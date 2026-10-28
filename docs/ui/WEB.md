@@ -6,6 +6,21 @@ labels, `·` as the separator, orange only for the one thing that matters, cold 
 Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
 or file from outside.
 
+## Conversation drafts and unconfirmed sends (D-045)
+
+Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
+visiting another web view restores that conversation's draft. New thread starts with its own composer;
+returning to the source conversation restores its draft. The initial composer belongs to the conversation
+created by its first submission. Drafts live only in JavaScript memory, never browser storage or the core.
+Reloading or closing the page discards them.
+
+While a submission is pending, Send says “Sending…” and repeated Enter does not submit it twice. You can
+keep drafting or visit another conversation. If the reply fails, the original text returns to an unchanged
+empty composer. If you wrote something newer, “Restore text” adds the failed text ahead of that newer
+draft when you choose it. Recovery stays with the originating conversation, including through view changes.
+Check the transcript before sending again: an unconfirmed reply may have reached the core. Nothing retries
+automatically. “Dismiss” removes the recovery notice; it does not erase the current draft.
+
 ## Connecting to the core (D-036)
 
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
@@ -158,7 +173,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
-  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  automatically. Each card shows the answer sequence for its available options and says "Ctrl+F to focus the first
+  approval". The help changes during always confirmation and deny-note entry. A deliberately focused card has an
+  accent outline. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,

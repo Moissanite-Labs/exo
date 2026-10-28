@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Automatic continuity checkpoints index recent tool and job records after interruption,
+  compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
+  private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
+
+- Web conversation drafts retain text and selection across thread and view switches in page memory.
+  Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
+  conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
+
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
@@ -81,6 +89,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `plugins/exo-gate/tests/test_bypass.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038), `docs/DOCS-MAP.md`.
 
+- The climb no longer takes a lesson whose evidence has decayed, and it catches a lesson that breaks another
+  domain (exo-desktop #35 by orda-aska, ported with the follow-up from abu-aska's review there; issue 13 on the fork).
+  A climb candidate needs a computed evidence weight of medium or high, not a stored `confidence`; a year after its
+  one correction a preference was still a candidate on 721828fd. The held-out gate checked only the candidate's own
+  domains, so a lesson that broke a work item while it won on mind was accepted. It now also gates each other
+  domain's held-out items on their own; the own-domain check, with the pinned items, is unchanged, since pooling
+  every domain into one composite let a work item that flipped up hide a mind item the candidate broke. An accepted
+  candidate rescores every dev, held-out and pinned item, so `eval/incumbent.json` and the night's composite stop
+  carrying the old incumbent's rows outside its domains; if the call budget runs out first, the merged rows are
+  cached under a key the next night does not trust. A 120-item night with one accepted candidate made 256 responder
+  calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
+  **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
+
+- The core retries its start after a failed or cancelled start instead of failing every later command
+  (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
+  raise once and leave every later command with the same `internal` error until exod restarted. A start cut
+  short inside the MCP step no longer leaves its servers running: the retry stops them first, and engine close
+  always closes MCP. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 
@@ -124,6 +153,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
+
+- Web approval cards show the keyboard sequence for their available answers and the current confirmation or deny-note
+  step. Ctrl+F focuses the first approval without losing the composer draft, and the focused card has an accent outline.
+
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
