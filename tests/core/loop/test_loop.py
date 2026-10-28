@@ -666,6 +666,11 @@ def test_usage_updated_model_names_the_route_that_served_after_fallback(tmp_path
     asyncio.run(go())
     usage = [e.body for e in store.events_since(0) if isinstance(e.body, ev.UsageUpdated)]
     assert usage and usage[-1].model == "b:small"
+    notices = [e.body for e in store.events_since(0) if isinstance(e.body, ev.Notice)]
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert notices and calls and calls[-1].call_id
+    assert notices[0].source == "model_route" and notices[0].call_id == calls[-1].call_id
+
 
 
 def test_session_updated_publishes_model_in_use(tmp_path):
