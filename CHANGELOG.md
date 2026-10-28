@@ -35,6 +35,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- GNU time output options are read as file writes beside the nested command, retaining local and store-write policy checks (#543).
+
 - The core retries its start after a failed or cancelled start instead of failing every later command
   (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
   raise once and leave every later command with the same `internal` error until exod restarted. A start cut

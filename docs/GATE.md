@@ -3025,3 +3025,8 @@ on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` 
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.
+
+
+### Security repair #543
+
+GNU time output options are read as file writes beside the nested command, retaining local and store-write policy checks. Classifier tests treat these command strings as data and never execute them.

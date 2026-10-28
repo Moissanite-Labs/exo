@@ -3028,7 +3028,7 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
+def _strip_prefix_words(words: list, writes: list | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
     env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
     sudo = own_argv = False
@@ -3044,6 +3044,17 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
             break
         sudo = sudo or base in ("sudo", "doas")
         own_argv = base in ("env", "sudo")
+        if base == "time" and writes is not None:
+            paths = _option_values([w.text for w in words], ("-o", "--output"), takes="f",
+                                   longs=("--f", "--fo", "--for", "--form", "--forma", "--format"), operands=0)
+            sources = {w.text: w for w in words[1:]}
+            for word in words[1:]:
+                if word.text.startswith("-o"):
+                    sources.setdefault(word.text[2:], word)
+                if "=" in word.text:
+                    sources.setdefault(word.text.partition("=")[2], word)
+            writes += [replace(sources.get(path, _Word(path)), text=path, raw=path, fd="")
+                       for path in paths if path]
         takes, words = _PREFIXES[base], words[1:]
         while words and words[0].text.startswith("-") and words[0].text != "-":
             f = words[0].text
@@ -3663,7 +3674,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
-    words, sudo, split = _strip_prefix_words(words)
+    file_outputs: list[_Word] = []
+    words, sudo, split = _strip_prefix_words(words, file_outputs)
     parts: list[Classification] = []
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
@@ -3735,6 +3747,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         c = _make("store_write", summary=what[:120], target=t, link=t, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
+    # Prefix output files are writes of their own, not writes to the nested command's input paths.
+    for target in file_outputs:
+        output = _Cmd(words=([_Word("sudo")] if sudo else []) + [_Word(":")],
+                      redirs=[(">", target)], own=k.own)
+        parts += _classify_simple(output, cmd, depth, ctx)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
         # The words are classified as decoded, so category, target and vetoes still see them, but a message
         # catalog can replace them: the indirection signal asks unless opaque_exec is named.
