@@ -31,6 +31,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Web composer guidance suggests provider credentials only for authentication failures; transport and
+  unknown model-call errors point to the recorded failure in `/trace` (#756).
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 

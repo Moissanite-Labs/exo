@@ -851,7 +851,8 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 ### Set up a provider from a client
 
 One engine, `src/exo/providers_setup.py` (D-034), sits behind `exo providers` (`src/exo/providers_cmd.py`), the TUI
-`/providers` panel and the web Providers page. Reuse it. Do not write a second key path.
+`/providers` panel and the web Providers page. Web composer guidance keeps the model-call error string
+and suggests credentials only for explicit authentication evidence; transport and unknown errors use `/trace`. Reuse it. Do not write a second key path.
 
 - **Keys are write-only.** No function there returns a stored value. A key never goes through `config.set` or any
   protocol command. A client reads the masked field, calls `set_key`, and shows only status.

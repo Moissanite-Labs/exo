@@ -327,3 +327,28 @@ def test_escape_never_stops_a_turn_in_the_page():
         for line in js.read_text(encoding="utf-8").splitlines():
             if "Escape" in line:
                 assert not re.search(r"\b(?:interrupt|stopTurn)\s*\(|/interrupt", line), (js.name, line)
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_provider_guidance_requires_authentication_evidence(tmp_path):
+    got = node(tmp_path, '''
+const guide = new c.Guide();
+const errors = ["ReadError: peer closed connection", "ConnectTimeout: timed out", "HTTP 401: unauthorized",
+  "authentication failed", "invalid API key", "unknown provider failure", true, false];
+console.log(JSON.stringify(errors.map(providerError => guide.rules({providerError}))));
+''')
+    for i in [0, 1, 5, 6]:
+        assert len(got[i]) == 1
+        assert "keys" not in got[i][0]["text"].lower()
+        assert "credentials" not in got[i][0]["text"].lower()
+        assert "Providers" not in got[i][0]["text"]
+    for i in [2, 3, 4]:
+        assert "Providers" in got[i][0]["text"]
+        assert "credentials" in got[i][0]["text"]
+    assert got[7] == []
+    assert all(len(tip["text"]) <= 72 for tips in got for tip in tips)
+
+
+def test_chat_preserves_provider_error_evidence_for_guidance():
+    chat = (STATIC / "chat.js").read_text()
+    assert "providerError: b.error || false" in chat
