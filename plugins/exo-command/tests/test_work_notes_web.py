@@ -139,11 +139,15 @@ def test_inspector_response_generations_thread_refresh_close_and_unmount():
             assert b.eval("document.querySelector('.xc-work-notes').hidden")
             b.eval("document.querySelector('.xc-work-open').click()")
             b.wait("window.notesRequests.length === 8")
-            reply(b, 7, dict(ROW, revision=10))
+            # Standalone Chat selects its default thread; draft-aware Chat can restore the last selection.
+            # Answer the actual requested owner so this remains a generation test in either composition.
+            remounted_session = b.eval("decodeURIComponent(new URL(window.notesRequests[7].url, location.origin).pathname.split('/')[4])")
+            reply(b, 7, dict(ROW, session=remounted_session, revision=10))
             b.wait("document.querySelector('.xc-work-notes').textContent.includes('Revision 10')")
             assert "Revision 99" not in b.eval("document.querySelector('.xc-work-notes').textContent")
             press(b, "History"); b.wait("window.notesRequests.length === 9"); press(b, "Close")
-            reply(b, 8, {"history": [dict(ROW, revision=11)]})
+            assert b.eval("window.notesRequests[8].url") == b.eval("window.notesRequests[7].url")
+            reply(b, 8, {"history": [dict(ROW, session=remounted_session, revision=11)]})
             assert b.eval("document.querySelector('.xc-work-notes').hidden")
             assert not src.sent
     finally:
