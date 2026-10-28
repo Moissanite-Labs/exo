@@ -628,3 +628,10 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Silent model streams
+
+A model connection that sends keepalives without model progress now ends with a retryable timeout
+rather than appearing busy forever. The existing router may try another route before output has
+appeared. If a model legitimately reasons silently for longer, increase its `progress_timeout`
+provider setting; zero disables this guard. This does not replay completed tools (#668).

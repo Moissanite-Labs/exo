@@ -133,6 +133,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   before the research says what to lift (wastes the 2026 work in Hermes).
 
 ## D-010 (2026-10-12) Standalone core: lean Python core, lifted Hermes parts, protocol-first UI
+- **Amendment 2026-10-28 (#668):** HTTP streams bound time without recognized model progress separately
+  from byte-idle time. Comments, pings and unknown SSE data cannot extend the progress deadline. The
+  deadline defaults to the read timeout; `progress_timeout` can raise it for silent reasoning or explicitly
+  disable it with zero. Timeouts follow existing retry/fallback and no-replay-after-output rules.
 - **Decision:** Exo gets its own core in Python, in this repo. It lifts a small set of Hermes modules
   (memory and context slot interfaces, provider message types and two transports, selected built-in tool
   logic, compressor prompts, and later individual platform adapters) and rewrites the loop, routing,

@@ -308,8 +308,9 @@ class Router:
             keys = [k for e in envs if (k := self._key(e))] if envs else [None]
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
+                progress = {"progress_timeout": float(spec["progress_timeout"])} if "progress_timeout" in spec else {}
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout, **progress)
                 creds.append(Credential(cid, key, prov))
         return creds
 
