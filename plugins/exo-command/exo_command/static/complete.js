@@ -113,6 +113,20 @@ export function ghost(text, sug, history) {
   return { text: "", ok: false };
 }
 
+// #756: what a recorded model error is evidence of. "auth" only when the text reads as an authentication or
+// permission failure, "transport" for a network, stream or timeout failure, "" when the text says nothing we can
+// read. The guide never sends someone to their keys on a connection error.
+const AUTH_ERROR = /\b(?:HTTP\s+)?40[13]\b|authentication|permission[_ ]?denied|unauthori[sz]ed|invalid[_ -]?api[_ -]?key|incorrect api key|invalid x-api-key|api key (?:is )?(?:invalid|missing|required|not set)/i;
+const TRANSPORT_ERROR = /\b(?:read|connect|write|pool|remoteprotocol)error\b|\btimed? ?out\b|\btimeout\b|stream ended without a response|\beconnreset\b|\beconnrefused\b|\beconnaborted\b|\beai_again\b|network|unreachable|connection (?:refused|reset|closed|aborted)|peer closed|closed the connection|no route to host/i;
+
+export function providerErrorKind(error) {
+  const text = typeof error === "string" ? error : "";
+  if (!text) return "";
+  if (AUTH_ERROR.test(text)) return "auth";
+  if (TRANSPORT_ERROR.test(text)) return "transport";
+  return "other";
+}
+
 // One dim line, local rules only. At most one new tip per `gap` ms, each rule twice a session, nothing while busy.
 export class Guide {
   constructor(opts = {}) {
@@ -124,7 +138,11 @@ export class Guide {
   }
   rules(st) {
     const out = [];
-    if (st.providerError) out.push({ key: "providers", text: "that model call failed: check your keys on the Providers page", fill: "" });
+    // The suggestion follows the error itself: a refusal can be the key, a transport failure cannot (chat.js passes the text).
+    const bad = st.providerError ? providerErrorKind(st.providerError) || "other" : "";
+    if (bad === "auth") out.push({ key: "providers:auth", text: "that model call was refused: check your keys on the Providers page", fill: "" });
+    if (bad === "transport") out.push({ key: "providers:transport", text: "the model could not be reached: send it again, or /trace", fill: "" });
+    if (bad === "other") out.push({ key: "providers:error", text: "that model call failed: /trace shows the error", fill: "/trace" });
     if (st.jobDone) out.push({ key: "job:" + st.jobDone, text: "job " + st.jobDone + " finished: ask for its job_output", fill: "show me the job_output for " + st.jobDone });
     if (st.findings) out.push({ key: "findings", text: st.findings + " open finding(s): /findings", fill: "/findings" });
     if (st.longTurn) out.push({ key: "trace", text: "that turn was slow: /trace shows where the time went", fill: "/trace" });
