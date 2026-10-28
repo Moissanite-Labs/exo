@@ -5533,3 +5533,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
+
+#### D-084 partial recovery amendment — 2026-10-28 (#501)
+
+Recover a small, runtime-independent deterministic excerpt building block for
+already retained sanitized tool text. It must preserve distinct diagnostic/source
+labels and call/error metadata, refuse mixed media or insufficient budgets, and
+never mutate originals. No runtime wiring, access-control or exact-expansion claim
+is made. See `docs/RETAINED-EXCERPT-ACCEPTANCE.md` for the remaining acceptance.
