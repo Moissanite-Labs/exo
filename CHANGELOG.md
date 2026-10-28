@@ -9,6 +9,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- A route with no catalog price now says where its price goes. `exo trace` names each unpriced route with
+  the config key that prices it, and the model-spend refusal for an unpriced route carries the same hint,
+  so a provider added by discovered model IDs no longer reports `unknown` cost with no next step (#841).
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.

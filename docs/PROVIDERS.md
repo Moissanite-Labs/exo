@@ -313,6 +313,22 @@ one it gets no credential, its routes are skipped and the providers list shows i
 its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
 and the result merges over the catalog (`docs/SEATS.md`).
 
+### Prices
+
+The catalog prices only the routes whose list prices are known (the Anthropic models today). A route with
+no entry runs normally; its cost reads `unknown` in `exo trace`, never `$0` (D-032). Set or override a price
+in config.json under `models.models`, keyed by `provider:model`, in USD per million tokens:
+
+    {"models": {"models": {"provider:model": {"input": 0.28, "output": 0.42, "cache_read": 0.028}}}}
+
+The numbers above are an example, not a quote: use the provider's published list price. `cache_read` and
+`cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
+price added later applies to new calls only, so a session recorded before it keeps `unknown`.
+
+A route with no price is also outside the model-spend journal. Turning that on refuses the route at its
+first call with "no pinned model-spend contract", and the refusal names the same config key, because the
+journal may only spend against a price the principal pinned.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.
