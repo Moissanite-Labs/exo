@@ -738,6 +738,8 @@ class CoreRuntime:
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]
+        if getattr(self, "work_notebook", None) is not None:
+            own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 
@@ -822,7 +824,7 @@ class CoreRuntime:
         value = cfg.get(b.key, _MISSING)
         if value is _MISSING:
             raise CommandFailed("not_found", f"{b.key} is not set")
-        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+        return {"key": b.key, "value": redact(value, b.key.split("."))}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
         require_principal("change settings")
