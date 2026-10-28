@@ -464,8 +464,8 @@ def test_mains_later_targets_reach_the_command_behind_a_quoted_assignment(home, 
 # --- with main fa5dfcd8's readings -----------------------------------------------------------------------------------
 # The text of `env -S` is read as env's own argv too (#591, #634), so a word quoted whole there is an assignment.
 # Behind a quoted prefix both readings meet: main read the quoted word before `env` as the program and never read the
-# text, so the delete asked as an unknown program, or logged beside a push. The spellings #634 does not read yet
-# decide as on main (#707): `env -iS` asks as an unknown program, `--split-s=` is read as an env listing.
+# text, so the delete asked as an unknown program, or logged beside a push. Since main f28934a3 (#707) every spelling
+# env takes is read behind a quoted prefix too (test_gate_quoted_prefix_compose.py).
 ENV_S = "env -S \"'Y=c d' rm -rf /srv/data\""
 OPAQUE_ALLOW_DENY = normalize_policies({"gates": {"deny": ["delete"], "categories": {"opaque_exec": "allow"}}})
 

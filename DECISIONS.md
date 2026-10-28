@@ -3034,9 +3034,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   push or a post (`git push origin feature && notify-send done`): it asks where it logged. The text of `env -S` or
   `--split-string` is read as a shell line and, since main took #634 (#591), as env's argv too, so a leading
   assignment quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) no longer hides the command either. The
-  spellings #634 does not read yet decide as on main: `env -iS` asks as an unknown program, and `--split-s=` is
-  read as an env listing (`credentials`), so it asks unless a policy denies `credentials`. The follow-up #707 is
-  open.
+  spellings #634 did not read are read since main f28934a3 took #707, behind a quoted prefix too (below).
   On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
   before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
   `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
@@ -3106,6 +3104,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as before #471, and with the home's `config.json` its reading as before D-074 has its own reading as before #471
   too: `X='a b' cp /tmp/x ~/.exo/config.json` takes 5 call readings where main takes 2, and 10 where main takes 4
   with the name split by `$\<newline>`. The count does not grow with nesting. A line without one costs what it did.
+  On main f28934a3 (2026-10-28), which took #707 (#591: the line env runs read in every spelling of `-S`, beside
+  main's own readings of the call in `Classification.split_readings`) and #718 (#491: the stdin a `sudo -s` or `-i`
+  shell runs, with the call read as before #491 at the end of its floors), the two layers nest (review 5678114534
+  of #546). `classify` reads the call for each reading of its quoted prefix assignments, and `_split_reading`
+  reads each of those for each reading of its `env -S` texts. So the line read as before #471 is the call exactly
+  as main f28934a3 reads it, its split readings and its reading as before #491 included, and the reading after the
+  quoted prefix has split readings of its own. `gate.readings` lists the line's own readings, then those of the
+  line as before D-074, before #471 and each split reading, each with its own; `decide`, `binds_exact`,
+  `no_grant`, `call_approvers` and the hook's checks read each. `_env_split_lines`, which finds the line env runs,
+  reads the prefixes as `_strip_prefix_words` does (`_prefix_assign`), so a quoted prefix hides no `-S` text in
+  any spelling: `X='a b' env --split-s="'Y=c d' rm -rf /srv/data"` and `X='a b' sudo -s <<< 'rm -rf /srv/data'`
+  are deletes that `deny: [delete]` denies, where main f28934a3 reads the quoted word as the program and asks.
+  The hook's bypass asks at the floor first only for main's own reading, which behind a quoted prefix is the line
+  read as before #471 (its first split reading, when it has one), so a post main holds there is still held; the
+  floor of every other reading, the reading after the quoted prefix and its split readings included, comes after
+  the hold, so `X='a b' env -S "gh auth token"` asks at the floor where main's bypass allows it. On main f28934a3,
+  `X='a b' env -S 'rm -rf /srv/data'` takes 7 call readings where main takes 3, and `X='a b' cp /tmp/x
+  ~/.exo/config.json` 5 where main takes 2.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

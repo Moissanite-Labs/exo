@@ -3044,6 +3044,15 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
+def _prefix_assign(w: "_Word", own_argv: bool, quoted_value: bool) -> bool:
+    """Whether the prefix word ``w`` is an assignment: its NAME= unquoted in the source, only the value quoted (#471),
+    while ``quoted_value`` (not in the reading as before #471, where a quoted word is the program); and any word of
+    the form NAME=VALUE in env's or sudo's own argv (``own_argv``). A line continuation in the name is no quoting:
+    bash drops it first. _strip_prefix_words and _env_split_lines (#591) read the prefixes alike."""
+    return bool(_ASSIGN.fullmatch(w.text)) and (own_argv or not w.quoted or quoted_value and bool(_ASSIGN_HEAD.match(
+        re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", w.raw))))
+
+
 def _strip_prefix_words(words: list, quoted_value: bool | None = None,
                         sudos: list | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
@@ -3059,8 +3068,7 @@ def _strip_prefix_words(words: list, quoted_value: bool | None = None,
     i, n = 0, len(words)
     while i < n:
         t = words[i].text
-        if (own_argv or not words[i].quoted or quoted_value and _ASSIGN_HEAD.match(
-                re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", words[i].raw))) and _ASSIGN.fullmatch(t):
+        if _prefix_assign(words[i], own_argv, quoted_value):
             if words[i].quoted and not own_argv and (seen := _quoted_seen.get()) is not None:
                 seen[0] = True
             i += 1
@@ -3400,10 +3408,10 @@ def _env_split_lines(words: list, raw: bool = False) -> list[str]:
     the word it sits in (_shell_parts: `$BR --force` is two words to env). No line without one, when env would
     refuse the text, or when no word of it closes before an expansion (`env -S "$CMD"`). With ``raw``, the text as
     main reads -S's (an attached one alone, else the words from it on, joined) and the option word (_env_s_text)."""
-    i, own_argv = 0, False
+    i, own_argv, quoted_value = 0, False, not _as_before.get()
     while i < len(words):
         w = words[i]
-        if (own_argv or not w.quoted) and _ASSIGN.fullmatch(w.text):
+        if _prefix_assign(w, own_argv, quoted_value):     # a quoted prefix assignment hides no -S text (#471)
             i += 1
             continue
         base = w.text.rsplit("/", 1)[-1]
@@ -4233,15 +4241,15 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     # cmd was not read. That reading stays beside cmd's, and the parts read from cmd are signed, so decide also decides
     # the line with the parts read before on top (_QUOTED): no decision is looser than before. Also when cmd is an
     # `env -S` (words is [] then), so the quoted word's value is still scanned for store paths and env-inject names.
-    old = _strip_prefix_words(before, False)[0]
+    old_words = _strip_prefix_words(before, False)[0]
     old_parts: list[Classification] = []
-    if len(old) > len(words):
-        memo: dict = {}
+    if len(old_words) > len(words):
+        signed: dict = {}
         if "late" in ctx:
-            ctx["late"][n_late:] = [_signed(p, _QUOTED, memo) for p in ctx["late"][n_late:]]
-        old_parts = _classify_program(old, k, cmd, depth, ctx, piped) + \
-            _exec_options(before, old, k, cmd, depth, ctx, piped)
-        parts = [_signed(p, _QUOTED, memo) for p in parts] + old_parts
+            ctx["late"][n_late:] = [_signed(p, _QUOTED, signed) for p in ctx["late"][n_late:]]
+        old_parts = _classify_program(old_words, k, cmd, depth, ctx, piped) + \
+            _exec_options(before, old_words, k, cmd, depth, ctx, piped)
+        parts = [_signed(p, _QUOTED, signed) for p in parts] + old_parts
     if sudo:
         parts[0].signals.append("sudo")
         _run_privileged(parts[0])
@@ -4276,7 +4284,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     # path either scan meets stays (#514)
     old_ids = {id(p) for p in old_parts}
     hits = list(dict.fromkeys(
-        (_store_touch(k, old, [p for p in parts if _QUOTED not in p.signals], octx) if len(old) > len(words) else [])
+        (_store_touch(k, old_words, [p for p in parts if _QUOTED not in p.signals], octx)
+         if len(old_words) > len(words) else [])
         + _store_touch(k, words, [p for p in parts if id(p) not in old_ids], ctx)))
     if hits:
         # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,

@@ -979,14 +979,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   behind a quoted prefix is a target of the line (`X='a b' ssh buildhost gh pr view 5` under a rule on `buildhost`).
   With #634 (#591), the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env
   -S "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program;
-  a spelling #634 does not read yet (`env -iS`, `--split-s=`) decides as on main (#707). With main 58503282 (#635,
-  #652, #659), a store name split by quotes, a backslash or a backslash-newline, or in another letter case, behind
-  a quoted prefix is a store write on every reading, and so is a write by a relative name after a `cd` into such a
-  folder there: `X='a b' cd ~/.E''XO && cp /tmp/x config.json` is a store write that `deny: [store_write]` denies,
-  where main read it as `credentials` and asked. A camelCase tool the gate reads by its name and arguments keeps
-  its floor (#515) and gets no reading as before. A line with a quoted prefix assignment is read
-  again as before #471, with each of main's readings (5 call readings where main makes 2 for `X='a b' cp /tmp/x
-  ~/.exo/config.json`); a line without one costs what it did.
+  with main f28934a3 (#707, #491), the reading behind a quoted prefix reads the `env -S` text in every spelling
+  env takes (`env -iS`, `--split-s=`, `-i0vS`, `--split`, also with `--` or a glued `;x` in the text) and a `sudo
+  -s` or `sudo -i` shell's stdin, so `X='a b' env --split-s="'Y=c d' rm -rf /srv/data"` and `X='a b' sudo -s <<<
+  'rm -rf /srv/data'` are deletes that `deny: [delete]` denies, where main f28934a3 asks as an unknown program; each
+  such line decides at least as it does with `X=ab` and as main reads it. The line read as before #471 is main's
+  whole reading, its `env -S` split readings included, and permissions bypass asks at the floor first only for
+  that reading, so a post main holds beside a quoted prefix is still held, while a secret or store write only the
+  new reading finds (`X='a b' env -S "gh auth token"`) asks at the floor where main's bypass allows it. With main
+  58503282 (#635, #652, #659), a store name split by quotes, a backslash or a backslash-newline, or in another
+  letter case, behind a quoted prefix is a store write on every reading, and so is a write by a relative name after
+  a `cd` into such a folder there: `X='a b' cd ~/.E''XO && cp /tmp/x config.json` is a store write that
+  `deny: [store_write]` denies, where main read it as `credentials` and asked. A camelCase tool the gate reads by
+  its name and arguments keeps its floor (#515) and gets no reading as before. A line with a quoted prefix
+  assignment is read again as before #471, with each of main's readings (on main f28934a3: 5 call readings where
+  main makes 2 for `X='a b' cp /tmp/x ~/.exo/config.json`, 7 where main makes 3 for `X='a b' env -S 'rm -rf
+  /srv/data'`); a line without one costs what it did.
 - Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
   start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
   `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
