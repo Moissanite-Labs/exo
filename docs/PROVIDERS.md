@@ -352,7 +352,8 @@ the week. Such an entry lists the off-peak rates as windows over its standard (h
     output = 0.60
     cache_read = 0.003
 
-The call is priced at the rates in force at the moment it was made, not at the time the turn is read.
+The call is priced at the rates in force at the moment it was made, not at the time the turn is read, and
+not at the time its usage arrives: a stream that runs past a window boundary keeps the rate it started under.
 Weeks and hours are UTC: `days` are `mon`..`sun`, `hours` are `HH:MM-HH:MM` half-open, and a span may wrap
 midnight (`22:00-02:00`). No `days` means every day, no `hours` means all day. A window replaces only the
 rates it names; the entry's own rates fill the rest. A window that cannot be read is skipped and named in

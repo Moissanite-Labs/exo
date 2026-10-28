@@ -542,6 +542,7 @@ class Router:
                 yield event
             return
         started, t0 = False, time.monotonic()
+        call_at = self.clock()  # the rates in force when this call was made, not when usage arrived
         attempts = [] if attempts is None else attempts
         cool: float | None = None  # set when this failure opens the route's breaker
 
@@ -576,7 +577,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage)
+                ev.usage = self.price(route, ev.usage, at=call_at)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")
