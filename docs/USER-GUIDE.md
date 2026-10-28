@@ -20,6 +20,13 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
 ## 1. Install and first run
 
+**Continuing after interruption.** Exo automatically includes a short index of recent
+tool and job records when the same ordinary conversation continues. `/checkpoint`
+shows it in the TUI or `exo chat`. Interrupted tool effects remain unknown until
+checked. It never replays work. Disable with
+`exo config set work_checkpoint.enabled false` and restart. See
+[automatic continuity checkpoints](WORK-CHECKPOINT.md) for limits and privacy.
+
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
@@ -71,6 +78,9 @@ copy that keeps the old name hides the pack's skill or is hidden by it. Then del
 each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5.
 
 ## 2. The two clients
+
+The web chat status strip wraps to fit the conversation width in either layout. Model names and values remain
+readable as the window narrows; notices appear on their own wrapped row.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
@@ -126,8 +136,20 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
-`/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
+`/layout` does. Use Rename beside a thread to edit its title, then Save or Cancel. Enter saves and Escape cancels.
+Double-click opens the same editor. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
+
+Web conversation drafts stay with each thread while the page is open, including when you visit another
+view. A pending send lets you keep writing and blocks duplicate Enter submissions. If a send is unconfirmed,
+your text remains recoverable in that thread without replacing newer edits. Check the transcript before
+sending again; a lost reply may still have reached the core. Reloading or closing the page discards drafts.
+See [conversation drafts](ui/WEB.md#conversation-drafts-and-unconfirmed-sends-d-045).
+
+Find a conversation searches the loaded titles, IDs and agent names. Use the status selector to show
+working conversations or those waiting for an approval. It does not search message contents. Show latest
+messages returns to the newest message when you have scrolled away. Appearance offers Dark, Light or
+System; that preference is saved in this browser. Back and Forward move between the web views.
 
 ## 3. Slash commands
 
@@ -141,7 +163,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
-| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
+| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where Rename or a double-click opens the title editor. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
 | `/cwd` | Show this thread's working folder. |
@@ -315,8 +337,10 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
-press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. Both clients show the answer sequence: `Ctrl+F`, then `o` once, `a` followed by Enter
+for always, or `d` followed by Enter to deny. The web card lists its available choices and changes its help during
+confirmation or note entry. Press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays
+in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
@@ -364,8 +388,9 @@ What the gate asks about, and why:
   `export PATH="$HOME/.local/bin:$PATH"`, asks. So does `hash -p /tmp/x ls`, which makes `ls` run another file
   (#330). A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
   like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
-  `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
-  (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
+  `setsid`, `flock` or `watch` (#160, fixed in #196), a heredoc or pipe into a group such as `{ bash; }`
+  (#161, fixed in #198), and a pipe, here-string or heredoc into the shell `sudo -s` or `sudo -i` starts
+  (#491). The gate finds programs only in the shell forms its parser reads. A command inside a
   parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
   #158). A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
   `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579), and `p=x; echo ${p@P}` stays a read when the line
@@ -488,6 +513,14 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - If a seat's key was made again, its messages are refused until you pin the new key:
   `exo keys pin <seat> $EXO_HOME/keys/<seat>.pub --replace`. A Hermes profile's name must be a seat id (lowercase
   letters, digits, `-` and `_`), or its messages are refused. `docs/PEERS.md` "Peer keys" lists these cases.
+- A send to a seat whose key this home holds goes out only when that seat signs its presence file and its answer
+  with that key (#523). If the presence file does not verify, the send fails with `presence file does not verify
+  ... not sent` and nothing reaches the peer. That happens when the peer runs an older Exo: update it. It also
+  happens when the peer's key was made again and this home still pins the old one: pin the new key with
+  `exo keys pin <seat> <that home>/keys/<seat>.pub --replace` (add `--peer` for a seat of another home), then send
+  again. If instead the send fails with `first reply that does not verify ... not published`, the text was sent
+  and the peer may already have it; only its answer was refused. Check with the peer before you send again, or it
+  gets the message twice.
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
