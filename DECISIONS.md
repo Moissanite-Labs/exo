@@ -3207,6 +3207,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Amendment 2026-10-28 (#753):** direct bound shell calls redact final output by default. The Registry-owned bash handler leaves final-output redaction to the Registry, so that strict pass runs once. Stream redaction remains separate and protects read boundaries. The Registry does not trust literal redaction markers in raw tool output; credentials containing those markers still match. See `docs/GITHUB-AUTH.md`.
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
   approvals with `allow_always`. (b) `exo web` re-exposed the whole protocol and the event stream with no token;
