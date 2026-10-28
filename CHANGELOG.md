@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Web conversation drafts retain text and selection across thread and view switches in page memory.
+  Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
+  conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).

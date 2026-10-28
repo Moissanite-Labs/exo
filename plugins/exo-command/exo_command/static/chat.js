@@ -12,7 +12,18 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 
+// Page-lifetime intent only: never write prompts to browser storage.
+const drafts = new Map();
+let lastThread = null;
+const draftListeners = new Set();
+const changedDraft = (id, restore = false, owner = null) => { for (const f of draftListeners) f(id, restore, owner); };
+function draft(id) {
+  if (!drafts.has(id)) drafts.set(id, { text: "", start: 0, end: 0, revision: 0, pending: false, failures: [] });
+  return drafts.get(id);
+}
+
 export function mount(root) {
+  let mounted = true, navigation = 0;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
@@ -28,15 +39,51 @@ export function mount(root) {
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
+  const recoveryEl = h("div", { class: "xc-draft-recovery", "aria-live": "polite" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
   const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
   modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), modelPicker);
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), recoveryEl, modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
+  function saveDraft() {
+    const d = draft(current);
+    if (d.text !== input.value) d.revision++;
+    Object.assign(d, { text: input.value, start: input.selectionStart, end: input.selectionEnd });
+  }
+  function restoreDraft() {
+    const d = draft(current);
+    input.value = d.text; input.setSelectionRange(d.start, d.end);
+    if (help.restore) help.restore();
+    drawDraft();
+  }
+  function drawDraft() {
+    const d = draft(current);
+    sendBtn.disabled = d.pending;
+    sendBtn.textContent = d.pending ? "Sending…" : "Send";
+    recoveryEl.replaceChildren(...(d.pending ? [h("span", null, "Sending. You can keep writing.")] : []),
+      ...d.failures.map(f => h("div", { class: "xc-draft-failed" },
+        h("span", null, "Send was not confirmed: " + f.error + ". Check the thread before sending again."),
+        h("button", { class: "xc-btn", onclick: () => {
+          saveDraft();
+          if (!f.restored) { d.text = d.text ? f.text + "\n" + d.text : f.text; d.start = d.end = d.text.length; d.revision++; }
+          d.failures = d.failures.filter(x => x !== f); restoreDraft(); input.focus();
+        } }, f.restored ? "Keep editing" : "Restore text"),
+        h("button", { class: "xc-btn", onclick: () => { d.failures = d.failures.filter(x => x !== f); drawDraft(); } }, "Dismiss"))));
+  }
+  const changed = (id, restore, owner) => {
+    if (current !== id) return;
+    if (owner) { input.value = ""; open(owner); refreshSessions(); }
+    else if (restore) restoreDraft();
+    else drawDraft();
+  };
+  draftListeners.add(changed);
+  input.addEventListener("input", saveDraft);
+  input.addEventListener("select", saveDraft);
+  input.addEventListener("keyup", saveDraft);
   const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
@@ -441,11 +488,13 @@ export function mount(root) {
   }
 
   async function open(id) {
+    saveDraft(); ++navigation; lastThread = id;
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -456,7 +505,11 @@ export function mount(root) {
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
       model = (d.session && d.session.model) || "";
-    } catch (e) { fail(e); }
+    } catch (e) {
+      if (!mounted || current !== id || generation !== snapshotGeneration) return;
+      fail(e);
+    }
+    if (!mounted || current !== id || generation !== snapshotGeneration) return;
     loading = false;
     drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
@@ -514,10 +567,11 @@ export function mount(root) {
   }
 
   async function create(kind = "") {
+    saveDraft(); const nav = ++navigation;
     try {
       const d = await api("POST", "/api/chat/sessions", { kind });
       await refreshSessions();
-      if (d.session) open(d.session.id);
+      if (d.session && mounted && nav === navigation) open(d.session.id);
     } catch (e) { fail(e); }
   }
 
@@ -570,7 +624,7 @@ export function mount(root) {
 
   async function send() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || draft(current).pending) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
     // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
@@ -629,18 +683,42 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
+    saveDraft();
+    let origin = current, nav = navigation;
+    const steering = busy, intent = draft(origin);
+    intent.pending = true;
+    input.value = ""; saveDraft(); help.sent(text); drawDraft();
+    const revision = intent.revision;
+    let sid = origin;
     try {
-      if (!current) {
+      if (!sid) {
         const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
+        sid = d.session.id;
+        // Once created, this conversation owns both the request and anything typed behind it.
+        if (mounted && current === origin) saveDraft();
+        drafts.set(sid, intent); drafts.delete(origin);
+        const show = mounted && nav === navigation && current === origin;
+        // A remounted composer can still own the null slot while this old request finishes.
+        changedDraft(origin, false, sid);
+        origin = sid;
+        if (show && current === sid) nav = navigation;
         await refreshSessions();
-        await open(d.session.id);
       }
-      input.value = ""; help.sent(text);
-      const steering = busy, sid = current;
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
-      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
-      flash("");
-    } catch (e) { fail(e); }
+      intent.pending = false; changedDraft(origin);
+      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; if (mounted) drawSteers(); }
+      if (mounted && nav === navigation && current === origin) {
+        if (!origin) await open(sid);
+        else { drawDraft(); flash(""); }
+      }
+    } catch (e) {
+      if (mounted && current === origin) saveDraft();
+      intent.pending = false;
+      const restored = intent.revision === revision && !intent.text;
+      if (restored) Object.assign(intent, { text, start: text.length, end: text.length });
+      intent.failures.push({ text, restored, error: e && e.message ? e.message : String(e) });
+      changedDraft(origin, true);
+    }
   }
 
   // Queued steers (D-045): a message sent while a turn runs waits for the next tool round. Until it lands the
@@ -664,8 +742,14 @@ export function mount(root) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
       delete steers[x.id]; drawSteers();
-      if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
-      else flash("no longer queued");
+      if ((d.cancelled || []).length) {
+        if (mounted && current === x.session) saveDraft();
+        const target = draft(x.session);
+        target.text = target.text.trim() ? x.text + "\n" + target.text : x.text;
+        target.start = target.end = target.text.length; target.revision++;
+        changedDraft(x.session, true);
+        if (mounted && current === x.session) input.focus();
+      } else if (mounted && current === x.session) flash("no longer queued");
     } catch (e) { fail(e); }
   }
 
@@ -711,11 +795,12 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { saveDraft(); mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
-  refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
+  restoreDraft();
+  refreshSessions().then(() => { if (mounted && !current && (asked || (!draft(null).text && !draft(null).pending && sessions.length))) open(asked || (sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id)); });
   return off;
 }
 

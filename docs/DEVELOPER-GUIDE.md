@@ -1053,3 +1053,14 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+### Web composer draft ownership
+
+`plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
+null key before the first conversation is created. A successful creation transfers ownership to its real
+session ID. Capture selection on input/navigation and restore only when switching the composer owner.
+Pending sends are per session; failure reconciliation compares the draft revision before restoring text.
+Mount listeners update a remounted chat when an older request finishes. Never persist prompt text to browser
+storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
+without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
+thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
