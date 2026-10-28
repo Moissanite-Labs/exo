@@ -740,6 +740,9 @@ system or bash will.
   folder, as it denies the absolute path. Before, the link was the one spelling no entry on the place could reach,
   and the question named only the link. A relative path is read from the session's folder as resolved, so a link
   to that folder itself adds nothing. The call's own target, which its grants are keyed on, stays as spelt.
+  The gate cannot tell a planted link from a system one. On macOS `/tmp` is a link to `/private/tmp`, and an allow
+  rule matches the call as spelt while the part is decided on its own (#191). So a policy that denies `local_write`
+  and allows `target:/tmp/*` denies `write_file /tmp/x` until it allows `target:/private/tmp/*` too.
 - **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes

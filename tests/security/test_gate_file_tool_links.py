@@ -118,6 +118,25 @@ def test_no_link_no_change(tree):
             assert (c.category, c.summary, c.parts) == ("local_write", f"write {path}", []), (path, cwd)
 
 
+def test_a_system_link_in_an_absolute_path_is_read_where_it_lands_too(tree):
+    """The cost. The gate cannot tell a planted link from a system one, such as macOS `/tmp`, a link to
+    `/private/tmp`. An allow rule matches the call as spelt, and the part is decided on its own (#191). So a policy
+    that denies local writes and allows the spelt folder now denies the write, and names the place, until it allows
+    the place too. On main the write was allowed. The default policy still allows it."""
+    (tree / "private" / "tmp").mkdir(parents=True)
+    (tree / "tmp").symlink_to(tree / "private" / "tmp")
+    c = read(tree, "write_file", str(tree / "tmp" / "x.txt"))
+    spelt = {"match": {"target": f"{tree}/tmp/*"}, "decision": "allow"}
+    place = {"match": {"target": f"{tree}/private/tmp/*"}, "decision": "allow"}
+
+    def confined(*rules):
+        return gate.normalize_policies({"gates": {"categories": {"local_write": "deny"}, "rules": list(rules)}})
+    d = gate.decide(c, confined(spelt))
+    assert d.outcome == "deny" and str(tree / "private" / "tmp" / "x.txt") in d.reason
+    assert gate.decide(c, confined(spelt, place)).outcome == "allow"
+    assert outcome(c) == "allow"
+
+
 @pytest.mark.parametrize("how", ["write_file", "edit_file", "apply_patch update"])
 def test_the_part_is_the_file_the_tool_writes(tree, how):
     """What the gate reads is what the tool writes: the part's target is the file that changes."""
