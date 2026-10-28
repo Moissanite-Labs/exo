@@ -5119,6 +5119,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-086: Optional session working notes
 
+- **Pending proposal:** [Agent and human work vessel](docs/AGENT-OPERATOR-DESIGN.md)
+  proposes client use of these notes and further acceptance gates. This pointer
+  approves no new behavior, policy or defaults.
+
 - **Date:** 2026-10-23
 - **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
 - **Problem:** A long task's current goal, constraints, blockers and next action can become scattered

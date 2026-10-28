@@ -34,6 +34,9 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
+pending continuity and supervision work. It changes no runtime contract or policy.
+
 **Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
 state in `sessions.sqlite`. Composition validates `work_notes` before opening
 runtime resources, then attaches the gated tool, per-session prompt and handoff
