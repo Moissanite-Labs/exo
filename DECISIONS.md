@@ -288,6 +288,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (terms); Perplexity's 27B open model as the shipped default (needs about 49 GB of GPU memory, no device path).
 
 ## D-016 (2026-10-12) Agent wire: SYM-2P lines for machines, English for models and people
+- **Amendment 2026-10-27 (exo-desktop #5 and #17, ported in #674):** `exo.wire.verify(line, sig, trusted_pub)`
+  checks a detached signature only against the key the caller pins, and returns False when none is given. Before,
+  it fell back to the `pub` the signature carries. Whoever made the packet chose that key, so any packet signed by
+  any key passed. No production caller used that path, and `delegate`'s receipt test already pinned the key. A
+  caller with no pinned key for the signer cannot verify a line. Docs: `docs/AGENT-WIRE.md` §4.2.
 - **A's ask:** "project exo should integrate this tech, or a better implementation of its concept, in its
   backend systems for interagent communcation, delegation, and wherever else appropriate/relevant"
   (aska-digital/protean-sym2p).
@@ -1138,6 +1143,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
   are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
+- **Amendment 2026-10-27 (#691, fixed in #728, exo-desktop #16, PR #674):** `exo config show`, `exo config get`
+  and `config.get` mask the same values, and those are the values `config.set` refuses. Before exo-desktop #16 the
+  two commands printed raw values. `config.get` judged a dotted key by its last part only, so a container under
+  `token` and every literal under `headers` printed in full. Now `redact` takes the whole key path, and it and the
+  `config.set` refusal share one test, `_is_secret`. A string is a secret when it is shaped like a key, even beside
+  a `${VAR}`, or when it is a literal (not `${VAR}`) under `env`, `headers` or a secret-shaped name at any level. So
+  `{"token": {"a": "x"}}` is refused and masked, and a header literal in a file written by hand is masked. One test
+  for both means the commands never print a value `config.set` would refuse. Cost: a container whose own name looks
+  like a secret, such as an MCP server named `github-token`, is masked whole and cannot be set with literals.
+  Rejected: judging only the last part of the key, which still printed a container under `token` and every literal
+  under `headers`. No command or key changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,

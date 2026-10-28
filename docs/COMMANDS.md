@@ -261,10 +261,10 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo config show` | Every key with its effective value. | none | `main` in `src/exo/config.py` |
+| `exo config show` | Every key with its effective value. A secret prints as `***`, as `config.get` returns it (`docs/SEATS.md` "Config and secrets"). | none | `main` in `src/exo/config.py` |
 | `exo config path` | Where `config.json` lives. | none | same |
 | `exo config roles` | The model route per role. No secrets. | none | same |
-| `exo config get <key>` | One value. Exit code 1 if unset. | `<key>` | same |
+| `exo config get <key>` | One value, a secret masked as in `show`. Exit code 1 if unset. | `<key>` | same |
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo models` | Providers, whether a key is found (yes or no, never the value), the route per role, and the `code_find` status. | `--remote PROVIDER` lists that provider's models over the network | `cmd_models` in `src/exo/models_cmd.py` |
