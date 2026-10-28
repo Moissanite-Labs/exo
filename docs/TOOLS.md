@@ -106,7 +106,13 @@ explicit minimal set (`exo.envscrub.minimal_env`: `PATH`, `HOME`, `USER`, `LOGNA
 switches, and never an API key (muse-cli also drops `META_API_KEY`). MCP servers get the environment their own `env` table asks for (`${VAR}`
 expansion), not this filter.
 
-## Pipeline exit codes
+## Shell results and pipeline exit codes
+
+Foreground `bash` returns its captured output and `[exit N]` as before, with `ToolResult.is_error` true when the
+command exits nonzero, times out or is interrupted. The model, tool completion event and turn error count share
+that status. A failed write-shaped command does not count as successful file progress for repeat detection.
+Output remains available on failure, including capped head and tail output. A successful background job launch
+still returns its job receipt; job completion is reported separately.
 
 bash reports the exit code of a pipeline's last stage, so `false | head -1` looks like success. Exo does not turn on
 `pipefail` (`grep | head` would then fail on SIGPIPE). An EXIT trap records the final pipeline's `PIPESTATUS`; when an
