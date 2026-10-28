@@ -25,8 +25,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
-- Deeply nested JSON in web approval, chat and provider POSTs returns the existing 400 JSON input error
-  instead of closing the connection without a response (follow-up to #751).
+- JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
+  400 JSON input error instead of closing the connection without a response (follow-up to #751).
 
 - Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
   the connection without a response. They send no approval answer to the core (#740).

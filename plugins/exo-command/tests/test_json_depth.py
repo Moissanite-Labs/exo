@@ -1,4 +1,10 @@
-"""Deep JSON stays an HTTP input error in both POST readers (follow-up to #751)."""
+"""Decoder nesting failures stay HTTP input errors (follow-up to #751).
+
+Inject RecursionError only for designated request bytes: decoder nesting limits differ across Python versions.
+The real HTTP readers, routing, authentication and dispatch guards still run.
+"""
+import json
+
 import pytest
 
 from exo_command import providers
@@ -7,6 +13,18 @@ from test_approval_json_body import post
 
 DEEP_JSON = [b"[" * 1500 + b"]" * 1500, b'{"nested":' * 1500 + b"null" + b"}" * 1500]
 ROUTES = ["/api/approvals/r1", "/api/chat/sessions", "/api/providers/default"]
+
+
+@pytest.fixture(autouse=True)
+def decoder_nesting_failure(monkeypatch):
+    decode = json.loads
+
+    def loads(data, *args, **kwargs):
+        if isinstance(data, bytes) and data in DEEP_JSON:
+            raise RecursionError("synthetic JSON decoder nesting limit")
+        return decode(data, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
 
 
 @pytest.fixture(autouse=True)
