@@ -5210,3 +5210,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ceiling off, the same six pass on a tree that counts 15,828, where they fail on `main` at `13cea687`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
+
+
+## D-089 (2026-10-28) One shared implementation, then reviewed desktop syncs
+- **Status:** Accepted by the principal, effective for new work. [Decision discussion](https://github.com/aska-digital/exo/discussions/746).
+- **Decision:** shared core, plugins, web UI and their docs and tests are implemented and reviewed in Exo. Native desktop shell, packaging and sync tooling belong in Exo Desktop. The fork takes batches of merged Exo commits through a reviewed sync PR. Automation prepares drafts and never pushes or merges directly into main.
+- **Why:** parallel implementation PRs duplicate review and allow fixes, policy and parent branches to drift apart.
+- **Existing work:** authors retain ownership. Preserve unfinished PRs and unique desktop files until the canonical change is merged and downstream integration is verified. An urgent alpha carry names its canonical PR, owner and reconciliation step.
+- **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
+- **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
+- **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
