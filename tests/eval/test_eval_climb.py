@@ -431,3 +431,133 @@ def test_climb_rescores_the_incumbent_when_what_scores_it_changes(tmp_path, nigh
     inner = night2.get("responder_for", _says("line ?"))
     run([], **{**night2, "responder_for": lambda cfg: (lambda p: (n.__setitem__(0, n[0] + 1), inner(cfg)(p))[1])})
     assert n[0] == 0
+
+
+def test_climb_gates_cross_domain_held_out_regression(tmp_path):
+    """issue 13 (#3): render_system injects every rule globally, so a new rule can regress held-out items in a
+    domain the candidate did not declare. The gate must consider all held-out, not just the candidate's domains."""
+    cut = int(round(E.HELD_FRACTION * 100))
+    mind = items(30, "mind")                       # candidate wins here, incumbent loses
+    # work items forced into the held-out set (low hash) so the candidate's cross-domain regression lands on held-out
+    work, k = [], 0
+    while len(work) < 6:
+        iid = f"w{k}"
+        if E._hash_pct(iid) < cut:
+            work.append({"id": iid, "question": f"Write work line {k}", "gold": f"work line {k}",
+                         "domain": "work", "ts": f"2026-09-{k % 28 + 1:02d}T00:00:00Z"})
+        k += 1
+    pool = mind + work
+    assert any(i["domain"] == "work" for i in E.split(pool)["held"])
+
+    def rf(cfg):
+        def respond(prompt):
+            # incumbent (base) is bad on mind, good on work; candidate (bad) is good on mind, bad on work
+            if "work" in prompt:                   # a work item
+                return "work line " + prompt.rsplit(" ", 1)[-1] if cfg["mode"] == "base" else "BROKEN on work"
+            return "line " + prompt.rsplit(" ", 1)[-1] if cfg["mode"] == "bad" else "Status fine"
+        return respond
+    rep = E.climb(tmp_path, E.Budget(), incumbent={"id": "i", "config": {"mode": "base"}},
+                  candidates=[{"id": "c", "config": {"mode": "bad"}, "domains": ["mind", "general"]}],
+                  responder_for=rf, grader=E.exact_grader, rules=[], items=pool)
+    c = rep["candidates"][0]
+    assert c["dev"]["better"]                      # it looks like a win on its own domain
+    # the cross-domain held-out regression must be caught (would be accepted before the fix, which only gated the
+    # candidate's declared domains)
+    assert c["status"] == "gate_failed" and "domain_drop" in c["reason"]
+    assert rep["accepted"] == []
+
+
+def two_domains():
+    """80 mind and 40 work items; 15 mind and 10 work items are held out."""
+    return ([{"id": f"m{i}", "question": f"Write mind {i}", "gold": f"mind {i}", "domain": "mind",
+              "ts": f"2026-09-{(i % 28) + 1:02d}T00:00:00Z"} for i in range(80)]
+            + [{"id": f"w{i}", "question": f"Write work {i}", "gold": f"work {i}", "domain": "work",
+                "ts": f"2026-09-{(i % 28) + 1:02d}T00:00:00Z"} for i in range(40)])
+
+
+def wrong_on(cfg):
+    """A configuration {"wrong": ids} answers every item right except those."""
+    def respond(prompt):
+        _, dom, k = prompt.split()
+        return "x" if f"{dom[0]}{k}" in cfg["wrong"] else f"{dom} {k}"
+    return respond
+
+
+@pytest.mark.parametrize("case", ["own_drop_diluted", "other_domain_drop", "other_drop_on_own_evidence", "clean"])
+def test_climb_gates_its_own_domains_and_each_other_domain_on_its_own(tmp_path, case):
+    """Every held-out item is gated, but not as one pool: with `held_tolerance` 0.0 a work item that flips up
+    must not pay for a mind item the candidate breaks (the abu-aska repro on the fork's PR), and a drop in work
+    still fails it though the candidate declares only mind (issue 13). A drop on the lesson's own evidence does
+    not count in another domain either."""
+    pool = two_domains()
+    parts = E.split(pool)
+    held = {d: sorted(i["id"] for i in parts["held"] if i["domain"] == d) for d in ("mind", "work")}
+    assert (len(held["mind"]), len(held["work"])) == (15, 10)
+    mind_dev = {i["id"] for i in parts["dev"] if i["domain"] == "mind"}
+    inc_wrong, cand_wrong = {
+        "own_drop_diluted": (mind_dev | {held["work"][0]}, {held["mind"][0]}),
+        "other_domain_drop": (mind_dev, {held["work"][0]}),
+        "other_drop_on_own_evidence": (mind_dev, {held["work"][0]}),
+        "clean": (mind_dev, set()),
+    }[case]
+    exclude = ["ev-own"] if case == "other_drop_on_own_evidence" else []
+    if exclude:   # that work item is a replay of the lesson's own evidence
+        next(i for i in pool if i["id"] == held["work"][0])["source"] = "ev-own"
+    rep = E.climb(tmp_path, E.Budget(), incumbent={"id": "i", "config": {"wrong": sorted(inc_wrong)}},
+                  candidates=[{"id": "c", "config": {"wrong": sorted(cand_wrong)}, "domains": ["mind", "general"],
+                               "exclude": exclude}],
+                  responder_for=wrong_on, grader=E.exact_grader, rules=[], items=pool,
+                  policy={"guarded_domains": []})
+    c = rep["candidates"][0]
+    assert c["dev"]["better"]
+    if case in ("clean", "other_drop_on_own_evidence"):
+        assert c["status"] == "accepted" and rep["accepted"] == ["c"] and c["gate"]["failures"] == []
+        return
+    assert c["status"] == "gate_failed" and rep["accepted"] == []
+    drops = [f for f in c["gate"]["failures"] if f["gate"] == "held_out_drop"]
+    if case == "own_drop_diluted":   # base's check on its own domains, as base ran it
+        assert c["held"]["delta"] < 0 and drops == [{"gate": "held_out_drop", "delta": c["held"]["delta"]}]
+    else:                            # its own domains are clean; work is gated alone
+        assert c["held"]["delta"] == 0 and drops == [{"gate": "held_out_drop", "delta": -0.1, "domain": "work"}]
+
+
+def test_climb_accept_rescores_the_other_domains(tmp_path):
+    """The accepted candidate's rule reaches every domain: its cache rows and the night's composite are its own
+    scores everywhere, not the old incumbent's rows outside its `domains`."""
+    pool = two_domains()
+    work_dev = {i["id"] for i in E.split(pool)["dev"] if i["domain"] == "work"}
+    everything = sorted(i["id"] for i in pool)
+    rep = E.climb(tmp_path, E.Budget(noise_runs=0), incumbent={"id": "i", "config": {"wrong": everything}},
+                  candidates=[{"id": "c", "config": {"wrong": []}, "domains": ["mind"]}], responder_for=wrong_on,
+                  grader=E.exact_grader, rules=[], items=pool)
+    assert rep["accepted"] == ["c"]
+    cache = json.loads((tmp_path / "eval" / "incumbent.json").read_text())
+    rows = {r["id"]: r["score"] for k in ("dev", "held") for r in cache[k]["rows"]}
+    assert work_dev and all(rows[i] == 1.0 for i in work_dev)
+    assert set(rows) == set(everything) - set(i["id"] for i in E.split(pool)["train"])
+    assert cache["dev"]["composite"] == rep["composite"] == 1.0 and "partial" not in cache["key"]
+
+
+def test_climb_out_of_calls_at_accept_leaves_a_cache_the_next_night_rescores(tmp_path):
+    """The rescore after an accept can run out of calls: the merged rows still carry the old incumbent's work
+    rows, so they are cached under a key no night matches, and the next night scores the incumbent afresh."""
+    pool = two_domains()
+    parts = E.split(pool)
+    mind_dev = [i for i in parts["dev"] if i["domain"] == "mind"]
+    everything = sorted(i["id"] for i in pool)
+    cap = len(parts["dev"]) + len(parts["held"]) + len(mind_dev) + len(parts["held"])   # baseline + candidate
+    rep = E.climb(tmp_path, E.Budget(noise_runs=0, max_calls=cap),
+                  incumbent={"id": "i", "config": {"wrong": everything}},
+                  candidates=[{"id": "c", "config": {"wrong": []}, "domains": ["mind"]}], responder_for=wrong_on,
+                  grader=E.exact_grader, rules=[], items=pool)
+    assert rep["accepted"] == ["c"] and rep["calls"] == cap
+    cache = json.loads((tmp_path / "eval" / "incumbent.json").read_text())
+    assert cache["key"].get("partial") is True and rep["composite"] < 1.0
+    n = [0]
+
+    def counting(cfg):
+        inner = wrong_on(cfg)
+        return lambda p: (n.__setitem__(0, n[0] + 1), inner(p))[1]
+    again = E.climb(tmp_path, E.Budget(noise_runs=0), incumbent={"id": "c", "config": {"wrong": []}}, candidates=[],
+                    responder_for=counting, grader=E.exact_grader, rules=[], items=pool)
+    assert n[0] > 0 and again["start_composite"] == 1.0
