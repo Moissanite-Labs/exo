@@ -403,6 +403,73 @@ def _args_key(args: Any) -> str:
     return hashlib.sha1(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
+class RepeatWatch:
+    """Incremental primary-loop repeat warning. Keep only active turns and bounded recent call keys."""
+    LIMIT = 256
+
+    def __init__(self) -> None:
+        self.turns: dict[str, dict[str, Any]] = {}
+        self.completed: dict[tuple[str, str], set[str]] = {}
+
+    def feed(self, event: ev.Event) -> Flag | None:
+        body, session = event.body, event.session
+        if not session:
+            return None
+        if isinstance(body, ev.TurnStarted):
+            self.turns[session] = {"turn": body.turn_id, "model": body.model, "pending": {},
+                                   "counts": {}, "warned": set(), "filed": set()}
+            return None
+        state = self.turns.get(session)
+        if state is None:
+            return None
+        if isinstance(body, ev.TurnCompleted):
+            if body.turn_id != state["turn"]:
+                return None
+            self.completed[session, state["turn"]] = state["filed"]
+            if len(self.completed) > self.LIMIT:
+                self.completed.pop(next(iter(self.completed)))
+            del self.turns[session]
+        elif isinstance(body, ev.ToolStarted):
+            pending = state["pending"]
+            pending[body.call.id] = (body.call.name, _args_key(body.call.arguments),
+                                     _changes_files(body.call.name, body.call.arguments, False))
+            if len(pending) > self.LIMIT:
+                pending.pop(next(iter(pending)))
+        elif isinstance(body, ev.ToolCompleted):
+            call = state["pending"].pop(body.result.call_id, None)
+            if call is None:
+                return None
+            name, key, changes = call
+            counts = state["counts"]
+            n = counts.pop((name, key), 0) + 1
+            counts[name, key] = n
+            if len(counts) > self.LIMIT:
+                counts.pop(next(iter(counts)))
+            if changes and not (body.is_error or body.result.is_error):
+                counts.clear()  # the same normalization and successful-file-change epoch as detect()
+            elif n >= 3 and name not in state["warned"] and len(state["warned"]) < self.LIMIT:
+                state["warned"].add(name)
+                return Flag(f"tool.repeat:{name}", "papercut", f"Tool {scrub(name, 80)} repeated the same call {n} times",
+                            "Repeated calls detected during the active turn. This argument-based heuristic does not measure progress or stop the turn.",
+                            session, state["turn"], state["model"])
+        return None
+
+    def filed(self, flag: Flag) -> None:
+        state = self.turns.get(flag.session)
+        if state and state["turn"] == flag.turn:
+            state["filed"].add(flag.signature)
+
+    def already_filed(self, flag: Flag) -> bool:
+        state = self.turns.get(flag.session)
+        return bool((state and state["turn"] == flag.turn and flag.signature in state["filed"]) or
+                    flag.signature in self.completed.get((flag.session, flag.turn), set()))
+
+    def finish(self, session: str, turn: str) -> None:
+        self.completed.pop((session, turn), None)
+        if (state := self.turns.get(session)) and state["turn"] == turn:
+            del self.turns[session]
+
+
 def _norm(text: str) -> str:
     """A tool error reduced to its kind: lower case, paths and numbers blanked, first line, 50 chars."""
     line = (text.strip().splitlines() or [""])[0].lower()
