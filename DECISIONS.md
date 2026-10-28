@@ -404,6 +404,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   feature building continue in the main session. Promotion of lessons still needs held-out wins (D-022).
 
 ## D-025 (2026-10-12) Harness self-observation: trace, findings, re-verification
+- **Amendment 2026-10-28 (#749):** the primary loop detects repeated normalized tool calls during a turn, with
+  bounded recent state and the existing file-change epochs. After three repeats it warns and files once per tool
+  per turn. It does not infer semantic progress, stop a turn or change routing and round limits.
 - **Amendment 2026-10-28 (#748):** recorded fallback counts require a serving route without a terminal error.
   Failed attempts remain observable as errors or timeouts instead of claiming recovery. Legacy traces without
   model-call records retain their notice-derived semantics. Routing, cooldowns and retry policy are unchanged.
