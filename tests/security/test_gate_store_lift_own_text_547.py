@@ -12,7 +12,8 @@ line (#394, `_line_own_test`), as the rule step asks of a rule on a line a store
 push names neither the store send nor the line's lead, so the push's matrix deny stands. A rule that names every
 command on the line lifts the deny as before, and the store floor still asks.
 
-Rows marked "main:" give that result on main f28934a3, so those tests fail there; the other rows guard what stays.
+Rows marked "main:" give that result on main f28934a3 and on main 3570be0e, whose src/exo/gate.py and
+plugins/exo-gate/exo_gate are byte-identical to f28934a3, so those tests fail there; the other rows guard what stays.
 Classification and decision only; no command string here is run.
 """
 import pytest
@@ -199,6 +200,20 @@ def test_the_whole_line_test_runs_once_per_rule_on_a_long_store_line(rule, monke
     outcome = decide(sh(line), pol(rule)).outcome
     assert outcome in ("ask", "deny"), outcome
     assert len(runs) <= 2, len(runs)
+
+
+@pytest.mark.parametrize("first_named", [True, False])
+def test_the_whole_line_answer_is_not_kept_across_lines_or_calls(first_named):
+    # One policies object, so the rule is the same object (the same id) in both calls. It names the push and the gist
+    # send, so it passes the test of the gist line and lifts the push's deny there (the floor asks), and it does not
+    # name the s3 send, so the push's deny stands on that line. Each line gets its own answer in either order, so the
+    # answer kept per rule (_whole_line_test) is not carried from one line or decide() call to the next.
+    # main: the s3 line asks too.
+    policies = pol({"match": {"command": "^git push|^gh gist create"}, "decision": "allow"})
+    named = (f"{PUSH} && gh gist create ~/.exo/plugins/foo/__init__.py", ("store_write", "ask", "floor"))
+    unnamed = (f"{PUSH} && aws s3 cp ~/.exo/plugins/foo/__init__.py s3://b/x", ("store_write", "deny", "matrix"))
+    for line, expected in (named, unnamed) if first_named else (unnamed, named):
+        assert result(line, policies)[:3] == expected, line
 
 
 LONG_LINE = " && ".join([f"git push --force origin b{i}" for i in range(3000)] +
