@@ -14,9 +14,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (D-091).
 
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
+- The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).
+- The bus `Store.verify` (relay `/v1/verify` and the `verify_ledger` MCP tool) answers ok false with checked 0
+  for an inverted range, a range that starts past the head, or an explicit range on an empty log. It
+  answered ok true for all three, so a check of nothing read as a clean log. `to` is clamped to the head.
+  A verify with no range on an empty log still answers ok true, with `empty: true`. Port of
+  aska-digital/exo-desktop #70 by sparky-118 (docs/PEERS.md "Bus seats").
+- Learn review and the consolidation model reflector no longer drop a valid model reply because of a brace in
+  the prose after it. The old greedy match ran to the last brace in the text. Port of aska-digital/exo-desktop
+  #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
+  array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
+  `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
@@ -58,6 +69,34 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
 
 ### Fixed
+- A loop body that `cd`s into the store is read as running its earlier commands there on the next pass (#479, also
+  #480). The gate read the body once, in order, so `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` and its `while :` and `until false` forms, which rewrite the policy file on the second pass, were allowed
+  reads on main f28934a3, also under `deny: [store_write]` (the `select` form and the `$( )` form asked but were not
+  denied), and so was the brace-bodied `for i in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`. When a
+  `for`, `select`, `while` or `until` body (a `coproc` one too) holds a `cd` or `pushd` into the store or a
+  descriptor folder after the loop's first command, `classify` now reads the call a second time with that folder
+  entered where the outermost such loop starts, and keeps that reading beside main's (`gate.readings`; the more
+  severe leads): the rows are `store_write`, ask the principal alone, keep the bypass floor and deny under `deny:
+  [store_write]`. A `for` or `select` loop with a `{ ..; }` body (`for i in 1 2; { ..; }`, `select x in a b; {
+  ..; }`, `for ((..)) { ..; }`) counts as a `do ..; done` one; a `for ((..))` header is found from its own `((..))`,
+  so a reserved word as its variable (`for ((do=0; do<2; do++)) { ..; }`), a `!` or any number of `|`, `&&` or
+  `||` pieces in it do not hide the body. Nested loops, a loop condition, `cd -` or a `cd` out after the write,
+  `pushd`, the store spelt as `"$HOME/.exo/policies"`, `$EXO_HOME/policies`, `${X:-..}` or a glob, and a loop in a
+  `$( )` or `bash -c` count. A `for` word list, the loop's `done` or `}` redirections and a command before the loop
+  run once and keep their folder. Known limits, as on main: a `cd` through a variable set earlier or the loop
+  variable is not followed, and a loop behind `time` is not read again (it asks as `opaque_exec`, a seat may answer
+  it and permissions bypass auto-allows it). The second reading may read afresh 64 lines more than the first; past
+  that (a nest of loops in `$( )` five levels deep, which cost about 6 times main's time) it fails closed with one
+  `store_write` part for the passes it did not read, so a deeper nest costs about 2 to 3 times main's CPU time (8
+  levels: 1.05 s, main 0.39 s; 12 levels: 6.2 s, main 3.0 s), and about 4 times when the nest also writes
+  `~/.exo/config.json`, whose D-074 reading is a classify of its own (6 levels: 1.10 s, main 0.29 s). Main's
+  reading of every call is kept unchanged, so nothing decides lower: main's `scripts/gate_diff.py` against f28934a3
+  lowers 0 of 1,123,144 built-in pairs (7,129 tightened on 122 actions), 0 of 4,409,664 pairs on an aimed corpus
+  of 11,424 loop lines under 193 policies before the second verify (606,376 tightened on 7,792 actions), and 0 of
+  2,737,512 pairs on the 7,092 lines with a `((` of that corpus and 4,950 new arithmetic-header lines (135,509
+  tightened on 4,752 actions). Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`
+  "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-28), `docs/DOCS-MAP.md`.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
@@ -960,6 +999,57 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
+  `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
+  as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was
+  dropped too: the opaque floor fired only on `indirection`. So `git push origin feature && X='a b' rm -rf
+  /srv/data` logged, also under `deny: [delete]`, and `gh pr comment 5 ... && X='a b' gh pr comment 6 ... --body
+  'Zork leaked'` walked past the posting rules. A word is now an assignment when its `NAME=` is unquoted in the
+  source (only the value may be quoted, so `'X=a' cmd` still runs a program named `X=a`). The old reading is kept
+  beside the command's, also before an `env -S` or `--split-string`, so `X='a b' ls` still asks, a store path in the
+  value is still a store write and an env-inject value (`GIT_SSH_COMMAND='rm -rf /srv/data' env -S 'git fetch'`) is
+  still read, and a setter under either reading (`X="$Y" ls`) still counts for a `command` rule (#394). The line is
+  also decided with the part main put on top, and the whole call is also read and decided as before, each quoted
+  word the program, the stricter outcome standing: a `cd` behind one (`X='a b' cd /dev && yarn publish`), a
+  `coproc` after one or a value `declare` reads again leaves no decision lower than before. The two readings merge
+  as a gh line's readings do (#399): each reserved part and violation of either stays, a violation as often as one
+  of them lists it (two posts to one PR that both miss the footer around `X='a b' cd ~/.exo/state` list it twice),
+  and the exo-gate hook's checks past the decision (body files, who may answer, "once", the required executor, an
+  "always" bound to the exact line) read the line as before too. That reading is one of the line's readings
+  (`gate.readings`), so a store write or secret part only it has keeps the answer with the principal, once (#447,
+  #311), and a sudo write only it reads keeps its displaced part's approvers (#454). The hook's grant check (D-075)
+  reads it against its own act too: a reserved hit there that is not that reading's act keeps the ask from an
+  "always", as on main, so `X='a b' sudo git commit -m x; sudo git commit -m x` under `reserved: [local_write]`
+  asks every time, although the commit leads the line now.
+  An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
+  `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
+  such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
+  a post now asks where it logged. An unknown program that names a store path (`bat ~/.exo/plugins/foo/__init__.py`)
+  still asks the principal alone, and its decision now names the rule `opaque` where it named `floor`. Main's
+  `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
+  counts in #546). With #584 and D-074, the line read as before also gets its own joined reading and its own reading
+  as before D-074, and a store name an expansion hides or quotes (#320, `~/.exo/pol$(:)icies/gates.yaml`,
+  `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading. With #514 and #493, the store
+  scan keeps each store path either reading meets, so a target entry on a later one still matches, and an ssh host
+  behind a quoted prefix is a target of the line (`X='a b' ssh buildhost gh pr view 5` under a rule on `buildhost`).
+  With #634 (#591), the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env
+  -S "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program;
+  with main f28934a3 (#707, #491), the reading behind a quoted prefix reads the `env -S` text in every spelling
+  env takes (`env -iS`, `--split-s=`, `-i0vS`, `--split`, also with `--` or a glued `;x` in the text) and a `sudo
+  -s` or `sudo -i` shell's stdin, so `X='a b' env --split-s="'Y=c d' rm -rf /srv/data"` and `X='a b' sudo -s <<<
+  'rm -rf /srv/data'` are deletes that `deny: [delete]` denies, where main f28934a3 asks as an unknown program; each
+  such line decides at least as it does with `X=ab` and as main reads it. The line read as before #471 is main's
+  whole reading, its `env -S` split readings included, and permissions bypass asks at the floor first only for
+  that reading, so a post main holds beside a quoted prefix is still held, while a secret or store write only the
+  new reading finds (`X='a b' env -S "gh auth token"`) asks at the floor where main's bypass allows it. With main
+  58503282 (#635, #652, #659), a store name split by quotes, a backslash or a backslash-newline, or in another
+  letter case, behind a quoted prefix is a store write on every reading, and so is a write by a relative name after
+  a `cd` into such a folder there: `X='a b' cd ~/.E''XO && cp /tmp/x config.json` is a store write that
+  `deny: [store_write]` denies, where main read it as `credentials` and asked. A camelCase tool the gate reads by
+  its name and arguments keeps its floor (#515) and gets no reading as before. A line with a quoted prefix
+  assignment is read again as before #471, with each of main's readings (on main f28934a3: 5 call readings where
+  main makes 2 for `X='a b' cp /tmp/x ~/.exo/config.json`, 7 where main makes 3 for `X='a b' env -S 'rm -rf
+  /srv/data'`); a line without one costs what it did.
 - Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
   start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
   `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
