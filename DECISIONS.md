@@ -2954,6 +2954,175 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
+  push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
+  `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
+  runs `cmd`, but the gate read an unknown program named `X=a b` and never read `cmd`. So
+  `git push origin feature && X='a b' rm -rf /srv/data` logged, also under `deny: [delete]`, and a second post
+  behind such a word skipped the posting rules (#396). A word is now an assignment when its `NAME=` (with any
+  `[subscript]` and `+`) is unquoted in its source text, so only the value may be quoted. A word whose name or `=` is
+  quoted (`'X=a' cmd`, `"X"=a cmd`, `X\=a cmd`) stays the program, as bash runs it, and after `env` or `sudo` a word
+  quoted whole is still an assignment (#231). A line continuation in the name (`X\<newline>='a b' cmd`) is dropped
+  before the check, as bash drops it. The env-inject scan (#231) reads the value as before. (2) The opaque
+  floor fired when the line's category was `opaque_exec` or a part carried `indirection`. An unknown program carries
+  the signal `unknown program` instead, so beside a more severe part that logs (`git push origin feature && mytool
+  --wipe`, `git push origin feature; kill -9 1`) its ask was dropped. The floor now fires on that signal too, and a
+  category line naming `opaque_exec` below ask still lowers it (#178); a rule on `opaque_exec` lowers it only when
+  that rule matches the line's dominant part, as for `indirection`. `binds_exact` takes the signal as well, so an
+  "always" on such a line covers that exact line, not every later push to the same remote. The differential does
+  not run that hook step, so the new tests pin it.
+  These steps keep every decision at least as strict as main's. The old reading stays beside the new one as an
+  unknown-program part, with main's exec-options scan over it, so `X='a b' ls`, a bare `X='a b'` and a post behind
+  one still ask. The store check scans that reading's words first, so a store path in a quoted value
+  (`X="$HOME/.exo/state/notes.md" ls`, or the folder a `cd` into the store left) is store_write as before. The old
+  reading is kept also when the new one reaches an `env -S` or `--split-string`, so `X="$HOME/.exo/state/notes.md"
+  env -S 'ls'` stays store_write and `GIT_SSH_COMMAND='rm -rf /srv/data' env -S 'git fetch'` is still denied under
+  `deny: [delete]`. The setter check of a `command` rule (#394) counts a setter under either reading, so `X="$Y" ls`
+  (a program from a variable, before) still has to be named by an allow rule that would lower `X="$Y" ls; git push
+  --force origin main`. And the parts read from the command behind such a word carry the signal `quoted
+  assignment`: `decide` also decides the line with the part `_combine` would put on top without them, as main did,
+  and keeps the stricter outcome. That step holds a post followed by a delete or a force push behind a quoted
+  assignment (`gh pr comment 5 ... && X='a b' rm -rf /srv/data`) at main's decision. There the delete now outranks
+  the post, and the matrix cell, category lines and third-party escalation read the dominant part only (#437), so
+  without the step an all-allow or all-log category policy would allow or log what the post's third-party
+  escalation asks for, and a deny cell for irreversible public acts would ask. Those steps read one simple
+  command at a time, and the new reading also changes what the commands after it see. A `cd` behind a quoted word
+  (`X='a b' cd /dev && yarn publish`) moves their folder, as bash runs it, and their store write then outranks the
+  publish a deny cell denied (the same as `X=ab cd /dev && yarn publish` on main); a reserved word after one is read
+  as after an unquoted assignment (`X='a b' coproc env | cat` a coprocess, where bash runs a program named
+  `coproc`); and a value declare reads again is added to the line late. So `classify` also reads a call that has a
+  quoted prefix assignment as before, each such word the program, in a call of its own (`Classification.before`),
+  and `decide` decides that reading too. The two decisions merge as #399's readings do (`_strictest`): the strictest
+  outcome, the widest exposure, each reserved part of either, and each violation as often as one of them lists it,
+  with one `and N more on other posts` that counts each entry either left out. Each check the exo-gate hook makes
+  past `decide` reads that reading and its own floor, as it reads #399's floor: a post's body file, the required
+  executor's body check, who may answer, "once" and the categories that never get a grant; and `binds_exact` binds
+  the line as that reading binds. Within the simple command, the
+  old reading's store scan reads its own parts and the folder from before the new reading's `cd`, and the late parts
+  the new reading adds are signed. Before these, the reviews' differential runs found lowered lines among
+  each built-in shell line behind `X='a b'` (`X='a b' coproc env | cat`: credentials deny -> credentials ask;
+  `X='a b' cd /dev && ssh -vpls 22 rm -rf /data`: delete deny -> store_write ask; `X='a b' cd ~/.exo && mv keys
+  /tmp/k`: credentials deny -> store_write ask) and in an aimed corpus (`gh pr comment 5 ...
+  && X='a b' declare -a 'arr=($(rm -rf /srv/data))'`: github_post deny -> delete ask), and with the two in-command
+  fixes alone lines still lowered, each a `cd` or a `coproc` behind the quoted word. Rejected:
+  dropping the old reading, which lowers those lines and the ones that ask only as an unknown program. Rejected:
+  reading a reserved word after an assignment as a program, as bash does: right for both forms, but it changes the
+  unquoted form main reads as a coprocess, which this fix leaves alone. Rejected: giving the
+  env-inject scan's matching loop the same unquoted-name test. Bash runs `'GIT_SSH_COMMAND=rm -rf /srv/data' git
+  fetch` as a program of that name, but main reads the delete in the value and `deny: [delete]` denies the line.
+  With the test it would ask. The loop still reads a word with a quoted name as an assignment, which only adds parts.
+  The differential (main's `scripts/gate_diff.py` under its built-in policies and those from the reviews, among them
+  `command` rules on `git push` beside `opaque_exec: allow`, target and command denies and matrix deny cells) lowers
+  nothing on its built-in corpus and on aimed lines: a `cd` or `pushd` into `/dev`, `/proc`, `~/.exo` or `~/.ssh`
+  behind each quoting style, also through `builtin`, `command`, `env -S`, `--split-string`, `env -u`, `nice`, `sudo`,
+  `timeout` and `exec`, before a publish, a force push, a post, an ssh delete, a secret read or a move of the store's
+  keys; a `cd` before one; reserved words and `coproc` after one; environment dumps behind one; values declare and
+  friends read again after a post; each quoting style with store, secret and env-inject values (`PATH`, `BASH_ENV`,
+  `GIT_SSH_COMMAND`, `PS4`, `LD_PRELOAD`) through each wrapper; and each built-in shell line behind `X='a b'`, with
+  their compound forms. The runs and counts are in #546. Earlier versions lowered lines it now covers:
+  once main took #468, a merge of the two readings that kept each violation once lowered lines under the posting
+  policies (`gh pr comment 5 -R myorg/app --body $'ok\nF' && X='a b' pushd /dev/fd &&
+  gh pr comment 5 -R myorg/app --body hi`: both posts miss the footer after the `cd` into a descriptor, store or
+  secret folder, and main lists that violation twice, the merge once);
+  one that scanned only the new reading's words for store paths lowered a store path in a quoted value from
+  store_write; one that dropped the old reading when an `env -S` followed lost store_write and env-inject deletes;
+  and one whose setter check read only the new reading allowed `X="$Y" ls; git push --force origin main` by a rule
+  on `git push`. The stricter lines are a push that logged, or was allowed, and now asks beside an unknown program or
+  a command read behind a quoted assignment (`vcs_push log -> vcs_push ask`), and the command behind one taking the
+  line (`opaque_exec allow -> delete ask`): a command read behind a quoted assignment now asks or denies as it does
+  alone, and an unknown program (the quoted word read as before) asks beside a push that logged.
+  The everyday cost is a script that calls a local tool the gate does not know after a
+  push or a post (`git push origin feature && notify-send done`): it asks where it logged. The text of `env -S` or
+  `--split-string` is read as a shell line and, since main took #634 (#591), as env's argv too, so a leading
+  assignment quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) no longer hides the command either. The
+  spellings #634 did not read are read since main f28934a3 took #707, behind a quoted prefix too (below).
+  On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
+  before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
+  `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
+  executor check and its approvers for a sudo write's displaced part, which iterate the readings: a store write or
+  secret part only that reading has keeps the answer with the principal, once, and a sudo write only it reads keeps
+  its displaced part's approvers. An "always" on such a line covers that exact line only (`binds_exact`). The
+  hook's grant check (D-075) reads each reading against its own act (2026-10-26, review of #546): a reserved hit in
+  the line read as before that differs from that reading's act, or from the act of the part its sudo write displaced
+  (#454), keeps the ask, as on main, where that reading was the line. Comparing the hits with the line's own act
+  alone let an "always" cover `X='a b' sudo git commit -m x; sudo git commit -m x` under `reserved: [local_write]`,
+  and the same with `systemctl enable foo.timer` under `reserved: [schedule]` or `sudo curl` under `reserved:
+  [web_read]`, which main asks every time: a costly act ties with the unknown program, comes first and leads the line
+  now, so the hit is on the line's own act. Rejected: comparing every hit with the act of the line read as before,
+  which keeps the ask on lines main grants (`X='a b' git push origin main` under `reserved: [vcs_push]`, which has no
+  hit as read before). Main's `scripts/gate_diff.py` lowers nothing on its built-in corpus or on the aimed corpora
+  above with the test lines of #311, #447, #454, #316 and #528 behind `X='a b'` and `X="$Y"`, in front and after the
+  first joiner, also in a shell call's own folder.
+  Through the exo-gate hook, those prefixed lines under several policy and approval setups, each asked twice with
+  an "always" between, lose no ask, exact binding, approver or "once" against main. So do commands across the
+  categories (sudo, schedule and sudo write forms among them) behind `X='a b'` and `X="$Y"`, alone and joined by `;`
+  or `&&` with the prefix on either side, under a reserved entry for each category a grant may cover and all of them
+  at once: no ask that main never lets a grant answer takes one. Some lines ask where main took a grant: a reserved
+  entry names a part main never read there (the command behind the quoted word, or the unknown program kept beside
+  it), and D-075 keeps a hit on another part than the line's act from a grant. The runs and counts are in #546.
+  On main dcab371a (2026-10-26), which took #584 (a `$` form's backslash-newline joined) and D-074 (the home's
+  `config.json` a store path, `Classification.ordinary`), each reading keeps the others: the line read as before
+  #471 has its own joined reading and its own reading as before D-074, and the reading as before D-074 its own
+  reading as before #471. `gate.readings` lists the line's own readings, then those of the line as before D-074,
+  then those of the line as before #471. A store name an expansion hides (#320: `~/.exo/pol$(:)icies/gates.yaml`,
+  `~/.exo/$(printf policies)/default.yaml`), a quoted one (`~/.exo/pol'icies'/gates.yaml`) and the home's
+  `config.json` so hidden, written behind each quoted prefix style, after a push and behind `sudo`, are store writes
+  on the new reading alone too, as on main.
+  On main 15e60ddb (2026-10-26), which took #514 (each store path a write names is a target), #493 (an ssh host
+  stands for an empty target), #515 (a camelCase tool read as its words) and #328 (a quoted heredoc delimiter with a
+  space), the simple command's store scan keeps each store path either reading's scan meets, the quoted word's
+  first, so a target entry on a later store path reaches the write as on main. The reading as before #471 is its own
+  call (`classify` reads it beside the line, each with `_classify_reading`'s budgets and folders), so it keeps
+  main's joined reading, its reading as before D-074 and its targets, and `binds_exact` binds the line as that
+  reading binds (review 5659099075 of #546). The command behind a quoted word now gets main's later readings too: an
+  ssh host behind `X='a b'` is a target of the line, so a rule on it denies `X='a b' ssh buildhost gh pr view 5`,
+  which main read as an unknown program and asked.
+  On main fa5dfcd8 (2026-10-27), which took #634 (#591: the text of `env -S` read as env's own argv too), #585
+  (the lexer reads a `$` form after a backslash-newline), #588 (`$[..]` read as `$((..))`), #612, #516, #579 and
+  #586 (the hook's two policy files merged as one stricter reading), the merge changes none of this amendment's
+  code. Each of those readings is made inside a reading of the call, so the line read as before #471 makes it too,
+  and the `env -S` argv reading sits beside the quoted prefix readings: `X='a b' env -S "'Y=c d' rm -rf
+  /srv/data"` is a delete that `deny: [delete]` denies, also after a push or behind `sudo`, where main reads the
+  quoted word as the program and asks, or logs beside the push. The hook's grant check for the line read as before
+  reads its reserved hits under the pinned and the changed file both, also on each side #586 asks alone, so it
+  only keeps an ask.
+  On main 58503282 (2026-10-27), which took #635 (#601: store and secret names in any letter case), #652 (#553: a
+  `$((` bash reads as a command substitution) and #659 (#651: a tool that replaces text writes the store file it
+  names), the merge changes none of this amendment's code either (review 5661669883 of #546). The reading as
+  before #471 is a call of its own (`classify` makes it with `_classify_reading`), so every reading main makes of a
+  shell line is made in it too: the joined reading (#584), the reading as before D-074 (`ordinary`), the folded
+  store names (#601, #635), a glob in a secret store's folder (#594, #609), the store paths each write names (#514,
+  #611), an ssh host for an empty target (#493, #610), the `env -S` argv reading (#634), `$\<newline>` (#585, #643)
+  and `$((` (#553, #652). `gate.readings` lists each of them after the line's own, `binds_exact` binds the line
+  when any of them would, `as_dict` leaves `before` out, and the hook's grant check reads that reading's reserved
+  hits under each policy file (#586, #640). A camelCase tool's floor (#515, #602), a file tool's store keys (#494,
+  #608) and a replace tool's write (#651, #659) are made only for a call the gate reads by its name and arguments,
+  never a shell line, so no such call has a reading as before; it keeps main's readings as they are. A store name
+  split by quotes, a backslash or a backslash-newline, or in another letter case, behind a quoted prefix is a store
+  write on every reading, and so is a write by a relative name after a `cd` into such a folder there (`X='a b' cd
+  ~/.E''XO && cp /tmp/x config.json`): main read the quoted word as the program, never moved the folder and read
+  the line as `credentials`, so `deny: [store_write]` asked. A line with a quoted prefix assignment is read again
+  as before #471, and with the home's `config.json` its reading as before D-074 has its own reading as before #471
+  too: `X='a b' cp /tmp/x ~/.exo/config.json` takes 5 call readings where main takes 2, and 10 where main takes 4
+  with the name split by `$\<newline>`. The count does not grow with nesting. A line without one costs what it did.
+  On main f28934a3 (2026-10-28), which took #707 (#591: the line env runs read in every spelling of `-S`, beside
+  main's own readings of the call in `Classification.split_readings`) and #718 (#491: the stdin a `sudo -s` or `-i`
+  shell runs, with the call read as before #491 at the end of its floors), the two layers nest (review 5678114534
+  of #546). `classify` reads the call for each reading of its quoted prefix assignments, and `_split_reading`
+  reads each of those for each reading of its `env -S` texts. So the line read as before #471 is the call exactly
+  as main f28934a3 reads it, its split readings and its reading as before #491 included, and the reading after the
+  quoted prefix has split readings of its own. `gate.readings` lists the line's own readings, then those of the
+  line as before D-074, before #471 and each split reading, each with its own; `decide`, `binds_exact`,
+  `no_grant`, `call_approvers` and the hook's checks read each. `_env_split_lines`, which finds the line env runs,
+  reads the prefixes as `_strip_prefix_words` does (`_prefix_assign`), so a quoted prefix hides no `-S` text in
+  any spelling: `X='a b' env --split-s="'Y=c d' rm -rf /srv/data"` and `X='a b' sudo -s <<< 'rm -rf /srv/data'`
+  are deletes that `deny: [delete]` denies, where main f28934a3 reads the quoted word as the program and asks.
+  The hook's bypass asks at the floor first only for main's own reading, which behind a quoted prefix is the line
+  read as before #471 (its first split reading, when it has one), so a post main holds there is still held; the
+  floor of every other reading, the reading after the quoted prefix and its split readings included, comes after
+  the hold, so `X='a b' env -S "gh auth token"` asks at the floor where main's bypass allows it. On main f28934a3,
+  `X='a b' env -S 'rm -rf /srv/data'` takes 7 call readings where main takes 3, and `X='a b' cp /tmp/x
+  ~/.exo/config.json` 5 where main takes 2.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

@@ -956,6 +956,57 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
+  `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
+  as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was
+  dropped too: the opaque floor fired only on `indirection`. So `git push origin feature && X='a b' rm -rf
+  /srv/data` logged, also under `deny: [delete]`, and `gh pr comment 5 ... && X='a b' gh pr comment 6 ... --body
+  'Zork leaked'` walked past the posting rules. A word is now an assignment when its `NAME=` is unquoted in the
+  source (only the value may be quoted, so `'X=a' cmd` still runs a program named `X=a`). The old reading is kept
+  beside the command's, also before an `env -S` or `--split-string`, so `X='a b' ls` still asks, a store path in the
+  value is still a store write and an env-inject value (`GIT_SSH_COMMAND='rm -rf /srv/data' env -S 'git fetch'`) is
+  still read, and a setter under either reading (`X="$Y" ls`) still counts for a `command` rule (#394). The line is
+  also decided with the part main put on top, and the whole call is also read and decided as before, each quoted
+  word the program, the stricter outcome standing: a `cd` behind one (`X='a b' cd /dev && yarn publish`), a
+  `coproc` after one or a value `declare` reads again leaves no decision lower than before. The two readings merge
+  as a gh line's readings do (#399): each reserved part and violation of either stays, a violation as often as one
+  of them lists it (two posts to one PR that both miss the footer around `X='a b' cd ~/.exo/state` list it twice),
+  and the exo-gate hook's checks past the decision (body files, who may answer, "once", the required executor, an
+  "always" bound to the exact line) read the line as before too. That reading is one of the line's readings
+  (`gate.readings`), so a store write or secret part only it has keeps the answer with the principal, once (#447,
+  #311), and a sudo write only it reads keeps its displaced part's approvers (#454). The hook's grant check (D-075)
+  reads it against its own act too: a reserved hit there that is not that reading's act keeps the ask from an
+  "always", as on main, so `X='a b' sudo git commit -m x; sudo git commit -m x` under `reserved: [local_write]`
+  asks every time, although the commit leads the line now.
+  An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
+  `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
+  such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
+  a post now asks where it logged. An unknown program that names a store path (`bat ~/.exo/plugins/foo/__init__.py`)
+  still asks the principal alone, and its decision now names the rule `opaque` where it named `floor`. Main's
+  `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
+  counts in #546). With #584 and D-074, the line read as before also gets its own joined reading and its own reading
+  as before D-074, and a store name an expansion hides or quotes (#320, `~/.exo/pol$(:)icies/gates.yaml`,
+  `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading. With #514 and #493, the store
+  scan keeps each store path either reading meets, so a target entry on a later one still matches, and an ssh host
+  behind a quoted prefix is a target of the line (`X='a b' ssh buildhost gh pr view 5` under a rule on `buildhost`).
+  With #634 (#591), the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env
+  -S "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program;
+  with main f28934a3 (#707, #491), the reading behind a quoted prefix reads the `env -S` text in every spelling
+  env takes (`env -iS`, `--split-s=`, `-i0vS`, `--split`, also with `--` or a glued `;x` in the text) and a `sudo
+  -s` or `sudo -i` shell's stdin, so `X='a b' env --split-s="'Y=c d' rm -rf /srv/data"` and `X='a b' sudo -s <<<
+  'rm -rf /srv/data'` are deletes that `deny: [delete]` denies, where main f28934a3 asks as an unknown program; each
+  such line decides at least as it does with `X=ab` and as main reads it. The line read as before #471 is main's
+  whole reading, its `env -S` split readings included, and permissions bypass asks at the floor first only for
+  that reading, so a post main holds beside a quoted prefix is still held, while a secret or store write only the
+  new reading finds (`X='a b' env -S "gh auth token"`) asks at the floor where main's bypass allows it. With main
+  58503282 (#635, #652, #659), a store name split by quotes, a backslash or a backslash-newline, or in another
+  letter case, behind a quoted prefix is a store write on every reading, and so is a write by a relative name after
+  a `cd` into such a folder there: `X='a b' cd ~/.E''XO && cp /tmp/x config.json` is a store write that
+  `deny: [store_write]` denies, where main read it as `credentials` and asked. A camelCase tool the gate reads by
+  its name and arguments keeps its floor (#515) and gets no reading as before. A line with a quoted prefix
+  assignment is read again as before #471, with each of main's readings (on main f28934a3: 5 call readings where
+  main makes 2 for `X='a b' cp /tmp/x ~/.exo/config.json`, 7 where main makes 3 for `X='a b' env -S 'rm -rf
+  /srv/data'`); a line without one costs what it did.
 - Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
   start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
   `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
