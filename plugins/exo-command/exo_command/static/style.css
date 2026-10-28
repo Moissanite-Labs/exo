@@ -263,6 +263,10 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-sess-title { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; line-height: 1.4; }
 .xc-sess .xc-dim { font: 12px var(--xc-sans); color: var(--fg-3); }
 .xc-sess .xc-needs { color: var(--accent); }
+.xc-sess.xc-child { padding-left: 28px; }
+.xc-sess-toggle { background: none; border: 0; padding: 2px 14px 6px 28px; text-align: left; cursor: pointer;
+  font: 500 10px var(--xc-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.xc-sess-toggle:hover { color: var(--fg); }
 .xc-log { flex: 1; min-width: 0; overflow-y: auto; font: 400 16px/1.65 var(--xc-sans); display: flex; flex-direction: column; gap: 22px; padding: 28px clamp(20px, 3vw, 44px); scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 .xc-log > .xc-empty { color: var(--fg-3); font-size: 12.5px; padding: 0; }
 .xc-text { white-space: pre-wrap; overflow-wrap: anywhere; }

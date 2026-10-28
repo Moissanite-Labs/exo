@@ -8,7 +8,7 @@ import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
-import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
+import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem, groupThreads, threadLabel, isScoutChild } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 
 // Page-lifetime intent only: never write prompts to browser storage.
@@ -28,6 +28,7 @@ export function mount(root) {
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
+  const collapsedGroups = new Set();   // parent ids whose scout children are folded in the sidebar (canonical port of exo-desktop #83)
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
@@ -506,7 +507,7 @@ export function mount(root) {
     const el = document.getElementById("xc-where");
     if (!el) return;
     const s = sessions.find((x) => x.id === current);
-    el.replaceChildren(...(s ? [h("b", null, s.agent || s.seat || "exo"), " \u00B7 " + short(s.title || s.id, 36)] : []));
+    el.replaceChildren(...(s ? [h("b", null, s.agent || s.seat || "exo"), " \u00B7 " + (s.title && s.title.trim() ? short(threadLabel(s), 36) : threadLabel(s))] : []));
   }
 
   function drawSessions() {
@@ -522,17 +523,49 @@ export function mount(root) {
     searchClear.hidden = !threadQuery;
     threadScope.textContent = shown.length + " of " + sessions.length + " loaded conversations";
     renameButtons.clear(); conversationButtons.clear();
-    listEl.replaceChildren(...(shown.length ? shown.map((s) => {
+    // Canonical port of exo-desktop #83: delegated scouts sit beneath their parent conversation, grouped only by the session's
+    // own parent + kind metadata (groupThreads, chat_state.js) — never by a title prefix. Grouping runs on the
+    // filtered list, so a scout whose parent is filtered out stays top-level as an orphan, still openable.
+    // A top-level row keeps class exactly "xc-sess", as before; child rows add "xc-child". Rows keep the
+    // explicit Rename button and editor from main: no prompt-based rename anywhere here.
+    const groups = groupThreads(shown);
+    function expandAncestors(node) {   // the open thread's group is never folded away from it
+      if (node.session.id === current) return true;
+      for (const c of node.children) if (expandAncestors(c)) { collapsedGroups.delete(node.session.id); return true; }
+      return false;
+    }
+    groups.forEach(expandAncestors);
+    function sessRow(s, isChild, extra) {
+      const label = threadLabel(s);
+      const titled = !!(s.title && s.title.trim());
+      const visible = isChild || !titled ? label : short(label, 40);   // a scout's full title wraps, not truncates
       const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
       renameButtons.set(s.id, button);
-      const conversationButton = h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => chooseConversation(s.id),
-        title: "Open conversation", "aria-current": s.id === current ? "true" : null,
+      const conversationButton = h("button", { class: "xc-sess" + (s.id === current ? " on" : "") + (isChild ? " xc-child" : ""), onclick: () => chooseConversation(s.id),
+        title: label + " (" + s.id + ")", "aria-current": s.id === current ? "true" : null,
         ondblclick: () => beginRename(s) },
-        h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
+        h("span", { class: "xc-sess-title" }, visible),
+        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", ...extra, when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
       conversationButtons.set(s.id, conversationButton);
       return h("div", { class: "xc-session-row" }, conversationButton, button);
-    }) : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
+    }
+    function renderGroup(node, isChild) {
+      const s = node.session;
+      const extra = [];
+      if (node.orphan && isScoutChild(s)) extra.push("orphan scout");
+      if (node.children.length) extra.push(node.children.length + " scout" + (node.children.length === 1 ? "" : "s"));
+      const out = [sessRow(s, isChild, extra)];
+      if (!node.children.length) return out;
+      const running = node.children.filter((c) => c.session.status === "live").length;
+      const folded = collapsedGroups.has(s.id);
+      out.push(h("button", { class: "xc-sess-toggle", "aria-expanded": String(!folded), onclick: () => { if (folded) collapsedGroups.delete(s.id); else collapsedGroups.add(s.id); drawSessions(); } },
+        (folded ? "▸ " : "▾ ") + node.children.length + " scout" + (node.children.length === 1 ? "" : "s") + (running ? " · " + running + " running" : "")));
+      if (!folded) for (const c of node.children) out.push(...renderGroup(c, true));
+      return out;
+    }
+    const rows = [];
+    for (const g of groups) rows.push(...renderGroup(g, false));
+    listEl.replaceChildren(...(rows.length ? rows : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
       sessions.length ? h("button", { class: "xc-btn", onclick: () => {
         searchInput.value = threadQuery = ""; threadFilterInput.value = threadFilter = "all"; drawSessions(); searchInput.focus();
       } }, "Show all conversations") : null)]));
@@ -904,7 +937,7 @@ export function mount(root) {
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
   restoreDraft();
-  refreshSessions().then(() => { if (mounted && !current && (asked || (!draft(null).text && !draft(null).pending && sessions.length))) open(asked || (sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id)); });
+  refreshSessions().then(() => { if (mounted && !current && (asked || (!draft(null).text && !draft(null).pending && sessions.length))) { const first = groupThreads(sessions)[0]; open(asked || (sessions.some(s => s.id === lastThread) ? lastThread : (first && first.session.id)) || sessions[0].id); } });
   return off;
 }
 

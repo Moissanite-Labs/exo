@@ -218,6 +218,12 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
   current composer draft. A refused save keeps the title draft and shows the error.
+  Delegated scout sessions (kind `subagent` with a `parent` session, as `session.list` reports) sit beneath
+  their parent conversation, expandable, with their scout count and running scouts shown on the parent; a scout
+  whose parent is not in the filtered list stays top-level as an orphan, still openable. Grouping never infers
+  ownership from a title. A thread with no title shows `Untitled thread` (or `Untitled scout`) plus its full
+  session id, not just the id. Choosing a scout, or collapsing its parent, does not switch the active
+  conversation's composer draft.
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
   readers already at the newest item continue following it. The transcript is keyboard focusable.

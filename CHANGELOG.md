@@ -6,6 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Chat Threads sidebar groups delegated scout sessions beneath their parent conversation (canonical port of exo-desktop #83). Grouping uses only the session's own `parent` + `kind="subagent"` metadata from `session.list`, never a title prefix; a scout whose parent is not in the list stays top-level as an orphan, still openable. A thread with no title shows `Untitled thread` (or `Untitled scout`) plus its full session id.
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).
