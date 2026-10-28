@@ -514,6 +514,15 @@ def full(call, policy):
     return c.category, d.outcome, [r[0] for r in d.reserved], d.violations
 
 
+def full_once(call, policy):
+    """full, with each reserved category listed once. Since #706 (#609 follow-up) main lists a line's store again as
+    another store when the line's target is the word as written and its own list spells `~` out, or when the store is
+    in a quoted `bash -c` text: main cd371aed counts two hits for `cat ~/.kube/\\config` and for
+    `bash -c 'cat < ~/.kube/config'` under `reserved: [target:*/.kube/config]`, where `cat ~/.kube/config` has one."""
+    category, outcome, hits, violations = full(call, policy)
+    return category, outcome, sorted(set(hits)), violations
+
+
 LOWERED = [
     ({"tool": "write_file", "args": {"path": "~/.kube//config", "content": "x"}},
      {"tool": "write_file", "args": {"path": "~/.kube/config", "content": "x"}}),
@@ -579,10 +588,15 @@ DD = [
 
 
 @pytest.mark.parametrize("odd, plain, policy", [(o, p, pol) for o, p in LOWERED for pol in STRICT] +
-                         [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET] +
                          [(o, p, pol) for o, p in DD for pol in STRICT + EXO_TARGET])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
+
+
+@pytest.mark.parametrize("odd, plain, policy", [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET])
+def test_a_backslash_line_decides_as_its_plain_spelling(odd, plain, policy):
+    # the same stores take the same reserved hits; main's second copy of a store (full_once) is not counted
+    assert full_once(odd, policy) == full_once(plain, policy)
 
 
 @pytest.mark.parametrize("policy, outcome, hits", list(zip(TARGET, ["deny", "ask", "deny"],
@@ -884,9 +898,11 @@ def test_the_target_stays_the_first_store_the_line_names():
 
 @pytest.mark.parametrize("line", ["cat ~/.kube/config ~/.ssh/id_rsa", "cat ~/.kube/conf* ~/.ssh/id_rsa"])
 def test_a_line_main_read_the_same_way_gets_no_part(line):
-    # Only a target main did not read brings main's in. On a line main read the same way, the second store is not a
-    # target, as on main: naming each store a line names is a follow-up
-    assert full(line, SECOND[0])[1] == "ask"
+    # Only a target main did not read brings main's in. On a line main read the same way, no such part is made. The
+    # entry for the second store matches the part main makes for each store a line names since #706 (#609 follow-up)
+    c = gate.classify({"tool": "bash", "args": {"command": line}})
+    assert not any(p.main_target for p in gate._each_part(c))
+    assert full(line, SECOND[0])[1] == "deny"
 
 
 # --- a shell call's own folders (#513 sixth round) -----------------------------------------------------------------
@@ -1057,11 +1073,13 @@ def test_main_s_read_of_the_folder_stays_a_part_beside_a_later_part_main_read(to
                                   "cp /pro?/self/environ keys"])
 @pytest.mark.parametrize("in_args", [True, False])
 def test_a_bare_word_main_read_first_gets_no_part_of_its_own(line, in_args):
-    # main's line had no target for `keys`, and neither its part nor its folder read is `keys` alone, so an entry for
-    # that name asks, here and on main, with `~/.exo` as the call's folder or the session's
+    # main's line had no target for `keys`, so the part of main's target is not made for it, with `~/.exo` as the
+    # call's folder or the session's. An entry for that name denies through the part main makes for each store a
+    # line names since #706 (#609 follow-up), here and on main cd371aed
     args = {"command": line, "cwd": "~/.exo"} if in_args else {"command": line}
     c = gate.classify({"tool": "bash", "args": args}, cwd=None if in_args else "~/.exo")
-    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:keys"]}})).outcome == "ask"
+    assert not any(p.main_target and p.target == "keys" for p in gate._each_part(c))
+    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:keys"]}})).outcome == "deny"
 
 
 @pytest.mark.parametrize("line", ["cat ~/.kube/config; cd ~/.docker && cat conf*",
@@ -1221,15 +1239,16 @@ SSH_IRREVERSIBLE = {"gates": {"rules": [{"match": {"target": "*/.ssh/*", "revers
     "cat /pro?/self/environ; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
     "cat ~/.docker/./config.json ~/.ssh/id_rsa; echo $(ssh prod 'rm -rf /')",
     "cat ~/.kube//config ~/.ssh/id_rsa; bash -c 'rm -rf /'",
+    # the plain line: since #706 (#609 follow-up) main's part for the second store weighs as the line's own
+    "cat ~/.kube/config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
 ])
 def test_main_s_target_keeps_the_weight_of_a_heavier_command_deeper_in_the_line(line):
     assert full(line, SSH_IRREVERSIBLE)[:2] == ("credentials", "deny")
 
 
-@pytest.mark.parametrize("line", ["cat ~/.kube/config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
-                                  "cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod ls"])
+@pytest.mark.parametrize("line", ["cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod ls"])
 def test_main_s_target_gets_no_weight_main_did_not_give_it(line):
-    # main's target is the kube config on the plain line, and `ssh prod ls` is no heavier command: both ask, as on main
+    # `ssh prod ls` is no heavier command, so the line asks, as on main
     assert full(line, SSH_IRREVERSIBLE)[1] == "ask"
 
 
@@ -1283,3 +1302,38 @@ def test_a_path_in_its_own_case_gets_no_copy_of_the_host_s_delete(path):
                                   "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa'"])
 def test_the_host_keeps_every_reserved_hit_main_lists(line):
     assert sorted(full(line, {"gates": {"reserved": ["target:prod"]}})[2]) == ["credentials", "read", "shell"]
+
+
+# Since #706 (#609 follow-up) each store a secret line names past its first is a credentials part of its own
+# (``other_store``), so an entry for any of them matches. The stores are read as #446 reads them, a name the shell
+# reads in a text with a backslash included, so a store past an odd first store, or an odd store past the first,
+# keeps its part, and the ssh hop's copy for the host passes over these parts as over main's target (the merge of
+# main cd371aed)
+EACH_STORE = [
+    ("cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials", "cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials",
+     {"gates": {"deny": ["target:*/.aws/*"]}}),
+    ("cat /pro?/self/environ ~/.ssh/id_rsa ~/.aws/credentials",
+     "cat /proc/self/environ ~/.ssh/id_rsa ~/.aws/credentials", {"gates": {"deny": ["target:*/.aws/*"]}}),
+    ("cat ~/.ss?/* ~/.kube//config", "cat ~/.ss?/* ~/.kube/config", {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("cat ~/.ssh/id_rsa < ~/.kube/\\config", "cat ~/.ssh/id_rsa < ~/.kube/config",
+     {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("cat ~/.{kube//config,ssh/id_rsa}", "cat ~/.{kube/config,ssh/id_rsa}", {"gates": {"deny": ["target:*/.ssh/*"]}}),
+    ("ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'",
+     "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials'", {"gates": {"deny": ["target:*/.aws/*"]}}),
+    ("ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'",
+     "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials'", HOST_READ[0]),
+    ("ssh a ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'",
+     "ssh a ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials'", HOST_READ[0]),
+]
+
+
+@pytest.mark.parametrize("odd, plain, policy", EACH_STORE)
+def test_each_store_past_the_first_keeps_its_part_in_any_spelling(odd, plain, policy):
+    assert full(odd, policy)[:2] == full(plain, policy)[:2] == ("credentials", "deny")
+
+
+def test_each_store_past_an_odd_first_store_keeps_its_reserved_hit():
+    policy = {"gates": {"reserved": ["target:*/.aws/*", "target:*/.ssh/*"]}}
+    assert full("cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials", policy)[2] == ["credentials", "credentials"]
+    c = gate.classify({"tool": "bash", "args": {"command": "cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials"}})
+    assert {p.target.rsplit("/", 2)[-2] for p in gate._each_part(c) if p.other_store} == {".ssh", ".aws"}
