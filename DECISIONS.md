@@ -4751,7 +4751,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and their controls, under the default policies and four aimed `gates.yaml` files, in enforce and observe mode,
   with and without bypass, at no, high and low registry risk, gives 1360 lines on main e0968a2b and here: 164 change,
   each to an ask or to a bypass row that records the ask, and none runs here that main asks about or blocks.
-  `gate_diff` sees neither check (both are past `decide`).
+  `gate_diff` sees neither check (both are past `decide`). *2026-10-27, review 5675164403 of #703:* the rows above
+  are not the only ones. The floor reads each part too, so a snake shell call whose own folder argument is a secret
+  folder (#311) also asks once in bypass. Its line keeps its own category (`read`), and the store read is a
+  `credentials` part. `terminal`, `bash` and `exec_command` running `cat config` with `workdir` `~/.kube`, and
+  `bash` running `ls` with `cwd` `~/.exo/keys`, `~/.aws` or `~/.claude`, ran in bypass on main 58503282. They ask
+  once since #703, in enforce and observe mode, with `bypass.floor` `credentials`. `cat ~/.kube/config` asked
+  before too, and a shell call in an ordinary folder still runs. This decision wants that: secrets still ask.
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,
