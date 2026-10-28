@@ -171,5 +171,10 @@
       "strict_xfail": true
     }
   ],
-  "validation": "18 passed, 16 strict xfailed; --runxfail separately exposes expected gaps"
+  "validation": "18 passed, 16 strict xfailed; --runxfail separately exposes expected gaps",
+  "extension_568": {
+    "base": "f28934a3f6bfcaec3a5e29223f7354df788afe07",
+    "validation": "41 ordinary regression guards pass on current main; no gap reproduced and no runtime fix claimed",
+    "scope": "four documented dd read/write/plain/odd operands under direct,sudo,bash with target deny,reserved,rule; multi-store SSH policy plus copy and unrelated-dd controls"
+  }
 }
