@@ -14,9 +14,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   answered ok true for all three, so a check of nothing read as a clean log. `to` is clamped to the head.
   A verify with no range on an empty log still answers ok true, with `empty: true`. Port of
   aska-digital/exo-desktop #70 by sparky-118 (docs/PEERS.md "Bus seats").
-- Learn review and the consolidation model reflector decode the first JSON value in model output. The old
-  greedy match ran to the last brace in the text, so prose with a brace after the value dropped a valid
-  proposal. Port of aska-digital/exo-desktop #72 by sparky-118.
+- Learn review and the consolidation model reflector no longer drop a valid model reply because of a brace in
+  the prose after it. The old greedy match ran to the last brace in the text. Port of aska-digital/exo-desktop
+  #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
+  array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
+  `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
 - Web workspace design with coordinated dark and light themes, readable conversation typography,

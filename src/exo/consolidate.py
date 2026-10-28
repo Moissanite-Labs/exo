@@ -523,16 +523,31 @@ Reply with one JSON object and nothing else:
  "domain": "one of the allowed domains", "type": "preference or rule", "title": "short title"}}"""
 
 
-def _decode_model_json(raw: str) -> Any:
-    """Decode the first JSON value in model output, ignoring anything after it.
+_JSON_STARTS = 64   # brace positions tried before the reply counts as having no object
+
+
+def _decode_model_json(raw: str) -> dict:
+    """Decode the first JSON object in model output, skipping the prose around it.
 
     The old greedy match ran to the last brace in the text, so a trailing
-    brace in prose after the value dropped valid output.
+    brace in prose after the object dropped valid output. Decoding is tried
+    from each `{` in turn, so a bracketed note, an array or an object wrapped
+    in an array before or around the answer does not hide it either. The first
+    start that decodes to an object wins.
     """
-    starts = [i for i in (raw.find("{"), raw.find("[")) if i >= 0]
-    if starts:
-        return json.JSONDecoder().raw_decode(raw[min(starts):])[0]
-    return json.loads(raw)
+    decoder, start = json.JSONDecoder(), raw.find("{")
+    for _ in range(_JSON_STARTS):
+        if start < 0:
+            break
+        try:
+            value = decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+        start = raw.find("{", start + 1)
+    raise ValueError("no JSON object in the model output")
 
 
 class ModelReflector:
