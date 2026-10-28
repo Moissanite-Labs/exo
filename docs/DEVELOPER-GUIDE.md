@@ -34,6 +34,23 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
+pending continuity and supervision work. It changes no runtime contract or policy.
+
+**Automatic continuity checkpoints.** `exo.work_checkpoint` derives a bounded
+record index from visible session messages and job metadata. Composition enables
+it by default; it chains existing callbacks and workspace injection, adds no
+model calls or replay, and reconstructs after abrupt exits. Keep it separate from
+manual working notes. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md) for privacy, undo,
+uncertain-effects semantics and acceptance tests.
+
+**Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
+state in `sessions.sqlite`. Composition validates `work_notes` before opening
+runtime resources, then attaches the gated tool, per-session prompt and handoff
+source. Updates compare revisions inside one transaction. Keep note authorship
+as `agent`, preserve session scope, and use existing gate and executor dispatch.
+The adapter and limits are documented in [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
+
 | Path | What lives there |
 |---|---|
 | `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
@@ -61,11 +78,13 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+**The core budget (D-077, D-083).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
-protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
-with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
+protocol files excluded). The ceiling is off (D-083): the test reports the count against `CORE_FLOOR = 14,813` and
+asserts nothing about lines. Run it with `-s` to see the number. It does assert two step 4 structure counts, which
+ratchet down: `INWARD_IMPORTS_MAX = 39`
+imports of a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. A real
+reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
 its own cap (section 2).
@@ -205,7 +224,9 @@ Then do the next three steps.
 
 **Classify it in the gate.** The gate decides allow, log, ask or deny by category. Add the tool to `TOOLS` in
 `src/exo/gate.py`, mapped to a category such as `read`, `local_write`, `shell`, `delegate`, `credentials`,
-`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow.
+`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow,
+also when the gate reads a known word in its camelCase name (`mcp__fs__writeFile`): the unsplit name is still read
+as `unknown` beside it, and any reading counts.
 If the tool sends something outward, its category must be one the gate treats as outward, so approvals bind to the
 exact text (`docs/GATE.md`).
 
@@ -400,25 +421,26 @@ runs and CI never run it.
 
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+Rules that tests enforce: the protocol caps, the core line budget (a reported count over a floor, no ceiling; explained below), the
 TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
 
-**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
-lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
-generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
-`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
-left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+**The core line budget (D-077, D-083).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`)
+counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and
+`src/exo/upstream.py`, generated files excluded. The ceiling is off: the test records `CORE_FLOOR = 14,813`, prints
+the count and its distance from the floor, and asserts nothing about lines. Run it with `-s` or `-rP` to see the
+count and the largest counted files. It does assert the two step 4 structure caps. The rules are in
+`docs/ENGINE-SPLIT.md` "Budget policy":
 
-- Fixes and features land inside the headroom with no ceremony.
+- Fixes and features land on their own merits. No headroom note, no waiting for a reduction.
 - A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
   its post-merge count in the same PR. The floor never goes up.
-- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
-  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
-- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- A count that climbs far past the floor is a reason to schedule a reduction, never a reason to refuse work.
+- The structure caps are the gate: `INWARD_IMPORTS_MAX` and `PRIVATE_STATE_MAX` only go down. A PR that adds one has
+  to remove another first.
 - Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
   boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
@@ -536,7 +558,7 @@ one main hid shows nothing. A text the head lists fewer times than main does is 
 while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
 violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
 grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
-hook's answer to an error: ask, or allow for a read tool.
+hook's answer to an error: ask, a read tool too (D-084).
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
@@ -576,6 +598,8 @@ and a line in its decision amendment:
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
+The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
@@ -649,6 +673,8 @@ example with `git filter-repo`), then publish.
 **`DECISIONS.md`.** Each significant choice gets a heading `## D-NNN (date) title`, in number order, newest last.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.
+
+**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries and verification.
 
 **Branch and merge.**
 
@@ -823,7 +849,8 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 - **Limits** (`Limits` in `delegate.py`): depth 1 (flat), 10 tasks per call, 4 running children at once, 24 tool
   rounds, 200,000 tokens and 900 seconds per child. Cancelling the parent's tool call interrupts every child.
 - **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
-  ever read the English form.
+  ever read the English form. In code, pin the signer's key: `exo.wire.verify(line, sig, trusted_pub)` returns
+  False without one, because the key a signature carries proves nothing (D-016 amendment).
 - **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
   lives in `src/exo/subagents.py`. Through this built-in only the principal may act: `command()` calls `steer` and
   `stop` without `by`, so the parent-session path (`by=<parent session id>`, which speaks as `delegate`, D-040) is
@@ -1041,3 +1068,14 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+### Web composer draft ownership
+
+`plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
+null key before the first conversation is created. A successful creation transfers ownership to its real
+session ID. Capture selection on input/navigation and restore only when switching the composer owner.
+Pending sends are per session; failure reconciliation compares the draft revision before restoring text.
+Mount listeners update a remounted chat when an older request finishes. Never persist prompt text to browser
+storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
+without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
+thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.

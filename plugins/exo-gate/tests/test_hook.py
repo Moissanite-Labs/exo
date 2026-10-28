@@ -56,6 +56,23 @@ def test_register_wires_both_hooks(keyed_store):
     assert set(ctx.hooks) == {"pre_tool_call", "post_approval_response"}
 
 
+def test_internal_error_on_read_tool_fails_closed(keyed_store):
+    # An internal error in the gate's own classification (e.g. a malformed policy
+    # regex) must not silently allow a read tool. It must fall through to an
+    # approval card. Regression for aska-digital/exo-desktop issue 11 (D-084).
+    store, key = keyed_store
+    g, ctx = make_gate(store, key)
+
+    def _boom(*a, **k):
+        raise RuntimeError("policy regex broken")
+
+    g._pre_tool_call = _boom
+    res = call(ctx, "read_file", {"path": "x"})
+    assert res is not None, "a read tool must not be silently allowed on a gate error"
+    assert res["action"] == "approve"
+    assert res.get("once") is True, "an error card must not become a standing grant"
+
+
 def test_allow_returns_none_and_records(keyed_store):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
@@ -670,13 +687,49 @@ def test_required_policy_accept_audit_failure_keeps_prior_active_policy(keyed_st
     assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
 
 
-def test_internal_error_fails_closed_except_reads(keyed_store, monkeypatch):
+def test_internal_error_fails_closed_including_reads(keyed_store, monkeypatch):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
     monkeypatch.setattr(hook.gate, "classify", lambda a: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert call(ctx, "read_file", {"path": "x"}) is None
+    r = call(ctx, "read_file", {"path": "x"})
+    assert r["action"] == "approve" and "boom" in r["message"] and r.get("once") is True
     r = call(ctx, "terminal", {"command": "ls"})
     assert r["action"] == "approve" and "boom" in r["message"]
+
+
+def _raise(*a, **k):
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("decision_model", [False, True])
+def test_internal_error_card_is_once_only_for_every_call(keyed_store, monkeypatch, decision_model):
+    """D-084: in enforce mode a gate error asks for every call, reads, a search and non-dict arguments included, and
+    the card offers no "always"."""
+    store, key = keyed_store
+    _, ctx = make_gate(store, key, decision_model=decision_model)
+    monkeypatch.setattr(hook.gate, "classify", _raise)
+    for tool, args in [("read_file", {"path": "README.md"}), ("search_files", {"pattern": "x", "path": "."}),
+                       ("read_file", ["README.md"]), ("terminal", {"command": "ls"})]:
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["once"] is True and r["rule_key"] == f"exo-gate:error:{tool}", r
+
+
+@pytest.mark.parametrize("decision_model", [False, True])
+def test_internal_error_in_observe_mode(keyed_store, monkeypatch, decision_model):
+    """D-084: observe mode lets a call ahead on a gate error, as before, unless the gate reads it as a store write or
+    a secret. Those ask the principal alone, once, and a secret check that raises counts as a secret."""
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, mode="observe", decision_model=decision_model)
+    monkeypatch.setattr(g, "_rules", _raise)
+    assert call(ctx, "read_file", {"path": "README.md"}) is None
+    assert call(ctx, "terminal", {"command": "ls"}) is None
+    for tool, args in [("read_file", {"path": "~/.exo/keys/seat.key"}),
+                       ("write_file", {"path": "~/.exo/policies/gates.yaml", "content": "x"})]:
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["once"] is True and r["approvers"] == ["principal"], (tool, r)
+    monkeypatch.setattr(hook.gate, "args_sensitive", _raise)
+    r = call(ctx, "read_file", {"path": "README.md"})
+    assert r["action"] == "approve" and r["once"] is True and r["approvers"] == ["principal"], r
 
 
 def test_settings_resolution(tmp_path):
@@ -886,8 +939,10 @@ def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeyp
     store, key = keyed_store
     g, ctx = make_gate(store, key, decision_model=False)
     monkeypatch.setattr(g, "_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert g.pre_tool_call("read_file", {"path": "~/.exo/keys/seat.key"})["action"] == "approve"
-    assert g.pre_tool_call("read_file", {"path": "README.md"}) is None
+    secret = g.pre_tool_call("read_file", {"path": "~/.exo/keys/seat.key"})
+    assert secret["action"] == "approve" and secret.get("once") is True
+    plain = g.pre_tool_call("read_file", {"path": "README.md"})
+    assert plain["action"] == "approve" and plain.get("once") is True
 
 
 @pytest.mark.parametrize("cat, tool, args, plain_args, key", [

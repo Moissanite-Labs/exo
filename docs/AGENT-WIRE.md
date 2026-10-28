@@ -179,7 +179,7 @@ Result: 3 callers: src/exo/cli.py:52, src/exo/onboard.py:118, src/exo/core/engin
 | No schema shared with the program | Typed `Brief` and `Receipt` dataclasses in `exo.wire.packets`; statuses equal the protocol's `task.updated` values. |
 | Validator only | Strict `decode` (rejects anything non-canonical) plus `repair`, which fixes only meaning-preserving damage: surrounding text, code fences, leading zeros, body spacing. It never repairs a bad checksum, an unknown code or a missing field; those are refused, because guessing would change meaning. |
 | One version literal, no negotiation | The `(100 N)` vocabulary marker, and `negotiate(mine, theirs)` over advertised formats (`sym2p/2+exo1`, `json`), falling back to JSON when nothing matches. |
-| Checksum only; signing open (O-1) | Detached Ed25519 signatures over the exact line bytes with Exo's existing keys (`exo.crypto.Signer`), stored with each receipt. Bus envelopes are already signed and hash-chained, so the checksum is only needed on unsigned paths. |
+| Checksum only; signing open (O-1) | Detached Ed25519 signatures over the exact line bytes with Exo's existing keys (`exo.crypto.Signer`), stored with each receipt. Bus envelopes are already signed and hash-chained, so the checksum is only needed on unsigned paths. A caller pins the key: `verify(line, sig, trusted_pub)` checks the signature against `trusted_pub` only, and returns False when none is given. The `pub` a signature carries is never trusted on its own, because whoever made the packet chose it (exo-desktop #17). |
 | Renderer wording is "informative" | A deterministic renderer: same packet, same English, every time. Tests cover every status and every opcode. |
 | A model that cannot write a line has no path | No model writes lines in Exo. For peers that cannot speak the line, the same packet has a strict canonical JSON form; `decode_any` reads line, repaired line or JSON and reports which, so repairs and fallbacks can be counted. |
 
@@ -268,9 +268,9 @@ at `dce1e9b`. A new `[[watch]]` follows Hermes's delegation files for edge-case 
 repair, JSON fallback, signing, negotiation, renderer coverage, bus bodies, the CLI; and on the engine: one
 child end to end, a parallel fan-out held at the concurrency cap, parent interrupt cancelling all children, a
 client interrupting one child, timeout, turn and token limits, toolset narrowing, depth limits, nested
-delegation, signed receipts, restart recovery and client rendering. The core stays under its 8,000-line
-budget (7,952 lines; 48 lines of headroom left, so the next core addition should raise the budget to the
-wave 3 figure of 15,000 that `docs/STANDALONE.md` sets).
+delegation, signed receipts, restart recovery and client rendering. The core's counted lines are
+reported against a floor, with no ceiling (D-077, D-083, `docs/ENGINE-SPLIT.md` "Budget policy"); the figure the
+wave 3 plan set is in `docs/STANDALONE.md`.
 
 ### Model tiers
 

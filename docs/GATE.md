@@ -484,6 +484,26 @@ tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` 
 has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
 "The store is credentials").
 
+## An internal gate error asks once (D-084)
+
+When the gate's own checks raise (classification, a policy rule, the secret check), the hook
+asks with a card instead of allowing the call. Read tools ask too. The card is once-only in every
+mode, bypass included: the core offers allow and deny, and no answer becomes a standing grant, so
+the next such error asks again. When the gate still reads the call as a store write or a secret,
+only the principal answers, in every mode (D-033). A secret check that raises counts as a secret.
+In observe mode a call the gate does not read as a store write or a secret goes ahead, and the
+error is logged. Under a required executor the call is blocked instead (D-020). When classification
+itself raised, the gate cannot see a store path or a secret named inside a shell command (the
+secret check reads only path arguments): a store write or a command such as `cat ~/.ssh/id_rsa`
+then gets a card any approver may answer, or goes ahead in observe mode, as before D-084, unless
+the secret check finds a secret.
+
+The card waits for an answer. An unattended run stops at it until someone answers or the turn is
+stopped: `approvals.ask` has no timeout, and "Default if no reply: skip" is only the card's text.
+Code: `Gate.pre_tool_call` in `plugins/exo-gate/exo_gate/hook.py`. Tests:
+`plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`,
+`tests/integration/test_required_gate.py`.
+
 ## Who answered: the connection, not the body (D-039)
 
 The core never takes the answerer from the `approval.respond` body. The transport stamps a caller:
@@ -640,7 +660,7 @@ Limits. No environment variable carries the credential, and `tool_env` drops `EX
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
 by its full path (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, though a relative name
 asks: `cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name above a file
-(`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r .
+(`principals/*/run/*`); a short wildcard for the folder itself (`grep -r .
 ~/.exo/ru?`, `ru[n]`: the last part needs three literal characters, the same as for `~/.ss?`, while
 `~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line: `cd ~/.exo && grep -r . ru?`);
 a case variant inside a glob's own wildcard part (`~/.e*O/run/*`: bash matches a glob part that holds a
@@ -659,7 +679,7 @@ the process-tree check are the guard.
 A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
 (`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
 token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. The
-names match in any case (#601, D-082): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
+names match in any case (#601, D-087): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
 are `~/.ssh/config` and `~/.kube/config`, and they ask as the plain spellings do. The descriptor folders
 are the exception, matched as written: `printf x > /DEV/FD/3` writes an ordinary file where `> /dev/fd/3`
 writes one the gate cannot resolve, and only the lower-case spelling asks. The process folders do fold:
@@ -787,6 +807,61 @@ Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults
 `test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
+### A glob in a store's folder (#594, #609)
+
+A glob may stand in a store's folder, not only in its file name: `cat ~/.ss?/*`, `cat ~/.aw?/*` and
+`cat ~/.exo/key?/*` read the store as `cat ~/.ssh/*` does. Since #609 the gate tests a globbed folder against the
+folder of each sample store path (and a sample another sample sits below, so `.exo/keys` counts), part by part, as
+bash reads it:
+
+- **A leading dot.** Bash's `*`, `?` and `[..]` never match a leading dot, so a part matches a dot folder only when
+  it starts with a literal dot: `~/.s*/*` and `~/.*/*` can reach `~/.ssh`, `~/[.]ssh/*` and `~/*/*` cannot, and
+  stay reads.
+- **Three literal characters.** A match needs a part that starts with a literal dot, or three literal characters
+  across the matched parts (`.ss?`, `.exo/key?`), so `src/*/*` and `~/*/x` stay ordinary.
+- **A file below a secret folder.** When the folder matched is itself a secret store by name (`.ssh`, `.aws`,
+  `.gnupg`, `.exo/keys`), any glob file part below it asks, as below the literal folder, and so does a glob folder
+  that goes deeper than it (#609 review): `cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  ask, and deny under `deny: [credentials]`. Its leading parts must match the folder with the same discipline. A
+  folder that is not a secret by name matches at its own depth only, so `cat ~/.config/*/x/*` and
+  `cat ~/.cach?/x/*` stay reads. A secret folder the glob could name wins over an ordinary one it also names, so
+  `ls ~/.*/*.md`, `cat ~/.*/x/*` and `cat ~/.exo/*/old/*` ask (they reach `~/.ssh/a.md` or
+  `~/.exo/keys/old/x` as `cat ~/.ssh/*.md` does), where they read before. This fails closed.
+- **A public key.** A file part that ends in `.pub` stays out, as for a literal folder: `cat ~/.ss?/*.pub` and
+  `cat ~/.ss?/keys/*.pub` are reads, while `cat ~/.ss?/*.pu?` and `cat ~/.ss?/*.pub*` ask.
+
+A line's credentials target is the first store it names. A glob that reaches a store now counts as one, so on
+`cat ~/.ss?/* ~/.aws/credentials` the glob came first, and a `target:` entry on the later literal store stopped
+matching (review 5662072421 of #609). So every other store a shell line names is a `credentials` part with that
+store as its target, beside the line's own target, which stays the first: a `target:` deny, a `reserved:` entry and
+a rule on any store the line names match it. `cat ~/.ss?/* ~/.aws/credentials` under `deny: ["target:*/.aws/*"]`,
+`cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` and a rule on target `*/.aws/*` with decision
+`deny` are denied again, and `reserved: ["target:*/.ssh/*"]` keeps its entry. The same holds for two literal stores,
+which asked before #609 too (#313, below): `cat ~/.aws/* ~/.ssh/id_rsa` and `cat ~/.aws/credentials;
+cat ~/.ssh/id_rsa` are denied under `deny: ["target:*/.ssh/*"]`, and so is a store a brace set names
+(`cat ~/.aws/credentials ~/.{ssh,x}/id_rsa`). So are the stores after a Keychain read, an environment dump or
+a secret variable, which name no store and come first (`security find-generic-password -w -s x; cat ~/.ssh/id_rsa`,
+`env; cat ~/.ssh/id_rsa`, `cat ~/.ssh/id_rsa; env`). Each new part only adds a match. A word the gate reads more
+than one way (a brace word, a quoted `"$HOME"`, a substitution) gives a part for each reading, so a `reserved:`
+entry can list one file twice (`/.ssh/id_rsa` and `~/.ssh/id_rsa` for `"$HOME"/.ssh/id_rsa`), and a line of many
+brace-heavy store words gives up to a few thousand parts (bounded by the brace budget).
+
+Cost. The folders a glob is tested against are built once per set of samples, not once per glob word, so a line
+of 500 ordinary globbed-folder words (`src/*/x1*`) classifies in 0.11s where main e0968a2b takes 0.52s. A line that
+names a store now reads every later word for a store too, where main stopped at the first, so 500 globbed store
+words take 0.15s (main 0.02s); both stay linear.
+
+Known limits. A glob folder is tested against the samples, so a store with no sample stays a read when its folder
+is globbed (`cat ~/.cla*/.cred*`, `cat ~/.config/gclou?/*.json`), and so do a store outside the home folder's
+samples (`cat /home/u/.ss?/*`), a relative glob folder after a `cd` (`cd ~/x && cat ../.ss?/*`), a literal file
+part below a globbed folder (`cat ~/.ss?/config`), and a glob that names the store folder itself
+(`tar cf /tmp/x.tar ~/.ss?`, `grep -r . ~/.ss?`, as for `~/.exo/ru?` above). A `target:` entry is matched against
+the store as the line spells it, so a glob folder matches only an entry written for the glob
+(`cat ~/.ss?/*` under `deny: ["target:*/.ssh/*"]` asks).
+
+Tests: `tests/security/test_gate_glob_store_folder_594.py`, `tests/security/test_gate_glob_target_second_store_609.py`.
+
 ### A camelCase tool name reads its words beside the name's one word (#515)
 
 The name parser adds camelCase words beside each separator part. The complete unsplit call is also
@@ -801,7 +876,20 @@ Earlier built-in differential counts covered the pre-review implementation only 
 these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
 rules, explicit unknown-category policies, and leading-separator MCP names.
 
-Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`.
+The call leads with its hump-word category, and the unsplit reading is its `floor`, so every check past `decide`
+must read each reading too. Two did not on main e0968a2b, and in the hook alone (review 5662071801): bypass kept
+its floor only for a lead `store_write` or `credentials`, so `readFile` on `~/.exo/policies/gates.yaml`,
+`mcp__fs__readFile` on `~/.exo/config.json` and `mcp__slack__postMessage` naming `~/.aws/credentials` ran in
+bypass (a replace of a store file, `mcp__fs__searchReplace`, leads with `store_write` since #659); and the
+registry's high-risk ask fired only for a lead `unknown`, so `mcp__fs__writeFile` with risk `high` ran. Both
+read every reading now (`gate.no_grant`, `gate.readings`), so the floor holds in bypass as well (see
+"Bypass mode (D-065)"). A camelCase call with a `floor` also binds an `always` answer and a standing
+grant to its exact arguments (`gate.binds_exact`): `getApiKey`, `execCommand` or `mcp__github__getIssue` no
+longer share a grant across arguments, and a grant stored as `exo-gate:unknown:<tool>` before #515 no longer
+matches. This only tightens.
+
+Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`,
+`plugins/exo-gate/tests/test_camel_floor_hook.py`.
 
 ### A thread's environment file (#313)
 
@@ -835,9 +923,12 @@ They fall in four groups, all from how the gate already handles a secret store:
   violations, named after its part. Before #396 they checked the dominant part only, and such a post lost
   them. The line asks either way.
 - **A second store's target.** A line's credentials target is the first store it names, and a `cat` part has no
-  target. So a `target:` entry for a second store on the line no longer matches:
-  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
-  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
+  target. So a `target:` entry for a second store on the line no longer matched:
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asked, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` and `cat ~/.aws/* ~/.ssh/id_rsa` did, and so did a store after a
+  Keychain read or an environment dump (`env; cat ~/.ssh/id_rsa`). Since the #609 follow-up each other store the
+  line names is a `credentials` part with that store as its target, so all of these are denied again
+  ("A glob in a store's folder" above).
 
 The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
 line is `credentials`, not `store_write`: `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`.
@@ -884,7 +975,7 @@ cannot leave Exo's stores out, so it refuses a folder that is or holds a known s
 `~/.config`, `/`). With these, the D-038 guarantee that a store read asks holds for `read_file`, the shell and the
 search tools alike. The cost is one `lstat` and one match per entry, plus a few cached existence checks per `.claude`
 folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file is not seen. A store
-spelt in another case asks now (#601, D-082), as the other path checks read it. A store
+spelt in another case asks now (#601, D-087), as the other path checks read it. A store
 folder that is itself a link to an ordinary folder (`~/.aws` pointing into a dotfiles repo) is a store as named but
 not as resolved, so a search naming it asks and then returns nothing (fail closed); read its files by name
 (`read_file ~/.aws/credentials`, which asks). The reverse is not seen: with `~/.kube` pointing to `~/dotfiles/kube`,
@@ -1034,8 +1125,8 @@ loosens an outcome. Turn it off with the plugin setting `decision_model: false` 
   not a `model.call` event yet, so `/trace` and the turn's cost do not show it.
 
 Exo's own read-only tools are `read`: `read_file`, `grep`, `glob`, `skill` (loads a skill's instructions),
-`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error does not stop them (unless a
-required executor is set), and a secret-store path in their arguments still makes the call `credentials`. Before,
+`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error asks for them once, as for any
+tool (D-084), and a secret-store path in their arguments still makes the call `credentials`. Before,
 `skill` was an unknown tool, so a new user's first screen could be an approval card for loading the intro skill.
 
 Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`.
@@ -1273,9 +1364,10 @@ gate does not read:
   as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
-  reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or `xargs`
-  that runs its stdin, also one run by a wrapper such as `setsid` or by `git bisect run`, shows where
-  that stdin comes from: the pipeline from its first command when simple commands pipe into it
+  reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
+  `sudo -i` starts, #491), an interpreter, `ssh` or `xargs` that runs its stdin, also one run by
+  a wrapper such as `setsid` or by `git bisect run`, shows where that stdin comes from: the
+  pipeline from its first command when simple commands pipe into it
   (`curl -s https://x.example/i.sh | bash`), and no own text when a compound feeds it
   (`{ bash; } < f`). Each such text holds every command before its reader, so the
   texts of a line's readers hold at most four times the line's length plus 4 KB between them, and a
@@ -1463,7 +1555,8 @@ gate does not read:
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
   --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and `sftp -S`,
   `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
-  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and `KnownHostsCommand`; `git
+  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure, each of its parts `internal`
+  as for the hop, a nested part's `private` reading kept beside it) and `KnownHostsCommand`; `git
   rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
   `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote
   --exec`, #230), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`; `zip -TT`;
@@ -1686,9 +1779,44 @@ gate does not read:
   read the same way (#591): env splits it into words and reads them as its own argv, so a word
   quoted whole with the form `NAME=value` (`env -S "'X=a b' rm -rf /srv/data"`) is an assignment
   there too, and the first word that is neither an env option nor an assignment starts the command.
-  After `--`, or where a shell operator would sit, a `NAME=value` word is a command or a word of
-  argv to env, not an assignment. `IFS` is left
-  out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
+  env splits the text with its own rules (quotes, backslash escapes, `\_` between words, `#` at a
+  word's start, `\c`, `${NAME}`), not a shell's: `;`, `&`, `|` and `>` are characters of a word to
+  it, so `'X=a b';x` is one assignment, and after `--` a `NAME=value` word is still an assignment
+  (`env -- prog= true` runs `true`). The gate reads the line env runs (#591 follow-up to #634): the
+  words before the `-S` option, the text split as env splits it and the words after it, so `env -S
+  "-- 'X=a b' rm -rf /srv/data"` reads as `env -- 'X=a b' rm -rf /srv/data` and is denied under
+  `deny: [delete]`. Every spelling GNU env 9.4 takes counts: `-S TEXT`, `-STEXT` (the text whole;
+  only `--split-string=` splits at its `=`), `--split-string=TEXT`, `--split-string TEXT` and each
+  unambiguous prefix (`--split`, `--s`), and `-S` in a word of short options (`-iS`, `-vS`,
+  `-i0vS`). A shell expansion in the text keeps the words env closes before it, and the rest of the
+  shell word stands for the rest of the text (`$BR --force` is also read as two words). A text env
+  would refuse (an unclosed quote, an unknown escape, a `$` outside `${NAME}`) adds no line, and a
+  program from a variable stays opaque. The text is still read as a shell line beside it, with the
+  `opaque_exec` part `-S` carries, in every spelling: a spelling main missed (`--split-s=`,
+  `-i0vS"..."`) reads as `-S TEXT` does, and no environment dump is read in its option word. The
+  call is read up to three more times as a call of its own: with each text a shell line only, as
+  before #634 (each spelling as main read it), the same with every spelling read as `-S TEXT`, and,
+  whenever any `env -S` text or spelling is read, with #634's reading of its leading words, as main
+  read it, so a text nested behind a spelling main missed (`env -iS'\q' sh -c 'env -S "..."'`)
+  decides as on main. The strictest decision of the readings stands, with every reserved hit and
+  violation of each, so a part keeps the ssh hop's host it had: a rule or reserved entry on the host
+  and `opaque_exec` still reaches `ssh host 'env -S "..."'` and `ssh host 'env -i0vS"..."'`. The
+  exo-gate hook's bypass floor reads the category of each of these readings, so a line one of them
+  reads as credentials or a store write still asks in bypass. It keeps main's order for main's own
+  reading (classify puts it first): the floor when that reading is a floor category, then the hold
+  of a post that breaks the posting rules, then the floor of any other reading. So with bypass on
+  `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"` is held, as on main,
+  and its `-S` spelling asks at the floor (credentials, once), as on main. A call with an `env -S`
+  text costs up to four readings, each linear in the text, and a spelling main missed is read in
+  full (a 40 KB `env --split="..."` text of 20,000 words takes 3.7-4.4 s of CPU here, 0.06 s on main
+  58503282). A spelling main missed is not read with #634's leading words, so where env refuses its
+  own text (`env --split "'X=a b' gh auth token \d"`, an unknown escape) it may ask where the `-S`
+  spelling denies, as on main; env runs nothing then. A text nested behind it that main read is read
+  as main read it and decides as on main. Known limits, as without `-S`: a `NAME` env takes but the
+  gate does not (`a.b=1`), a lone `-` and the value of an option word that takes one (`env -iu
+  HOME`) read as the program, an unknown program (`opaque_exec`) that `categories: {opaque_exec:
+  allow}` allows. `IFS` is left out: it does not change how literal words split, and `while IFS=
+  read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
@@ -1747,6 +1875,58 @@ gate does not read:
   part's category. A gh read's other targets (#399) stay on the displaced part, and the line as
   read before #399 keeps the approvers of its own displaced part
   (`sudo gh pr "$V" 5 > /tmp/f`).
+- `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` start the target user's shell
+  (#491). With no command, that shell runs its stdin, so the gate reads it as it reads `bash` with
+  no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds
+  it (a pipe, a here-string, a heredoc). So `echo 'rm -rf /srv/data' | sudo -s` and
+  `sudo -i <<< 'rm -rf /srv/data'` are `delete` and deny under `deny: [delete]`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` is a store write. A stdin the gate cannot read
+  (`sudo -s < /tmp/script.sh`, a variable, a process substitution) asks, and so does `sudo -s` with
+  no feed, as `bash` alone does: a command around the line may give it one. sudo's options are read
+  as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
+  `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
+  `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
+  another sudo too. A word the gate cannot read that may come to `-s` counts as a shell option: an
+  option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) unless the expansion
+  is the value of a letter or `=` before it (`sudo -u"$U" -l` and `sudo --user="$U" -v` stay
+  reads), an option's value that bash may split into several words (`sudo -u $U`, `sudo -u $(id
+  -un)`, a bracket glob such as `sudo -u [!a]s`; a brace set is expanded and its words read as
+  options, a word it makes twice kept, so `sudo -u {root,-s}` is `sudo -u root -s` and
+  `sudo -p {-s,-s}` is `sudo -p -s -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`, `sudo {-s,}`, `sudo ~-`, which is `$OLDPWD`). Such a word may also take the next word
+  for its value (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a
+  stdin, that stdin is read as the shell's too, and the options are also read again from the word
+  after the next one. A brace value whose words end the options elsewhere has its command read as
+  sudo runs it: `sudo -u {root,-p} echo rm -rf /srv/data` is `sudo -u root -p echo rm -rf
+  /srv/data`, whose prompt is `echo`, so it is `delete`, and so is `sudo -"$X" echo rm -rf
+  /srv/data`. These readings also read the words sudo runs as bash expanded them, so a sudo there
+  with a brace value is read in turn (`sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data` is
+  `delete`). They may not be bash's, so they add only what their command is known to do:
+  `sudo -u $U cat /etc/hosts` and `sudo -u {alice,bob} ls` stay reads, while a nest of them past
+  the depth cap asks. Past 16 such readings in one call, the call asks. So
+  `sudo -u $U <<< 'rm -rf /srv/data'` is `delete`, and `sudo -u $U` alone asks as `bash` alone
+  does, while `sudo -u $U ls` with no feed stays a read. `sudo -u $U -l`, `sudo -l -U $U` and
+  `sudo -u $U -v` ask too: the gate does not read sudo's list and validate modes, in which no
+  shell starts. With a command, sudo runs `$SHELL -c` on the command's words joined with spaces,
+  each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash. The gate reads
+  that text too where it may differ from the words: a `$` the shell expands again, a newline it
+  drops as a line continuation (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty word, or an
+  option sudo reads otherwise than the prefix reader (`sudo -iu root rm -rf /srv/data` is
+  `delete`). Such a line also asks as `opaque_exec` (unless a policy names `opaque_exec` below
+  ask), as it did when the gate read an unknown program there, and its approval binds to the exact
+  command. That text holds the sudos after it, which its own reading reads in turn, so nested sudo
+  shells are read once per level, and a text read back as its words is not parsed again for each
+  later sudo in it. A later sudo's moved and may readings are still read, since that text holds
+  its brace value as a literal (`sudo -s sudo -u "$U" -u {root,-p} echo rm -rf /srv/data` is
+  `delete`). A word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's
+  own parts stay beside these, and the call is also read as before #491, as the last of its
+  floors (`gate.readings`), and decided on each reading, the strictest standing. So a policy that
+  allows the category the shell's parts lead with does not lower a line main asked or logged
+  (`ssh host 'sudo -s < /tmp/script.sh'` still logs under `{opaque_exec: allow}`). Known
+  limits: `su` with no `-c` and `sudo su` with a stdin ask as an unknown program, and the fed
+  text is not read, so a deny on what it carries asks rather than denies; the files a login shell
+  reads first (`sudo -i`) and a `SHELL` that names another program are not read;
+  `env -S 'sudo -s'` with a stdin asks as `env -S bash` does, and the fed text is not read.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
@@ -2367,12 +2547,15 @@ lands"): where the part that runs the stdin names the host for an empty target, 
 empty other target too. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` may land on
 the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. After a hop that
 host is the first one, where the line hands the stdin over, as for the part's own target; ssh's own
-part names the inner host. So `deny` and `reserved` entries, category lines that deny and rules that deny
-a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
-costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh` is denied as before, and `sudo ssh host <
-cmds.sh`, which asked, is denied too. The new `opaque_exec` part can be the part that decides the
-line. The policy steps that read only that part then read it, so some lines decide lower than before
-(D-038 amendment for #316):
+part names the inner host. A part nested below the one that leads (#461: the gh read below the store
+write of `gh release download -O ~/.exo/policies/gates.yaml`) keeps its own target; where that
+target is empty it has a copy on the host beside it, and the host joins an empty other target (#461
+follow-up), so an entry on the host still sees it as when it led. So `deny` and `reserved` entries,
+category lines that deny and rules that deny a part still see every part they saw: under `{match:
+{category: [shell, read], reversibility: costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh`
+is denied as before, and `sudo ssh host < cmds.sh`, which asked, is denied too. The new
+`opaque_exec` part can be the part that decides the line. The policy steps that read only that part
+then read it, so some lines decide lower than before (D-038 amendment for #316):
 
 - Under a policy that allows or logs `opaque_exec` (a category line or a rule), or the category
   of a known text a hop reads (`delete`), a line where the new part displaces one the matrix logs,
@@ -2431,11 +2614,13 @@ itself once a host is read, are read as the host and command. The value of `mosh
 `--client` or `--server` is a command that runs, so the gate reads it as one: `mosh --serv='rm -rf
 /data' host` denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client`
 helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
-and is `internal` like the inner command. With `--local`, mosh runs the server and the command on
-this machine, so nothing on the line is marked `internal`. Another option's value that itself
-reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
-by mosh as that value and never run, but the gate used to read it as the command, so it still
-does and the line asks. Words after the host that mosh takes as its options or their values
+and is `internal` like the inner command. A helper that does not lead the line, as below a store
+write the remote command makes (#461), has a copy on the host, so an entry on `{category:
+opaque_exec, target: host}` still reaches it as when it led. With `--local`, mosh runs the server
+and the command on this machine, so nothing on the line is marked `internal`. Another option's value
+that itself reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`)
+is taken by mosh as that value and never run, but the gate used to read it as the command, so it
+still does and the line asks. Words after the host that mosh takes as its options or their values
 (`mosh host ls --port 'x; rm -rf /data'`) are read both ways: with `POSIXLY_CORRECT` set,
 Getopt::Long stops at the host and mosh runs them as the command, so their parts are matched as
 that command too and the line asks. The same holds where the gate used to read another word as the
@@ -2683,7 +2868,7 @@ itself, which makes a protected folder or `config.json` from its source name
 `tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks match in any case (#601,
-D-082): on a case-insensitive filesystem (APFS) `STATE/` for `state/`, `CONFIG.JSON` for the home's
+D-087): on a case-insensitive filesystem (APFS) `STATE/` for `state/`, `CONFIG.JSON` for the home's
 `config.json` and a distinct `.exO` folder all ask, as the plain spellings do; `EXO_GATE_CASE_SENSITIVE=1`
 reads main d800f33c's case-sensitive names. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
@@ -2736,11 +2921,22 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a gh download or clone into it (#461): `gh release download` with `-O`
-or `--output` (also `=`-attached), `gh run download` and `gh attestation download` with `-D` or
-`--dir`, and `gh repo clone` and `gh gist clone` into their directory word, with or without `--`
-before it. These read on GitHub, so the store check took the line for a read and never looked at
-the paths before; now it does, under `sudo`, in `bash -c` and a `$( )`, and past a `-R` before the
-subcommand. `-O -` prints to stdout and stays a read, and so does a path outside the store. Also
+or `--output` (also `=`-attached) or `-D`/`--dir`, `gh run download` with `-D` or `--dir`, `gh
+attestation download` after a `cd` into the store (it has no such option and writes into the
+current folder), and `gh repo clone` and `gh gist clone` into their directory word, with or without
+`--` before it. These read on GitHub, so the store check took the line for a read and never looked
+at the paths before; now it does, under `sudo`, in a `$( )`, and past a `-R` before the subcommand
+(in `bash -c` the line already asked, as opaque code). `-O -` prints to stdout and stays a read, and
+so does a path outside the store. The gh read stays a part of the line, so a deny, reserved entry or
+rule on it still applies. Over an ssh or mosh hop each part below the store write that has an empty
+target also has a copy on the host (#461 follow-up), so an entry on `{category: read, target: host}`
+or `{category: opaque_exec, target: host}` still reaches the gh read or the `eval` and stdin forms,
+as it did when the read led the line; so does the part that runs ssh's stdin beside such a line
+(`echo x | ssh $H gh release download ..`), and every part of an `ssh -o RemoteCommand=` line is
+`internal`, so a matrix cell on an internal action still reaches the read, while a nested part keeps
+its `private` reading as a copy, so a rule on `exposure: private` still reaches it as before. The
+hop does the same where a later reading makes the store write: a store path in another letter case
+(`~/.EXO/policies/gates.yaml`), a `$((` read as a command substitution and an `env -S` text. Also
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
@@ -2764,8 +2960,8 @@ reason the policy loader does not check, the hook's fallback card still asks the
 principal alone, once, in observe mode too (#464; a pattern that does not compile is refused when
 the policy loads now, #466). A store read that a shell call's own folder adds
 as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
-Other calls keep their fallback: a read tool
-runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
+Other calls keep their fallback: observe mode runs the call, and enforce mode asks once, a read
+tool too (D-084). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
@@ -2810,7 +3006,20 @@ path as its target, not only the first one the scan meets, which is still the ca
 So `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from
 `a.yaml` to `gates.yaml` and `delete_file` on both paths are denied under
 `deny: ["target:*/gates.yaml"]`, where they asked before; `rm` of both was denied already, as its
-`delete` part names the last path.
+`delete` part names the last path. So are `apply_patch` and `write_file` with two store files, and
+under a `{category: store_write, target: "*/gates.yaml"}` deny or reserved entry too. A later
+command that repeats a braced store path keeps its own part (#611 follow-up): the store check
+expands and checks each brace spelling once per line and gives each command that repeats it the
+same hits, so `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x >
+~/.exo/policies/{g,h}.yaml` is denied under `categories: {store_write: deny}` beside an allow rule
+on `^cp `, as the unbraced line is, and so is a case variant the store reads since #635
+(`~/.EXO/policies/{g,h}.yaml`). The hits a repeat gives again come from a budget of their own
+(4,096 per call), so a line of many repeats stays bounded; past it a repeat is one hit on the word
+as written, as a word past the brace cap is. Limits: a relative path read from a `cd` into the
+store, from `tar -C` or `git -C`, or from the call's own folder is no target, so a `target:` entry
+on it does not match. `cd ~/.exo/policies && cp a.yaml gates.yaml` and `tar -C ~/.exo/policies -xf
+/var/tmp/x.tar gates.yaml` ask the principal alone under `deny: ["target:*/gates.yaml"]`, and
+`cp a.yaml gates.yaml` with `~/.exo/policies` as `cwd` is allowed, as on main (#453, #527).
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
@@ -2938,6 +3147,14 @@ default, and no policy file turns it on.
 | A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
 | A standing grant, `allow` or `log` | runs | runs |
 
+**Every reading counts.** A call is on the floor when any way the gate reads it is `store_write` or `credentials`
+(`gate.no_grant`): a part of a compound line, or the unsplit reading of a camelCase tool name (#515). So
+`readFile` on a seat or policy file, `mcp__fs__readFile` on `~/.exo/config.json` and `mcp__slack__postMessage`
+naming `~/.aws/credentials` ask in bypass, though their names lead with `read` or `message_send`. The ledger row's
+`bypass.floor` names the floor category. A post that breaks the posting rules and has its floor only in such a
+reading is held first, as before; once rewritten, it asks. Until review 5662071801 bypass checked only the
+category a call led with, so on main e0968a2b those calls ran.
+
 **Whose turn.** Lowering reaches only a turn the principal started. The core passes the turn's author (D-040) into
 every tool hook, and the gate lowers an ask only when that author is the principal: a turn a local caller, a peer,
 a bus wake, a job notice or the scheduler started in the same core runs its asks as if bypass were off, and the
@@ -2970,9 +3187,9 @@ agent gets the list of fixes and goes on.
 ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
 starts after bypass was switched on, bypass is inert.
 
-**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
-cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
-on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+**Not covered.** An internal gate error still falls back to a once-only card, reads included (the gate could
+not classify the call, so it cannot know the call is off the floor; D-084). Bypass changes what the gate asks; it
+is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.

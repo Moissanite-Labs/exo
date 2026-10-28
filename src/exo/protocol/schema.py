@@ -577,6 +577,7 @@ class ModelCall:
     stop_reason: str = ""
     error: str = ""
     retries: int = 0  # loop-level retries before this outcome
+    call_id: str = ""  # assistant message ID identifying this model call
 
 
 @event("harness.error")
@@ -594,6 +595,8 @@ class HarnessError:
 class Notice:
     text: str
     level: Literal["info", "warn"] = "info"
+    source: str = ""  # model_route identifies a transient routing warning
+    call_id: str = ""  # matching ModelCall; empty on legacy/general notices
 
 
 @event("error")
