@@ -25,8 +25,15 @@ A client reads the line and decides. Three things can answer:
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
-`exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
+`exo chat` keeps `/quit`, `/exit` and `/queue` client-side. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
+
+The line client's preloaded queue is a bounded slice of #233: `/queue add <prompt>` appends a whole prompt,
+`/queue` or `/queue list` shows FIFO order, `/queue clear` removes all waiting prompts, and `/queue run` starts
+them one turn at a time. It pauses after a rejected send or an abnormal turn end. A rejected prompt stays first;
+an accepted prompt is removed without automatic retry. Slash commands cannot be queued. The queue holds at most
+32 prompts of 50,000 characters in this client process, is not saved, and requires an ordinary or private thread.
+This slice does not read new input during a running turn, change steering, or add TUI/web queue controls.
 The web client (`exo web`) runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from its composer
 (`WEB_COMMANDS` in `plugins/exo-command/exo_command/api.py`). The first three go to `command.run`. `/new` starts a thread
 and `/layout` is saved in the page. `/rename <title>` calls `POST /api/chat/sessions/<id>/rename`, which runs the
@@ -248,7 +255,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
 | `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). Refuses, with exit 1, a socket that another core answers on or is starting on (the other core's pid is named): give a second seat its own `--socket`. Each socket has an owner-only lock file beside it (`exod.sock.lock`), held for the core's life, so two cores started at once leave exactly one; a crashed core's lock is gone with it. Only the core that holds the default socket's lock writes `run/exod.pid`, the file `exo stop` reads. | `cmd_serve` in `src/exo/cli_chat.py` |
-| `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. An approval prompt (`allow/deny/allow_always>`) takes an option it shows, in any case, or `a`, `y` or `yes` for `allow`. Any other reply denies. `allow_always`, like Always in the terminal client, waits for a second step: Enter confirms the standing grant, and any other reply cancels it and shows the options again. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
+| `exo chat` | A line client for `exod`. Preloaded `/queue` controls run whole prompts in order (limits above); other `/name args` lines go to `command.run`. `/quit` and `/exit` leave. An approval prompt (`allow/deny/allow_always>`) takes an option it shows, in any case, or `a`, `y` or `yes` for `allow`. Any other reply denies. `allow_always`, like Always in the terminal client, waits for a second step: Enter confirms the standing grant, and any other reply cancels it and shows the options again. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` (alias `--dangerously-skip-permissions`: after connecting, the window sends `/permissions bypass launch`; D-065) | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the newest thread with messages in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
