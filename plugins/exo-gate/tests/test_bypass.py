@@ -194,6 +194,45 @@ def test_the_s_spelling_beside_a_post_still_asks_at_the_floor(keyed_store, as_ca
     assert g.permissions.floor_asks == 1 and g.permissions.held == 0 and g.permissions.auto_approved == 0
 
 
+QUOTED_HOLDS = [
+    "X='a b' gh auth token; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "X='a b' env -S \"gh auth token\"; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "X=a\\ b env -iS \"gh auth token\"; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "X='a b' sudo -s <<< 'gh auth token'; gh pr comment 5 --repo octo/demo --body \"hello\"",
+]
+
+
+@pytest.mark.parametrize("line", QUOTED_HOLDS)
+def test_a_quoted_prefix_beside_a_post_is_held_as_on_main(keyed_store, as_caller, line):
+    """#546 after main f28934a3: main read a quoted prefix assignment as the program, so its own reading of these
+    lines is no floor category and the post that breaks the posting rules is held. The floor goes first only for
+    main's own reading (the line read as before #471, ``before``), so they are still held, not asked once."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "block" and "Fix:" in r["message"], r
+    [row] = rows(store)
+    assert row["decided_by"] == "bypass" and row["decision"]["rule"] == "bypass_hold"
+    assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
+
+
+@pytest.mark.parametrize("line", [
+    "X='a b' env -S \"gh auth token\"",
+    "X='a b' env --split-s='cat ~/.ssh/id_rsa'",
+    "X='a b' sudo -s <<< 'cat ~/.ssh/id_rsa'",
+    "X=\"$Y\" sudo -i <<< 'cp /tmp/x ~/.exo/policies/x'",
+    "echo 'cat ~/.ssh/id_rsa' | X=a\\ b sudo -s",
+])
+def test_a_secret_or_store_write_behind_a_quoted_prefix_asks_at_the_floor(keyed_store, as_caller, line):
+    """#546 after main f28934a3: main read these as an unknown program and bypass allowed them; the reading after the
+    quoted prefix reads the `env -S` text or the sudo shell's stdin, so the secret or store write asks at the floor."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r.get("once") is True, r
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and row["bypass"]["floor"] in perm.FLOOR
+    assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
+
+
 def test_secrets_in_an_auto_approved_call_are_redacted_in_the_ledger(keyed_store, as_caller):
     _, ctx, store = bypassed(keyed_store, as_caller)
     tok = "ghp_" + "a1B2c3D4e5" * 4

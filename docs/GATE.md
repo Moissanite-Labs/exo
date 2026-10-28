@@ -1204,9 +1204,12 @@ store paths first and its value still reaches the env-inject check: `X="$HOME/.e
 ls` and `X="$HOME/.exo/state/notes.md" env -S 'ls'` stay store_write, and `GIT_SSH_COMMAND='rm -rf
 /srv/data' env -S 'git fetch'` is still denied under `deny: [delete]`. The `-S` text itself is
 read as env's argv too (#591, fixed on main by #634, below), so `X='a b' env -S "'Y=c d' rm -rf
-/srv/data"` is a delete as well. A spelling #634 does not read yet decides as on main (#707):
-`env -iS` asks as an unknown program, and `--split-s=` is read as an env listing
-(`credentials`). The setter check of a `command` rule (#394, below)
+/srv/data"` is a delete as well. The line env runs (#707, below) is found behind a quoted prefix
+too, in every spelling env takes (`env -iS`, `--split-s=`, `-i0vS`, `--split`), and so is the
+stdin a `sudo -s` or `sudo -i` shell runs (#491): `X='a b' env --split-s="'Y=c d' rm -rf
+/srv/data"` and `X='a b' sudo -s <<< 'rm -rf /srv/data'` are deletes, each such line decides at
+least as it does with `X=ab`, and the line read as before (below) keeps each `env -S` reading main
+makes of it. The setter check of a `command` rule (#394, below)
 counts a setter under either reading, so `X="$Y" ls` (a program from a variable, before) is
 still one. A line continuation in the name (`X\<newline>='a b' cmd`) is no
 quoting: bash drops it first, and so does this check. The parts read from the command behind such
@@ -1806,13 +1809,17 @@ gate does not read:
   reading (classify puts it first): the floor when that reading is a floor category, then the hold
   of a post that breaks the posting rules, then the floor of any other reading. So with bypass on
   `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"` is held, as on main,
-  and its `-S` spelling asks at the floor (credentials, once), as on main. A call with an `env -S`
-  text costs up to four readings, each linear in the text, and a spelling main missed is read in
-  full (a 40 KB `env --split="..."` text of 20,000 words takes 3.7-4.4 s of CPU here, 0.06 s on main
-  58503282). A spelling main missed is not read with #634's leading words, so where env refuses its
-  own text (`env --split "'X=a b' gh auth token \d"`, an unknown escape) it may ask where the `-S`
-  spelling denies, as on main; env runs nothing then. A text nested behind it that main read is read
-  as main read it and decides as on main. Known limits, as without `-S`: a `NAME` env takes but the
+  and its `-S` spelling asks at the floor (credentials, once), as on main. Behind a quoted prefix
+  assignment (#471), main's own reading is the line read as before (`Classification.before`, the
+  quoted word the program) with its first split reading, so `X='a b' env -S "gh auth token"; gh pr
+  comment 5 --repo octo/demo --body "hello"` is held, as on main f28934a3, and `X='a b' env -S "gh
+  auth token"` alone asks at the floor, where main read an unknown program and bypass allowed
+  it. A call with an `env -S` text costs up to four readings, each linear in the text, and a
+  spelling main missed is read in full (a 40 KB `env --split="..."` text of 20,000 words takes
+  3.7-4.4 s of CPU here, 0.06 s on main 58503282). A spelling main missed is not read with #634's
+  leading words, so where env refuses its own text (`env --split "'X=a b' gh auth token \d"`, an
+  unknown escape) it may ask where the `-S` spelling denies, as on main; env runs nothing then. A
+  text nested behind it that main read is read as main read it and decides as on main. Known limits, as without `-S`: a `NAME` env takes but the
   gate does not (`a.b=1`), a lone `-` and the value of an option word that takes one (`env -iu
   HOME`) read as the program, an unknown program (`opaque_exec`) that `categories: {opaque_exec:
   allow}` allows. `IFS` is left out: it does not change how literal words split, and `while IFS=
