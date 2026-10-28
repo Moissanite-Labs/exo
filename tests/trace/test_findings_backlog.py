@@ -95,3 +95,26 @@ def test_cli_backlog_text_json_and_invalid_filters(tmp_path, monkeypatch, capsys
         cli.main(["findings", "backlog", "--limit", "-1"])
     with pytest.raises(SystemExit, match="--status"):
         cli.main(["findings", "backlog", "--status", "open"])
+
+
+def test_backlog_reads_while_another_process_holds_the_write_lock(tmp_path):
+    """The backlog is a read: it must not wait for, or block, a writer on the same file (#797 review)."""
+    import sqlite3
+    import time
+
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    findings = Findings(store, version="fixture")
+    add(findings, "pending")
+    writer = sqlite3.connect(tmp_path / "sessions.sqlite", timeout=0, isolation_level=None)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("UPDATE findings SET title='renamed'")
+        started = time.monotonic()
+        report = findings.backlog(5, now=NOW)
+        assert time.monotonic() - started < 1
+        assert report["pending"] == 1 and report["oldest"][0]["title"] == "pending"  # the snapshot before the write
+        writer.execute("COMMIT")  # the backlog read left no lock behind
+        assert not store._db.in_transaction
+    finally:
+        writer.close()
+        store.close()
