@@ -52,7 +52,8 @@ CAMEL_SPELLINGS = [
     ("mcp__fs__readFile", {"path": "policies/gates.yaml"}, "~/.exo"),
 ]
 # Review 5675164403 of #703: a snake shell call whose own folder argument is a secret folder (#311). The store read
-# is a part of the line, not its lead category, so it ran in bypass before #703.
+# is a part of the line, not its lead category, so it ran in bypass before #703. The gate reads `cwd` and `workdir`
+# alike for every shell tool (review 5681915526 asked for the other spellings), so the last four rows swap them.
 SECRET_FOLDER = [
     ("terminal", {"command": "cat config", "workdir": "~/.kube"}),
     ("bash", {"command": "cat config", "workdir": "~/.kube"}),
@@ -60,6 +61,10 @@ SECRET_FOLDER = [
     ("bash", {"command": "ls", "cwd": "~/.exo/keys"}),
     ("bash", {"command": "ls", "cwd": "~/.aws"}),
     ("bash", {"command": "ls", "cwd": "~/.claude"}),
+    ("bash", {"command": "cat config", "cwd": "~/.kube"}),
+    ("terminal", {"command": "ls", "cwd": "~/.aws"}),
+    ("terminal", {"command": "ls", "workdir": "~/.exo/keys"}),
+    ("exec_command", {"cmd": "ls", "workdir": "~/.claude"}),
 ]
 # Controls that lead with their floor category: they asked in bypass on main too.
 LEAD_FLOOR = [
@@ -171,6 +176,8 @@ def test_bypass_keeps_the_floor_of_a_shell_call_whose_folder_argument_is_a_secre
     assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
 
 
+# A SECRET_FOLDER row names its folder in its own `cwd` or `workdir`, so it needs no session folder (""). Only the
+# relative CAMEL_SPELLINGS row reads its path from the session folder.
 @pytest.mark.parametrize("mode", ["enforce", "observe"])
 @pytest.mark.parametrize("tool,args,folder", CAMEL_SPELLINGS + [(t, a, "") for t, a in SECRET_FOLDER])
 def test_without_bypass_those_calls_ask_once(gate_in, mode, tool, args, folder):
