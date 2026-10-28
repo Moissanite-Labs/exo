@@ -582,8 +582,11 @@ class SessionStore:
                              ts=r["ts"], id=r["id"]))
         return out
 
-    def latest_model_call_reasoning(self) -> dict:
-        rows = self._q("SELECT body FROM events WHERE type='model.call' AND json_extract(body, '$.role')='main' ORDER BY seq DESC LIMIT 1")
+    def latest_model_call_reasoning(self, agent: str) -> dict:
+        rows = self._q("SELECT e.body FROM events e JOIN sessions s ON s.id=e.session"
+                       " WHERE e.type='model.call' AND json_extract(e.body, '$.role')='main'"
+                       " AND s.agent=? AND COALESCE(s.kind,'') NOT IN ('subagent','scheduled')"
+                       " ORDER BY e.seq DESC LIMIT 1", (agent,))
         if not rows:
             return {}
         body = json.loads(rows[0][0])

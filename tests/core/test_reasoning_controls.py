@@ -13,7 +13,7 @@ from exo.core.models.reasoning import capability
 from exo.core.reasoning import CAPABILITY, ReasoningSettings
 from exo.core.sessions import SessionStore
 from exo.core.types import Message, ToolResult, ToolSpec
-from exo.principal import CALLER, Caller
+from exo.principal import CALLER, Caller, require_principal
 from exo.server.engine import CommandFailed
 
 SPEC = {'transport': 'openai', 'base_url': 'https://api.openai.com/v1'}
@@ -36,7 +36,7 @@ def command(settings, engine, body, caller='principal:web'):
 
 def setup(tmp_path):
     r = router(FakeProvider(['ok'], repeat=True))
-    settings = ReasoningSettings(tmp_path, 'test', r)
+    settings = ReasoningSettings(tmp_path, 'test', r, authorize=require_principal)
     store = SessionStore(tmp_path / 'sessions.sqlite')
     engine = SimpleNamespace(loop=SimpleNamespace(model=ROUTE), store=store, agent='test')
     return settings, engine, r
@@ -47,7 +47,7 @@ def test_exact_capabilities_and_unknown_routes_are_honest():
     assert not capability(SPEC, 'gpt-6.1-sol')['supported']
     for url in ('https://api.openai.com.evil/v1', 'https://evil.test/api.openai.com/v1', 'http://api.openai.com/v1',
                 'https://api.openai.com:8080/v1', 'https://api.openai.com:bad/v1',
-                'https://user:fake-password@api.openai.com/v1', 'https://api.openai.com/v1?foo',
+                'https://user:fake-password' '@api.openai.com/v1', 'https://api.openai.com/v1?foo',
                 'https://api.openai.com/v1#fragment'):
         assert not capability({**SPEC, 'base_url': url}, 'gpt-5.1')['supported']
     assert 'gateway' in capability({**SPEC, 'base_url': 'https://opencode.ai/zen/go/v1'}, 'deepseek-v4-pro')['reason']
@@ -91,7 +91,7 @@ def test_main_turn_snapshot_stable_across_tool_rounds_and_other_loops_inherit(tm
     asyncio.run(loop.send(sid, 'use work'))
     assert [c['opts']['reasoning'] for c in p.calls] == ['high', 'high']
     assert all('_exo_reasoning' not in c['opts'] for c in p.calls)
-    last = engine.store.latest_model_call_reasoning()
+    last = engine.store.latest_model_call_reasoning(engine.agent)
     assert last['requested'] == last['sent'] == 'high'
     asyncio.run(loop.send(sid, 'next'))
     assert p.calls[-1]['opts']['reasoning'] == 'low'
@@ -161,8 +161,13 @@ def test_real_engine_reserves_core_command_and_rejects_untrusted_caller(tmp_path
         dispatcher = Dispatcher(engine)
         request = wire.Command.of(wire.CommandRun(name='reasoning', args='{"action":"list"}'))
         try:
-            refused = await dispatcher.run(request, 'local')
-            assert not refused.ok and refused.error.code == 'forbidden'
+            for caller in ('local', 'channel', 'peer:fixture', 'bus:fixture', 'seat:test'):
+                for body in ({'action': 'list'}, {'action': 'reset'},
+                             {'action': 'set', 'route': 'fake:scripted', 'level': None}):
+                    attempt = wire.Command.of(wire.CommandRun(name='reasoning', args=json.dumps(body)))
+                    refused = await dispatcher.run(attempt, caller)
+                    assert not refused.ok and refused.error.code == 'forbidden'
+                    assert not engine.reasoning_settings.path.exists()
             response = await dispatcher.run(request, 'principal:web')
             assert response.ok and response.result['output']['capability'] == CAPABILITY
             assert not response.result['output']['supported']
@@ -197,7 +202,7 @@ def test_unavailable_preferences_never_drop_ingress_or_introduce_wire_options(tm
     events = engine.store.events_since(session=sid)
     assert any(e.type == 'notice' and 'preferences are unavailable' in e.body.text for e in events)
     assert all('private-file-content-must-not-escape' not in str(e) for e in events)
-    last = engine.store.latest_model_call_reasoning()
+    last = engine.store.latest_model_call_reasoning(engine.agent)
     assert last['sent'] is None and 'unavailable' in last['status']
     listing = command(settings, engine, {'action': 'list'})
     assert listing['preferences_available'] is False and listing['warning']
@@ -206,3 +211,52 @@ def test_unavailable_preferences_never_drop_ingress_or_introduce_wire_options(tm
     monkeypatch.undo()
     repaired = command(settings, engine, {'action': 'reset'})
     assert repaired['preferences_available'] and settings.load() == {}
+
+
+@pytest.mark.parametrize('interference', ['other-seat', 'subagent', 'scheduled'])
+@pytest.mark.parametrize('kind', ['thread', 'private'])
+def test_last_main_call_stays_with_actual_engine_agent_and_future_top_level_thread(tmp_path, monkeypatch, kind, interference):
+    from exo.core.engine import CoreEngine
+    from exo.core.seats import Seat
+    monkeypatch.setenv('EXO_NO_KEYCHAIN', '1')
+    monkeypatch.setenv('EXO_NO_SECRET_SERVICE', '1')
+    monkeypatch.setenv('EXO_KEYS_FILE', str(tmp_path / 'unused-keys'))
+    async def run():
+        cfg = {'fake': {'reply': 'fixture'}, 'roles': {'main': ['fake:scripted'], 'aux': ['fake:scripted']}}
+        alpha = CoreEngine(tmp_path / 'home', cfg, cwd=str(tmp_path), env={}, seat=Seat(name='alpha'))
+        beta = CoreEngine(tmp_path / 'home', cfg, cwd=str(tmp_path), env={}, seat=Seat(name='beta'))
+        try:
+            alpha.router.providers['direct'] = SPEC
+            alpha.router.instances['direct'] = FakeProvider(['alpha'], repeat=True)
+            alpha.router.set_role('main', [ROUTE])
+            alpha.loop.model = ROUTE
+            command(alpha.reasoning_settings, alpha, {'action': 'set', 'route': ROUTE, 'level': 'high'})
+            sid = alpha.store.create_session(agent=alpha.agent).id
+            await alpha.loop.send(sid, 'first alpha turn')
+            def last():
+                return command(alpha.reasoning_settings, alpha, {'action': 'list'})['last_call']
+            assert last()['sent'] == 'high'
+            if interference == 'other-seat':
+                await beta.loop.send(beta.store.create_session(agent=beta.agent).id, 'beta turn')
+            else:
+                child = Loop(alpha.store, alpha.loop.provider, model=ROUTE)
+                await child.send(alpha.store.create_session(agent=alpha.agent, parent=sid, kind=interference).id, 'child turn')
+            assert last()['sent'] == 'high'
+            command(alpha.reasoning_settings, alpha, {'action': 'set', 'route': ROUTE, 'level': 'low'})
+            await alpha.loop.send(alpha.store.create_session(agent=alpha.agent, kind=kind).id, 'future main turn')
+            assert last()['sent'] == 'low'
+        finally:
+            await alpha.close()
+            await beta.close()
+    asyncio.run(run())
+
+
+
+def test_settings_without_engine_authorization_are_fail_closed(tmp_path):
+    settings, engine, r = setup(tmp_path)
+    unguarded = ReasoningSettings(tmp_path, 'test', r)
+    for body in ({'action': 'list'}, {'action': 'reset'},
+                 {'action': 'set', 'route': ROUTE, 'level': 'high'}):
+        with pytest.raises(CommandFailed, match='principal authority'):
+            command(unguarded, engine, body)
+    assert not settings.path.exists()

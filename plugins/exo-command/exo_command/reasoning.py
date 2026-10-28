@@ -16,7 +16,7 @@ async def handle(centre, method, body):
             return 200, data
         if method != 'POST':
             return 405, {'error': 'GET or POST only'}
-        request = {key: body.get(key) for key in ('route', 'level')}
+        request = {key: body[key] for key in ('route', 'level') if key in body}
         request['action'] = 'reset' if body.get('action') == 'reset' else 'set'
         result = await centre.source.call(s.CommandRun(name='reasoning', args=json.dumps(request)))
         return 200, result['output']
