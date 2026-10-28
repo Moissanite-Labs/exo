@@ -3373,6 +3373,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   character, so the `shell` part main reads was gone under a category deny); the port now reads that span to its
   end as main does (`test_a_legacy_arithmetic_span_left_open_keeps_mains_reading`). The level-4 and budget limit
   under a rule allowing `opaque_exec` stays a documented limit (`docs/GATE.md` "Known limits"), no lower than main.
+  *Re-checked 2026-10-28 (review 5678114763, on the merges of main 347746ad and f28934a3):* main f28934a3 reads
+  each `env -S` text again as a call of its own (`split_readings`, #591 and #707) and the stdin of a `sudo -s` or
+  `sudo -i` shell, with the line as read before #491 at the end of its floors (#491, #718). `classify` keeps main's
+  loop over the `env -S` readings, and each of them is read both ways (`_classify_reading`: as the lexer reads now
+  and, where the two may differ, as before #143 at the end of that reading's `also` chain), each with its own
+  joined (#584), `ordinary` (D-074) and sudo floor readings, so a word bash reads in an `env -S` text or a sudo
+  shell's stdin is read in every one of main's readings. `readings` lists the `ordinary` and `split_readings` of
+  every reading, not only the call's, and `binds_exact` binds a line with either in any reading; the hook's bypass
+  floor reads main's first split reading as main does, and `no_grant` every reading. Rows in
+  `tests/security/test_gate_parameter_expansion.py` (24 that fail on main f28934a3 and 8 guards) and
+  `plugins/exo-gate/tests/test_approvals.py` (4 rows: principal-only approvers, no standing grant) pin the
+  composition; four `test_unseen_body.py` rows keep both unseen notes there. `scripts/gate_diff.py` of main
+  f28934a3 against this tree lowers nothing: the built-in corpus (13,205 actions x 88 policies, no variants,
+  17,950 pairs tightened on 353 actions) and an aimed corpus that adds a combination corpus harvested from main's
+  #591, #491 and hook tests, with this PR's word forms around them and inside `env -S` texts and sudo stdin
+  (31,670 actions x 151 policies, 4,782,170 pairs, 993,319 tightened on 13,337 actions).
 
   *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
   command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the

@@ -72,9 +72,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   host target (#493), each store path a write names (#514), a write into a code-load folder (#459), a gh download
   into the store (#461), a glob in a secret store's folder (#594), a here-document's exact delimiter line (#328),
   `env -S`'s own argv (#591), a backslash-newline after `$` (#585), a `$((` bash runs as a `$( ( )` (#553), a
-  store name in any letter case (#601), a `${..@P}` (#579) and legacy `$[ ]` (#588). On main 58503282 the reading
-  before is main's own lexer, #553's `$((` reading among them; a `${..@P}` is weighed as #579 weighs it (a literal
-  the line assigns keeps the read), and a `$((` bash never closes asks where main reads it as text.
+  store name in any letter case (#601), a `${..@P}` (#579) and legacy `$[ ]` (#588). The reading before is
+  main's own lexer (on main f28934a3), #553's `$((` reading among them; a `${..@P}` is weighed as #579 weighs it (a
+  literal the line assigns keeps the read), and a `$((` bash never closes asks where main reads it as text. Each of
+  main's `env -S` readings (#591, #707: `Classification.split_readings`) is read both ways too, and so is the stdin
+  of a `sudo -s` or `sudo -i` shell (#491, #718) with its reading as before #491, so a word in an `env -S` text or
+  in that stdin is read: `env --split='echo ${v:-$(git push --force origin main)}'` and
+  `sudo -i <<< 'echo ${v:-$(git push --force origin main)}'` deny under `categories: {force_push: deny}` (main
+  f28934a3: ask), and a store write in such a word is answered by the principal only. `gate.readings` lists the
+  `ordinary` and `split_readings` of every reading, and `binds_exact` binds a line with either in any reading.
   `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
