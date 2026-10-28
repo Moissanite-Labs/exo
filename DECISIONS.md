@@ -493,10 +493,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A bus seat keeps the old shape on purpose: the bus routes by seat through the relay the send already posts to,
   never through a socket a presence file names, so a forged file cannot redirect a bus send, and the bus ack
   carries no outcome of the peer's own (its `delivered` names the relay's seq), so there is no first receipt to
-  verify. Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned, as
+  verify. Stricter than before for two honest setups: a daemon whose presence file or first receipt is unsigned, as
   an older `exo`'s are, cannot be sent to while a key is pinned for its seat; update it, or leave its seat
-  unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every name, which breaks messaging
-  an unpinned peer of another home until `exo keys pin --peer`, a step the receive side does not ask for either.
+  unpinned, and the trust ladder applies. And a seat whose key was made again cannot be sent to until this home
+  pins the new key (`exo keys pin --replace`, USER-GUIDE §7). Rejected: requiring a pinned key for every name,
+  which breaks messaging an unpinned peer of another home until `exo keys pin --peer`, a step the receive side
+  does not ask for either.
+  *Amendment 2026-10-26 (#603 review, a signed first reply is not a receipt):* the #523 amendment signed the first
+  reply in "the same doc shape a later receipt uses", and `deliver` signs it for any envelope, one that does not
+  verify too, with the `msg_id` the envelope names. A client of beta's socket read a held message's id from beta's
+  `list`, sent beta a junk envelope with that id, and handed the signed `denied` to alpha's `receipt`, which
+  published `denied` for a message still held at beta. That broke the #132 rule that a later receipt comes only
+  from the seat the message went to. The two docs now sign their kind: `deliver`'s reply carries `kind: "reply"`
+  and `notify_sender`'s receipt `kind: "receipt"` (Hermes' peers module calls the same two, so it follows).
+  `receipt` takes a doc whose kind is `receipt`, or one with no kind as an older `exo` signs its receipts, unless
+  that kind-less doc carries `mode` or `session`: a #523 first reply signs those fields and no receipt ever has, so
+  a #523 build's reply cannot pass as a receipt either. The send path takes a reply by the same rule (`doc_kind`):
+  `kind: "reply"`, or a kind-less doc that signs `mode` or `session`, so a receipt, an older `exo`'s included, is
+  no first reply, and a send to a #523 build still completes. Refusing that kind-less reply would gain nothing and
+  cost a duplicate: the reply is checked after the text has gone, so a send that fails on its reply has already
+  reached the peer, and only the outcome is refused (USER-GUIDE §7 says so). A reply is
+  still signed for an envelope that does not verify: signing it only for a verified envelope would leave an honest
+  sender whose key the receiver does not hold, or holds an old copy of, with an unsigned `denied` it must refuse,
+  so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
+  JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
+  that is not a mapping fails the send as a refused reply.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -3913,6 +3934,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   without replacing newer edits or sending again automatically. Recovery asks the user to inspect the thread
   before sending again because a lost acknowledgement does not prove rejection. Delayed opens and unsteer
   replies cannot redirect newer navigation or put one conversation's text into another composer.
+
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
@@ -4568,6 +4593,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
+  editor with Save, Cancel, Enter and Escape. This uses the existing principal-only rename command without
+  selecting that thread or replacing the current composer draft. Native JavaScript prompts are not required.
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
   stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
