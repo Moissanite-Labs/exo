@@ -193,7 +193,8 @@ running a shell command. A mistyped `/comand` is not sent: Exo says "did you mea
 line in the box. Up arrow brings back earlier lines, and as you type, the rest of an earlier line shows dim; press
 right arrow to take it. With the box empty, a dim line sometimes suggests a next step (`/providers` after a failed
 call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help. Inspired by the
-Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance".
+Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance". In the web composer,
+a failed call suggests `/trace`; credential setup is suggested only when the failure reports an authentication problem.
 
 ## 4. Memory
 

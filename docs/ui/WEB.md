@@ -239,7 +239,8 @@ waits in the box, and the page asks again with no limit: a timer, 1 s doubling t
 not move the backoff on. So a long core restart never turns a core command into a model turn, and the names are used
 as soon as the core answers. An older core that answers `unknown_command` or `unsupported` for `commands.list` also
 counts as an answer (`core` is `[]`); a core-only name the page then cannot know goes as a message.
-A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
+A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. A failed model call suggests `/trace` to inspect the recorded failure; only explicit authentication
+errors suggest checking credentials on the Providers page. One dim guidance line above the box (a failed call,
 a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
 config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
 yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back; an

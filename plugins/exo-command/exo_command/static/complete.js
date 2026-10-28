@@ -124,7 +124,13 @@ export class Guide {
   }
   rules(st) {
     const out = [];
-    if (st.providerError) out.push({ key: "providers", text: "that model call failed: check your keys on the Providers page", fill: "" });
+    if (st.providerError) {
+      const error = typeof st.providerError === "string" ? st.providerError : "";
+      const auth = /\b(?:HTTP\s+401|unauthori[sz]ed|authentication\s+(?:failed|error)|invalid\s+(?:API[ -]?)?(?:key|token))\b/i.test(error);
+      out.push({ key: "providers", text: auth
+        ? "authentication failed: check credentials on the Providers page"
+        : "that model call failed: /trace shows the recorded failure", fill: "" });
+    }
     if (st.jobDone) out.push({ key: "job:" + st.jobDone, text: "job " + st.jobDone + " finished: ask for its job_output", fill: "show me the job_output for " + st.jobDone });
     if (st.findings) out.push({ key: "findings", text: st.findings + " open finding(s): /findings", fill: "/findings" });
     if (st.longTurn) out.push({ key: "trace", text: "that turn was slow: /trace shows where the time went", fill: "/trace" });

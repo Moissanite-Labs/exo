@@ -1212,6 +1212,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pid), with no made-up exit code. A client that adopted its cores reaps any that exited later at its next start.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
+- **Amendment 2026-10-28 (#756):** the web composer retains model-call error evidence. Only explicit
+  authentication failures suggest checking provider credentials. Transport and unknown failures suggest
+  inspecting the recorded failure with `/trace`, without implying that a key is wrong.
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
   has". The reference is the Hermes CLI (`hermes_cli/commands_completion.py`): a prompt_toolkit completer with a `/`
   menu, subcommand lists, ghost text from history and `@` file search. We studied it and built our own.
