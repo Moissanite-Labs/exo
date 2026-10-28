@@ -3213,7 +3213,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
-- **Amendment 2026-10-28 (#753):** direct bound shell calls redact final output by default. The Registry-owned bash handler leaves final-output redaction to the Registry, so that strict pass runs once. Stream redaction remains separate and protects read boundaries. The Registry does not trust literal redaction markers in raw tool output; credentials containing those markers still match. See `docs/GITHUB-AUTH.md`.
+- **Amendment 2026-10-28 (#753):** direct bound shell calls redact final output by default. The Registry-owned bash handler leaves final-output redaction to the Registry, so that strict pass runs once. Stream redaction remains separate and protects read boundaries. The Registry does not trust literal redaction markers in raw tool output; credentials containing those markers still match. Secret lookup or final redaction failures withhold the entire result and return a generic error, never raw output or exception text. See `docs/GITHUB-AUTH.md`.
 - **Amendment 2026-10-27 (bound GitHub fallback):** token and disabled modes seed their private gh configuration
   with a public invalid token. Removing token environment variables while retaining that directory fails authentication
   instead of consulting the machine's gh keyring. Actual credentials are not written there. Deliberate configuration

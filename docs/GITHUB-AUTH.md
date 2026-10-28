@@ -71,4 +71,6 @@ This covers ordinary gh commands and HTTPS Git authentication for the selected h
 
 Arbitrary shell access remains trusted: code can use, transform or export its environment credential. Raw-value redaction removes known tokens from foreground output and bound job logs, including split reads. It is not a sandbox against encoded output or deliberate exfiltration.
 
-Direct bound `run_command` calls redact their final output by default. The Registry-owned bash handler defers that final-output pass to the Registry, which applies strict redaction once. Streaming still redacts across reads. This avoids masking ordinary text a second time across an inserted marker, while still removing raw credentials that contain the literal `[redacted]` marker, quotes or backslashes (#753).
+Direct bound `run_command` calls redact their final output by default. The Registry-owned bash handler defers that final-output pass to the Registry, which applies strict redaction once.
+
+If final secret lookup or redaction fails, the Registry withholds the entire result and returns a generic error without the raw output or exception text. Streaming still redacts across reads. This avoids masking ordinary text a second time across an inserted marker, while still removing raw credentials that contain the literal `[redacted]` marker, quotes or backslashes (#753).
