@@ -3048,6 +3048,18 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
         while words and words[0].text.startswith("-") and words[0].text != "-":
             f = words[0].text
             words = words[1:]
+            if base == "sudo":
+                key, eq, value = f.partition("=")
+                long_root = len(key) >= 5 and "--chroot".startswith(key)
+                r = f.find("R", 1) if f.startswith("-") and not f.startswith("--") else -1
+                short_root = r > 0 and not any(ch in "ughpCDrtUT" for ch in f[1:r])
+                if long_root or short_root:
+                    inline = value if long_root and eq else f[r + 1:] if short_root else ""
+                    root = _Word(inline) if inline else words[0] if words else _Word("")
+                    rest = words if inline or not words else words[1:]
+                    # The selected root changes both executables and absolute file names. Reuse chroot's
+                    # opaque namespace reading while retaining the nested command and its denies.
+                    return [_Word("chroot"), root, *rest], sudo, None
             if base == "env" and (f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S"))):
                 inline = f.split("=", 1)[1] if "=" in f else (f[2:] if f.startswith("-S") and len(f) > 2 else "")
                 return [], sudo, inline or " ".join(w.text for w in words)
