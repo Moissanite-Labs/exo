@@ -51,8 +51,8 @@ def _redact_result(result: ToolResult) -> ToolResult:
             for part in result.content:
                 if part.type == "text" and part.text:
                     part.text = redact_secrets(part.text, vals)
-    except Exception:  # redaction must never lose a result
-        pass
+    except Exception:  # no raw or partially scrubbed result may cross this boundary
+        return ToolResult.of_text(result.call_id, "Tool output withheld: secret redaction failed.", is_error=True)
     return result
 
 

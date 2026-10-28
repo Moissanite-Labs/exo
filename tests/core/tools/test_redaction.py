@@ -302,3 +302,25 @@ def test_registry_strictly_redacts_literal_marker_and_escaped_credentials(monkey
         ToolContext(cwd=str(tmp_path), emit=seen.append, meta={"github_auth": (str(tmp_path / "home"), "test")})))
     assert result.text() == "[redacted] done\n[exit 0]"
     assert "".join(seen) == "[redacted] done"
+
+
+@pytest.mark.parametrize("failed_operation", ["redact_secrets", "known_secret_values"])
+def test_bound_registry_withholds_output_when_final_redaction_fails(monkeypatch, tmp_path, failed_operation):
+    """No stream is needed to protect the returned bound result when its final scrub fails."""
+    from exo.core import github_auth
+    value = "fake-bound-" + "credential-753"
+    monkeypatch.setattr(keys, "_loaded", set())
+    monkeypatch.setattr(github_auth, "binding", lambda *_: {"mode": "token", "host": "github.com", "store": "keychain"})
+    monkeypatch.setattr(keys, "keychain_get", lambda _: value)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    (tmp_path / "output").write_text(value + " sensitive output")
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(value)  # neither the result nor the exception text may escape
+
+    monkeypatch.setattr(keys, failed_operation, fail)
+    result = asyncio.run(default_registry().call(ToolCall("c1", "bash", {"command": "cat output"}),
+        ToolContext(cwd=str(tmp_path), meta={"github_auth": (str(tmp_path / "home"), "test")})))
+    assert result.is_error and result.call_id == "c1"
+    assert result.text() == "Tool output withheld: secret redaction failed."
+    assert value not in result.text() and "sensitive output" not in result.text()
