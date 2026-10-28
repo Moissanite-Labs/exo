@@ -10,6 +10,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why:** A asked for work that survives compaction and session switches.
 - **Rejected:** Keeping plans in agent memory or the Drive vault (lost on compaction; slow sync).
 
+D-001 maintainer evidence amendment (2026-10-28, #615): hosted CI recovery requires a new run with completed job results, separately from local verification and passing tests. `scripts/actions_health.py` records a bounded, read-only attempt inventory; it does not infer a startup-failure cause or change Actions settings. See `docs/ACTIONS-HEALTH.md`.
+
 ## D-002 (2026-10-11) Research and inventory run as parallel subagents writing to files
 - **Decision:** Five subagents: guardian-angel crawl, GitHub inventory, local ~/.hermes inventory,
   local documents and exports inventory, base evaluation. Each writes one file in `research/` or

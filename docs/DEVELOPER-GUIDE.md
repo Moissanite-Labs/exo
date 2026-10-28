@@ -670,6 +670,8 @@ example with `git filter-repo`), then publish.
 
 ## 8. Decisions and the merge flow
 
+For zero-job Actions startup failures, use the read-only [hosted CI diagnostic](ACTIONS-HEALTH.md). A locally tested change, hosted execution and passing hosted tests are separate evidence.
+
 **`DECISIONS.md`.** Each significant choice gets a heading `## D-NNN (date) title`, in number order, newest last.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.

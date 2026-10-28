@@ -5,6 +5,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Read-only Actions attempt diagnostics distinguish zero-job startup failures, completed hosted jobs and passing CI. Includes head-pinned recovery acceptance; account-side cause and repair remain open (#615).
+
 ### Fixed
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
