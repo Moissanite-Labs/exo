@@ -1067,3 +1067,10 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+## Repository access preflight
+
+Use `scripts/check_repository_access.py --expected-actor EXPECTED_PUBLIC_LOGIN` before stewardship
+to verify the selected account and visible Exo role without changing a login. The exact limits and
+exit codes are in `docs/REPOSITORY-ACCESS.md`; an account role does not prove token write capability
+or permanent access (#180).
