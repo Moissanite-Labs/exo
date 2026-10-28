@@ -450,6 +450,12 @@ Check your prose before you commit docs:
 
 ### Checking a gate change against main
 
+Gate-related pull requests also run `gate-preflight.yml`: the gate plugin suite and the base revision's
+comparator against the composed PR tree, with the JSON differential retained as an artifact. A nonzero
+comparator result fails that job. Hosted execution and branch-protection enforcement remain separate:
+maintainers must make `never-looser` a required check to enforce it at merge. Reviewers still inspect docs and
+explain every intentional lowering; this workflow does not waive the docs rule.
+
 A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so (D-038,
 amendment of 2026-10-22). `scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and
 run main's copy of the script on both trees:
