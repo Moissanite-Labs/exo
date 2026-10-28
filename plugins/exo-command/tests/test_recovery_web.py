@@ -269,11 +269,12 @@ console.log("ok");
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_bare_link_guidance_and_fresh_fragment_in_same_tab(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
+    (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
 export const api=async()=>{throw Error("bare URL must not make requests");};
 export const redeem=async()=>{throw Error("bare URL must not make requests");};
-export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){}},replaceChildren(...c){this.children=c;}});
+export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){}},setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},replaceChildren(...c){this.children=c;}});
 ''')
     (tmp_path / "bus.mjs").write_text('''export const onState=f=>{globalThis.state=f;f({connected:false});};export const start=async()=>{globalThis.started++;};export const restart=async()=>{globalThis.restarted++;};''')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
