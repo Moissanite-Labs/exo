@@ -613,3 +613,9 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Interrupted turn records
+
+If a running turn task is cancelled, its recorded status ends as interrupted so clients can stop
+showing it as busy. This does not replay tools or restart the turn automatically. A sudden core
+process exit before it saves a final event remains a separate recovery case (#667).

@@ -1055,3 +1055,11 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+## Turn task cancellation
+
+`Loop.send` propagates task cancellation after writing an interrupted terminal record for a started
+turn (#667). `timing.cancelled: 1` distinguishes this path from ordinary interruption. Event buses
+must persist an event before notifying subscribers; a cancelled completion notification therefore
+already has its terminal record and must not cause a duplicate. Provider cleanup and the session
+lock/running-state cleanup remain active. Abrupt process death remains a separate recovery concern.

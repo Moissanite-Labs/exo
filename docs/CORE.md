@@ -233,3 +233,12 @@ The active principal comes from `--principal`, else `$EXO_PRINCIPAL`.
 test in `tests/acceptance/` copies a populated store (`EXO_ACCEPTANCE_STORE`) to a temp dir,
 without `corpus/private`, and checks lint, find and ctx on three queries. It skips when no
 such store is present.
+
+### Task cancellation and terminal turn records
+
+When a task running `Loop.send` is cancelled after `turn.started`, the loop records
+`turn.completed` with `stop_reason: interrupted` and `timing.cancelled: 1`, then propagates
+`CancelledError`. The provider stream closes and the session lock/running flags are released.
+A cancellation while notifying subscribers of an already persisted completion does not create
+a second terminal record. This addresses task cancellation (#667), not the root cause of any
+particular silent stream or a process exit before an event can be persisted.

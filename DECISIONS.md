@@ -133,6 +133,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   before the research says what to lift (wastes the 2026 work in Hermes).
 
 ## D-010 (2026-10-12) Standalone core: lean Python core, lifted Hermes parts, protocol-first UI
+- **Amendment 2026-10-28 (#667):** cancellation of a task running a started turn records an interrupted
+  completion before propagating cancellation and releasing the session. An already persisted completion
+  is never duplicated when a subscriber notification is cancelled. This does not explain a particular
+  live stall or cover abrupt process death before persistence.
 - **Decision:** Exo gets its own core in Python, in this repo. It lifts a small set of Hermes modules
   (memory and context slot interfaces, provider message types and two transports, selected built-in tool
   logic, compressor prompts, and later individual platform adapters) and rewrites the loop, routing,

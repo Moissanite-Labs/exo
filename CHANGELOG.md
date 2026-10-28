@@ -31,6 +31,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Cancelled turn tasks record an interrupted completion before releasing the session, while
+  cancellation still propagates and existing terminal records are not duplicated (#667).
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 

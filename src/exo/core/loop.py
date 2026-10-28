@@ -228,53 +228,69 @@ class Loop:
                 soul = self.before_turn() or ""
             except Exception as exc:  # a failed refresh keeps the old prompt; the turn still runs
                 await self._emit(trace.error_body("before_turn", exc), session)
-        await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
-        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
-        author = provenance.author_of(user)
-        remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
-        if remembered:
-            await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
-        result = TurnResult(turn_id=turn_id, stop_reason="end")
+        terminal_attempted = False
         try:
-            await self._rounds(session, turn_id, user, st, result)
-            while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
-                late = list(st.steer)
-                st.steer.clear()
-                for m in late:
-                    await self._add(session, m, turn_id)
-                await self._rounds(session, turn_id, late[-1], st, result)
-        except _Interrupted:
-            result.stop_reason = "interrupted"
-        except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
-            result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
-            await self._emit(ev.Error(code="turn_failed", message=result.error), session)
-            await self._emit(trace.error_body("turn loop", exc), session)
-        st.accepting_steers = False  # no round can take a steer now: a later one waits for a new turn (#147)
-        await self._drain_steer(session, turn_id, st)  # arrived after the last tool round: context for the next turn
-        wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
-        timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
-                  "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
-                  "fallbacks": st.stats["fallbacks"], "tool_errors": st.stats["tool_errors"]}
-        if st.stats.get("interrupted_tool"):
-            timing["interrupted_tool"] = st.stats["interrupted_tool"]
-        await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
-                                          usage=result.usage, timing=timing), session)
-        reply = result.message.text() if result.message else ""
-        if remembered:
-            await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
-        if remembered and self.memory is not None and hasattr(self.memory, "checkpoint"):
-            recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
-            await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
-        if hasattr(self.context, "on_turn_complete"):
-            await maybe_await(self.context.on_turn_complete(session, result.last_usage))  # the last prompt's size
-        info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
-        await self._emit(ev.SessionUpdated(session=info), session)
-        if self.on_turn_end is not None:
+            await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
+            turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
+            author = provenance.author_of(user)
+            remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
+            if remembered:
+                await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
+            result = TurnResult(turn_id=turn_id, stop_reason="end")
             try:
-                await self.on_turn_end(session, turn_id)
-            except Exception as exc:  # observation never breaks a turn, but it is recorded
-                await self._emit(trace.error_body("turn observer", exc), session)
-        return result
+                await self._rounds(session, turn_id, user, st, result)
+                while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
+                    late = list(st.steer)
+                    st.steer.clear()
+                    for m in late:
+                        await self._add(session, m, turn_id)
+                    await self._rounds(session, turn_id, late[-1], st, result)
+            except _Interrupted:
+                result.stop_reason = "interrupted"
+            except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
+                result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
+                await self._emit(ev.Error(code="turn_failed", message=result.error), session)
+                await self._emit(trace.error_body("turn loop", exc), session)
+            st.accepting_steers = False  # no round can take a steer now: a later one waits for a new turn (#147)
+            await self._drain_steer(session, turn_id, st)  # arrived after the last tool round: context for the next turn
+            wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
+            timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
+                      "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
+                      "fallbacks": st.stats["fallbacks"], "tool_errors": st.stats["tool_errors"]}
+            if st.stats.get("interrupted_tool"):
+                timing["interrupted_tool"] = st.stats["interrupted_tool"]
+            terminal_attempted = True
+            await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
+                                              usage=result.usage, timing=timing), session)
+            reply = result.message.text() if result.message else ""
+            if remembered:
+                await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
+            if remembered and self.memory is not None and hasattr(self.memory, "checkpoint"):
+                recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
+                await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
+            if hasattr(self.context, "on_turn_complete"):
+                await maybe_await(self.context.on_turn_complete(session, result.last_usage))  # the last prompt's size
+            info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
+            await self._emit(ev.SessionUpdated(session=info), session)
+            if self.on_turn_end is not None:
+                try:
+                    await self.on_turn_end(session, turn_id)
+                except Exception as exc:  # observation never breaks a turn, but it is recorded
+                    await self._emit(trace.error_body("turn observer", exc), session)
+            return result
+        except asyncio.CancelledError:
+            st.accepting_steers = False
+            if not terminal_attempted:
+                # Event buses persist before notifying subscribers. A cancelled completion notification
+                # therefore already has its terminal record and must not emit a duplicate.
+                approval = self.approval_ms.get(session, 0) - waited
+                await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason="interrupted", timing={
+                    "wall_ms": int((time.monotonic() - t0) * 1000), "model_ms": st.stats["model_ms"],
+                    "tool_ms": max(0, st.stats["tool_ms"] - approval), "approval_ms": approval,
+                    "model_calls": st.stats["model_calls"],
+                    "fallbacks": st.stats["fallbacks"], "tool_errors": st.stats["tool_errors"],
+                    "cancelled": 1}), session)
+            raise
 
     async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> str:
         """Add the queued steers as context. Returns the newest author drained ("" when none), so the rounds
