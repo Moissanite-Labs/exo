@@ -45,7 +45,7 @@ def verify_copy(ledger_path, identity, checkpoints):
         db.close()
 
 
-def _verify_authority_once(ledger_path, authority):
+def _verify_authority_once(ledger_path, authority, reader=None):
     """Inspect a copy against a captured authenticated service head, without repair.
 
     The live signer is queried, but this is not an independently fresh witness
@@ -69,15 +69,15 @@ def _verify_authority_once(ledger_path, authority):
             checkpoints.append(previous)
     if canonical(previous) != canonical(latest):
         raise AuthorityError("checkpoint replay differs from captured authority head")
-    result = verify_copy(ledger_path, identity, checkpoints)
+    result = verify_projection(reader, identity, checkpoints) if reader is not None else verify_copy(ledger_path, identity, checkpoints)
     return result, latest
 
 
-def verify_authority(ledger_path, authority):
+def verify_authority(ledger_path, authority, *, reader=None):
     # If another append commits while replay/copy inspection is in progress, a
     # newer local copy must not be called divergent from the older captured head.
     for _ in range(3):
-        result, captured = _verify_authority_once(ledger_path, authority)
+        result, captured = _verify_authority_once(ledger_path, authority, reader)
         after = authority.head()
         verify_checkpoint(authority.identity, after)
         if canonical(after) == canonical(captured):
