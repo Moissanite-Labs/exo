@@ -6,7 +6,7 @@ This local test build adds warnings for repeated tool calls during a turn, corre
 
 - The primary loop warns after three calls with matching normalized arguments. It files at most one finding per tool per turn. Successful file-changing tools reset the comparison. This is a heuristic: legitimate polling can repeat, and the warning does not measure semantic progress.
 - A terminal model failure stays an error. Recorded fallback totals require confirmed recovery. Timeouts and successful fallbacks remain visible, and legacy trace inference remains available.
-- Registry-owned bash results receive one strict final redaction pass. Direct bound shell calls keep their default protection, including streamed reads and raw credentials containing masking markers, quotes or backslashes.
+- Registry-owned bash results receive one strict final redaction pass. A failed final secret lookup or redaction withholds the entire result. Direct bound shell calls keep their default protection, including streamed reads and raw credentials containing masking markers, quotes or backslashes.
 
 The warning does not stop, retry or switch models. It leaves the user's round limit unchanged. The observed investigation loop motivated the warning, but its model or context cause has not been established.
 
@@ -20,7 +20,7 @@ The first pilot's feature inventory remains in [its notes](PILOT-EXPERIMENTAL-20
 
 Fake model and tool checks prove the warning appears before a terminal event, does not duplicate its finding at turn end, respects edits, survives a diagnostic-store failure, and permits cancellation. A disposable composition proof requests an uncapped turn, runs eight tools and nine fake model calls, and finishes normally. An independent proof also verifies that request exceeds a configured two-round limit without changing that setting.
 
-The composed core, auth, trace, permissions and documentation suite passes 1,370 checks with one skip. The desktop web suite passes all 390 tests. Exact source and installation coordinates are recorded in the build receipt. No real model turn is used for installation testing. Hosted CI and cross-team merge clearance are not claimed.
+The composed core, auth, trace, permissions and documentation suite passes 1,372 checks with one skip. The desktop web suite passes all 390 tests. Exact source and installation coordinates are recorded in the build receipt. No real model turn is used for installation testing. Hosted CI and cross-team merge clearance are not claimed.
 
 This remains an experimental composition. Its inherited architecture limit is unresolved: 44 inward product imports against 39, and eight private-state reads against eight. No limit is raised or guard weakened.
 
