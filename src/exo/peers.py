@@ -142,17 +142,27 @@ class Directory:
         self._file(daemon).unlink(missing_ok=True)
 
     def get(self, daemon: str) -> Presence | None:
+        got = self.entry(daemon)
+        return got[0] if got else None
+
+    def entry(self, daemon: str) -> tuple[Presence, dict[str, Any]] | None:
+        """The entry and the JSON it was read from, which its signature covers: a newer exo may sign a field this
+        one does not know (#523)."""
         if Path(daemon).name != daemon:  # an envelope names the daemon: a path there never leaves this folder (#132)
             return None
         try:
-            return self._read(self._file(daemon))
+            d = json.loads(read_plain(self._file(daemon)))
+            return self._presence(d), d
         except (OSError, ValueError, TypeError):
             return None
 
     @staticmethod
-    def _read(path: Path) -> Presence:
-        d = json.loads(read_plain(path))
+    def _presence(d: dict[str, Any]) -> Presence:
         return Presence(**{k: v for k, v in d.items() if k in Presence.__dataclass_fields__})
+
+    @staticmethod
+    def _read(path: Path) -> Presence:
+        return Directory._presence(json.loads(read_plain(path)))
 
     def scan(self, prune: bool = True) -> list[Presence]:
         """Every live daemon. A file whose pid is gone, or that cannot be read, is removed (``prune``)."""
@@ -218,6 +228,13 @@ def verify_envelope(env: dict[str, Any], pub: str, seen: "OrderedDict[str, None]
         while len(seen) > 2000:
             seen.popitem(last=False)
     return ""
+
+
+def doc_kind(doc: dict[str, Any]) -> str:
+    """``reply`` for a deliver's first answer, ``receipt`` for a later outcome (#603 review). Each signs its kind; an
+    older exo signs none, and its first reply (#523) is the one that signs ``mode`` and ``session``, which no
+    receipt ever has."""
+    return str(doc.get("kind", "reply" if "mode" in doc or "session" in doc else "receipt"))
 
 
 def peer_meta(env: dict[str, Any]) -> dict[str, Any]:
@@ -540,9 +557,9 @@ class PeerNode:
         here, peer = self._pins(str(row["seat"]))
         if not here and not peer:
             return str(row["socket"])
-        p = self.directory.get(str(row["daemon"]))
+        p, raw = self.directory.entry(str(row["daemon"])) or (None, {})
         if p is None or p.daemon != row["daemon"] or p.seat != row["seat"] or p.pub not in here + peer \
-                or not any(crypto.verify_doc(asdict(p), k) for k in here + peer):
+                or not any(crypto.verify_doc(raw, k) for k in here + peer):
             raise ValueError(f"{row['name']}'s presence file does not verify against a key pinned for "
                              f"{row['seat']} here; not sent")
         return p.socket
@@ -552,12 +569,18 @@ class PeerNode:
         receiving seat signs it (``deliver``), and here it must name the message, state, seat and daemon the
         text went to and verify against a key this home pins for that seat, as ``receipt`` has since #132. A
         reply that fails raises: nothing is published and the send fails. For a name no key here for, the reply
-        is not checked and the receiving side's own ladder decides what arrived, as before."""
+        is not checked and the receiving side's own ladder decides what arrived, as before. The reply is signed as
+        ``kind: "reply"`` and a later receipt as ``kind: "receipt"``, so neither passes for the other (``doc_kind``:
+        a #523 build's reply, which names no kind, is still a reply)."""
+        if not isinstance(receipt, dict):
+            raise ValueError(f"{row['name']} answered with something that is not a reply; not published")
         here, peer = self._pins(str(row["seat"]))
         if not here and not peer:
             return
         by = str(receipt.get("by") or "")
-        if receipt.get("msg_id") != mid:
+        if doc_kind(receipt) != "reply":
+            why = "the doc is not a first reply"
+        elif receipt.get("msg_id") != mid:
             why = "the reply does not name the message"
         elif not ID_RE.fullmatch(by) or by != row["seat"] or receipt.get("daemon") != row["daemon"] \
                 or receipt.get("state") not in ("delivered", "held", "denied"):
@@ -588,7 +611,7 @@ class PeerNode:
     # ---------------------------------------------------------------- inbound
 
     async def deliver(self, env: dict[str, Any]) -> dict[str, Any]:
-        """A signed envelope from another daemon (or from this one). Returns the first receipt, signed with this
+        """A signed envelope from another daemon (or from this one). Returns the first reply, signed with this
         seat's key so the sending side can verify it (#523), the way a later receipt is signed (#132)."""
         meta = peer_meta(env)
         sender = self.directory.get(str(meta.get("daemon") or ""))
@@ -606,15 +629,17 @@ class PeerNode:
                                             "note": "" if pin or why else "key not pinned"})
         receipt = await self.path.submit(ing)
         # The first reply is signed like the later receipts are (#523, #132): the receiving seat answers only
-        # through a doc its own key verifies a send against, so a forged presence cannot publish an outcome.
-        return crypto.sign_doc({"v": 1, "msg_id": receipt.msg_id, "state": receipt.state, "detail": receipt.detail,
-                                "mode": receipt.mode, "session": receipt.session, "by": self.seat,
-                                "daemon": self.daemon, "ts": crypto.now_ts()}, self.signer.key)
+        # through a doc its own key verifies a send against, so a forged presence cannot publish an outcome. It is
+        # signed for any envelope, one that does not verify too, so it says it is a reply: a socket client that
+        # names a held message's id in a junk envelope gets a signed `denied` no sender takes as a receipt.
+        return crypto.sign_doc({"v": 1, "kind": "reply", "msg_id": receipt.msg_id, "state": receipt.state,
+                                "detail": receipt.detail, "mode": receipt.mode, "session": receipt.session,
+                                "by": self.seat, "daemon": self.daemon, "ts": crypto.now_ts()}, self.signer.key)
 
     async def notify_sender(self, ing: Ingress, r: Receipt) -> None:
         """Tell the sender a held message's outcome (released, denied, expired). Signed with this seat's key."""
-        doc = crypto.sign_doc({"v": 1, "msg_id": r.msg_id, "state": r.state, "detail": r.detail, "by": self.seat,
-                               "daemon": self.daemon, "ts": crypto.now_ts()}, self.signer.key)
+        doc = crypto.sign_doc({"v": 1, "kind": "receipt", "msg_id": r.msg_id, "state": r.state, "detail": r.detail,
+                               "by": self.seat, "daemon": self.daemon, "ts": crypto.now_ts()}, self.signer.key)
         sender = self.directory.get(str(ing.meta.get("from_daemon") or ""))
         if sender is None:
             return
@@ -629,12 +654,13 @@ class PeerNode:
     async def receipt(self, doc: dict[str, Any]) -> dict[str, Any]:
         """A later receipt for a message this daemon sent (#132). ``by`` must be the seat the message went to and the
         seat of the daemon sending the receipt, and the signature must verify against a key this home pins for that
-        seat. A presence key never verifies a receipt."""
+        seat. A presence key never verifies a receipt, and a first reply is no receipt: an older exo's receipt says
+        no ``kind``, and its first reply (#523) is told apart by the ``mode`` and ``session`` it signs."""
         mid, by = str(doc.get("msg_id") or ""), str(doc.get("by") or "")
         sent = self._sent.get(mid)
         who = self.directory.get(str(doc.get("daemon") or ""))
         if sent is None or who is None or not ID_RE.fullmatch(by) or by != sent[2] or who.seat != by \
-                or doc.get("state") not in ("released", "denied", "expired", "delivered"):
+                or doc_kind(doc) != "receipt" or doc.get("state") not in ("released", "denied", "expired", "delivered"):
             return {"ok": False}
         here, peer = self._pins(by)
         if not any(crypto.verify_doc(doc, p) for p in here + peer):
