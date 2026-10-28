@@ -1266,6 +1266,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-28 (#650):* File-tool path arguments retain secret and store checks under normalized camelCase and underscore keys and inside nested operation containers; non-path content strings remain content.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
   globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`

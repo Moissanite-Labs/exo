@@ -7105,6 +7105,37 @@ def _patch_paths(text: str) -> list[str]:
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", "files", "directory", "dir", "root",
                   "source", "src", "from", "old_path", "dest", "dst", "destination", "to", "target")
+_PATH_ARG_NORMAL = frozenset(k.replace("_", "") for k in _PATH_ARG_KEYS)
+
+
+def _path_arguments(args: Mapping, *, destinations: bool = False) -> list[str]:
+    """Original flat paths first, then normalized aliases and nested operation paths. Iterative and cycle-safe."""
+    paths = [v for k in _PATH_ARG_KEYS if not destinations or k not in ("source", "src", "from", "old_path")
+             for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
+             else [args.get(k)]) if isinstance(v, str)]
+    pending, seen = [(args, False)], set()
+    while pending:
+        value, named = pending.pop()
+        if isinstance(value, str):
+            if named:
+                paths.append(value)
+            continue
+        if not isinstance(value, (Mapping, list, tuple)) or (id(value), named) in seen:
+            continue
+        seen.add((id(value), named))
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                name = str(key).lower().replace("_", "").replace("-", "")
+                if destinations and (name in ("src", "from", "oldpath") or name.startswith(("source", "frompath"))):
+                    continue
+                path = name in _PATH_ARG_NORMAL or name.endswith(("path", "file", "dir", "dest", "destination",
+                                                                 "target", "output"))
+                if name.endswith("name") and isinstance(item, str) and ("/" in item or "\\" in item):
+                    path = True
+                pending.append((item, path))
+        else:
+            pending.extend((item, named) for item in value)
+    return list(dict.fromkeys(paths))
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
 # They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` reads beside the name's word.
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
@@ -7125,13 +7156,11 @@ _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 @_brace_budget
 def args_sensitive(args: Mapping) -> str:
     """The first path-like tool argument that names a secret store, or ''."""
-    for k in _PATH_ARG_KEYS:
-        v = args.get(k)
-        for item in (v if isinstance(v, (list, tuple)) else [v]):
-            if isinstance(item, str) and item:
-                words = _brace_words(item)         # expanded once for both checks
-                if words is None or _sensitive_words(words) or _glob_words(words):
-                    return item
+    for item in _path_arguments(args):
+        if item:
+            words = _brace_words(item)         # expanded once for both checks
+            if words is None or _sensitive_words(words) or _glob_words(words):
+                return item
     return ""
 
 
@@ -7680,7 +7709,9 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         category = "local_write" if operation == "update" else "read"
         c = _make(category, summary=f"session working notes: {operation}")
     elif tool in ("write_file", "patch", "edit_file", "apply_patch"):
-        paths = [_first(args, ("path", "file_path"))] + _patch_paths(str(args.get("patch") or ""))
+        old_paths = [p for p in ([_first(args, ("path", "file_path"))]
+                                + _patch_paths(str(args.get("patch") or ""))) if p]
+        paths = old_paths + _path_arguments(args, destinations=True)
         paths = [p for p in paths if p]
         path = next((p for p in paths if is_sensitive_path(p)), "") or args_sensitive(args)
         cat = "credentials"
@@ -7696,6 +7727,10 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if cat != "local_write" or len(set(paths)) > 1:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
+            if cat == "credentials" and not old_paths and path not in paths:
+                # Previously an absent destination left the secret source as the fallback local-write part.
+                # Keep its policy/reserved matches when a newly recognized destination is added.
+                c.parts.append(_make("local_write", summary=f"write {path}", target=path, link=path))
         # #447: a store file it writes beside a secret is a part, so only the principal answers. #514: so is each store
         # file past the first, so a target entry on any of them matches, as for the other file tools.
         if cat != "local_write":
@@ -7738,8 +7773,7 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             # rename, as `mv` does, with or without a secret beside it (#494). A tool whose camelCase name says so
             # counts too (#447).
             wide = own == "delete" or not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
-            named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
-                     else [args.get(k)]) if isinstance(v, str)]
+            named = _path_arguments(args)
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide, from_cwd=True)))
             if stores and not secret and (cat in ("local_write", "delete") or fetch):
                 cat = "store_write"

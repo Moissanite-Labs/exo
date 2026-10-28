@@ -35,6 +35,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- File-tool path arguments retain secret and store checks under normalized camelCase and underscore keys and inside nested operation containers; non-path content strings remain content (#650).
+
 - The core retries its start after a failed or cancelled start instead of failing every later command
   (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
   raise once and leave every later command with the same `internal` error until exod restarted. A start cut

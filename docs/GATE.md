@@ -3025,3 +3025,8 @@ on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` 
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.
+
+
+### Security repair #650
+
+File-tool path arguments retain secret and store checks under normalized camelCase and underscore keys and inside nested operation containers; non-path content strings remain content. Classifier tests treat these command strings as data and never execute them.
