@@ -380,6 +380,22 @@ ended can no longer be closed, and its connection stays open until Python collec
 baseline decision judge run each question in its own `asyncio.run`, so they close the router they built after
 each question.
 
+### Prices
+
+The catalog prices only the routes whose list prices are known (the Anthropic models today). A route with
+no entry runs normally; its cost reads `unknown` in `exo trace`, never `$0` (D-032). Set or override a price
+in config.json under `models.models`, keyed by `provider:model`, in USD per million tokens:
+
+    {"models": {"models": {"provider:model": {"input": 0.28, "output": 0.42, "cache_read": 0.028}}}}
+
+The numbers above are an example, not a quote: use the provider's published list price. `cache_read` and
+`cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
+price added later applies to new calls only, so a session recorded before it keeps `unknown`.
+
+A route with no price is also outside the model-spend journal. Turning that on refuses the route at its
+first call with "no pinned model-spend contract", and the refusal names the same config key, because the
+journal may only spend against a price the principal pinned.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.

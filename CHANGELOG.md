@@ -15,6 +15,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- A route with no catalog price now says where its price goes. `exo trace` names each unpriced route with
+  the config key that prices it, and the model-spend refusal for an unpriced route carries the same hint,
+  so a provider added by discovered model IDs no longer reports `unknown` cost with no next step (#841).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.
