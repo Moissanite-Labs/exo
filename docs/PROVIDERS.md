@@ -313,6 +313,55 @@ one it gets no credential, its routes are skipped and the providers list shows i
 its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
 and the result merges over the catalog (`docs/SEATS.md`).
 
+## Prices (D-090)
+
+Prices ship in the catalog, `src/exo/core/models/catalog.toml`, as USD per million tokens:
+`input`, `output`, `cache_read` and `cache_write` under `[models."provider:model"]`. The catalog is the price
+table. It is edited by PR, like any other file, so a rate change is reviewed, dated and in the history.
+Exo never fetches a price at call time, and a route with no price reads `unknown`, never `$0` (D-032).
+
+Every priced entry carries where the number came from:
+
+    [models."anthropic:claude-opus-5-5"]
+    input = 4.00
+    output = 20.00
+    source = "https://platform.claude.com/docs/en/about-claude/pricing"
+    verified = "2026-10-28"
+
+`source` is the page a reviewer can open and `verified` is the UTC day it was read. `exo models
+--prices` prints the table; an entry whose date is older than 90 days is listed as stale, and an entry with
+rates but no `source` or `verified` is reported as a problem, so the table can be kept current without
+anyone guessing which numbers are old.
+
+### Rates that change by clock time
+
+A vendor that bills peak and off-peak publishes more than one rate; DeepSeek does, and off-peak is most of
+the week. Such an entry lists the off-peak rates as windows over its standard (highest) rate:
+
+    [models."deepseek:deepseek-flash"]
+    input = 0.30              # the standard, peak rate
+    output = 1.20
+    cache_read = 0.006
+    source = "https://api-docs.deepseek.com/quick_start/pricing/"
+    verified = "2026-10-28"
+
+    [[models."deepseek:deepseek-flash".window]]
+    days = ["mon", "tue", "wed", "thu", "fri"]
+    hours = ["01:00-04:00", "06:00-10:00"]
+    input = 0.15              # off-peak: half of peak
+    output = 0.60
+    cache_read = 0.003
+
+The call is priced at the rates in force at the moment it was made, not at the time the turn is read.
+Weeks and hours are UTC: `days` are `mon`..`sun`, `hours` are `HH:MM-HH:MM` half-open, and a span may wrap
+midnight (`22:00-02:00`). No `days` means every day, no `hours` means all day. A window replaces only the
+rates it names; the entry's own rates fill the rest. A window that cannot be read is skipped and named in
+the problem list rather than pricing a call wrongly.
+
+Two rules keep an error cheap. The entry's own rates are the vendor's standard, highest published rate, so
+a window that never matches over-reports and never under-reports spend. And vendor holidays are not
+modelled: a weekday holiday inside a peak window bills at the peak rate, again the safe direction.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.
@@ -374,6 +423,7 @@ started, and a CLI must be installed and logged in.
     exo providers                 providers: status, where the key is, models, default
     exo models                    providers, key found (yes or no), route per role
     exo models --remote NAME      list the provider's models (network, only when you ask)
+    exo models --prices           the price table: rates in force now, source, age (D-090)
     exo config roles              the route per role only
 
 No command prints a key value. A key from the environment, the Keychain (macOS), the Secret Service (Linux) or keys.env is read only by the real CLI;

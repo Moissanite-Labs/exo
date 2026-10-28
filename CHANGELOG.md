@@ -32,6 +32,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
 ### Added
+- Catalog prices carry a `source` page and a `verified` date, and an entry can name clock windows
+  (DeepSeek peak and off-peak) whose rates replace only the keys they name. A call is charged the rates
+  in force when it was made, not when the entry was read. `exo models --prices` prints the table: rates,
+  window in force, source and age, and names stale, undated or unreadable entries. An unpriced route
+  still reads `unknown`, never `$0` (D-090, `docs/PROVIDERS.md` "Prices (D-090)").
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
