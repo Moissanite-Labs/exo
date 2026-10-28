@@ -59,6 +59,7 @@ CLI hook: `exo.cli` lists both commands in its `LAZY` table. It imports this mod
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import json
@@ -1243,7 +1244,7 @@ def _archive(pdir: Path, pid: str, dry: bool = False) -> None:
 def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: str | None = None,
                     now: str | None = None) -> dict:
     """Write the proposal into its node (create or append), lint it, then log `belief_accepted`.
-    The node file is restored if the edit would add lint errors."""
+    The node file is restored if the edit would add lint errors, or if indexing or the ledger write fails."""
     st = load_state(ledger)
     p = _find(st, pid)
     status = _status(st, p.id)
@@ -1261,26 +1262,32 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new_text, encoding="utf-8")
-    store.reload()
-    after = store.lint()
-    added = [e for e in after.errors if e not in before.errors]
-    if added or p.node_id not in store.nodes:
-        if old_text is None:
-            path.unlink()
-        else:
-            path.write_text(old_text, encoding="utf-8")
+    indexed = False
+    try:
         store.reload()
-        raise ConsolidateError(f"accepting {p.id} would break lint: {'; '.join(added) or 'node did not parse'}")
-    store.index()
-    body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old_text is not None else "create",
-            "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence}
-    if p.supersedes:
-        body["supersedes"] = p.supersedes
-    if status == "held":
-        body["conflict_resolved_by"] = "direct accept"
-    refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
-                       refs=refs)
+        after = store.lint()
+        added = [e for e in after.errors if e not in before.errors]
+        if added or p.node_id not in store.nodes:
+            raise ConsolidateError(f"accepting {p.id} would break lint: {'; '.join(added) or 'node did not parse'}")
+        indexed = True
+        store.index()
+        body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old_text is not None else "create",
+                "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence}
+        if p.supersedes:
+            body["supersedes"] = p.supersedes
+        if status == "held":
+            body["conflict_resolved_by"] = "direct accept"
+        refs = [r for r in (st.beliefs[p.id].event_id,) if r]
+        ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
+                           refs=refs)
+    except BaseException:
+        # Nothing is accepted until the ledger says so: put the node back, so a retry does not add the lesson twice.
+        _put_back(path, old_text)
+        store.reload()
+        if indexed:
+            with contextlib.suppress(Exception):
+                store.index()
+        raise
     pairs = store.root / PAIRS_FILE
     pairs.parent.mkdir(parents=True, exist_ok=True)
     with pairs.open("a", encoding="utf-8") as fh:
@@ -1495,13 +1502,25 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or ledger.author
-                       or "principal", refs=refs)
+    try:
+        ev = ledger.append("belief_accepted", body, author or ledger.author
+                           or "principal", refs=refs)
+    except BaseException:
+        _put_back(path, old)  # not accepted: a retry must not append the lesson a second time
+        raise
     _archive(store.root / "proposals", p.id)
     _save_undo(store.root, p.id, path, old, new)
     commit = _git_commit(store.root, path, f"skill {p.target}: lesson {p.id}")
     return {"proposal_id": p.id, "node_id": p.node_id, "event": ev["id"], "action": body["action"],
             "commit": commit}
+
+
+def _put_back(path: Path, before: str | None) -> None:
+    """Return a file an accept wrote to what it was: `before`, or no file."""
+    if before is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(before, encoding="utf-8")
 
 
 def _save_undo(root: Path, pid: str, path: Path, before: str | None, after: str) -> None:

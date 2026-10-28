@@ -556,3 +556,89 @@ def test_proposal_ids_that_look_like_phone_numbers_do_not_break_lint(template_st
             assert not any(pat.search(text) for pat in LEAKS), text
     assert C.proposal_ref("p-1e0ab9625a43") == "p-1e0ab9625a43"
     assert C.proposal_ref(digits) == "p-3613648960"
+
+
+# --- a failed accept leaves nothing behind (exo-desktop #54) ------------------------------------------
+
+OTHER_NODE = """---
+id: {nid}
+title: Garden watering schedule
+type: fact
+domain: {dom}
+summary: When the garden beds get watered in summer.
+load_when: Planning garden chores.
+confidence: low
+stability: durable
+valid_from: 2026-01-01
+sources:
+  - {{kind: inferred, ref: "template:example"}}
+links:
+  - {{to: person/identity, rel: part-of}}
+---
+
+Water the beds at dawn.
+"""
+
+
+def _write_other_node(store, nid):
+    """Write node `nid` on disk, behind this store object's cache."""
+    path = store.nodes_dir / f"{nid}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = OTHER_NODE.format(nid=nid, dom=nid.split("/")[0])
+    path.write_text(text, encoding="utf-8")
+    return path, text
+
+
+def _fail_once(monkeypatch, obj, name, exc):
+    """Make `obj.name` raise `exc` on its first call only, as a full disk or a lost index would."""
+    real = getattr(obj, name)
+    calls = []
+
+    def once(*a, **kw):
+        if not calls:
+            calls.append(1)
+            raise exc
+        return real(*a, **kw)
+    monkeypatch.setattr(obj, name, once)
+
+
+@pytest.mark.parametrize("where", ["index", "ledger"])
+def test_a_failed_accept_restores_the_node_and_a_retry_adds_the_lesson_once(template_store, led, monkeypatch, where):
+    path, before = _write_other_node(template_store, "mind/formatting")
+    path.write_text(before.replace("Garden watering schedule", "Formatting of tables and bullet lists")
+                    .replace("When the garden beds get watered in summer.",
+                             "How the principal wants tables and bullet lists used in replies."), encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+    template_store.reload()
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    run(template_store, led)
+    p = proposed(led)[0]["body"]
+    assert p["action"] == "update" and p["node_id"] == "mind/formatting"
+    if where == "index":
+        _fail_once(monkeypatch, template_store, "index", OSError("no space left on device"))
+    else:
+        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    with pytest.raises(OSError):
+        C.proposal_accept(template_store, led, p["proposal_id"])
+    assert path.read_text(encoding="utf-8") == before
+    assert not list(led.iter(kind="belief_accepted"))
+    C.proposal_accept(template_store, led, p["proposal_id"])
+    assert path.read_text(encoding="utf-8").count("**Claim.** The principal wants") == 1
+
+
+@pytest.mark.parametrize("where", ["index", "ledger"])
+def test_a_failed_accept_of_a_new_node_leaves_no_file(template_store, led, monkeypatch, where):
+    led.append("ruling", {"text": "Never sign external comments with agent names."}, "principal")
+    res = run(template_store, led)
+    p = C.load_state(led).proposals[res.proposals[0]]
+    path = template_store.nodes_dir / f"{p.node_id}.md"
+    if where == "index":
+        _fail_once(monkeypatch, template_store, "index", OSError("no space left on device"))
+    else:
+        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    with pytest.raises(OSError):
+        C.proposal_accept(template_store, led, p.id)
+    assert not path.exists() and p.node_id not in template_store.nodes
+    assert p.node_id not in (template_store.root / "INDEX.md").read_text()
+    out = C.proposal_accept(template_store, led, p.id)
+    assert out["action"] == "create" and out["node_id"] == p.node_id

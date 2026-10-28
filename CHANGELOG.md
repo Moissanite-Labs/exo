@@ -216,6 +216,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
   `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
+- Accepting a lesson is all or nothing. When indexing or the ledger write fails after the node or skill file
+  was written, the file goes back to what it was. A retry then adds the lesson once, not twice (exo-desktop #54).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
