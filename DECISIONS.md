@@ -300,6 +300,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Later:** tiers for aux side calls; tier auto-selection from past receipts.
 
 ## D-018 (2026-10-12) Provider agnostic; users choose models; default eval and decision models
+- **Amendment 2026-10-28:** the first-party DeepSeek catalog entry uses its API key and discovered model IDs.
+  Tools retain the provider's required prior reasoning history. Default roles, prices and saved-effort
+  capability policy are unchanged.
 - **A's rulings:** "exo should be model and provider agnostic"; "users config which models are used. by
   default, the decision model used is laya (locally run) and the evaluation model is same model as what's
   configured and being used in the harness/chat"; "i have a typesafe api as well so we can experiment with

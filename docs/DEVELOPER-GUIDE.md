@@ -1047,3 +1047,7 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+The `deepseek` transport extends Chat Completions for first-party thinking history. Its offline fixtures in
+`tests/core/models/test_deepseek.py` cover prior-answer replay, tool-result pairing, usage, discovery and the
+provider's effort mapping. See [First-party DeepSeek API](PROVIDERS.md#first-party-deepseek-api).
