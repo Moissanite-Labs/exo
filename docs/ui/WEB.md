@@ -170,7 +170,11 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
 - **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
-  the core `rename` built-in, principal only (D-069).
+  the core `rename` built-in, principal only (D-069). Delegated scout sessions (kind `subagent` with a
+  `parent` session, as `session.list` reports) sit beneath their parent conversation, expandable, with
+  their scout count and running scouts shown on the parent; a scout whose parent is not in the list
+  stays top-level as an orphan, still openable. Grouping never infers ownership from a title. A thread
+  with no title shows `Untitled thread` (or `Untitled scout`) plus its full session id, not just the id.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed

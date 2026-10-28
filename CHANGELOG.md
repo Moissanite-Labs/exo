@@ -25,6 +25,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Chat Threads sidebar groups delegated scout sessions beneath their parent conversation (canonical port of exo-desktop #83). Grouping uses only the session's own `parent` + `kind="subagent"` metadata from `session.list`, never a title prefix; a scout whose parent is not in the list stays top-level as an orphan, still openable. A thread with no title shows `Untitled thread` (or `Untitled scout`) plus its full session id.
 - A gate error on a read tool asks instead of allowing the call, and the error card is once-only, so "always" cannot become a standing grant. A failed classification that read a store or secret goes to the principal alone (D-084).
 
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
