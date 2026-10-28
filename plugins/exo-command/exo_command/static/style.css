@@ -327,15 +327,14 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-tool { font: 12px/1.45 var(--xc-mono); color: var(--fg-2); overflow-wrap: anywhere; }
 .xc-tool span { color: var(--cold); }
 
-/* the status strip: instruments, one line, hairline above */
-.xc-strip { display: flex; align-items: center; flex-wrap: nowrap; overflow: hidden; gap: 0; border-top: 1px solid var(--line); background: var(--bg); font: 500 11px var(--xc-mono); letter-spacing: .06em; color: var(--fg-3); min-height: 32px; }
-.xc-strip > * { flex: none; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; white-space: nowrap; }
+/* the status strip: wrapping instruments, hairline above */
+.xc-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 0; border-top: 1px solid var(--line); background: var(--bg); font: 500 11px var(--xc-mono); letter-spacing: .06em; color: var(--fg-3); min-height: 32px; }
+.xc-strip > * { flex: none; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; max-width: 100%; flex-wrap: wrap; white-space: normal; overflow-wrap: anywhere; }
 .xc-strip > * + * { border-left: 1px solid var(--line); }
 .xc-strip .xc-i { text-transform: uppercase; font-size: 10px; letter-spacing: .16em; color: var(--fg-3); }
-.xc-strip .xc-v { color: var(--fg); text-transform: none; letter-spacing: 0; }
+.xc-strip .xc-v { min-width: 0; max-width: 100%; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .xc-strip .xc-via { color: var(--accent); }
-.xc-strip .xc-model { min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.xc-strip .xc-model .xc-v { overflow: hidden; text-overflow: ellipsis; min-width: 12ch; }
+.xc-strip .xc-model { min-width: min(100%, 24ch); flex: 0 1 auto; }
 .xc-strip .xc-model .xc-via { flex: none; }
 .xc-ready { padding-left: 0; }
 .xc-state { color: var(--fg-2); text-transform: uppercase; letter-spacing: .16em; font-size: 10px; }
@@ -344,7 +343,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-gauge i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--cold); transition: width .6s var(--ease); }
 .xc-gauge.hot i { background: var(--accent); }
 .xc-strip .xc-wire { flex: 1 1 60px; min-width: 60px; padding: 0; border-left: 1px solid var(--line); }
-.xc-flash { color: var(--accent-2); overflow-wrap: anywhere; white-space: normal; margin-left: auto; }
+.xc-strip .xc-flash { flex: 1 1 100%; margin-left: 0; border-left: 0; color: var(--accent-2); overflow-wrap: anywhere; white-space: normal; }
 .xc-spacer { flex: 1; border: 0 !important; padding: 0 !important; }
 
 /* the composer */
