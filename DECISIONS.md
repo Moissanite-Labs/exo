@@ -694,6 +694,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   real terminal (the SVG export cannot show the terminal's default colours).
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
+- **Foreground shell result amendment (2026-10-28, #791):** actual nonzero exit codes, timeout and interruption set
+  `ToolResult.is_error`; captured output and `[exit N]` remain unchanged. Code-zero pipelines with a masked-stage
+  note remain successful. Failed write-shaped commands do not reset repeat detection as successful file progress.
+  No automatic retry, stop, permission or model policy changes. Background launch receipts are unchanged.
 - **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
   of seven asks, the two that hurt most in real use were a shell that holds the turn (a build or a long test run) and
   the principal's words reaching memory by discipline instead of by mechanism.
