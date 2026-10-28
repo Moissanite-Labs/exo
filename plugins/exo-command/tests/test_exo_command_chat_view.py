@@ -177,7 +177,7 @@ globalThis.pending.push({...h2,session:null},{...o2,session:"s2"});   // the ser
 bus.emit({seq:11,session:null,type:"approval.requested",body:h2});
 bus.emit({seq:12,session:"s2",type:"approval.requested",body:o2});
 assert.deepEqual(appr(),["h1","h2"]);
-const thread2=nodes.findLast(x=>x.attrs.class==="xc-sess" && x.textContent.startsWith("s2"));
+const thread2=nodes.findLast(x=>x.attrs.class==="xc-sess" && x.textContent.includes("s2"));   // untitled rows now read "Untitled thread · s2" (canonical port of exo-desktop #83), not just the id
 await thread2.attrs.onclick();await settle();
 assert.deepEqual(appr(),["h1","h2","o1","o2"]);   // in s2: its own requests and the ones with no session
 globalThis.pending=globalThis.pending.filter(x=>x.request_id!=="h2");
@@ -234,3 +234,86 @@ console.log("ok");
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_group_threads_uses_parent_metadata_not_title_prefix(tmp_path):
+    (tmp_path / "chat_state.mjs").write_text((STATIC / "chat_state.js").read_text())
+    (tmp_path / "test.mjs").write_text(r'''
+import assert from "node:assert/strict";
+const {groupThreads, threadLabel, isScoutChild} = await import("./chat_state.mjs");
+const s = (id, o) => ({id, title: "", kind: "", parent: null, status: "idle", updated: "", ...o});
+const p1 = s("p1", {title: "Research"});
+const p2 = s("p2", {title: "Research"});  // identical title, different parent
+const a1 = s("a1", {title: "scout: database search", kind: "subagent", parent: "p1", status: "live"});
+const a2 = s("a2", {kind: "subagent", parent: "p1"});  // untitled scout
+const b1 = s("b1", {title: "scout: database search", kind: "subagent", parent: "p2"});  // identical title, other parent
+const orphan = s("o1", {title: "scout: lost", kind: "subagent", parent: "missing"});
+const fork = s("f1", {title: "copy", kind: "thread", parent: "p1"});  // a parent link, but not a scout: stays top-level
+const old = s("old1", {title: "Old notes"});  // no metadata at all: stays top-level
+const titled = s("t1", {title: "scout: not a child"});  // title prefix alone groups nothing
+const groups = groupThreads([p1, a1, p2, a2, b1, orphan, fork, old, titled]);
+assert.deepEqual(groups.map((g) => g.session.id), ["p1", "p2", "o1", "f1", "old1", "t1"]);
+assert.deepEqual(groups[0].children.map((c) => c.session.id), ["a1", "a2"]);
+assert.deepEqual(groups[1].children.map((c) => c.session.id), ["b1"]);
+assert.equal(groups[2].orphan, true);
+assert.equal(groups[0].orphan, false);
+assert.equal(isScoutChild(a1), true);
+assert.equal(isScoutChild(fork), false);
+assert.equal(isScoutChild(titled), false);
+assert.equal(threadLabel(a2), "Untitled scout · a2");
+assert.equal(threadLabel(old), "Old notes");
+assert.equal(threadLabel(s("u1", {})), "Untitled thread · u1");
+// a parent cycle cannot drop a session or loop forever
+const cyc = groupThreads([s("x1", {kind: "subagent", parent: "x2"}), s("x2", {kind: "subagent", parent: "x1"})]);
+assert.deepEqual(cyc.map((g) => g.session.id).sort(), ["x1", "x2"]);
+assert.deepEqual(groupThreads([]), []);
+assert.deepEqual(groupThreads(null), []);
+console.log("ok");
+''')
+    result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_chat_sidebar_groups_scouts_under_parent(tmp_path):
+    sessions = [
+        {"id": "p1", "title": "Research", "status": "idle", "updated": ""},
+        {"id": "a1", "title": "scout: a very long database search goal that keeps going past forty characters", "kind": "subagent", "parent": "p1", "status": "live", "updated": ""},
+        {"id": "a2", "kind": "subagent", "parent": "p1", "status": "idle", "updated": ""},
+        {"id": "p2", "title": "Research", "status": "idle", "updated": ""},
+        {"id": "b1", "title": "scout: database search", "kind": "subagent", "parent": "p2", "status": "idle", "updated": ""},
+        {"id": "o1", "title": "scout: lost", "kind": "subagent", "parent": "missing", "status": "idle", "updated": ""},
+        {"id": "old1", "title": "Old notes", "status": "idle", "updated": ""},
+    ]
+    _run(tmp_path, r'''
+// point the chat at the grouped session list, then redraw it via a session.created event
+globalThis.mockApi = async (method, path, body) => {
+  requests.push({method, path, body});
+  if (path === "/api/chat/sessions" && method === "GET") return {sessions: globalThis.grouped};
+  if (path.startsWith("/api/chat/sessions/")) return {session: {id: path.split("/").pop(), model: "fake:x"}, messages: [], seq: 10};
+  if (path === "/api/section/approvals") return {pending: []};
+  return {};
+};
+bus.emit({seq: 20, session: "p1", type: "session.created", body: {}});
+await settle();
+const list = byClass("xc-sessions");
+const rows = () => list.children.map((x) => x.textContent);
+const classes = () => list.children.map((x) => x.attrs.class);
+assert.deepEqual(classes(), ["xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess xc-child", "xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess", "xc-sess"]);
+assert.match(rows()[0], /^Research/); assert.match(rows()[0], /2 scouts/);
+assert.match(rows()[1], /2 scouts · 1 running/);
+assert.match(rows()[2], /a very long database search goal that keeps going past forty characters/);  // child title is not truncated
+assert.match(rows()[3], /Untitled scout · a2/);
+assert.match(rows()[4], /^Research/);  // identical title, second parent, its own group
+assert.match(rows()[6], /scout: database search/);
+assert.match(rows()[7], /orphan scout/);
+// collapsing the first group folds only its scouts, and expanding brings them back
+await list.children[1].attrs.onclick(); await settle();
+assert.deepEqual(list.children.map((x) => x.attrs.class), ["xc-sess", "xc-sess-toggle", "xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess", "xc-sess"]);
+await list.children[1].attrs.onclick(); await settle();
+assert.equal(list.children.length, 9);
+// opening a scout still opens that session, not its parent
+const scout = list.children.find((x) => x.attrs.class === "xc-sess xc-child" && x.textContent.includes("database search goal"));
+await scout.attrs.onclick(); await settle();
+assert.ok(requests.some((x) => x.path === "/api/chat/sessions/a1"));
+''', setup=f"globalThis.grouped={json.dumps(sessions)};\n")

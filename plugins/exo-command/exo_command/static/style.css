@@ -240,6 +240,10 @@ body { margin: 0; background: #08090a; }
 .xc-sess-title { font-size: 13px; overflow-wrap: anywhere; line-height: 1.35; }
 .xc-sess .xc-dim { font: 500 10px var(--xc-mono); letter-spacing: .08em; text-transform: uppercase; }
 .xc-sess .xc-needs { color: var(--accent); }
+.xc-sess.xc-child { padding-left: 28px; }
+.xc-sess-toggle { background: none; border: 0; padding: 2px 14px 6px 28px; text-align: left; cursor: pointer;
+  font: 500 10px var(--xc-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.xc-sess-toggle:hover { color: var(--fg); }
 .xc-log { flex: 1; min-width: 0; overflow-y: auto; font: 400 13.5px/1.62 var(--xc-mono); display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 .xc-log > .xc-empty { color: var(--fg-3); font-size: 12.5px; padding: 0; }
 .xc-text { white-space: pre-wrap; overflow-wrap: anywhere; }
