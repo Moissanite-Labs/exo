@@ -81,6 +81,9 @@ below.
 `POST /api/approvals/<id>` takes a JSON object with `decision` (`allow`, `deny` or `allow_always`) and an optional
 `note`. An array, null or scalar gets 400 with `{"error": "body must be a json object"}` before any approval answer
 reaches the core; malformed JSON keeps its 400 `{"error": "bad json"}` response (#740).
+JSON deeper than the decoder supports gets that same approval error. The shared body reader used by chat and
+provider POSTs rejects such input with its existing 400 `{"error": "body must be a json object"}` response
+(follow-up to #751).
 
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
