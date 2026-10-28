@@ -391,6 +391,21 @@ def test_cost_sums_priced_calls_and_never_reports_zero_for_unpriced():
     assert trace.money(1.5) == "$1.50"
 
 
+def test_a_call_that_hit_a_spend_limit_marks_the_figure_as_a_floor():
+    """A paid route that stopped on its own spend limit did work this turn is not billed for. The figure under it is a
+    floor, so it gets the same "+" the unpriced calls get, and the JSON says how many calls were short (D-093)."""
+    short = _usage_call("p:a", 0.02, undercounted=True)
+    t = tt(calls=[short, _usage_call("p:b", 0.01)])
+    assert t.undercounted() == 1
+    s = t.summary()
+    assert s["undercounted_calls"] == 1 and s["unpriced_calls"] == 0 and s["cost"] == "$0.0300+"
+    assert "0.0200+" in trace.table([t])  # the call line says it too, not just the turn total
+    assert "unknown" in trace.table([tt(calls=[_usage_call("p:c", None)])])  # unchanged: no price is still unknown
+    # the count follows the attempt outcome the router writes, not a second field the trace has to guess
+    turn = tt(calls=[])
+    assert turn.undercounted() == 0
+
+
 def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     kid = tt(calls=[_usage_call("p:k", 0.5)])
     t = tt(calls=[_usage_call("p:a", 0.25, cache_read=900)], children=[kid], t0=1.0, wall_ms=1000)

@@ -505,7 +505,14 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
+                    if last.status == 402:
+                        # The route stopped on the provider's own spend limit. Say it in those words once, and say the
+                        # money figure will read low: the paid route did work nobody will bill this turn for.
+                        yield ProviderEvent(kind="notice", attempts=attempts,
+                                            text=f"{route.ref} is over its provider spend limit; trying {nxt.ref}"
+                                                 " (this turn's cost is a floor)")
+                    else:
+                        yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
@@ -562,7 +569,9 @@ class Router:
                     ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
-                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                    # "spend_limit" keeps the cause after the fallback, so the money figure can say it is a floor.
+                    note("spend_limit" if ev.status == 402 else
+                         "timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
                          else "fallback", ev.error or "")
                     failed.append(ev)
                 return
@@ -623,6 +632,9 @@ class Router:
         else:
             name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
         spec = self.providers.get(name) or {}
+        if status == 402:  # the provider's own spend limit: a new key fixes nothing, raising the limit does
+            return status, (f"{name} is over its provider spend limit ({err}): raise the limit or top up the account, "
+                            "then test it in /providers")
         if status in REFUSED_STATUS:
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else envs
