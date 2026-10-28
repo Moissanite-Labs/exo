@@ -329,6 +329,39 @@ def test_child_loops_share_the_checkpoint_prompt_but_it_records_only_root_thread
     asyncio.run(run())
 
 
+def test_a_session_the_checkpoint_skips_opens_no_write_transaction(tmp_path, monkeypatch):
+    """Delegated and scheduled loops share the workspace prompt, also without a profile, where main's checkpoint is
+    on. Their sessions take no checkpoint. The checkpoint reads the session first, so their prompts open no write
+    transaction. A root thread still goes through one."""
+    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False})
+
+    async def run():
+        engine = compose.create()
+        original, calls = engine.store._tx, []
+
+        def counting(fn):
+            calls.append(fn)
+            return original(fn)
+
+        try:
+            assert engine.work_checkpoint is not None
+            root = await engine.loop.create_session(cwd=str(tmp_path), agent=engine.agent)
+            child = await engine.loop.create_session(cwd=str(tmp_path), agent=engine.agent, parent=root.id,
+                                                     kind="subagent")
+            scheduled = await engine.loop.create_session(cwd=str(tmp_path), agent=engine.agent, kind="scheduled")
+            engine.store._tx = counting
+            for session in (child.id, scheduled.id):
+                assert engine.loop.workspace_extra(session, str(tmp_path)) == ""
+            assert calls == []
+            engine.loop.workspace_extra(root.id, str(tmp_path))
+            assert len(calls) == 1
+        finally:
+            engine.store._tx = original
+            await engine.close()
+
+    asyncio.run(run())
+
+
 def test_the_workspace_prompt_keeps_main_s_order_instructions_notes_then_checkpoint(tmp_path, monkeypatch):
     """compose attaches the instructions, then the notebook, then the checkpoint, so the prompt reads in main's
     order. Each block wraps the one before it."""

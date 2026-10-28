@@ -124,7 +124,8 @@ every profile and without one: `work_notes.enabled` (off by default, D-086) and
 durable session records, which every profile keeps. It adds no tool, process or network use.
 compose checks the checkpoint setting before plugins load, and attaches it after the notebook,
 inside the startup rollback. Scheduled and delegated loops share the workspace prompt, but
-the checkpoint records ordinary root threads only. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
+the checkpoint records ordinary root threads only. For their sessions it reads the session
+record and opens no write transaction. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
 
 Some shared implementation modules remain bundled/imported by the core. Runtime profiles
 are not an installation-size optimizer or an OS sandbox. Third-party Python plugins are

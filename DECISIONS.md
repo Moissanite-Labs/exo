@@ -6403,3 +6403,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     install without a profile. compose and the learner both call it. So an empty name in that list, or a string
     value, stopped startup, though main skips such an entry and starts. Only a profile checks the list now.
     Without one, startup reads it as main does, and `exo harness show` names the plugins it can select.
+  - *Child prompts and the checkpoint.* Delegated and scheduled loops share the workspace prompt, and main's
+    checkpoint is part of it. Its capture opened a write transaction before it saw that such a session takes
+    no checkpoint, then committed nothing. It now reads the session first, and the transaction checks again.
