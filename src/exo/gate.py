@@ -132,7 +132,8 @@ class Classification:
     alt_targets: list[str] = field(default_factory=list, repr=False)
     # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
     # gh finds a subcommand past the options before it (_gh_verb_order) or reads gh api's method otherwise
-    # (_gh_api_method). `decide` keeps the stricter of the two.
+    # (_gh_api_method). `decide` keeps the stricter of the two. The call as read before #491, when the gate reads
+    # what a sudo -s or -i shell runs, ends the chain of floors (readings).
     floor: "Classification | None" = field(default=None, repr=False, compare=False)
     # True on the copy of a gh action on one of its alt_targets among the parts (#399): an ssh or mosh hop gives an
     # empty one the host, and `fill_body` gives each the body a caller read from the post's body file.
@@ -166,6 +167,10 @@ class Classification:
     # that file or an exo command that writes it counted as the store. decide takes both readings and the stricter
     # outcome stands, so a line main denied or asked about never decides lower.
     ordinary: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The same call with each `env -S` text read as before (#591 follow-up to #634): a shell line only, as before #634,
+    # where the call's first reading also read the line env runs (_env_split_lines); and with #634's reading of its
+    # leading words (_env_split_argv), as main read it, first. decide takes every reading and the strictest stands.
+    split_readings: list["Classification"] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -173,6 +178,7 @@ class Classification:
         d.pop("parts", None)
         d.pop("displaced")
         d.pop("ordinary")
+        d.pop("split_readings")
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
@@ -3028,34 +3034,273 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
+def _strip_prefix_words(words: list, sudos: list | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
-    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too.
+    ``sudos`` gets (program, the words, the index there of the word after it) for each sudo or doas met (#491,
+    _sudo_shells). It walks the words by index: a chain of prefixes costs one pass, not one copy per word."""
     sudo = own_argv = False
-    while words:
-        t = words[0].text
-        if (own_argv or not words[0].quoted) and _ASSIGN.fullmatch(t):
-            words = words[1:]
+    i, n = 0, len(words)
+    while i < n:
+        t = words[i].text
+        if (own_argv or not words[i].quoted) and _ASSIGN.fullmatch(t):
+            i += 1
             continue
         base = t.rsplit("/", 1)[-1]
-        if words[0].dynamic or base not in _PREFIXES:
+        if words[i].dynamic or base not in _PREFIXES:
             break
-        if base == "command" and words[1:2] and words[1].text in ("-v", "-V"):
+        if base == "command" and i + 1 < n and words[i + 1].text in ("-v", "-V"):
             break
+        if sudos is not None and base in ("sudo", "doas"):
+            sudos.append((base, words, i + 1))
         sudo = sudo or base in ("sudo", "doas")
         own_argv = base in ("env", "sudo")
-        takes, words = _PREFIXES[base], words[1:]
-        while words and words[0].text.startswith("-") and words[0].text != "-":
-            f = words[0].text
-            words = words[1:]
+        takes, i = _PREFIXES[base], i + 1
+        while i < n and words[i].text.startswith("-") and words[i].text != "-":
+            f = words[i].text
+            i += 1
             if base == "env" and (f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S"))):
                 inline = f.split("=", 1)[1] if "=" in f else (f[2:] if f.startswith("-S") and len(f) > 2 else "")
-                return [], sudo, inline or " ".join(w.text for w in words)
-            if f in takes and words:
-                words = words[1:]
-        if base == "timeout" and words and re.fullmatch(r"[\d.]+[smhd]?", words[0].text):
-            words = words[1:]
-    return words, sudo, None
+                return [], sudo, inline or " ".join(w.text for w in words[i:])
+            if f in takes and i < n:
+                i += 1
+        if base == "timeout" and i < n and re.fullmatch(r"[\d.]+[smhd]?", words[i].text):
+            i += 1
+    return words[i:], sudo, None
+
+
+# sudo's and doas's own options (sudo 1.9 `sudo -h` and parse_args.c, OpenBSD doas.c): the short ones that take a
+# value, and sudo's long ones, those that take a value marked with `=` (--preserve-env takes one only after `=`).
+_SUDO_VALUES = {"sudo": "aCcDgpRrTtUu", "doas": "aCu"}
+_SUDO_LONG = ("askpass", "auth-type=", "background", "bell", "close-from=", "login-class=", "chdir=", "preserve-env",
+              "edit", "group=", "set-home", "help", "host=", "login", "remove-timestamp", "reset-timestamp", "list",
+              "non-interactive", "no-update", "preserve-groups", "prompt=", "chroot=", "role=", "stdin", "shell",
+              "type=", "command-timeout=", "other-user=", "user=", "version", "validate")
+
+
+_sudo_shell_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_sudo_shell_off", default=False)
+_SUDO_READ = ("sudo", "shell read")          # the mark in _call_memo that _read_core reads the call as before #491 too
+
+
+def _sudo_unread(prog: str, w: _Word) -> bool:
+    """Whether a word in sudo's or doas's options may come to options the gate cannot read (#491): an operand that
+    may expand to one (`"$X"`, `?s`, `{-s,}`, `~-` or `~-{,}`, $OLDPWD), or an option word with an expansion or an
+    unquoted glob that may make several words, or that comes before any letter or `=` taking a value (`-$X`, `-?`,
+    `-E"$X"`; not `-u"$U"` or `--user="$U"`, whose expansion is the value, one word)."""
+    f = w.text
+    if not f.startswith("-"):
+        # bash expands braces before tildes: `~-{,}` is `~- ~-`, each $OLDPWD
+        return (w.dynamic or _expands(w) or w.raw[:1] == "[" and "]" in f) and f[:1] in "$`*?[{" or \
+            w.raw[:1] == "~" and any(re.fullmatch(r"~[-+]\d*", x) for x in _brace_words(w.raw, keep=True) or ["~-"])
+    if not (w.dynamic or w.glob):
+        return False
+    if _gh_splits(w):
+        return True
+    at = min([f.find(c, 1) for c in "$`*?[{" if c in f[1:]] or [len(f)])
+    if f.startswith("--"):
+        return "=" not in f[:at]
+    return not any(ch in _SUDO_VALUES[prog] or ch == "h" and prog == "sudo" for ch in f[1:at])
+
+
+def _sudo_splits(v: _Word) -> bool:
+    """Whether bash may make several words of a sudo option's value (#491): _gh_splits, or a bracket glob at its
+    start, which the lexer does not mark (`-u [!a]s`)."""
+    return _gh_splits(v) or v.raw[:1] == "[" and "]" in v.text
+
+
+_SUDO_BRANCHES = 16     # the readings per call of a word that may take the next word as its value (_sudo_read)
+# how the summary of a part a cap left unread ends (_too_deep, a sudo past _SUDO_BRANCHES): _a_cap
+_CAP_ENDS = ("nested too deep to read", "levels deep, not read", "next word than the gate reads")
+
+
+def _sudo_read(prog: str, words: list, i: int, shell: str, unsure: bool, left: list[int],
+               splice: bool = True) -> list[tuple]:
+    """The readings of one sudo's or doas's options from words[i] (_sudo_shells), as getopt reads them: each is
+    (the shell option or "", a list and the index there its command starts at, whether it only may, and how it was
+    read: "as written", "moved" when a brace value's words moved where the options end, "may" when a word took the
+    next one as its value, "past" past the call's budget ``left``). The first takes each word as written. A word
+    the gate cannot read (_sudo_unread) and a value that may split (_sudo_splits) may also end in a letter that
+    takes the next word as its value (`-$X echo` may be `-p echo`, `-u $U echo` may be `-u root -p echo`): a "may"
+    reading follows. ``splice`` False reads a brace value as one word, to tell whether its words moved anything; a
+    reading whose command they moved counts against the budget, with a shell option or not."""
+    out: list[tuple] = []
+    moved, first = False, (words, i, shell, unsure)
+
+    def then(j: int) -> list[tuple]:     # the reading where the word before words[j] took words[j] as its value
+        if j >= len(words):
+            return []
+        if left[0] <= 0:
+            return [(shell, words, len(words), True, "past")]
+        left[0] -= 1
+        return [(s, r, at, True, how if how == "past" else "may")
+                for s, r, at, _, how in _sudo_read(prog, words, j + 1, shell, True, left)]
+
+    while i < len(words) and words[i].text != "-" and (words[i].text.startswith("-") or
+                                                       _sudo_unread(prog, words[i])):
+        f, i = words[i].text, i + 1
+        if f == "--":
+            break
+        if _sudo_unread(prog, words[i - 1]):
+            shell, unsure = shell or f, True
+            out += then(i)
+            continue
+        takes = False
+        if f.startswith("--"):
+            name, eq, _ = f[2:].partition("=")
+            hits = ([o for o in _SUDO_LONG if o.rstrip("=") == name] or
+                    [o for o in _SUDO_LONG if o.startswith(name)]) if prog == "sudo" else []
+            shell = shell or next((f for o in hits if o in ("shell", "login")), "")
+            takes = len(hits) == 1 and hits[0].endswith("=") and not eq
+        for j, ch in enumerate(f[1:] if not f.startswith("--") else "", 2):
+            shell = shell or (f if ch == "s" or ch == "i" and prog == "sudo" else "")
+            if ch in _SUDO_VALUES[prog] or ch == "h" and prog == "sudo":
+                takes = j == len(f) and not (ch == "h" and i < len(words) and words[i].text.startswith("-"))
+                break
+        if not takes or i == len(words):
+            continue
+        v = words[i]
+        if splice and v.brace and _gh_splits(v) and not v.dynamic:
+            # bash keeps a word the set makes twice (`{-s,-s}` is `-s -s`), so the words are not deduplicated
+            alts = (_brace_words(v.raw.replace("\\\n", ""), keep=True) or [])[1:]
+            ws = [x for c in _parse(" ".join(alts))[0] for x in c.words]
+            if ws and len(ws) == len([a for a in alts if a]):
+                words, v, moved = words[:i] + ws + words[i + 1:], ws[0], moved or len(ws) > 1
+        if _sudo_splits(v):
+            shell, unsure = shell or v.text, True
+            out += then(i + 1)
+        i += 1
+    while prog == "sudo" and i < len(words) and _ASSIGN.fullmatch(words[i].text):
+        i += 1
+    if moved:                             # its command is read as well, where it starts elsewhere
+        _, was, at, _, _ = _sudo_read(prog, *first, [0], False)[0]
+        if len(was) - at == len(words) - i and (i == len(words) or was[at] is words[i]):
+            moved = False
+        elif left[0] <= 0:                # the call's budget counts it
+            return [(shell, words, len(words), True, "past")] + out
+        else:
+            left[0] -= 1
+    return [(shell, words, i, unsure, "moved" if moved else "as written")] + out
+
+
+def _sudo_shells(sudos: list, fed: bool = False) -> list[tuple[int, str, list, int, bool, str]]:
+    """For each sudo or doas in ``sudos`` (_strip_prefix_words), its index there and each reading of its options
+    (_sudo_read) that starts the target user's shell (sudo -s, -i, --shell, --login, doas -s: #491) or that moves
+    where its command starts: the option that does ("" for none), a list and the index there the words of its
+    command start at, whether it only may, and how it was read. Options are read as getopt reads them: clustered
+    (`-Es`, `-iu root`), `--user=root` or `--user root`, a unique prefix of a long one, up to `--` or the first
+    operand, and the NAME=VALUE words sudo takes for the environment after them. sudo's -h takes the next word as
+    its host when that is no option. An ambiguous long option counts as a shell option if it may be one (getopt
+    then stops sudo). So does a word the gate cannot read that may come to one (_sudo_unread), and an option's
+    value that may make several words (`-u $U`, _sudo_splits): a brace set there is expanded and its words read as
+    option words (`-u {root,-s}` is `-u root -s`). Such a word may also take the next word as its value, so when
+    the line feeds the command a stdin (``fed``), the shell is also read with no command."""
+    memo = _call_memo.get()
+    left = memo.setdefault(("sudo", "branches"), [_SUDO_BRANCHES]) if memo is not None else [_SUDO_BRANCHES]
+    out = []
+    for n, (prog, words, start) in enumerate(sudos):
+        seen = set()
+        for shell, ws, i, unsure, how in _sudo_read(prog, words, start, "", False, left):
+            rest = i < len(ws)
+            if shell == "" and how not in ("moved", "past") or how == "may" and not rest and not fed:
+                continue
+            for e in ((n, shell, ws, i, unsure, how),) + (((n, shell, ws, len(ws), unsure, how),)
+                                                         if unsure and fed and rest and shell else ()):
+                key = (e[1], len(e[2]) - e[3], id(e[2][e[3]]) if e[3] < len(e[2]) else 0,
+                       e[5] if e[3] < len(e[2]) or how == "past" else "")
+                if key not in seen:
+                    seen.add(key)
+                    out.append(e)
+    return out
+
+
+# bash's reserved words, which a shell reads otherwise as a command's first word
+_SUDO_KEYWORDS = frozenset("case coproc do done elif else esac fi for function if in select then time until while"
+                           .split())
+
+
+def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
+                      piped: str | None) -> list[Classification]:
+    """#491: the parts of what the shell a sudo -s or -i starts runs, beside the line's own reading. With no command,
+    that shell runs its stdin, read as `bash` with no operand reads it: an opaque part that runs it (_runs_stdin),
+    and the parts of each text the line feeds it (a pipe, a here-string, a heredoc). A stdin the gate cannot read (a
+    file, a variable, a process substitution) leaves that ask. With a command, sudo runs `$SHELL -c` on its words
+    joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash (sudo(8)),
+    so the shell expands a `$` again and drops a newline, as a line continuation. That text is read where it may
+    not be the words the line's own reading took (``words``): a `$`, a newline, an empty word, or an option of
+    sudo's that _strip_prefix_words reads otherwise (`-iu root`). An opaque part beside it keeps the ask the line
+    had when its own reading was an unknown program. A word the gate cannot read asks. A brace value that moves
+    where the options end (`-u {root,-p} echo rm`) has its command read as sudo runs it, with no shell. A reading
+    where a word may take the next one as its value reads its command both ways, as the shell would and as sudo
+    runs the words bash expanded (a sudo there with a brace value: `-E{,p} echo sudo -E{,p} echo rm`), and adds
+    only what that command is known to do: a command the gate cannot read there asks nowhere else (`sudo -u $U cat
+    f` stays a read), but a cap it met (_too_deep, the budget) asks (_a_cap). Only the first text read here is read
+    from the sudos after it as written: it holds them, and that reading reads them in turn (one per level, not each
+    again); their moved and may readings read words that text holds as literals, and are read here. A text read
+    back as its words is not parsed again for a later sudo as written, whose words are a part of it."""
+    parts: list[Classification] = []
+    reread: int | None = None             # the sudo whose command was read again: it holds the sudos after it
+    fed = _own_stdin(k) or k.piped_in or k.fed or k.stdin_unknown
+    own = [w.text for w in words]
+    same: list = []                       # the longest command a parse read back as its words
+    done: set = set()
+    for n, shell, src, i, unsure, how in _sudo_shells(sudos, fed):
+        size = len(src) - i               # the command is src[i:], made a list only when it is read
+        what, exact = f"{sudos[n][0]} {shell}".strip(), how == "as written" or how == "moved" and bool(shell)
+        if size and reread is not None and n > reread and how == "as written":
+            continue                      # a moved or may reading reads words the text read again does not hold
+        if not size and (how == "past", unsure, bool(shell)) in done:
+            continue                      # one of each kind: each reads the same stdin
+        if not size:
+            done.add((how == "past", unsure, bool(shell)))
+        if how == "past":
+            parts.append(_opaque(f"{what[:40]}: more of its options may take the next word than the gate reads", cmd))
+            continue
+        if not size:
+            if not shell:
+                continue
+            starts = "may start" if unsure else "starts"
+            parts.append(_runs_stdin(_opaque(f"{what} {starts} a shell, which runs its stdin"[:120], cmd), k))
+            if depth < _DEPTH:
+                parts += _once(ctx, (classify_shell, depth + 1), k, piped, lambda t: [classify_shell(t, depth + 1)])
+            continue
+        tail = 0 < len(words) <= size and own == [w.text for w in src[len(src) - len(words):]]
+        if how == "as written" and tail and size <= len(same) and src[i] is same[len(same) - size] and \
+                src[i].text not in _SUDO_KEYWORDS:
+            continue                      # a part of a text read back as its words: each word there reads alone
+        rest = src[i:]
+        runs: list[tuple[list, bool]] = []    # each command read, and whether all its parts count
+        if not shell or how == "may":     # sudo may run the words itself, as bash expanded them, with no shell
+            if [w.text for w in rest] != own:
+                runs.append((rest, False))
+        if shell:
+            if exact and any(w.dynamic for w in rest):
+                parts.append(_opaque(f"{what} passes its shell a word the gate cannot read, which it expands again"
+                                     [:120], cmd))
+            text = " ".join(re.sub(r"([^A-Za-z0-9_$-])", r"\\\1", w.text) for w in rest)
+            ws = [w for c in _parse(text)[0] for w in c.words]
+            if tail and [(w.text, w.dynamic) for w in ws] == [(w.text, False) for w in rest]:
+                same, ws = rest if len(rest) > len(same) else same, []
+            if ws:
+                runs.append((ws, exact))
+        for ws, whole in runs:
+            if whole:
+                reread = n if reread is None else reread
+                parts.append(_opaque(f"{what} runs its command through a shell, which reads other words"[:120], cmd))
+            if depth >= _DEPTH:
+                parts.append(_too_deep(cmd))
+                continue
+            got = _classify_simple(_wrapped(k, ws), cmd, depth + 1, ctx, piped)
+            # a reading that may not be bash's adds what its command is known to do, not a command it cannot read,
+            # and a cap it met (_too_deep, a sudo's budget): a nest cut short there asks
+            parts += got if whole else [q for p in got for q in (
+                [p] if p.category not in ("read", "opaque_exec") else [x for x in _each_part(p) if _a_cap(x)])]
+    return parts
+
+
+def _a_cap(p: Classification) -> bool:
+    """Whether p stands for text a cap left unread: a nest past _DEPTH or _NEST (_too_deep), or a sudo's options
+    past the call's budget of readings (_sudo_shell_parts)."""
+    return p.category == "opaque_exec" and p.summary.endswith(_CAP_ENDS)
 
 
 def _env_split_argv(split: str) -> str | None:
@@ -3063,8 +3308,10 @@ def _env_split_argv(split: str) -> str | None:
     text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
     the first word that is neither an option nor an assignment starts the command. Returns the text from that word
     on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
-    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
-    (a word to env, but the line's own reading covers what follows it)."""
+    split inside the split, or a shell operator before the command. Kept as #634 read the text, in a reading of its
+    own (classify, mode 1), so nothing it found is lost. It splits the text as a shell line does and takes the word
+    after `--` for the command; env does neither (it still reads `NAME=value` after `--`, and `;` is a character of
+    a word to it), and the first reading reads the text as env splits it (_env_split_lines)."""
     toks = _Lexer(split or "", scan=False).run()
     words = [t for k, t in toks if k == "w"]
     n, i = -1, 0
@@ -3080,7 +3327,7 @@ def _env_split_argv(split: str) -> str | None:
         if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
             return None
         if f == "--":
-            n = i                         # the options end: the next word is the command, assignments included
+            n = i                         # #634 took the next word for the command (see the docstring)
             break
         if f in _PREFIXES["env"] and i < len(words):
             i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
@@ -3096,6 +3343,249 @@ def _env_split_argv(split: str) -> str | None:
             break
         seen += 1
     return " ".join(w.raw for w in words[n:])
+
+
+# #591 follow-up: how a reading of the call reads an `env -S` text beside the text as a shell line, and a mark of what
+# it read there. classify sets it: 2 the line env runs (_env_split_lines), its first reading; 0 nothing more, as before
+# #634; 1 #634's leading words (_env_split_argv); 3 as 0. In 2 and 3 every spelling of -S reads as `-S TEXT` does
+# (_env_s_text): its text a shell line with the opaque part, and no environment dump. Unset (a classify_shell call
+# outside classify): 2, each spelling as main read it.
+_env_split_mode: contextvars.ContextVar[tuple[int, list[int]] | None] = contextvars.ContextVar(
+    "exo_gate_env_split_mode", default=None)
+
+
+_ENV_S_WORD = re.compile(r"-([^-uCS][^uCS]*)?S(.*)", re.S)     # -S in a word of short options (`-iS`, `-i0vS..`)
+
+
+def _env_s_text(f: str) -> bool:
+    """Whether this reading of the call reads the env option word ``f`` as `-S TEXT` (_env_split_mode 2 or 3, set by
+    classify): -S in a word of short options, or a prefix of --split-string. It then marks the call for the reading
+    as before (mode 0), which keeps what main read there (an environment dump for an option word alone)."""
+    name, ms = f.partition("=")[0], _env_split_mode.get()
+    if ms is None or ms[0] not in (2, 3) or not (_ENV_S_WORD.fullmatch(f) or len(name) > 2 and
+                                                 "--split-string".startswith(name)):
+        return False
+    ms[1][0] |= 1
+    return True
+
+
+def _env_split_lines(words: list, raw: bool = False) -> list[str]:
+    """#591: the simple command GNU env runs for an `env -S TEXT` among the prefixes of ``words``, in each spelling
+    env 9.4 takes: `-S TEXT`, `-STEXT` (the text whole: only `--split-string=` splits at its `=`), `--split-string=TEXT`
+    or `--split-string TEXT` and each unambiguous prefix of it (`--split`), and -S in a word of short options
+    (`-iS`, `-i0vS`). It is the words before it, TEXT split as env splits it (_env_split) and the words after it, as
+    a line of quoted words. env reads the split words as its own argv, so that line reads as the same command
+    without -S does: an assignment quoted whole or after `--`, or with `;` in it, is an assignment (`env 'X=a b;x'
+    rm`). A text with a shell expansion in it gives the words env closes before the first one (_shell_cut), the rest
+    of the shell word as one word; and a second line when the rest splits otherwise with each expansion one piece of
+    the word it sits in (_shell_parts: `$BR --force` is two words to env). No line without one, when env would
+    refuse the text, or when no word of it closes before an expansion (`env -S "$CMD"`). With ``raw``, the text as
+    main reads -S's (an attached one alone, else the words from it on, joined) and the option word (_env_s_text)."""
+    i, own_argv = 0, False
+    while i < len(words):
+        w = words[i]
+        if (own_argv or not w.quoted) and _ASSIGN.fullmatch(w.text):
+            i += 1
+            continue
+        base = w.text.rsplit("/", 1)[-1]
+        if w.dynamic or base not in _PREFIXES or base == "command" and words[i + 1:i + 2] and \
+                words[i + 1].text in ("-v", "-V"):
+            return []
+        own_argv, takes, i = base in ("env", "sudo"), _PREFIXES[base], i + 1
+        while i < len(words) and words[i].text.startswith("-") and words[i].text != "-":
+            f, i = words[i].text, i + 1
+            if base == "env" and f == "--":
+                break
+            name, eq, val = f.partition("=")
+            # -S in a word of short options; one that takes a value (-u, -C) before it takes the rest
+            m = _ENV_S_WORD.fullmatch(f) if base == "env" else None
+            if base == "env" and len(name) > 2 and "--split-string".startswith(name):
+                text: str | None = val if eq else None
+            elif m:
+                text = m[2] or None
+            else:
+                i += bool(i < len(words) and (f in takes or base == "env" and (re.fullmatch(r"-[^-uCS]*[uC]", f) or (
+                    not eq and len(name) > 2 and any(t.startswith(name) for t in ("--unset", "--chdir"))))))
+                continue
+            at, tail = i - 1, ""
+            if text is None:
+                if i >= len(words):
+                    return []
+                text, i = words[i].text, i + 1
+                if raw:
+                    return [" ".join(x.text for x in words[i - 1:]), f]
+            if raw:
+                return [text, f]
+            if words[i - 1].dynamic:
+                # A shell expansion in the text: the words env closes before it are read, and the rest of the shell
+                # word stands for the rest of the text (_shell_cut), as one word that may hold an expansion.
+                cut, lead = _shell_cut(words[i - 1]), len(words[i - 1].text) - len(text)   # lead: the option
+                if cut is None or len(cut[0]) < lead:
+                    return []
+                text, tail = cut[0][lead:], cut[1]
+            split = _env_split(text, tail)
+            if split is None:
+                return []
+            head = [x.raw or shlex.quote(x.text) for x in words[:at]] + (["-" + m[1]] if m and m[1] else [])
+            rest = [x.raw or shlex.quote(x.text) for x in words[i:]]
+            # The rest split by env's rules, each expansion a piece of the word it sits in. The value may hold a
+            # quote that joins what follows, so the one-word reading above stays beside it.
+            parts = _shell_parts(tail) if tail and "\0" not in text else None
+            more = None if parts is None or any("\0" in s for exp, s in parts if not exp) else \
+                _env_split(text + "".join("\0" if exp else s for exp, s in parts), exps=[s for exp, s in parts if exp])
+            line, other = " ".join(head + split + rest), " ".join(head + (more or []) + rest)
+            return [line] + [other] * bool(more and other != line)
+        if base == "timeout" and i < len(words) and re.fullmatch(r"[\d.]+[smhd]?", words[i].text):
+            i += 1
+    return []
+
+
+def _shell_cut(w: _Word) -> tuple[str, str] | None:
+    """A word with a shell expansion in it (#591): its text before the first expansion, and the rest of its source as
+    a shell word of its own (a double quote open there opened again). None when the lexer reads that start otherwise."""
+    raw, dq, i = w.raw, False, 0
+    while i < len(raw) and not (raw[i] in "$`" or i == 0 and raw[i] in "<>"):
+        if raw[i] == "\\":
+            i += 1
+        elif raw[i] == "'" and not dq:
+            j = raw.find("'", i + 1)
+            i = len(raw) if j < 0 else j
+        elif raw[i] == '"':
+            dq = not dq
+        i += 1
+    toks = [t[1] for t in _Lexer(raw[:i], scan=False).run() if t[0] == "w"]
+    head = toks[0].text if toks else ""
+    if i >= len(raw) or len(toks) > 1 or not w.text.startswith(head):
+        return None
+    return head, '"' * dq + raw[i:]
+
+
+def _shell_parts(src: str) -> list[tuple[bool, str]] | None:
+    """The pieces of a shell word's source (#591, the rest _shell_cut gives): (False, the text the shell gives) and
+    (True, an expansion's source, in the double quotes it sat in). None when a piece reads otherwise."""
+    out: list[tuple[bool, str]] = []
+    dq, i = False, 0
+    while True:
+        a, was = i, dq
+        while i < len(src) and src[i] not in "$`":     # as _shell_cut scans
+            if src[i] == "\\":
+                i += 1
+            elif src[i] == "'" and not dq:
+                j = src.find("'", i + 1)
+                i = len(src) if j < 0 else j
+            elif src[i] == '"':
+                dq = not dq
+            i += 1
+        toks = [t[1] for t in _Lexer('"' * was + src[a:i] + '"' * dq, scan=False).run() if t[0] == "w"]
+        if len(toks) > 1 or toks and toks[0].dynamic:
+            return None
+        if toks and toks[0].text:
+            out.append((False, toks[0].text))
+        if i >= len(src):
+            return out
+        lx, w = _Lexer(src, scan=False), _Word()
+        lx.i = i
+        if src[i] == "`":
+            lx._backtick(w, dq)
+        else:
+            lx._dollar(w, dq)
+        out.append((True, '"' * dq + src[i:lx.i] + '"' * dq) if w.dynamic else (False, w.text))
+        i = lx.i
+
+
+_ENV_ESCAPES = {'"': '"', "#": "#", "$": "$", "'": "'", "\\": "\\", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+                "v": "\v"}
+_ENV_VAR = re.compile(r"\{([A-Za-z_]\w*)\}", re.A)
+
+
+def _env_split(text: str, tail: str = "", exps: tuple | list = ()) -> list[str] | None:
+    """The words GNU env's -S splits ``text`` into (build_argv in coreutils' env.c), each quoted for a shell line:
+    quotes, the backslash escapes, `\\_` between words, `#` at a word's start and `\\c` end the text; `;`, `&`, `|`
+    and `>` are characters of a word. A ${NAME} env fills from its environment stays "${NAME}", and a word of
+    ${NAME}s only stays unquoted, as it may give no word (env gives none for an unset NAME but an empty word for a
+    set, empty one; in the command's place either is a program from a variable, which is opaque). None where env
+    refuses the text and runs nothing (an unclosed quote, an unknown escape, a `$` not in ${NAME}), and where a `#`
+    follows ${NAME}s only (a comment when they are empty). With ``tail``, ``text`` is the -S text only up to a shell
+    expansion and ``tail`` the shell source from there (_shell_cut): the words closed before the end stand, as later
+    text cannot change them, and the word open there (or a new one) ends with ``tail``. None then also when no word
+    closes before the end, as the program may come from the expansion. With ``exps``, each NUL in ``text`` stands
+    for the value of the shell expansion ``exps`` holds at its turn (_shell_parts), a piece of the word it sits in
+    that may be empty, as a ${NAME} is; None then also where an escape goes on in it. Each word's text is joined
+    once (_env_word), so the split takes time linear in the text."""
+    words: list[list[list]] = []        # each word's pieces: [False, its text's parts], [True, [a NAME]] or
+    sq = dq = bare = ended = False      # ["sh", [an expansion's source]]; bare: the open word holds those only
+    sep, i, k = True, 0, 0
+
+    def put(s: str, var: bool | str = False) -> None:
+        nonlocal sep, bare
+        if sep:
+            words.append([])
+            sep, bare = False, True
+        bare = bare and bool(var)
+        if words[-1] and not var and not words[-1][-1][0]:
+            words[-1][-1][1].append(s)
+        else:
+            words[-1].append([var, [s]])
+
+    while i < len(text):
+        ch, i = text[i], i + 1
+        if ch == "\0" and k < len(exps):
+            put(exps[k], "sh")
+            k += 1
+        elif ch == "\\" and text[i:i + 1] == "\0" and k < len(exps):     # the escape goes on in the value
+            return None
+        elif ch == "'" and not dq or ch == '"' and not sq:
+            sq, dq = (not sq, dq) if ch == "'" else (sq, not dq)
+            put("")
+        elif ch in " \t\n\v\f\r" and not (sq or dq):
+            sep = True
+        elif ch == "#" and (sep or bare):
+            if not sep:
+                return None
+            ended = True
+            break
+        elif ch == "\\" and not (sq and text[i:i + 1] not in ("\\", "'")):
+            if tail and i == len(text):     # the escape goes on in the expansion
+                break
+            nxt, i = text[i:i + 1], i + 1
+            if nxt == "_" and not dq:
+                sep = True
+            elif nxt == "c" and not dq:
+                ended = True
+                break
+            elif nxt == "_" or nxt in _ENV_ESCAPES:
+                put(" " if nxt == "_" else _ENV_ESCAPES[nxt])
+            else:
+                return None
+        elif ch == "$" and not sq:
+            m = _ENV_VAR.match(text, i)
+            if not m:
+                if tail and re.fullmatch(r"(\{([A-Za-z_]\w*)?)?", text[i:], re.A):  # ${NAME} goes on in it
+                    break
+                return None
+            put(m[1], True)
+            i = m.end()
+        else:
+            put(ch)
+    else:
+        if (sq or dq) and not tail:
+            return None
+    out = [_env_word(w) for w in words]
+    if not tail or ended:
+        return out
+    if len(words) - (not sep) < 1:
+        return None
+    return out + [tail] if sep else out[:-1] + [out[-1] + tail]
+
+
+def _env_word(pieces: list[list]) -> str:
+    """One word of _env_split, quoted for a shell line: a ${NAME} in double quotes, a word of ${NAME}s only bare, a
+    shell expansion as its source spells it."""
+    joined = [(var, "".join(s)) for var, s in pieces]
+    if all(var is True for var, _ in joined):
+        return "".join(f"${{{s}}}" for _, s in joined)
+    return "".join(s if var == "sh" else f'"${{{s}}}"' if var else shlex.quote(s) if s else ""
+                   for var, s in joined) or "''"
 
 
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
@@ -3663,7 +4153,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
-    words, sudo, split = _strip_prefix_words(words)
+    sudos: list = []                            # each sudo or doas on the way (#491)
+    words, sudo, split = _strip_prefix_words(words, sudos)
     parts: list[Classification] = []
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
@@ -3675,12 +4166,24 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
         what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
         parts.append(_opaque(f"runs the prompt expansion of {what}, a value the gate does not see", cmd))
-    if split is not None:
+    # #591: env reads the words of an `env -S` text as its own argv. The first reading of the call reads the line env
+    # runs (_env_split_lines), in every spelling of -S; the others read #634's leading words, or nothing more, as
+    # before (_env_split_mode), and the mark tells classify which of them the call needs. In the first reading and
+    # mode 3 a spelling main missed (`--split`, `-i0vS`) reads as `-S TEXT` does, its opaque part included; the
+    # reading as before (mode 0) keeps what main read there.
+    ms = _env_split_mode.get()
+    mode, mark = ms or (2, [0])
+    more = depth < _DEPTH and mode in (1, 2)
+    old = _env_split_argv(split) if split is not None and more else None
+    lines = (_env_split_lines(before) if mode == 2 else [old] if old else []) if more else []
+    raw = _env_split_lines(before, True) if split is None and ms and mode in (2, 3) else []
+    if raw and _env_s_text(raw[1]):
+        split = raw[0]
+    mark[0] |= 9 * bool(lines or raw) | 2 * bool(old)
+    if split is not None or lines:
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
-            parts.append(classify_shell(split, depth + 1))
-            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
-                parts.append(classify_shell(rest, depth + 1))
+            parts += [classify_shell(x, depth + 1) for x in ([split] if split is not None else []) + lines]
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
@@ -3700,6 +4203,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     if sudo:
         parts[0].signals.append("sudo")
         _run_privileged(parts[0])
+        shell = [] if _sudo_shell_off.get() else _sudo_shell_parts(sudos, words, k, cmd, depth, ctx, piped)
+        if shell and (memo := _call_memo.get()) is not None:
+            memo[_SUDO_READ] = True               # _read_core reads the call as before #491 too
+        parts += shell
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -6345,12 +6852,13 @@ def _brace_seq(s: str) -> list[str] | None:
     return [f"{v:0{width}d}" for v in vals]
 
 
-def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
+def _brace_words(tok: str, pool: int = 0, keep: bool = False) -> list[str] | None:
     """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
     ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
     not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
     for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
-    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget."""
+    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget. ``keep`` keeps
+    a word the expansion makes more than once, as bash does (`{-s,-s}` is two words: #491)."""
     if "{" not in tok:
         return [tok]
     left = _brace_left.get()
@@ -6463,7 +6971,7 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
         return None
     if left is not None and len(words) > 1:
         left[pool] -= sum(map(_brace_cost, words))
-    return list(dict.fromkeys([tok] + words))
+    return [tok] + words if keep else list(dict.fromkeys([tok] + words))
 
 
 def _expand_words(words: list[str]) -> list[str]:
@@ -7338,8 +7846,9 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
             rest, takes = argv[1:], _PREFIXES[base]
             while rest and rest[0].startswith("-") and rest[0] != "-":
                 f, rest = rest[0], rest[1:]
-                if base == "env" and f.startswith(("-S", "--split-string")):
-                    return argv, False                   # env -S text is classified on its own
+                if base == "env" and (f.startswith(("-S", "--split-string")) or _env_s_text(f)):
+                    # env -S text is classified on its own; no dump in the readings that read it as `-S TEXT` (#591)
+                    return [] if _env_s_text(f) else argv, False
                 if f in takes and rest:
                     rest = rest[1:]
             if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
@@ -7603,10 +8112,40 @@ def _joined_call(action: Any) -> tuple[str, dict] | None:
     return tool, {**args, key: _join_dollars(line)}
 
 
+def classify(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call from its name and arguments (_classify_reading). Pure; never raises on odd args. Its
+    first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up to
+    #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
+    read a line or such a spelling, the call is read again with each text a shell line only: with #634's reading of
+    the text's leading words (_env_split_argv), as main read it (mode 1), also where only a reading as main's found
+    one (a nested text a missed spelling hid, verify 2 of #707); as before #634 (mode 0); and with every spelling
+    read as `-S TEXT` (mode 3). Each is a call of its own, in ``split_readings`` with main's first (the hook's bypass
+    keeps main's order with it), so a part that leads one reading or takes an ssh hop's host there keeps it (review
+    of #634), and decide keeps the strictest."""
+    if _env_split_mode.get() is not None:      # a reading inside a reading (D-074's ordinary): the same mode
+        return _classify_reading(action, cwd)
+    mark: list[int] = [0]
+    token = _env_split_mode.set((2, mark))
+    try:
+        c = _classify_reading(action, cwd)
+    finally:
+        _env_split_mode.reset(token)
+    if mark[0] & 1:     # main's reading whenever any is taken: a text read here can hide a nested one main read
+        mark[0] |= 2
+    for mode in (1, 0, 3):                      # main's reading first: split_readings[0] when any is taken
+        if mark[0] & (1 << mode):
+            token = _env_split_mode.set((mode, [0]))
+            try:
+                c.split_readings.append(_classify_reading(action, cwd))
+            finally:
+                _env_split_mode.reset(token)
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
-def classify(action: Any, cwd: str | None = None) -> Classification:
-    """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
+def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call in one reading of its `env -S` texts (classify). When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
     ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
@@ -7614,9 +8153,10 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
     stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
-    A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515).
-    ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
-    (_in_tool_folder sets it)."""
+    A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
+    reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
+    chain of floors (readings), so decide never goes below it. ``cwd`` is the folder the tool runs in, when the
+    caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
     token = _joining.set(seen)
@@ -7641,10 +8181,13 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
 
 
 def _read_core(action: Any, cwd: str | None = None) -> Classification:
-    """The body classify reads the call with: the gh ``floor``, and the D-074 ``ordinary`` reading of a call whose
-    config.json the store counted, each with the call's own budgets, memos and folders. The join context is set by
-    classify, also for its joined reading; _read_core leaves it alone."""
+    """The body classify reads the call with: the gh ``floor``, the reading as before #491 at the end of the floors
+    when a sudo -s or -i shell's stdin was read, and the D-074 ``ordinary`` reading of a call whose config.json the
+    store counted, each with the call's own budgets, memos and folders. The join context is set by classify, also for
+    its joined reading; _read_core leaves it alone."""
     memo, mark = _call_memo.get(), [False]
+    if memo is not None:
+        memo.pop(_SUDO_READ, None)
     marked = _config_mark.set(mark)
     try:
         c = _classify_call(action)
@@ -7656,6 +8199,17 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
                 _gh_third_word.reset(third)
     finally:
         _config_mark.reset(marked)
+    if memo is not None and memo.pop(_SUDO_READ, False) and not _sudo_shell_off.get():
+        off, left, seen = _sudo_shell_off.set(True), _brace_left.set(None), _shell_seen.set(None)
+        try:
+            last = c
+            while last.floor is not None:
+                last = last.floor
+            last.floor = _brace_budget(_read_core)(action, cwd)     # the reading as before #491, its own budgets
+        finally:
+            _shell_seen.reset(seen)
+            _brace_left.reset(left)
+            _sudo_shell_off.reset(off)
     if mark[0]:
         off, left, seen = _config_off.set(True), _brace_left.set(None), _shell_seen.set(None)
         try:
@@ -8303,8 +8857,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
-    reading before #311, the call as read before D-074 (``ordinary``, #125), then the line on each other target it may
-    land on (``alt_targets``). Each reading goes
+    reading before #311, the call as read before D-074 (``ordinary``, #125), the call with each `env -S` text read as
+    before (``split_readings``, #591), then the line on each other target it may land on (``alt_targets``). Each
+    reading goes
     through all of the above, the own text pass and its fallback too, and the strictest stands on each axis
     (_strictest), so a reading only raises the line.
     """
@@ -8313,9 +8868,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     rs = readings(c)
     if len(rs) > 1:
         # #311: the call as read before (a shell call's folder made it credentials as a whole, #209), and #399: the
-        # line as the gate read it before gh's subcommand search, and D-074: the call with the Exo home's config.json
-        # an ordinary file, are decided too, so none decides lower.
-        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None), pol, ctx) for r in rs],
+        # line as the gate read it before gh's subcommand search, D-074: the call with the Exo home's config.json
+        # an ordinary file, and #591: the call with each env -S text read as before, are decided too, so none
+        # decides lower.
+        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None, split_readings=[]), pol, ctx)
+                           for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
         # #399: decided on each target the gate cannot rule out.
@@ -8994,11 +9551,12 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
     with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
-    ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
-    part leading (#454)."""
+    ``ordinary`` reading (D-074) or ``split_readings`` (#591). A sudo write also binds when its displaced part names
+    a target or asks with that part leading (#454)."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
             or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
+            or bool(c.split_readings)
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
@@ -9006,11 +9564,14 @@ def readings(c: Classification) -> list[Classification]:
     """Each way the gate reads the call, the call first: as it read it before #311 (``also``: a shell call's own
     folder argument made it credentials as a whole, #209), as it read it before #399 (``floor``: each gh command's
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
-    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125). `decide` keeps the
+    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125), and each reading
+    of the call with its `env -S` texts read as before (``split_readings``, #591: a shell line only, and #634's
+    leading words). `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
     body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
     as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
-    readings, each with its own ``floor``."""
+    readings, each with its own ``floor``. A floor may have a floor of its own: the reading as read before #491 ends
+    its chain (_read_core), with its own readings."""
     out: list[Classification] = []
     todo: list[Classification | None] = [c]
     while todo:
@@ -9018,8 +9579,9 @@ def readings(c: Classification) -> list[Classification]:
         if x is not None and not any(x is r for r in out):
             out.append(x)
             todo += [x.floor, x.also]
-    if c.ordinary is not None and not any(c.ordinary is r for r in out):
-        out += [r for r in readings(c.ordinary) if not any(r is e for e in out)]
+    for other in (c.ordinary, *c.split_readings):
+        if other is not None and not any(other is r for r in out):
+            out += [r for r in readings(other) if not any(r is e for e in out)]
     return out
 
 

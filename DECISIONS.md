@@ -169,6 +169,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
   envelope, so the bound is checked before the stream opens. A malformed request line still closes the
   connection with no reply.
+- **Amendment 2026-10-27 (exo-desktop #14, orda-aska; fork issue 2):** a failed core start no longer fails every
+  later command. The core starts its runtime once, at the first command: the provider readiness probe
+  (`_main_status`, run when no main role is configured), then the MCP servers. When that start raised, the engine
+  kept the failed task, and every later command awaited it again and got the same `internal` error until exod
+  restarted. A cancelled start task raised `CancelledError` the same way. Now a start task that raised or was
+  cancelled is cleared, and the next command starts again. Every command waiting on the failed start gets its
+  error, and commands that retry at the same time share one new start. A command cancelled while it waits leaves
+  a running start in place, so the runtime never starts twice. An MCP server that fails is still recorded in
+  `status()` and skipped, and `peers.start()` runs before the start task exists, so neither fails the start. The
+  steps that run again on a retry are guarded: `jobs.recover` returns after its first run, `PeerService.start`
+  once its node is set, `Scheduler.start` once its loop runs. A start cut short inside the MCP step can leave
+  server tasks running, so `McpManager.start` first stops the servers it already holds, and engine close
+  always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
+  cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
+  `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -215,6 +230,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
   style save-without-eval (same); keeping taste separate from memory and skills (the gap in PR #126940).
+- **Amendment 2026-10-27 (exo-desktop #35 by orda-aska, ported to exo with the follow-up from abu-aska's review
+  there):** a lesson is a climb candidate only when its computed evidence weight (`taste.label` of the noisy-or
+  weight, decayed to now) is medium or high; the stored `confidence` no longer decides, so a lesson whose evidence
+  has decayed stops being a candidate. Every rule reaches every domain, so the held-out gate covers them all, in two
+  parts: the candidate's own domains' held-out items (its domain and `general`) and the pinned items, from any
+  domain, are gated together as one pool exactly as before, and each other domain's held-out items are gated on
+  their own (`held_tolerance` 0.0 per domain, plus the rule, guarded-domain and domain-drop checks). Pooling every
+  domain into one held-out check would let a gain in one domain pay for a loss in another: with 15 mind and 10 work
+  held-out items, a candidate that broke one mind item while one work item flipped up passed it. Inside the own
+  pool a gain on one item can still offset a loss on another, as before. An accepted candidate rescores every dev,
+  held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
+  budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
+  accepted candidate made 256 calls, 173 before (+48%).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -498,10 +526,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A bus seat keeps the old shape on purpose: the bus routes by seat through the relay the send already posts to,
   never through a socket a presence file names, so a forged file cannot redirect a bus send, and the bus ack
   carries no outcome of the peer's own (its `delivered` names the relay's seq), so there is no first receipt to
-  verify. Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned, as
+  verify. Stricter than before for two honest setups: a daemon whose presence file or first receipt is unsigned, as
   an older `exo`'s are, cannot be sent to while a key is pinned for its seat; update it, or leave its seat
-  unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every name, which breaks messaging
-  an unpinned peer of another home until `exo keys pin --peer`, a step the receive side does not ask for either.
+  unpinned, and the trust ladder applies. And a seat whose key was made again cannot be sent to until this home
+  pins the new key (`exo keys pin --replace`, USER-GUIDE §7). Rejected: requiring a pinned key for every name,
+  which breaks messaging an unpinned peer of another home until `exo keys pin --peer`, a step the receive side
+  does not ask for either.
+  *Amendment 2026-10-26 (#603 review, a signed first reply is not a receipt):* the #523 amendment signed the first
+  reply in "the same doc shape a later receipt uses", and `deliver` signs it for any envelope, one that does not
+  verify too, with the `msg_id` the envelope names. A client of beta's socket read a held message's id from beta's
+  `list`, sent beta a junk envelope with that id, and handed the signed `denied` to alpha's `receipt`, which
+  published `denied` for a message still held at beta. That broke the #132 rule that a later receipt comes only
+  from the seat the message went to. The two docs now sign their kind: `deliver`'s reply carries `kind: "reply"`
+  and `notify_sender`'s receipt `kind: "receipt"` (Hermes' peers module calls the same two, so it follows).
+  `receipt` takes a doc whose kind is `receipt`, or one with no kind as an older `exo` signs its receipts, unless
+  that kind-less doc carries `mode` or `session`: a #523 first reply signs those fields and no receipt ever has, so
+  a #523 build's reply cannot pass as a receipt either. The send path takes a reply by the same rule (`doc_kind`):
+  `kind: "reply"`, or a kind-less doc that signs `mode` or `session`, so a receipt, an older `exo`'s included, is
+  no first reply, and a send to a #523 build still completes. Refusing that kind-less reply would gain nothing and
+  cost a duplicate: the reply is checked after the text has gone, so a send that fails on its reply has already
+  reached the peer, and only the outcome is refused (USER-GUIDE §7 says so). A reply is
+  still signed for an envelope that does not verify: signing it only for a verified envelope would leave an honest
+  sender whose key the receiver does not hold, or holds an old copy of, with an unsigned `denied` it must refuse,
+  so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
+  JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
+  that is not a mapping fails the send as a refused reply.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -631,6 +680,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
 
 ## D-031 (2026-10-12) UI/UX overhaul, terminal half: make the TUI look like the site's terminal figure
+- **Web amendment, 2026-10-28:** at the principal's request, the shared web workspace keeps the angular
+  identity while using readable sans serif conversation text, restrained surfaces and explicit attention
+  states. Dark remains the default; Light and System are saved presentation choices. Persistent navigation
+  supports browser history and keyboard access. Loaded-conversation search, status filters and Show latest
+  messages use existing records and preserve drafts. The web boot overlay is removed. This changes no
+  model, permission, storage or execution policy; desktop consumes the shared implementation under D-089.
+  Current behavior is documented in `docs/ui/WEB.md` and `docs/USER-GUIDE.md`.
 - **Why (A, verbatim):** "UI/UX needs an overhaul. the project website at exo.askaconsult.com gives such a
   futuristic feeling - our ui/ux should be deliver on it".
 - **Decision:** the language already exists on the site (`figure.term`, `style.css`), so the TUI takes it
@@ -650,6 +706,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   real terminal (the SVG export cannot show the terminal's default colours).
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
+- **Foreground shell result amendment (2026-10-28, #791):** actual nonzero exit codes, timeout and interruption set
+  `ToolResult.is_error`; captured output and `[exit N]` remain unchanged. Code-zero pipelines with a masked-stage
+  note remain successful. Failed write-shaped commands do not reset repeat detection as successful file progress.
+  No automatic retry, stop, permission or model policy changes. Background launch receipts are unchanged.
 - **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
   of seven asks, the two that hurt most in real use were a shell that holds the turn (a build or a long test run) and
   the principal's words reaching memory by discipline instead of by mechanism.
@@ -3191,6 +3251,80 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
 
+  *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
+  command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the
+  line was a bare assignment, `read`, and `echo 'rm -rf /srv/data' | sudo -s` or
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` ran with no ask, under `deny: [delete]` too, while `sudo bash` with the
+  same stdin was read. The gate now reads such a shell as `bash` with no operand (as #240 reads `ssh host`): an
+  `opaque_exec` part that runs its stdin (`_runs_stdin`), and the parts of each text the line feeds it, read once per
+  line under the same key as a fed `bash`. A stdin it cannot read asks, and so does a bare `sudo -s`, since a command
+  around the line may feed it. sudo's and doas's options are read as getopt reads them (`_sudo_shells`): clusters,
+  values attached or not, unique prefixes of sudo's long options, `--`, then sudo's `NAME=VALUE` words, for each
+  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo). A word the gate cannot
+  read that may come to `-s` counts as a shell option (`_sudo_unread`): an option word with an expansion or an
+  unquoted glob (`sudo -"$X"`, `sudo -?`; review of #491: `sudo -$(printf s) <<< 'rm -rf x'` was allowed under
+  `deny: [delete]`), unless it cannot split and the expansion comes after a letter or `=` that takes a value
+  (`sudo -u"$U" -l` stays a read; an empty `$U` there makes `-u` take the next word, which starts no shell); an
+  option's value that may split into several words (`sudo -u $U`, `sudo -u $(id -un)`; round 2 of the review:
+  `sudo -u {root,-s} <<< 'rm -rf x'` was allowed under `deny: [delete]`), whose brace set is expanded with
+  `_brace_words` and read as option words, keeping a word the set makes twice as bash does (round 3:
+  `sudo -p {-s,-s}` is `sudo -p -s -s`, and the deduplicated expansion hid the second `-s`), and a bracket glob at
+  the start of a value (`sudo -u [!a]s`), which the lexer does not mark as a glob; and an operand that may expand to
+  an option (`sudo "$X"`, `sudo ?s`, `sudo {-s,}`, `sudo ~-`, which is `$OLDPWD`), which main read as an unknown
+  program that asks, so a deny on the fed text only asked. Such a word may take the next word as its value
+  (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a stdin, the shell is also read with
+  no command, and the options are also read again from the word after the next one (`_sudo_read`). A brace value
+  whose words end the options elsewhere has its command read as sudo runs it, with no shell (round 3, on main too:
+  `sudo -u {root,-p} echo rm -rf x` is `sudo -u root -p echo rm -rf x`, whose prompt is `echo`, and was allowed
+  under `deny: [delete]`; so were `sudo -"$X" echo rm -rf x` and `sudo -u $U echo -s rm -rf x`). A may reading
+  reads its command both as the shell would and as sudo runs the words bash expanded (round 4: read only as escaped
+  shell text, a sudo there with a brace value was lost, so `sudo -E{,p} echo sudo -E{,p} echo rm -rf x` was allowed
+  under `deny: [delete]`). Those readings may not be bash's, so they add only the parts their command is known to
+  do, not `read` or `opaque_exec`: `sudo -u $U cat /etc/hosts`, `sudo -"$X" echo hi` and `sudo -u {alice,bob} ls`
+  stay reads. A part that stands for a cap stays, though (`_a_cap`: a nest past the depth cap, the budget below):
+  round 4 found five chained `sudo -u {root,-p} echo` read and allowed, the cap's ask dropped as a command the
+  reading could not read; such a nest now asks. A call reads at most 16 of them, a moved reading with a shell
+  option counted too (shared through the call memo); past that, it asks. This tightens a few lines that start no
+  shell when the words expand otherwise (`sudo -u $U` alone asks as `bash` alone does, `echo hi | sudo -u $U tee
+  /tmp/x` asks, and so do `sudo -u $U -l`, `sudo -l -U $U` and `sudo -u $U -v`, since the gate does not read sudo's
+  list and validate modes, in which no shell starts), and never lowers one: each such reading only adds parts. With
+  a command, sudo runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-`
+  and `$` escaped with a backslash. Where that text may not be the words the line's own reading took (a `$`, a
+  newline the shell drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix
+  reader takes for a program), the gate also reads it, beside an `opaque_exec` part, so the line asks as it did
+  when it read an unknown program there and its approval binds to the exact command. Only the first such text is
+  read at each level: it holds the sudos after it, which its own reading reads in turn as written (reading each of
+  them again at each level made a 40-deep `sudo -s ... echo '$x'` take minutes). Their moved and may readings are
+  still read: that text holds a brace value as a literal (round 4: `sudo -s sudo -u "$U" -u {root,-p} echo rm -rf
+  x` only asked under `deny: [delete]` and was allowed under `{opaque_exec: allow}`). A text a parse read back as
+  its words is not parsed again for a later sudo as written, whose command is a part of it, and the prefix reader
+  walks the words by index (round 3: parsing the rest once per sudo made a 28 KB chain of `sudo -u {root,-s}` take
+  167 s; a 1,000-deep chain of each shape now takes 0.2 to 4 s, against 0.1 to 0.3 s on main 58503282). A word of
+  the command the gate cannot read asks too. An operand's tilde is read after brace expansion, as bash reads it
+  (round 4: `sudo ~-{,}` is `sudo ~- ~-`).
+  Chosen over rewriting the prefix reader: every part main made stays (the line's first part keeps sudo's raise and
+  signal, and #454's sudo write still leads where main's `read` would), and the new parts only add. Added parts can
+  still lower a line where they take the lead and a policy allows their category (`ssh host 'sudo -s < f'` was a
+  costly internal `read` that logs, and `{opaque_exec: allow}` allowed the new lead), so the call is also read as
+  before #491 (a mark in the call memo, then `_sudo_shell_off`), as the last of its floors: `readings` follows the
+  chain of floors, and decide, `no_grant`, `call_approvers` and the hook take the strictest reading, so a decision
+  is at least main's. The bare forms tighten: `sudo -s`, `sudo -i` and `sudo -s > /tmp/f` ask as `opaque_exec`
+  where main allowed them as `read` or (#454) a costly `local_write`. An `always` on a fed line binds to the exact
+  line, as for `echo 'rm -rf x' | bash`. Known limits, not filed here: `su` with no `-c` and `sudo su` with a stdin
+  ask as an unknown program and the fed text is not read, so a deny on what it carries asks rather than denies; the
+  files a login shell reads first and a `SHELL` that names another program are not read; an ambiguous long option
+  is taken for a shell option when it may be one; `env -S 'sudo -s'` with a stdin asks as `env -S bash` does on
+  main, and the fed text is not read; a reading where a word may take the next one as its value adds no ask for a
+  program the gate cannot read there. The differential against main 58503282 (scripts/gate_diff.py,
+  `--jobs 2`) lowers no pair: the built-in corpus without variants (12,258 actions x 88 policies) tightens 13,061
+  pairs on 211 actions, and an aimed corpus of 8,316 lines (the new tests' lines, each shell spelling, feed, payload
+  and wrapper, option words with an expansion or a glob, option values that may split, brace sets in values with
+  repeated words, bracket-glob values, operands that may expand to an option, `~-` and `~+` with and without a
+  brace, words that may take the next word as their value, list and validate modes, nested and long sudo chains,
+  each pair of may and moved heads nested, and chains of them past the depth cap) under the 88 built-in policies
+  and 37 more deny, category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`,
+  `credentials`, `opaque_exec` and `github_post` tightens 431,781 pairs on 5,166 actions.
+
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so
   `"$\<newline>(cmd)"` runs cmd, `"$\<newline>{x}"` is `"${x}"` and `"$\<newline>@"` splits as `"$@"`. The lexer
@@ -3266,11 +3400,99 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   allowed. The gate now reads the leading words of the split text as env's own argv, as env's own arguments
   already are: the first word that is neither an env option nor an assignment starts the command, and the text
   from it on is classified beside the shell line's reading, so the hidden command's category reaches the decision
-  the way the spelling without `-S` does. After `--` a quoted `NAME=value` word is the command, a word an operator
-  would separate stays with the line's own reading (a word of argv to env), and a split inside the split is not
-  followed — each reads as before, so nothing lowers; an unknown program first is still the command and its
-  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
-  lowered. Tests: `tests/security/test_gate_category_deny_parts.py`.
+  the way the spelling without `-S` does. This reading took a quoted `NAME=value` word after `--` for the command
+  (corrected below: env still reads it as an assignment, `env -- prog= true` runs `true`), left a word with a
+  shell operator in it to the line's own reading, and does not follow a split inside the split; an unknown
+  program first is still the command and its arguments run nothing. The differential against main 3bf26afc
+  (11438 actions, 88 policies) found nothing lowered, but it held no ssh-wrapped `-S` line: behind a hop the new
+  part took the host from the `opaque_exec` part, which lowered (review 5665626829; the follow-up below fixes
+  it). Tests: `tests/security/test_gate_category_deny_parts.py`.
+- *Amendment 2026-10-27 (issue #591, follow-up to #634, review 5665626829):* an `env -S` text keeps the ssh hop's
+  host and is split as env splits it. #634 added its parts to the call's one reading, and behind an ssh hop the
+  host goes to the remote line's leading part, or on a secret or store line to #320's copy of its first targetless
+  credentials or store part: the new delete, push, post or secret part took it, and the `opaque_exec` part the
+  line had before was left with no target. Under `rules: [{match: {category: opaque_exec, target: host},
+  decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask (below its plain
+  `-S` spelling, which denies), so did the `rm -rf` form and `echo '...' | ssh host`, and `reserved:
+  [tool:terminal]` lost `(opaque_exec, me@host)` on `ssh -p 22 me@host 'env -S ...'`. Now the call is read as a
+  call of its own with each text a shell line only, as before #634, and, whenever any `env -S` text or spelling
+  is read, with #634's reading of the leading words (`_env_split_argv`, unchanged), as main read it
+  (`Classification.split_readings`; `_env_split_mode` tells each reading which). `readings` lists them, so
+  `decide` keeps the strictest with every reserved hit and violation, and `no_grant`, `call_approvers`,
+  `body_unseen`, the hook's body files and `binds_exact` read them too. Chosen over moving the host onto each
+  targetless part (that would add targets main never gave, which an allow rule on the host could match) and over
+  keeping the new parts out of the lead and the copy (a category line keyed on the old leading part still loses
+  it): a reading of its own is the old reading exactly, with its own budgets. The call's first reading reads the
+  line env runs (`_env_split_lines`, from the #591 branch): the words before the `-S` option, the text split by
+  env's own rules (`_env_split`: quotes, backslash escapes, `\_`, `#` at a word's start, `\c`, `${NAME}`; `;`,
+  `&`, `|` and `>` are characters of a word, so `'X=a b';x` is one assignment and `rm` runs) and the words after
+  it, each quoted, read as `env NAME=VALUE cmd` is: after `--` a `NAME=value` word is still an assignment
+  (coreutils: `env -- prog= true` runs `true`), so `env -S "-- 'X=a b' rm -rf /srv/data"` is a delete, which
+  corrects the #591 amendment above. Every spelling GNU env 9.4 takes is found: `-S TEXT`, `-STEXT` read whole
+  (`_strip_prefix_words` still cuts it at its first `=`, a reading kept beside: only `--split-string=` splits
+  there), `--split-string=TEXT`, `--split-string TEXT` and each unambiguous prefix (`--split`, `--s`), and `-S`
+  in a word of short options (`-iS`, `-vS`, `-i0vS`; one that takes a value, `-u` or `-C`, takes the rest). A
+  shell expansion in the text keeps the words env closes before it, and the rest of the shell word stands for the
+  rest, also split with each expansion a piece of its word (`$BR --force`). A text env would refuse adds no line,
+  and a program from a variable stays opaque. A spelling main missed reads in the first reading as `-S TEXT`
+  does (`_env_s_text`): its text a shell line beside the line env runs, with the `opaque_exec` part `-S`
+  carries, and no environment dump read in its option word (main read `env --split-s="..."` as a dump). One more
+  reading (mode 3) is the reading as before with every spelling so read, so the opaque part leads it as it leads
+  the `-S` spelling's reading as before, and an ssh hop's host lands on it: under `categories: {opaque_exec:
+  deny}` and the host rule, `env --split-s="..."` and `env -i0vS"..."`, bare and behind a hop, decide as `env -S
+  "..."` does (they asked; review of this PR). The reading as before (mode 0) keeps main's dump and program
+  parts. The exo-gate hook's bypass floor reads the category of the call and of each of these readings, as a
+  line main read as credentials first (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`)
+  may lead with `opaque_exec` in the first reading now, and in bypass it went ask -> allow (review of this PR).
+  Main's reading (mode 1) is taken whenever any `env -S` text or spelling is read, not only where #634's reading
+  of the leading words finds a command in the first reading (verify 2 of this PR): that reading reads a spelling
+  main missed as `-S TEXT`, so it never reached a nested text main read after the option word, and `env -iS'\q'
+  sh -c 'env -S "'"'"'X=a b'"'"' rm -rf /srv/data"'` went deny -> ask under `deny: [delete]` and lost its
+  `reserved: [delete]` hit, its `gh auth token` form went deny -> ask under `deny: [credentials]` and lost
+  `no_grant`, and in bypass the hook allowed it where main asked at the floor (credentials, once); an aimed
+  gate_diff of 156 such lines lowered 19,909 pairs on 2,037 actions at 1ae3b3a9, and lowers none now. classify
+  puts main's reading first in `split_readings`, and in bypass the hook keeps main's order for it: the floor first
+  when main's reading (or the call, with no split readings) is a floor category, then the hold of a post that
+  breaks the posting rules, then the floor of any other reading, then allow. A floor check of every reading before
+  the hold (round 1) turned a post main held into an ask at the floor (credentials, once) wherever a missed
+  spelling's `-S TEXT` reading or mode 3 led with a secret or an environment dump: 65 of 1,694 hook lines (verify
+  3 of this PR), such as `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"`. They are held
+  again, as on main, and `env -S "gh auth token"; gh pr comment ...` still asks at the floor. A hook probe of
+  3,626 lines through `pre_tool_call` (bypass on, and ask mode) lowers none against main 58503282. The split is
+  linear in the text, and a call with an `env -S` text costs up to four readings, each linear in the text with
+  budgets of its own; nesting stops at `_DEPTH` as before. A spelling main missed that was one opaque word on main
+  is read in full now. Measured in CPU time (best of three) against main 58503282: `env -S "'X=a b' rm -rf
+  /srv/data"` takes 6 ms (main 3 ms), the nested `env -iS'\q' sh -c '...'` row 7 ms (main 4 ms), `env
+  --split="..."` with a 40 KB text of 20,000 words 3.7-4.4 s (main 0.06 s; 1.0 s at 10 KB, so linear) and with one
+  40 KB word 0.5 s (main 0.06 s), and the aimed gate_diff below took 1,910 s on this branch against 544 s on main.
+  No memo is shared across the readings (each keeps its own budgets); a size cap or such a memo is left for a
+  follow-up. A spelling main missed is not read with #634's leading words (mode 1 is main's reading exactly), so
+  where env refuses its text (`env --split "'X=a b' gh auth token \d"`) it can ask where the `-S` spelling denies;
+  env runs nothing then, and main asked or allowed that line too. A text nested behind such a spelling that main
+  read (`env -iS'\q' sh -c 'env -S "..."'`, which main denied under `deny: [delete]`) is read as main read it, in
+  mode 1, and decides as on main.
+  Measured on main e0968a2b, under `deny: [delete]` each of `env --split`, `--split-str`, `-iS`, `-vS`, `-i0vS`
+  with `"'X=a b' rm -rf /srv/data"`, `env -S'"X=a b" rm -rf /srv/data'`, `env -iS "rm -rf /srv/data"`, the `--`
+  row and `env -S "'X=a b';x rm -rf /srv/data"` asked and now denies; under `categories: {opaque_exec: allow}`
+  the `--split`, `-iS`, `-vS` and glued `;x` rows were allowed and now ask; under `categories: {opaque_exec:
+  deny}` the `-i0vS"..."`, `--split=` and `--split-s=` rows asked and now deny (the same on main 58503282).
+  Nothing lowers: gate_diff (main's script, `--jobs 2`) against main 58503282 lowers 0 of 1,066,296 pairs on the
+  built-in corpus without variants (12,117 actions x 88 policies, 381 tightened) and 0 of 3,747,240 on an aimed
+  corpus of 20,818 `env -S` lines without variants (round 1's 18,270: 28 spellings, 12 assignment prefixes, 10
+  payloads among them an unknown escape and an unclosed quote, both quotings, bare and behind sudo, doas, nice
+  and timeout, and 16 spellings behind six ssh, mosh and stdin-fed ssh forms; verify 2's 156 nested
+  missed-spelling lines; and 2,392 more: 20 spellings before `sh -c` and `bash -c` with seven nested `env -S`
+  payloads, bare, behind sudo, doas, nice and timeout and behind four ssh, mosh and stdin-fed ssh forms, and
+  the bypass hold row) under 180 policies (the built-in ones and 92 more: deny and allow rules on the host and
+  `me@host`, category lines, deny and reserved entries on ten categories and on the host, `forbid_words`;
+  98,066 pairs tightened on 12,439 actions). Verify 2's 156 lines with their variants (2,912 actions x 93
+  policies) lower 19,909 pairs on 2,037 actions at 1ae3b3a9 and 0 now, and its 5,000 random `env -S` lines with
+  their variants (49,659 actions x 97 policies) lower 0. Known limits, as without `-S` (review nits, not
+  touched): a NAME env takes that is not an identifier (`a.b=1`), a lone `-`, and the value of an option word
+  that takes one (`env -iu HOME`) read as the program, an unknown program that `categories: {opaque_exec: allow}`
+  allows. Tests:
+  `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py`,
+  `plugins/exo-gate/tests/test_bypass.py`.
 - *Amendment 2026-10-26 (issue #585):* the lexer reads the `$` form after a `\<newline>` itself now, as bash reads
   it. #584 read such a line joined beside itself, but the line as written still read a `$` and then a backslash as
   a literal `$`, so its words were plain text and the decision leaned on the joined reading alone.
@@ -3374,6 +3596,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-28 (issue #740):* the approval POST checks that its parsed JSON is an object before reading
+  `decision`. Arrays, null and scalars get a 400 JSON error and send no `approval.respond` to the core, as the
+  shared POST body reader already requires. Malformed JSON keeps its `bad json` response; token checks and valid
+  approval answers are unchanged. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (follow-up to #751):* the approval and shared POST body readers catch JSON decoder
+  recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
+  limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
+  keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
@@ -3815,6 +4045,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
+- **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
+  process-tree sibling, so it skips where `/proc` is unavailable. The existing SIGHUP guard stays. The cleanup
+  signal-handler test still runs where SIGHUP is available; gate-diff runtime and gate policy are unchanged.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
@@ -3918,9 +4151,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
+  conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
+  page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
+  Unconfirmed sends retain recoverable text at their originating conversation, including a newly created one,
+  without replacing newer edits or sending again automatically. Recovery asks the user to inspect the thread
+  before sending again because a lost acknowledgement does not prove rejection. Delayed opens and unsteer
+  replies cannot redirect newer navigation or put one conversation's text into another composer.
+
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
+
+- **Amendment 2026-10-27:** web approval cards state their available answer sequence and the deliberate Ctrl+F focus
+  step. Instructions change for always confirmation and deny-note entry. A focused card has an accent outline.
+  Existing focus, confirmation and approval authority rules remain unchanged.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
@@ -3964,6 +4212,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
+  Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
+  the busy wire remains visible. This changes no command, telemetry, activity state or permission.
 - **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
   prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
   that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
@@ -4573,6 +4824,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
+  editor with Save, Cancel, Enter and Escape. This uses the existing principal-only rename command without
+  selecting that thread or replacing the current composer draft. Native JavaScript prompts are not required.
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
   stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
@@ -5131,6 +5385,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-086: Optional session working notes
 
+- **Pending proposal:** [Agent and human work vessel](docs/AGENT-OPERATOR-DESIGN.md)
+  proposes client use of these notes and further acceptance gates. This pointer
+  approves no new behavior, policy or defaults.
+
 - **Date:** 2026-10-23
 - **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
 - **Problem:** A long task's current goal, constraints, blockers and next action can become scattered
@@ -5170,7 +5428,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/WORK-NOTEBOOK.md`, user guide §1, developer guide §1, command reference, docs map and
   changelog. Whitepaper coverage is deferred to the next batch.
 
+### D-086 amendment: automatic record-derived continuity (2026-10-27)
+
+- Add a separate default-on `work_checkpoint` index, controlled by `enabled` and
+  `resume_chars`. It is not an agent-authored notebook revision or a task runner.
+- Reconstruct from the latest 40 visible session messages and 8 job metadata rows;
+  render at most 12 tool records, newest first, within the configured character
+  budget. Capture at turn end and before compression, and reconstruct before
+  injection so abrupt restart recovery does not depend on shutdown hooks.
+- Ordinary root threads only; exclude private, child/fork, scheduled and other-agent
+  sessions. Bind saved rows to the configured principal. Undo excludes reverted
+  transcript facts and suppresses jobs whose schema has no transcript anchor.
+- Copy no conversation text, tool arguments/output, commands, paths or job logs.
+  Tool success is a reported result, not effect verification. Interrupted or
+  missing results explicitly leave effects unknown. Nothing is automatically replayed.
+- `/checkpoint` requires a principal connection. It exposes record metadata without
+  a new approval path. Existing manual working notes and their gated tool are unchanged.
+- This is a bounded slice of #683: filesystem diffs, task-goal synthesis and child
+  work tracking remain outside scope. Docs: `docs/WORK-CHECKPOINT.md`, user/developer
+  guides, command reference, docs map and changelog; whitepaper deferred to next batch.
+
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
+- **Counter clarification 2026-10-27:** after resolving a relative import to `exo`, inspect its imported names
+  with the same real-module lookup as `from exo import ...`. This closes a spelling gap without counting exported
+  symbols, changing exclusions or counting repeated dependencies twice. Existing counts and caps remain 39 and 8.
 - **Status:** Accepted 2026-10-26 by the lead (reversible), amended 2026-10-27 by the principal's ruling "we're
   dropping the ceiling for now as we build out the codebase, it was too restrictive". It amends D-077: the line
   ceiling is off, and two of the engine split's step 4 numbers are assertions instead of printouts. The floor and its
@@ -5226,3 +5507,52 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ceiling off, the same six pass on a tree that counts 15,828, where they fail on `main` at `13cea687`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
+
+## D-084 (2026-10-27) An internal gate error asks once, and only once
+- **Status:** Accepted 2026-10-27 in aska-digital/exo-desktop #23 (orda-aska, ahrazzle, sparky-118); ported to
+  exo in #742, with the removal of `_SAFE_ON_ERROR`, `gate_diff`'s error model, the bypass and observe tests and the
+  Cost, Limits and Validation below in its follow-up. D-084 is the same number in both repos; see exo-desktop #77.
+- **Why:** when the gate's own checks raised, the exo-gate hook's error path returned no card for a read tool (the
+  `_SAFE_ON_ERROR` set: every tool `gate.TOOLS` calls `read`), so the read was allowed silently. Its card was
+  once-only only when the gate still read a store write, so an "always" answer to any other error card stood as a
+  grant for every later error on that tool, and a secret whose check raised got a card any approver could answer.
+  A read is not harmless when the gate cannot say what it reads: a broken policy pattern or a classifier bug then
+  let any `read_file` or `search_files` run unasked. On main `cd371aed`, with `gate.classify` or the rules lookup
+  raising in enforce mode, `read_file README.md`, `search_files .` and a call with non-dict arguments returned no
+  card, in ordinary and bypass sessions, with the decision model on and off.
+- **Decision:** when the gate's own checks raise, the hook asks with an approval card, reads included. The card is
+  once-only in every mode, bypass included: the core offers allow and deny, an "always" answer gives no grant and
+  runs nothing, and the next such error asks again. A call the gate still reads as a store write or a secret goes
+  to the principal alone, in every mode (D-033); a secret check that raises counts as a secret. Observe mode still
+  lets a call ahead when the gate does not read it as a store write or a secret, and logs the error. A required
+  executor still blocks (D-020). `_SAFE_ON_ERROR` is removed: nothing in exo reads it any more, and
+  `scripts/gate_diff.py` models an error as an ask for every tool.
+- **Cost:** an unattended run now waits on such a read until someone answers or the turn is stopped.
+  `approvals.ask` has no timeout, and "Default if no reply: skip" is only the card's text.
+- **Limits:** when classification itself raises, the gate cannot see a store path or a secret named inside a
+  shell command; the secret check reads only path arguments. Unless that check finds a secret, a store write or a
+  command such as `cat ~/.ssh/id_rsa` then gets a once-only card any approver may answer in enforce mode, and goes
+  ahead in observe mode as it did before.
+- **Validation:** measured against main `cd371aed`, before #742. A hook probe that makes `gate.classify`, the rules lookup,
+  `gate.args_sensitive`, or the rules lookup and `gate.args_sensitive` together raise, over enforce and observe,
+  ordinary and bypass sessions, the decision model on and off, and seven calls (`read_file README.md`,
+  `read_file ~/.exo/keys/seat.key`, `search_files .`, `terminal ls`, a store write, non-dict arguments,
+  `terminal cat ~/.ssh/id_rsa`): 224 cases, 136 stricter, 88 the same, none lower. Main's `scripts/gate_diff.py` (`--no-variants --jobs 2 --timeout 0`) found
+  nothing lowered on 12,164 actions x 88 policies and nothing lowered or tightened on 18 aimed read, search, secret
+  and store actions. `plugins/exo-gate/tests`, `tests/integration/test_required_gate.py`, `tests/security`,
+  `tests/docs`, `tests/test_gate_diff.py` and `tests/test_type_baseline.py` gave 12,208 passed and 117 skipped. The
+  branch's changed test files on main's code: 18 failed, 421 passed; the 18 are the new and changed error-path rows.
+- **Docs:** `docs/GATE.md` "An internal gate error asks once (D-084)" (before "Who answered"), the store section's
+  fallback line, the read-only tools paragraph and the bypass "Not covered" line; `docs/EXECUTORS.md`;
+  `docs/DEVELOPER-GUIDE.md` (`gate_diff`'s error model); `docs/DOCS-MAP.md`; `CHANGELOG.md`. Tests:
+  `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/integration/test_required_gate.py`, `tests/test_gate_diff.py`.
+
+## D-089 (2026-10-28) One shared implementation, then reviewed desktop syncs
+- **Status:** Accepted by the principal, effective for new work. [Decision discussion](https://github.com/aska-digital/exo/discussions/746).
+- **Decision:** shared core, plugins, web UI and their docs and tests are implemented and reviewed in Exo. Native desktop shell, packaging and sync tooling belong in Exo Desktop. The fork takes batches of merged Exo commits through a reviewed sync PR. Automation prepares drafts and never pushes or merges directly into main.
+- **Why:** parallel implementation PRs duplicate review and allow fixes, policy and parent branches to drift apart.
+- **Existing work:** authors retain ownership. Preserve unfinished PRs and unique desktop files until the canonical change is merged and downstream integration is verified. An urgent alpha carry names its canonical PR, owner and reconciliation step.
+- **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
+- **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
+- **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.

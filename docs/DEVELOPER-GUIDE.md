@@ -34,6 +34,16 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
+pending continuity and supervision work. It changes no runtime contract or policy.
+
+**Automatic continuity checkpoints.** `exo.work_checkpoint` derives a bounded
+record index from visible session messages and job metadata. Composition enables
+it by default; it chains existing callbacks and workspace injection, adds no
+model calls or replay, and reconstructs after abrupt exits. Keep it separate from
+manual working notes. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md) for privacy, undo,
+uncertain-effects semantics and acceptance tests.
+
 **Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
 state in `sessions.sqlite`. Composition validates `work_notes` before opening
 runtime resources, then attaches the gated tool, per-session prompt and handoff
@@ -548,7 +558,7 @@ one main hid shows nothing. A text the head lists fewer times than main does is 
 while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
 violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
 grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
-hook's answer to an error: ask, or allow for a read tool.
+hook's answer to an error: ask, a read tool too (D-084).
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
@@ -588,6 +598,8 @@ and a line in its decision amendment:
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
+The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
@@ -661,6 +673,8 @@ example with `git filter-repo`), then publish.
 **`DECISIONS.md`.** Each significant choice gets a heading `## D-NNN (date) title`, in number order, newest last.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.
+
+**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries and verification.
 
 **Branch and merge.**
 
@@ -1054,3 +1068,14 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+### Web composer draft ownership
+
+`plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
+null key before the first conversation is created. A successful creation transfers ownership to its real
+session ID. Capture selection on input/navigation and restore only when switching the composer owner.
+Pending sends are per session; failure reconciliation compares the draft revision before restoring text.
+Mount listeners update a remounted chat when an older request finishes. Never persist prompt text to browser
+storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
+without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
+thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
