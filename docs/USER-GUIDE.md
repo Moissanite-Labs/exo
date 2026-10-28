@@ -20,6 +20,13 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
 ## 1. Install and first run
 
+**Continuing after interruption.** Exo automatically includes a short index of recent
+tool and job records when the same ordinary conversation continues. `/checkpoint`
+shows it in the TUI or `exo chat`. Interrupted tool effects remain unknown until
+checked. It never replays work. Disable with
+`exo config set work_checkpoint.enabled false` and restart. See
+[automatic continuity checkpoints](WORK-CHECKPOINT.md) for limits and privacy.
+
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
