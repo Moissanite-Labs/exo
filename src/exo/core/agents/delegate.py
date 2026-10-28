@@ -41,7 +41,7 @@ ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "c
 # interaction (no ui panels), no shared memory writes, no outward messages, no scheduling in the parent's name.
 BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui",
                            "exo_harness_report", "exo_trace", "peers", "peer_send",
-                           "jobs", "job_output", "job_kill"})  # jobs belong to the main agent's threads (D-032)  # peers are the main agent's (D-026); self-observation is the main agent's job (D-025)
+                           "jobs", "job_output", "job_kill", "job_wait"})  # jobs belong to the main agent's threads (D-032)  # peers are the main agent's (D-026); self-observation is the main agent's job (D-025)
 BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
