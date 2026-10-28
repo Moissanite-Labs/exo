@@ -23,8 +23,8 @@ total is lower has lost one too. The texts behind that line are compared by coun
 and hides another text there in place of one main hid shows nothing. At an equal deny, lost reserved hits and
 violations are not counted: the hook blocks the call, and both only matter for an ask (a reserved hit keeps a
 standing grant from covering it, a violation is named in its message). A classify or
-decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
-name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
+decide exception counts as the outcome the hook gives on an error: ask, for every tool, reads included (D-084).
+Tightenings are counted only. Actions whose category or target changed while every decision stayed
 the same are counted with a few examples.
 
 An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
@@ -1947,17 +1947,11 @@ def _load_tree(tree: str, corpus: str, policies: str) -> None:
             errors[name] = f"{type(exc).__name__}: {exc}"[:200]
             pol = gate.normalize_policies({})
         pols.append((pol, entry.get("context")))
-    safe = {k for k, v in getattr(gate, "TOOLS", {}).items() if v == "read"}
-    _W.update(tree=tree, gate=gate, file=here, actions=actions, pols=pols, names=list(raw), errors=errors, safe=safe)
+    _W.update(tree=tree, gate=gate, file=here, actions=actions, pols=pols, names=list(raw), errors=errors)
 
 
-def _on_error(tool: str, args: Any) -> str:
-    """The hook's outcome when the gate raises: ask, or allow for a read tool with no secret in its arguments."""
-    try:
-        secret = bool(_W["gate"].args_sensitive(args if isinstance(args, dict) else {}))
-    except Exception:
-        secret = True
-    return "allow" if tool in _W["safe"] and not secret else "ask"
+# The hook's outcome when classify or decide raises: ask, for every tool, reads included (D-084).
+_ON_ERROR = "ask"
 
 
 def _post_names(gate: Any, c: Any) -> list[str]:
@@ -1990,7 +1984,7 @@ def _row(i: int) -> list:
         cat, target = str(c.category), str(c.target)
     except Exception as exc:
         why = f"classify raised {type(exc).__name__}: {exc}"[:200]
-        return [None, None, why, [[_on_error(tool, args), "error", why, [], []]], [0] * npol, 0, []]
+        return [None, None, why, [[_ON_ERROR, "error", why, [], []]], [0] * npol, 0, []]
     uniq: dict[tuple, int] = {}
     idx, nerr = [], 0
     for pol, ctx in _W["pols"]:
@@ -2000,7 +1994,7 @@ def _row(i: int) -> list:
                    tuple(sorted({(str(x[0]), str(x[1])) for x in d.reserved})), tuple(sorted(map(str, d.violations))))
         except Exception as exc:
             nerr += 1
-            key = (_on_error(tool, args), "error", f"decide raised {type(exc).__name__}: {exc}"[:300], (), ())
+            key = (_ON_ERROR, "error", f"decide raised {type(exc).__name__}: {exc}"[:300], (), ())
         idx.append(uniq.setdefault(key, len(uniq)))
     return [cat, target, None, [[o, r, why, [list(x) for x in res], list(v)] for o, r, why, res, v in uniq], idx, nerr,
             _post_names(gate, c)]

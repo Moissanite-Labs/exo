@@ -4,7 +4,6 @@ import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
-import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
@@ -12,47 +11,143 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 
+// Page-lifetime intent only: never write prompts to browser storage.
+const drafts = new Map();
+let lastThread = null;
+const draftListeners = new Set();
+const changedDraft = (id, restore = false, owner = null) => { for (const f of draftListeners) f(id, restore, owner); };
+function draft(id) {
+  if (!drafts.has(id)) drafts.set(id, { text: "", start: 0, end: 0, revision: 0, pending: false, failures: [] });
+  return drafts.get(id);
+}
+
 export function mount(root) {
+  let mounted = true, navigation = 0, homeRevision = 0;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
-  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
-  const listEl = h("div", { class: "xc-sessions" });
-  const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
+  const listEl = h("div", { class: "xc-sessions", id: "xc-conversation-list" });
+  let threadQuery = "", threadFilter = "all";
+  const searchInput = h("input", { class: "xc-thread-search", id: "xc-thread-query", type: "search", placeholder: "Title, ID or agent",
+    "aria-label": "Find a loaded conversation", "aria-controls": "xc-conversation-list", "aria-describedby": "xc-thread-scope",
+    oninput: () => { threadQuery = searchInput.value; drawSessions(); } });
+  const searchClear = h("button", { class: "xc-btn xc-thread-clear", type: "button", hidden: true,
+    "aria-label": "Clear conversation search", onclick: () => { searchInput.value = threadQuery = ""; drawSessions(); searchInput.focus(); } }, "Clear");
+  const searchField = h("div", { class: "xc-thread-searchfield" }, h("label", { for: "xc-thread-query" }, "Find a conversation"), searchInput, searchClear);
+  const threadFilterInput = h("select", { class: "xc-thread-filter", "aria-label": "Conversation status",
+    onchange: () => { threadFilter = threadFilterInput.value; drawSessions(); } },
+    h("option", { value: "all" }, "All conversations"), h("option", { value: "working" }, "Working"), h("option", { value: "attention" }, "Needs you"));
+  const threadScope = h("p", { class: "xc-thread-scope", id: "xc-thread-scope", role: "status" });
+  let renameTarget = null, renameSaving = false, renameActive = true;
+  const renameButtons = new Map(), conversationButtons = new Map();
+  const renameInput = h("input", { type: "text", "aria-label": "Thread title", autocomplete: "off", maxlength: "200" });
+  const renameError = h("div", { role: "alert", class: "xc-rename-error" });
+  const renameSave = h("button", { type: "submit", class: "xc-btn xc-primary" }, "Save");
+  const renameCancel = h("button", { type: "button", class: "xc-btn", onclick: () => closeRename() }, "Cancel");
+  const renameEditor = h("form", { class: "xc-rename-editor", hidden: true, "aria-label": "Rename thread",
+    onsubmit: (e) => { e.preventDefault(); saveRename(); },
+    onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); closeRename(); } } },
+    h("label", null, "Thread title", renameInput), renameError, h("div", { class: "xc-btnrow" }, renameSave, renameCancel));
+  function beginRename(s) {
+    if (renameSaving) return;
+    renameTarget = s.id; renameInput.value = s.title || ""; renameError.textContent = "";
+    renameEditor.hidden = false; renameInput.focus(); renameInput.select();
+  }
+  function closeRename() {
+    if (renameSaving) return;
+    const id = renameTarget; renameTarget = null; renameEditor.hidden = true; renameInput.value = "";
+    renameError.textContent = ""; (renameButtons.get(id) || searchInput).focus();
+  }
+  async function saveRename() {
+    if (!renameTarget || renameSaving) return;
+    const title = renameInput.value.trim(), id = renameTarget;
+    if (!title) { renameError.textContent = "Enter a thread title."; renameInput.focus(); return; }
+    renameSaving = true; renameInput.disabled = renameSave.disabled = renameCancel.disabled = true;
+    renameError.textContent = "Saving…";
+    try {
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(id) + "/rename", { title });
+      if (!renameActive) return;
+      sessions = sessions.map((s) => s.id === id ? { ...s, title } : s); drawSessions();
+      renameSaving = false; closeRename();
+    } catch (e) {
+      if (renameActive) renameError.textContent = e && e.message ? e.message : "Could not rename this thread.";
+    } finally {
+      renameSaving = false; renameInput.disabled = renameSave.disabled = renameCancel.disabled = false;
+      if (renameActive && !renameEditor.hidden) renameInput.focus();
+    }
+  }
+  const logEl = h("div", { class: "xc-log", id: "xc-transcript", role: "log", "aria-label": "Conversation messages", "aria-live": "polite", tabindex: "0" });
+  const latestBtn = h("button", { class: "xc-btn xc-latest", type: "button", hidden: true, "aria-controls": "xc-transcript",
+    onclick: () => { home(); logEl.focus(); } }, "Show latest messages");
+  logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
+  const recoveryEl = h("div", { class: "xc-draft-recovery", "aria-live": "polite" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
   const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
   modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), modelPicker);
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), recoveryEl, modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
+  function saveDraft() {
+    const d = draft(current);
+    if (d.text !== input.value) d.revision++;
+    Object.assign(d, { text: input.value, start: input.selectionStart, end: input.selectionEnd });
+  }
+  function restoreDraft() {
+    const d = draft(current);
+    input.value = d.text; input.setSelectionRange(d.start, d.end);
+    if (help.restore) help.restore();
+    drawDraft();
+  }
+  function drawDraft() {
+    const d = draft(current);
+    sendBtn.disabled = d.pending;
+    sendBtn.textContent = d.pending ? "Sending…" : "Send";
+    recoveryEl.replaceChildren(...(d.pending ? [h("span", null, "Sending. You can keep writing.")] : []),
+      ...d.failures.map(f => h("div", { class: "xc-draft-failed" },
+        h("span", null, "Send was not confirmed: " + f.error + ". Check the thread before sending again."),
+        h("button", { class: "xc-btn", onclick: () => {
+          saveDraft();
+          if (!f.restored) { d.text = d.text ? f.text + "\n" + d.text : f.text; d.start = d.end = d.text.length; d.revision++; }
+          d.failures = d.failures.filter(x => x !== f); restoreDraft(); input.focus();
+        } }, f.restored ? "Keep editing" : "Restore text"),
+        h("button", { class: "xc-btn", onclick: () => { d.failures = d.failures.filter(x => x !== f); drawDraft(); } }, "Dismiss"))));
+  }
+  const changed = (id, restore, owner) => {
+    if (current !== id) return;
+    if (owner) { input.value = ""; open(owner); refreshSessions(); }
+    else if (restore) restoreDraft();
+    else drawDraft();
+  };
+  draftListeners.add(changed);
+  input.addEventListener("input", saveDraft);
+  input.addEventListener("select", saveDraft);
+  input.addEventListener("keyup", saveDraft);
   const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     if (e.key === "ArrowUp" && !input.value && lastSteer() && !e.defaultPrevented) { e.preventDefault(); e.stopImmediatePropagation(); unsteer(lastSteer()); }
   }, true);
-  const newBtn = h("button", { class: "xc-btn xc-primary", onclick: () => create() }, "New thread");
+  const newBtn = h("button", { class: "xc-btn xc-new-thread", onclick: () => create() }, "New thread");
   const layoutBtn = h("button", { class: "xc-btn xc-layout", onclick: () => switchLayout(layout === "inverse" ? "classic" : "inverse") });
-  const heroCanvas = h("canvas", { class: "xc-hero-canvas", "aria-hidden": "true" });
   const heroText = h("div", { class: "xc-hero-text" });
-  const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
-  const hero = createHero(heroCanvas);
-  let heroOn = false, heroTimer = 0;
-  const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
+  const heroEl = h("div", { class: "xc-hero" }, heroText);
+  const stage = h("div", { class: "xc-stage" }, heroEl, logEl, latestBtn);
   const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
     h("a", { href: "#providers" }, "Set up providers"));
-  const mainEl = h("main", { class: "xc-chat-main" });
+  const mainEl = h("section", { class: "xc-chat-main", "aria-label": "Conversation" });
   const parts = { banner: setupBanner, stage, approvals: apprEl, status: statusEl, steer: steerEl, guide: help.guideEl, composer, menu: help.menuEl };
   function arrange() {   // the real DOM order, so the tab order matches what is on screen
     mainEl.replaceChildren(...columnOrder(layout).map((k) => parts[k]));
@@ -66,10 +161,20 @@ export function mount(root) {
     layout = v; setLayout(v); arrange(); drawLog();
   }
   arrange();
+  const narrowThreads = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
+  const mobileThreads = () => !!(narrowThreads && narrowThreads.matches);
+  const conversationTitle = h("span", { class: "xc-conversation-current" });
+  const conversationSummary = h("summary", { class: "xc-conversation-summary" }, h("span", null, "Conversations"), conversationTitle);
+  const threadDetails = h("details", { class: "xc-conversations", open: !mobileThreads() }, conversationSummary,
+    searchField, threadFilterInput, threadScope, renameEditor, listEl, layoutBtn);
+  function adaptThreadChooser() {
+    if (!mobileThreads()) threadDetails.open = true;
+    else if (!threadDetails.contains(document.activeElement)) threadDetails.open = false;
+  }
+  threadDetails.addEventListener("toggle", () => { if (!mobileThreads() && !threadDetails.open) threadDetails.open = true; });
+  if (narrowThreads && narrowThreads.addEventListener) narrowThreads.addEventListener("change", adaptThreadChooser);
   root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn),
-    mainEl,
-    sideEl));
+    h("nav", { class: "xc-chat-left", "aria-label": "Conversations" }, newBtn, threadDetails), mainEl, sideEl));
 
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
     api("GET", "/api/providers").then((d) => { if (d && d.ready === false) setupBanner.hidden = false; }).catch(() => {});
@@ -77,7 +182,7 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- items
 
-  function flash(msg) { notice = msg || ""; drawStatus(); }
+  function flash(msg) { notice = msg || ""; routeNotice = null; drawStatus(); }
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
   // A context note (meta.note: other threads' news) is for the model, not a message the user typed (D-028), so the
@@ -138,14 +243,18 @@ export function mount(root) {
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
       case "notice":
+        if (!mine) return;
         if (mine && /^tip\b/i.test(b.text || "")) { push({ kind: "sys", id: "tip" + ev.seq, tone: "tip", text: b.text.replace(/^tip:?\s*/i, "") }); return; }
-        flash(b.text); return;
+        flash(b.text);
+        if (b.source === "model_route" && b.call_id) routeNotice = b.call_id;
+        return;
       default: break;
     }
     if (!mine) return;
     switch (ev.type) {
       case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
+        if (routeNotice) flash("");
         busy = false; drawStatus(); loadContext();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
@@ -157,6 +266,7 @@ export function mount(root) {
         instruments(b.usage); drawStatus(); break;
       }
       case "model.call":
+        if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
         help.note({ providerError: !!b.error });
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
@@ -198,8 +308,7 @@ export function mount(root) {
     if (!it) { it = { kind: "assistant", id: b.message_id, text: "", streaming: true }; push(it); }
     if (it.complete) return;
     it.text += b.text;
-    if (it.textEl) it.textEl.textContent = it.text; else redraw(it);
-    stick();
+    if (it.textEl) keepReading(() => { it.textEl.textContent = it.text; }, aboveViewport(it.el)); else redraw(it);
   }
 
   function completed(m) {
@@ -211,7 +320,7 @@ export function mount(root) {
       if (it) {
         const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);   // judged before the redraw: a rendered table is taller than its streamed text
         it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it);
-        if (keep) { home(); requestAnimationFrame(home); }
+        if (keep) { home(); scheduleHome(); }
       }
       else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
@@ -263,43 +372,53 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- drawing
 
-  function home() { logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); }
-  function stick() { if (nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) home(); }
+  function updateLatest() {
+    latestBtn.hidden = !items.length || nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+  }
+  function home() { ++homeRevision; logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); updateLatest(); }
+  function scheduleHome() {
+    const revision = homeRevision, owner = navigation, session = current, mode = layout, top = logEl.scrollTop;
+    requestAnimationFrame(() => {
+      if (mounted && revision === homeRevision && owner === navigation && session === current && mode === layout && top === logEl.scrollTop) home();
+    });
+  }
+  function aboveViewport(element) {
+    return element && element.getBoundingClientRect && logEl.getBoundingClientRect
+      ? element.getBoundingClientRect().bottom <= logEl.getBoundingClientRect().top : layout === "inverse";
+  }
+  function keepReading(change, above = false) {
+    const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+    const top = logEl.scrollTop, height = logEl.scrollHeight;
+    change();
+    if (keep) home();
+    else { ++homeRevision; logEl.scrollTop = top + (above ? logEl.scrollHeight - height : 0); }
+    updateLatest();
+  }
   function push(it) {
     it.fresh = true;
     items.push(it);
     if (items.length === 1) { drawLog(); return; }
-    if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));   // newest first, or last
-    stick();
+    keepReading(() => {
+      if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));
+    }, layout === "inverse");
   }
   function drawHero() {
     const want = items.length === 0;
+    heroEl.hidden = !want;
     if (want) {
-      clearTimeout(heroTimer);
-      const s = sessions.find((x) => x.id === current);
-      const chip = (k, l) => h("span", { class: "xc-chipk" }, h("b", null, k), l);
-      const line = (k, v) => h("div", { class: "xc-hl" }, h("span", { class: "xc-i" }, k), h("span", { class: "xc-v" }, v));
+      const chip = (key, label) => h("span", { class: "xc-chipk" }, h("b", null, key), label);
       heroText.replaceChildren(
-        h("div", { class: "xc-hero-title" }, "E X O"),
-        h("div", { class: "xc-hero-sub" }, current ? "ready \u00B7 nothing in this thread yet" : "no thread open \u00B7 pick one or start a new thread", h("span", { class: "xc-caret" })),
-        h("div", { class: "xc-hlines" },
-          line("agent", (s && (s.agent || s.seat)) || "exo"),
-          line("model", model || (s && s.model) || "not set"),
-          line("memory", ctx ? ctx.summaries + " summaries \u00B7 " + ctx.nodes + " nodes \u00B7 log " + ctx.log + " entries" : "reading\u2026")),
-          h("div", { class: "xc-chips" }, chip("\u21B5", "send"), chip("\u21E7\u21B5", "new line"), chip("/", "context \u00B7 findings \u00B7 trace"), chip("o a d", "approvals")));
-      heroEl.classList.remove("out"); heroEl.hidden = false;
-      if (!heroOn) { heroOn = true; hero.start(); }
-    } else if (heroOn) {
-      heroOn = false; heroEl.classList.add("out");
-      heroTimer = setTimeout(() => { heroEl.hidden = true; hero.stop(); }, 600);
+        h("h2", { class: "xc-hero-title" }, "What are we working on?"),
+        h("div", { class: "xc-hero-sub" }, "Describe the outcome, ask a question, or bring a task."),
+        h("div", { class: "xc-chips" }, chip("Enter", "send"), chip("Shift+Enter", "new line"), chip("/", "commands")));
     }
   }
-  function redraw(it) { const old = it.el; if (old && old.isConnected) { old.replaceWith(itemEl(it)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
+  function redraw(it) { const old = it.el; if (old && old.isConnected) { keepReading(() => old.replaceWith(itemEl(it)), aboveViewport(old)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
   function drawLog() {
     logEl.replaceChildren(...ordered(items, layout).map(itemEl));
     drawHero();
     home();
-    requestAnimationFrame(home);   // once the new rows have a height: a thread opens on its newest item
+    scheduleHome();   // finish initial positioning only if no newer reading, layout or navigation intent won
   }
 
   function itemEl(it) {
@@ -391,13 +510,36 @@ export function mount(root) {
   }
 
   function drawSessions() {
-    const waiting = new Set(Object.values(approvals).map((a) => a.session));
-    listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
-        title: "Double-click to rename (also /rename <title>)",
-        ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
+    const pendingApprovals = Object.values(approvals);
+    const waiting = new Set(pendingApprovals.map(a => a.session));
+    const globalWaiting = pendingApprovals.some(a => !a.session);
+    const focused = document.activeElement;
+    const focusedConversation = [...conversationButtons].find(([, button]) => button === focused);
+    const focusedRename = [...renameButtons].find(([, button]) => button === focused);
+    const query = threadQuery.trim().toLowerCase();
+    const shown = sessions.filter(s => (!query || [s.title, s.id, s.agent, s.seat].some(value => String(value || "").toLowerCase().includes(query)))
+      && (threadFilter === "all" || (threadFilter === "working" ? s.status === "live" : globalWaiting || waiting.has(s.id))));
+    searchClear.hidden = !threadQuery;
+    threadScope.textContent = shown.length + " of " + sessions.length + " loaded conversations";
+    renameButtons.clear(); conversationButtons.clear();
+    listEl.replaceChildren(...(shown.length ? shown.map((s) => {
+      const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
+      renameButtons.set(s.id, button);
+      const conversationButton = h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => chooseConversation(s.id),
+        title: "Open conversation", "aria-current": s.id === current ? "true" : null,
+        ondblclick: () => beginRename(s) },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
+      conversationButtons.set(s.id, conversationButton);
+      return h("div", { class: "xc-session-row" }, conversationButton, button);
+    }) : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
+      sessions.length ? h("button", { class: "xc-btn", onclick: () => {
+        searchInput.value = threadQuery = ""; threadFilterInput.value = threadFilter = "all"; drawSessions(); searchInput.focus();
+      } }, "Show all conversations") : null)]));
+    if (focusedConversation) (conversationButtons.get(focusedConversation[0]) || searchInput).focus({ preventScroll: true });
+    else if (focusedRename) (renameButtons.get(focusedRename[0]) || searchInput).focus({ preventScroll: true });
+    const selected = sessions.find(s => s.id === current);
+    conversationTitle.textContent = selected ? short(selected.title || selected.id, 40) : "Choose a conversation";
     drawWhere();
   }
 
@@ -440,12 +582,23 @@ export function mount(root) {
     try { sessions = (await api("GET", "/api/chat/sessions")).sessions; drawSessions(); } catch (e) { fail(e); }
   }
 
+  function chooseConversation(id) {
+    const opened = open(id);  // restore the chosen draft synchronously; loading must never steal focus later
+    if (mobileThreads()) {
+      threadDetails.open = false;
+      input.focus({ preventScroll: true });
+    }
+    return opened;
+  }
+
   async function open(id) {
+    saveDraft(); ++navigation; lastThread = id;
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -456,7 +609,11 @@ export function mount(root) {
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
       model = (d.session && d.session.model) || "";
-    } catch (e) { fail(e); }
+    } catch (e) {
+      if (!mounted || current !== id || generation !== snapshotGeneration) return;
+      fail(e);
+    }
+    if (!mounted || current !== id || generation !== snapshotGeneration) return;
     loading = false;
     drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
@@ -514,10 +671,11 @@ export function mount(root) {
   }
 
   async function create(kind = "") {
+    saveDraft(); const nav = ++navigation;
     try {
       const d = await api("POST", "/api/chat/sessions", { kind });
       await refreshSessions();
-      if (d.session) open(d.session.id);
+      if (d.session && mounted && nav === navigation) chooseConversation(d.session.id);
     } catch (e) { fail(e); }
   }
 
@@ -570,7 +728,7 @@ export function mount(root) {
 
   async function send() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || draft(current).pending) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
     // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
@@ -629,18 +787,42 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
+    saveDraft();
+    let origin = current, nav = navigation;
+    const steering = busy, intent = draft(origin);
+    intent.pending = true;
+    input.value = ""; saveDraft(); help.sent(text); drawDraft();
+    const revision = intent.revision;
+    let sid = origin;
     try {
-      if (!current) {
+      if (!sid) {
         const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
+        sid = d.session.id;
+        // Once created, this conversation owns both the request and anything typed behind it.
+        if (mounted && current === origin) saveDraft();
+        drafts.set(sid, intent); drafts.delete(origin);
+        const show = mounted && nav === navigation && current === origin;
+        // A remounted composer can still own the null slot while this old request finishes.
+        changedDraft(origin, false, sid);
+        origin = sid;
+        if (show && current === sid) nav = navigation;
         await refreshSessions();
-        await open(d.session.id);
       }
-      input.value = ""; help.sent(text);
-      const steering = busy, sid = current;
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
-      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
-      flash("");
-    } catch (e) { fail(e); }
+      intent.pending = false; changedDraft(origin);
+      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; if (mounted) drawSteers(); }
+      if (mounted && nav === navigation && current === origin) {
+        if (!origin) await open(sid);
+        else { drawDraft(); flash(""); }
+      }
+    } catch (e) {
+      if (mounted && current === origin) saveDraft();
+      intent.pending = false;
+      const restored = intent.revision === revision && !intent.text;
+      if (restored) Object.assign(intent, { text, start: text.length, end: text.length });
+      intent.failures.push({ text, restored, error: e && e.message ? e.message : String(e) });
+      changedDraft(origin, true);
+    }
   }
 
   // Queued steers (D-045): a message sent while a turn runs waits for the next tool round. Until it lands the
@@ -664,8 +846,14 @@ export function mount(root) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
       delete steers[x.id]; drawSteers();
-      if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
-      else flash("no longer queued");
+      if ((d.cancelled || []).length) {
+        if (mounted && current === x.session) saveDraft();
+        const target = draft(x.session);
+        target.text = target.text.trim() ? x.text + "\n" + target.text : x.text;
+        target.start = target.end = target.text.length; target.revision++;
+        changedDraft(x.session, true);
+        if (mounted && current === x.session) input.focus();
+      } else if (mounted && current === x.session) flash("no longer queued");
     } catch (e) { fail(e); }
   }
 
@@ -711,11 +899,12 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
-  refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
+  restoreDraft();
+  refreshSessions().then(() => { if (mounted && !current && (asked || (!draft(null).text && !draft(null).pending && sessions.length))) open(asked || (sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id)); });
   return off;
 }
 

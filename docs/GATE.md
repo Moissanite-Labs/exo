@@ -482,6 +482,26 @@ tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` 
 has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
 "The store is credentials").
 
+## An internal gate error asks once (D-084)
+
+When the gate's own checks raise (classification, a policy rule, the secret check), the hook
+asks with a card instead of allowing the call. Read tools ask too. The card is once-only in every
+mode, bypass included: the core offers allow and deny, and no answer becomes a standing grant, so
+the next such error asks again. When the gate still reads the call as a store write or a secret,
+only the principal answers, in every mode (D-033). A secret check that raises counts as a secret.
+In observe mode a call the gate does not read as a store write or a secret goes ahead, and the
+error is logged. Under a required executor the call is blocked instead (D-020). When classification
+itself raised, the gate cannot see a store path or a secret named inside a shell command (the
+secret check reads only path arguments): a store write or a command such as `cat ~/.ssh/id_rsa`
+then gets a card any approver may answer, or goes ahead in observe mode, as before D-084, unless
+the secret check finds a secret.
+
+The card waits for an answer. An unattended run stops at it until someone answers or the turn is
+stopped: `approvals.ask` has no timeout, and "Default if no reply: skip" is only the card's text.
+Code: `Gate.pre_tool_call` in `plugins/exo-gate/exo_gate/hook.py`. Tests:
+`plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`,
+`tests/integration/test_required_gate.py`.
+
 ## Who answered: the connection, not the body (D-039)
 
 The core never takes the answerer from the `approval.respond` body. The transport stamps a caller:
@@ -1099,8 +1119,8 @@ loosens an outcome. Turn it off with the plugin setting `decision_model: false` 
   not a `model.call` event yet, so `/trace` and the turn's cost do not show it.
 
 Exo's own read-only tools are `read`: `read_file`, `grep`, `glob`, `skill` (loads a skill's instructions),
-`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error does not stop them (unless a
-required executor is set), and a secret-store path in their arguments still makes the call `credentials`. Before,
+`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error asks for them once, as for any
+tool (D-084), and a secret-store path in their arguments still makes the call `credentials`. Before,
 `skill` was an unknown tool, so a new user's first screen could be an approval card for loading the intro skill.
 
 Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`.
@@ -1284,9 +1304,10 @@ gate does not read:
   as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
-  reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or `xargs`
-  that runs its stdin, also one run by a wrapper such as `setsid` or by `git bisect run`, shows where
-  that stdin comes from: the pipeline from its first command when simple commands pipe into it
+  reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
+  `sudo -i` starts, #491), an interpreter, `ssh` or `xargs` that runs its stdin, also one run by
+  a wrapper such as `setsid` or by `git bisect run`, shows where that stdin comes from: the
+  pipeline from its first command when simple commands pipe into it
   (`curl -s https://x.example/i.sh | bash`), and no own text when a compound feeds it
   (`{ bash; } < f`). Each such text holds every command before its reader, so the
   texts of a line's readers hold at most four times the line's length plus 4 KB between them, and a
@@ -1699,9 +1720,44 @@ gate does not read:
   read the same way (#591): env splits it into words and reads them as its own argv, so a word
   quoted whole with the form `NAME=value` (`env -S "'X=a b' rm -rf /srv/data"`) is an assignment
   there too, and the first word that is neither an env option nor an assignment starts the command.
-  After `--`, or where a shell operator would sit, a `NAME=value` word is a command or a word of
-  argv to env, not an assignment. `IFS` is left
-  out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
+  env splits the text with its own rules (quotes, backslash escapes, `\_` between words, `#` at a
+  word's start, `\c`, `${NAME}`), not a shell's: `;`, `&`, `|` and `>` are characters of a word to
+  it, so `'X=a b';x` is one assignment, and after `--` a `NAME=value` word is still an assignment
+  (`env -- prog= true` runs `true`). The gate reads the line env runs (#591 follow-up to #634): the
+  words before the `-S` option, the text split as env splits it and the words after it, so `env -S
+  "-- 'X=a b' rm -rf /srv/data"` reads as `env -- 'X=a b' rm -rf /srv/data` and is denied under
+  `deny: [delete]`. Every spelling GNU env 9.4 takes counts: `-S TEXT`, `-STEXT` (the text whole;
+  only `--split-string=` splits at its `=`), `--split-string=TEXT`, `--split-string TEXT` and each
+  unambiguous prefix (`--split`, `--s`), and `-S` in a word of short options (`-iS`, `-vS`,
+  `-i0vS`). A shell expansion in the text keeps the words env closes before it, and the rest of the
+  shell word stands for the rest of the text (`$BR --force` is also read as two words). A text env
+  would refuse (an unclosed quote, an unknown escape, a `$` outside `${NAME}`) adds no line, and a
+  program from a variable stays opaque. The text is still read as a shell line beside it, with the
+  `opaque_exec` part `-S` carries, in every spelling: a spelling main missed (`--split-s=`,
+  `-i0vS"..."`) reads as `-S TEXT` does, and no environment dump is read in its option word. The
+  call is read up to three more times as a call of its own: with each text a shell line only, as
+  before #634 (each spelling as main read it), the same with every spelling read as `-S TEXT`, and,
+  whenever any `env -S` text or spelling is read, with #634's reading of its leading words, as main
+  read it, so a text nested behind a spelling main missed (`env -iS'\q' sh -c 'env -S "..."'`)
+  decides as on main. The strictest decision of the readings stands, with every reserved hit and
+  violation of each, so a part keeps the ssh hop's host it had: a rule or reserved entry on the host
+  and `opaque_exec` still reaches `ssh host 'env -S "..."'` and `ssh host 'env -i0vS"..."'`. The
+  exo-gate hook's bypass floor reads the category of each of these readings, so a line one of them
+  reads as credentials or a store write still asks in bypass. It keeps main's order for main's own
+  reading (classify puts it first): the floor when that reading is a floor category, then the hold
+  of a post that breaks the posting rules, then the floor of any other reading. So with bypass on
+  `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"` is held, as on main,
+  and its `-S` spelling asks at the floor (credentials, once), as on main. A call with an `env -S`
+  text costs up to four readings, each linear in the text, and a spelling main missed is read in
+  full (a 40 KB `env --split="..."` text of 20,000 words takes 3.7-4.4 s of CPU here, 0.06 s on main
+  58503282). A spelling main missed is not read with #634's leading words, so where env refuses its
+  own text (`env --split "'X=a b' gh auth token \d"`, an unknown escape) it may ask where the `-S`
+  spelling denies, as on main; env runs nothing then. A text nested behind it that main read is read
+  as main read it and decides as on main. Known limits, as without `-S`: a `NAME` env takes but the
+  gate does not (`a.b=1`), a lone `-` and the value of an option word that takes one (`env -iu
+  HOME`) read as the program, an unknown program (`opaque_exec`) that `categories: {opaque_exec:
+  allow}` allows. `IFS` is left out: it does not change how literal words split, and `while IFS=
+  read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
@@ -1760,6 +1816,58 @@ gate does not read:
   part's category. A gh read's other targets (#399) stay on the displaced part, and the line as
   read before #399 keeps the approvers of its own displaced part
   (`sudo gh pr "$V" 5 > /tmp/f`).
+- `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` start the target user's shell
+  (#491). With no command, that shell runs its stdin, so the gate reads it as it reads `bash` with
+  no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds
+  it (a pipe, a here-string, a heredoc). So `echo 'rm -rf /srv/data' | sudo -s` and
+  `sudo -i <<< 'rm -rf /srv/data'` are `delete` and deny under `deny: [delete]`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` is a store write. A stdin the gate cannot read
+  (`sudo -s < /tmp/script.sh`, a variable, a process substitution) asks, and so does `sudo -s` with
+  no feed, as `bash` alone does: a command around the line may give it one. sudo's options are read
+  as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
+  `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
+  `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
+  another sudo too. A word the gate cannot read that may come to `-s` counts as a shell option: an
+  option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) unless the expansion
+  is the value of a letter or `=` before it (`sudo -u"$U" -l` and `sudo --user="$U" -v` stay
+  reads), an option's value that bash may split into several words (`sudo -u $U`, `sudo -u $(id
+  -un)`, a bracket glob such as `sudo -u [!a]s`; a brace set is expanded and its words read as
+  options, a word it makes twice kept, so `sudo -u {root,-s}` is `sudo -u root -s` and
+  `sudo -p {-s,-s}` is `sudo -p -s -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`, `sudo {-s,}`, `sudo ~-`, which is `$OLDPWD`). Such a word may also take the next word
+  for its value (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a
+  stdin, that stdin is read as the shell's too, and the options are also read again from the word
+  after the next one. A brace value whose words end the options elsewhere has its command read as
+  sudo runs it: `sudo -u {root,-p} echo rm -rf /srv/data` is `sudo -u root -p echo rm -rf
+  /srv/data`, whose prompt is `echo`, so it is `delete`, and so is `sudo -"$X" echo rm -rf
+  /srv/data`. These readings also read the words sudo runs as bash expanded them, so a sudo there
+  with a brace value is read in turn (`sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data` is
+  `delete`). They may not be bash's, so they add only what their command is known to do:
+  `sudo -u $U cat /etc/hosts` and `sudo -u {alice,bob} ls` stay reads, while a nest of them past
+  the depth cap asks. Past 16 such readings in one call, the call asks. So
+  `sudo -u $U <<< 'rm -rf /srv/data'` is `delete`, and `sudo -u $U` alone asks as `bash` alone
+  does, while `sudo -u $U ls` with no feed stays a read. `sudo -u $U -l`, `sudo -l -U $U` and
+  `sudo -u $U -v` ask too: the gate does not read sudo's list and validate modes, in which no
+  shell starts. With a command, sudo runs `$SHELL -c` on the command's words joined with spaces,
+  each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash. The gate reads
+  that text too where it may differ from the words: a `$` the shell expands again, a newline it
+  drops as a line continuation (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty word, or an
+  option sudo reads otherwise than the prefix reader (`sudo -iu root rm -rf /srv/data` is
+  `delete`). Such a line also asks as `opaque_exec` (unless a policy names `opaque_exec` below
+  ask), as it did when the gate read an unknown program there, and its approval binds to the exact
+  command. That text holds the sudos after it, which its own reading reads in turn, so nested sudo
+  shells are read once per level, and a text read back as its words is not parsed again for each
+  later sudo in it. A later sudo's moved and may readings are still read, since that text holds
+  its brace value as a literal (`sudo -s sudo -u "$U" -u {root,-p} echo rm -rf /srv/data` is
+  `delete`). A word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's
+  own parts stay beside these, and the call is also read as before #491, as the last of its
+  floors (`gate.readings`), and decided on each reading, the strictest standing. So a policy that
+  allows the category the shell's parts lead with does not lower a line main asked or logged
+  (`ssh host 'sudo -s < /tmp/script.sh'` still logs under `{opaque_exec: allow}`). Known
+  limits: `su` with no `-c` and `sudo su` with a stdin ask as an unknown program, and the fed
+  text is not read, so a deny on what it carries asks rather than denies; the files a login shell
+  reads first (`sudo -i`) and a `SHELL` that names another program are not read;
+  `env -S 'sudo -s'` with a stdin asks as `env -S bash` does, and the fed text is not read.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
@@ -2930,8 +3038,8 @@ reason the policy loader does not check, the hook's fallback card still asks the
 principal alone, once, in observe mode too (#464; a pattern that does not compile is refused when
 the policy loads now, #466). A store read that a shell call's own folder adds
 as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
-Other calls keep their fallback: a read tool
-runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
+Other calls keep their fallback: observe mode runs the call, and enforce mode asks once, a read
+tool too (D-084). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
@@ -3157,9 +3265,9 @@ agent gets the list of fixes and goes on.
 ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
 starts after bypass was switched on, bypass is inert.
 
-**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
-cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
-on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+**Not covered.** An internal gate error still falls back to a once-only card, reads included (the gate could
+not classify the call, so it cannot know the call is off the floor; D-084). Bypass changes what the gate asks; it
+is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.
