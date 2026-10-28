@@ -1,10 +1,17 @@
 # Web client look (D-031)
 
-The web client (`plugins/exo-command/exo_command/static/`) now speaks the language of the project site
-(`site/assets/style.css`, the `figure.term` section): same tokens, hairlines instead of boxes, mono uppercase
-labels, `·` as the separator, orange only for the one thing that matters, cold blue for what the system knows.
-Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
-or file from outside.
+The web client (`plugins/exo-command/exo_command/static/`) is a shared workspace for a person and an agent.
+Conversation text uses a readable sans serif face; code and measurements use monospace. Angular forms,
+quiet surface levels and the orange accent retain the project's identity. Strong color identifies the
+current action, attention requests and errors. Text names each state as well.
+
+The application bar keeps navigation, connection state and Appearance available across views. Dark is the
+default; Light and System are explicit choices. Only that choice is saved in browser storage, alongside
+the existing conversation layout preference. No font, asset or dependency loads from another site.
+
+Navigation links support browser Back and Forward. The keyboard skip link moves directly to the main
+content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
+“Connected” describes the event connection, while the conversation reports its own work state.
 
 ## Conversation drafts and unconfirmed sends (D-045)
 
@@ -141,6 +148,11 @@ the policy and does not run with it.
 
 ## Screens
 
+Current workspace samples are `docs/ui/workspace-dark.png`, `workspace-light.png` and
+`workspace-mobile.png`. They contain synthetic conversations. `scripts/shots_workspace.py OUTDIR`
+renders both themes at 320, 390, 768, 1024 and 1440 pixels and records viewport geometry. It uses a
+temporary browser profile and a stand-in server, without a real core or credentials.
+
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
 instrument column on the right), `web-02-turn.png` (a turn with tools running), `web-03-approval.png` (an
 approval panel) and `web-04-memory.png` (the memory column filled in). `scripts/promo_shots_web.py` makes them.
@@ -148,8 +160,8 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 ## What is where
 
-- **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
-  pulses orange while a turn runs and is hollow when idle.
+- **Brand bar.** The Exo mark, selected conversation, navigation links, Appearance and connection state.
+  The square activity indicator turns orange while a turn runs and is hollow when idle.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
@@ -186,17 +198,27 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   message has the sender in the header, a grey rule and the line "from another session, not from you": it never
   looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
   (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
-  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
-- **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
-  `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
+  live `peer.message` and its stored message make one card.
+- **Composer.** A framed writing area with a separate action row. The desktop prompt says `steer ›` instead of
+  `›` while a turn runs. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
-- **Thread list.** Each thread has a visible Rename button. It opens a labeled title field with Save and Cancel.
+- **Conversation list.** Find a conversation filters loaded titles, IDs and agent names. The count names its
+  loaded scope; this is not full-history or message search. The status selector shows all conversations,
+  working conversations or those with an approval waiting. Search and filtering do not switch the active
+  conversation or touch its draft. Clear or Show all conversations resets the search.
+  Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
+  search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
+  does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
+  Each thread has a Rename button. It opens a labeled title field with Save and Cancel.
   Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
   current composer draft. A refused save keeps the title draft and shows the error.
+- **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
+  It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
+  readers already at the newest item continue following it. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -207,18 +229,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
   whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
   reconnects and gets the reset.
-- **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
-  route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
-  `?boot=0`, and after the first time in a tab.
+- **Startup.** The workspace opens directly. Connection status and authentication errors remain visible;
+  there is no timed boot overlay or duplicate startup request for a visual check sequence.
 
 ## Empty thread and instrument column
 
-- An empty thread shows the site's hero: the masked hairline grid and the node shell around an orange core
-  (`hero.js`, ported from `site/assets/main.js`), behind a brand block (`E X O`, agent, model, memory line)
-  and key hints as chips. It fades out when the first item arrives. It draws about 24 frames a second with the
-  pixel ratio capped at 1.5, stops when the tab is hidden or the canvas is off screen, and draws one still
-  frame under reduced motion. Measured in headless Chrome on an idle empty thread: 1.7 percent main-thread
-  time with motion, 0.0 percent with reduced motion.
+- An empty thread asks “What are we working on?” with a short prompt and relevant keyboard hints.
+  Its presentation is static. Opening an empty conversation starts no canvas animation,
+  observers or model calls. The prompt disappears when the first transcript item arrives.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
   ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
@@ -273,7 +291,7 @@ with the approval cards under it, then the thread with the newest item first; cl
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
-(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+(`localStorage` key `xc-layout`; Appearance uses the separate `xc-appearance` key). The code is `static/layout.js` (pure, tested in node)
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
@@ -347,8 +365,9 @@ table and snapshot stubbed, no key read) and shoots every tab with data and empt
 
 ## Motion and accessibility
 
-Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
-turns them all off and hides the boot. The page is dark only, like the site, and paints its own background.
+Motion respects `prefers-reduced-motion: reduce`. Focus remains visible in both themes. Appearance can
+follow the operating system or keep an explicit light or dark choice. The mobile composer puts its writing
+area above its actions so a narrow window does not squeeze the text between buttons.
 
 ## Fix found on the way
 
