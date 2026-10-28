@@ -225,11 +225,13 @@ def raise_nofile_limit(cap: int = 10240) -> int | None:
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
                 emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = (),
-                env_deny: Iterable[str] = (), github_auth: tuple[str, str] | None = None) -> tuple[int, str, str]:
+                env_deny: Iterable[str] = (), github_auth: tuple[str, str] | None = None,
+                *, redact_output: bool = True) -> tuple[int, str, str]:
     """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
 
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
-    stdout and stderr are merged in arrival order.
+    stdout and stderr are merged in arrival order. Bound credentials are redacted by default;
+    the Registry-owned handler defers final-output redaction to its strict result boundary.
     """
     side_fd, side_path = open_side()
     try:
@@ -282,7 +284,7 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     if note and status == "ok":
         out.add("\n" + note)
     rendered = out.render()
-    if github_auth:
+    if redact_output and github_auth:
         from exo.core.models.keys import redact_secrets
         rendered = redact_secrets(rendered)
     return code, rendered, status
@@ -321,7 +323,7 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str:
                                        cancel=ctx.cancel, emit=ctx.emit,
                                        env_allow=ctx.meta.get("env_allow") or (),
                                        env_deny=ctx.meta.get("env_deny") or (),
-                                       github_auth=ctx.meta.get("github_auth"))
+                                       github_auth=ctx.meta.get("github_auth"), redact_output=False)
     output = output.rstrip("\n")
     if status == "timeout":
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"

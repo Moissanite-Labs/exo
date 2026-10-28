@@ -23,6 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Bound bash results no longer mask ordinary text twice across redaction markers (#753). The Registry keeps one strict final-output pass; direct bound shell calls and streamed output retain redaction.
+
 - Repeated tool-call warnings and findings can appear during an active turn, rather than waiting for completion. The argument-based warning is deduplicated per tool and turn and does not stop work or change round limits (#749).
 
 - Failed model calls no longer count as recovered fallbacks or produce findings claiming the call fell back. Successful recovery and legacy trace inference remain visible (#748).
