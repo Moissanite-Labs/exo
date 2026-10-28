@@ -1307,8 +1307,7 @@ def test_the_host_keeps_every_reserved_hit_main_lists(line):
 # Since #706 (#609 follow-up) each store a secret line names past its first is a credentials part of its own
 # (``other_store``), so an entry for any of them matches. The stores are read as #446 reads them, a name the shell
 # reads in a text with a backslash included, so a store past an odd first store, or an odd store past the first,
-# keeps its part, and the ssh hop's copy for the host passes over these parts as over main's target (the merge of
-# main cd371aed)
+# keeps its part, and the ssh hop's copy for the host passes over these parts as over main's target
 EACH_STORE = [
     ("cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials", "cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials",
      {"gates": {"deny": ["target:*/.aws/*"]}}),
