@@ -49,6 +49,8 @@ A configured seat with unavailable credentials fails before spawning bash or bac
 
 Known raw credential values are redacted from shell streaming/final results and from bound jobs before their logs are written, including values split across reads. Tokens are never placed in process arguments or saved binding metadata.
 
-Direct bound `run_command` calls redact their final output by default. The Registry-owned bash handler defers that final-output pass to the Registry, which applies strict redaction once. Streaming still redacts across reads. This avoids masking ordinary text a second time across an inserted marker, while still removing raw credentials that contain the literal `[redacted]` marker, quotes or backslashes (#753).
+Direct bound `run_command` calls redact their final output by default. The Registry-owned bash handler defers that final-output pass to the Registry, which applies strict redaction once.
+
+If final secret lookup or redaction fails, the Registry withholds the entire result and returns a generic error without the raw output or exception text. Streaming still redacts across reads. This avoids masking ordinary text a second time across an inserted marker, while still removing raw credentials that contain the literal `[redacted]` marker, quotes or backslashes (#753).
 
 Arbitrary shell access is trusted: a command can use, transform or exfiltrate its environment credential. Exact-value redaction is not a credential sandbox. Use limited token permissions and normal approval controls.
