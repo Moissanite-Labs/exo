@@ -425,3 +425,15 @@ ledger (see "Private threads").
   threads hidden), `/new private` starts a private thread. Context notes are not shown in the
   transcript.
 - `/context` and `/compact` (above); both also report principal capture (D-032). Commands stay at 30.
+
+### Host-added context and principal pins
+
+When a host supplies canonical `conversation_messages` and `incoming_message`, exo-context observes
+those for pins and handoff/undo windows, rather than API-only plugin additions (#538). The request
+passed to the model remains unchanged. Known `<memory-context>` fences are excluded from user
+text used for capture, including nested, case-variant and unfinished fences; ordinary principal
+words outside a fence remain eligible. API-only content sidecars are not carried as source words.
+
+A host that provides neither canonical source messages nor a boundary for untagged plugin text
+cannot make that text distinguishable from literal user input. Hosts must keep those source
+boundaries. Existing legacy pins have no reliable origin marker and are not silently deleted.
