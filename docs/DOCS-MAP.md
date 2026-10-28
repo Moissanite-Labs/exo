@@ -59,6 +59,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-024 Lean acceptance | `docs/WAVE-3.md` "Acceptance" | n/a | n/a | WP §31 |
 | D-025 Trace, findings, re-verification | `docs/TRACE.md` | §9 | §4 (reporting errors) | WP §9, §23 |
 | D-026 Peers and one ingress path | `docs/PEERS.md`, `docs/GATE.md` | §7 | §2 (`peers` command) | WP §7, §8, §12.7 |
+| Issue #638 Malformed peer presence is skipped and pruned (D-026 amendment) | `docs/PEERS.md` "How it works", `DECISIONS.md` D-026 | §7 "Peers" | §1 peer discovery | n/a |
 | D-027 Reserved, not written (named in D-026 as the next ingress sources) | none | n/a | n/a | n/a |
 | D-028 One agent, one continuous memory | `docs/MEMORY-MODEL.md`, `docs/SEATS.md` "Several seats in one home" | §4 | §4 | WP §5, §17 |
 | D-029 jevgrep as `code_find` | `docs/TOOLS.md` "code_find" | §10 | §3 | WP §15.1 |

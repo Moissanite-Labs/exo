@@ -89,6 +89,9 @@ commands. Its collaborators have small interfaces:
 - `engine.approvals` is an `ApprovalDesk` (`src/exo/core/approvals.py`): `ask`, `listing`, `respond` and
   `announce_resolved`, one `Pending` record per open request. Code that needs a human answer calls
   `engine.approvals.ask(...)`. A test that fakes an open request puts a `Pending` in `engine.approvals.open`.
+- Peer discovery rejects non-object JSON and non-integer (including boolean) pids before constructing
+  presence records. `Directory.scan(prune=False)` leaves rejected files in place; normal scans prune them.
+  Unknown signed fields remain in `Directory.entry`'s original document for signature verification.
 - `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes

@@ -468,7 +468,8 @@ Details: `docs/GATE.md`.
 
 Peers are other live sessions on the machine: Exo sessions, Hermes agents and bus seats.
 
-- `/peers` lists them. `/send <peer> <text>` sends a message from you.
+- `/peers` lists them. `/send <peer> <text>` sends a message from you. Malformed discovery records
+  are ignored and removed during normal discovery so other live peers remain available.
 - An agent can message a peer with its `peer_send` tool.
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
