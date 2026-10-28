@@ -8,7 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 
-PULL_REQUESTS = (508, 510, 512, 630, 723)
+PULL_REQUESTS = (508, 510, 630, 686, 723)
 FIELDS = '''number url state baseRefName headRefOid mergeCommit {oid}
  files(first:100) {pageInfo {hasNextPage} nodes {path}}'''
 QUERY = 'query {repository(owner:"aska-digital",name:"exo") {' + ''.join(

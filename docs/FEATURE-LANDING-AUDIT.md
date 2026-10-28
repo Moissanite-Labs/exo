@@ -2,7 +2,7 @@
 
 A merged PR can target a feature branch, or its merge can omit source changes. An ancestry check
 alone cannot establish that the implementation exists on today's main. This read-only audit checks
-the five PRs named in #741: #508, #510, #512, #630 and #723.
+the five PRs named in #741: #508, #510, #630, #686 and #723.
 
 ```sh
 python scripts/audit_feature_landings.py --repo /path/to/clone --base origin/main --live
@@ -38,8 +38,7 @@ issue status and never claims that #741 is fully resolved.
 5. Re-run this audit and behavioral checks on the final combined tree. Keep #741 open until the full
    source inventory and intended behavior are accounted for.
 
-At base `c572f8e1`, a local complete audit found missing source paths for #508, #510 and #630. The
-#512 merge was an ancestor and its listed paths were present, with later differences requiring
-review. #723's listed paths were also present with some differences, despite no merge ancestry.
-Those are dated metadata findings, not blanket lost-feature or restoration claims. The source
-implementations remain with their owners; this draft supplies the repeatable remaining-scope audit.
+A dated source-path report must retain the exact five IDs above. Refresh the base and save the
+result when reviewing the restoration queue; source presence and later path differences remain
+review signals, not blanket lost-feature or restoration claims. The source implementations remain
+with their owners; this draft supplies the repeatable remaining-scope audit.

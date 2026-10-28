@@ -112,3 +112,7 @@ def test_shallow_history_is_incomplete_even_when_source_objects_exist(repo):
     (repo / ".git" / "shallow").write_text(source + "\n")
     report = module.audit(repo, "main", [pull_request(source, source)])
     assert not report["ancestry_complete"] and not report["complete"]
+
+
+def test_fixed_audit_inventory_matches_the_five_prs_named_in_issue_741():
+    assert module.PULL_REQUESTS == (508, 510, 630, 686, 723)
