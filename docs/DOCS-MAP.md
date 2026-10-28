@@ -44,6 +44,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-008 Waves of parallel agents | `docs/STANDALONE.md` §6 "Phased build plan" | n/a | §8 | WP §31 |
 | D-009 Exo is standalone, Hermes is a source | `docs/STANDALONE.md` §0 | n/a | §1 | WP §25 |
 | D-010 Standalone core, protocol first | `docs/STANDALONE.md` §5, `docs/CORE-V2-INTERFACES.md` | §2 | §2 | WP §11, §12 |
+| Issue #668 HTTP meaningful-progress deadlines; watchdog slice of #682 (D-010 amendment) | `docs/PROVIDERS.md` HTTP deadlines, `DECISIONS.md` D-010 | Silent model streams | HTTP model progress deadlines | n/a |
 | D-011 Store v2 | `docs/STORE-V2.md` §2 | §11 (store commands) | §9 "Use retrieval" (store v2 itself is designed, not built) | WP §19 (as designed) |
 | D-012 One learning loop | `docs/LEARNING.md` | §2 (accept, edit, reject keys) | §9 "Work on the learning loop" | WP §6, §22 |
 | D-013 UniiChat context model in the core loop | `docs/MEMORY-MODEL.md` "Context assembly per turn" | §4 | §4 "Memory provider hooks" | WP §17 |

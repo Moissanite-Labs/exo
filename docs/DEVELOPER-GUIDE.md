@@ -1078,3 +1078,11 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## HTTP model progress deadlines
+
+HTTP providers count recognized events and buffered tool-argument/signature fragments as stream
+progress. SSE comments, unknown payloads and pings do not reset `progress_timeout`. The response
+iterator is cancelled and closed on expiry, and existing retry/fallback policy receives a retryable
+read timeout. The default inherits `read_timeout`; a finite nonnegative override, including zero
+to disable, is supported in `models.providers.NAME` for HTTP transports only (#668, part of #682).

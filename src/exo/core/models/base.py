@@ -11,7 +11,9 @@ the router, not the transport.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import time
 from email.utils import parsedate_to_datetime
 from typing import Any, AsyncIterator, Iterator
@@ -75,6 +77,7 @@ class StreamState:
     """Assembles deltas into the final assistant Message."""
 
     def __init__(self) -> None:
+        self.progress = 0  # recognized model output, including buffered tool arguments
         self.parts: list[ContentPart] = []
         self.tool_calls: list[ToolCall] = []
         self.usage = Usage()
@@ -127,7 +130,8 @@ class HttpTransport:
     def __init__(self, base_url: str, api_key: str | None = None, *, name: str | None = None,
                  model: str | None = None, client: httpx.AsyncClient | None = None,
                  timeout: float = 600.0, headers: dict[str, str] | None = None,
-                 session_header: str | None = None, read_timeout: float | None = 60.0) -> None:
+                 session_header: str | None = None, read_timeout: float | None = 60.0,
+                 progress_timeout: float | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -137,6 +141,9 @@ class HttpTransport:
         # A provider that accepts the request but never sends a byte must fail fast, so the router can fall
         # back (seen live: a provider hanging every chat call while its model list answered in 0.2 s).
         self._timeout = httpx.Timeout(timeout, connect=15.0, read=read_timeout or timeout)
+        self._progress_timeout = self._timeout.read if progress_timeout is None else progress_timeout
+        if self._progress_timeout is not None and (not math.isfinite(self._progress_timeout) or self._progress_timeout < 0):
+            raise ValueError("progress_timeout must be finite and nonnegative")
         if name:
             self.name = name
 
@@ -174,6 +181,26 @@ class HttpTransport:
         is retryable on another route and counts toward the route circuit breaker."""
         return False
 
+    async def _progress_lines(self, response: httpx.Response, state: StreamState) -> AsyncIterator[str]:
+        """Bound time without recognized model progress; SSE comments and pings do not reset it."""
+        budget = self._progress_timeout
+        if not budget:
+            async for line in response.aiter_lines():
+                yield line
+            return
+        lines = response.aiter_lines().__aiter__()
+        deadline, progress = time.monotonic() + budget, state.progress
+        while True:
+            try:
+                line = await asyncio.wait_for(anext(lines), max(0, deadline - time.monotonic()))
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError as exc:
+                raise httpx.ReadTimeout(f"no model progress for {budget:g}s") from exc
+            yield line
+            if state.progress != progress:
+                deadline, progress = time.monotonic() + budget, state.progress
+
     # --- stream ------------------------------------------------------------
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         session_id = opts.pop("session_id", None)
@@ -201,16 +228,19 @@ class HttpTransport:
                                       retry_after=parse_retry_after(resp.headers.get("retry-after")))
                     return
                 buf: list[str] = []
-                async for line in resp.aiter_lines():
+                async for line in self._progress_lines(resp, st):
                     buf.append(line)
                     if line != "":
                         continue
                     for ev, payload in iter_sse(buf):
                         for out in self.handle(ev, payload, st):
+                            st.progress += 1
                             yield out
                             if out.kind == "error":
                                 return
                     buf = []
+                    if st.meta.get("_finished"):
+                        break
                 for ev, payload in iter_sse(buf):
                     for out in self.handle(ev, payload, st):
                         yield out
