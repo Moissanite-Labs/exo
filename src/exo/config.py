@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +53,9 @@ class ConfigError(ValueError):
     pass
 
 
-# Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
-# the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers` any
-# literal is refused; use "${VAR}" so the secret stays in the environment, a platform key store, or keys.env.
+# Secrets never go through the file API: names that look like one (`api_key`, `token`, ...) at any level of
+# the key path, unless the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers`
+# any literal is refused; use "${VAR}" so the secret stays in the environment, a platform key store, or keys.env.
 SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
@@ -64,6 +65,12 @@ _VAR_REF = re.compile(r'\$\{\w+\}')
 
 def _is_secret_name(name: str) -> bool:
     return bool(SECRET_NAME.search(name)) and not name.endswith('_env')
+
+
+def _secret_path(path: Sequence[str]) -> bool:
+    """Whether a literal at this key path is a secret: a secret-shaped name at any level, or under env or headers.
+    Every level counts, so a container named like a secret holds secrets in its leaves (#691)."""
+    return any(_is_secret_name(p) or p in ('env', 'headers') for p in path)
 
 
 def check_not_secret(key: str, value: Any) -> None:
@@ -76,20 +83,20 @@ def check_not_secret(key: str, value: Any) -> None:
             for x in v:
                 walk(path, x)
         elif isinstance(v, str) and v:
-            guarded = any(p in ('env', 'headers') for p in path) or _is_secret_name(path[-1])
-            if _SECRET_VALUE.search(v) or (guarded and not _VAR_REF.search(v)):
+            if _SECRET_VALUE.search(v) or (_secret_path(path) and not _VAR_REF.search(v)):
                 raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
                                   f'use "${{VAR}}" or a *_env key naming an environment variable')
     walk(key.split('.'), value)
 
 
-def redact(data: Any, name: str = '') -> Any:
-    """A copy of config data with secret-looking values masked (for config.get)."""
+def redact(data: Any, path: Sequence[str] = ()) -> Any:
+    """A copy of config data with secret-looking values masked (for config get, config show and the JSON API).
+    `path` is the key path of `data`, so a dotted key is judged level by level, as a write is."""
     if isinstance(data, dict):
-        return {k: redact(v, str(k)) for k, v in data.items()}
+        return {k: redact(v, [*path, str(k)]) for k, v in data.items()}
     if isinstance(data, list):
-        return [redact(v, name) for v in data]
-    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_is_secret_name(name) or _SECRET_VALUE.search(data)):
+        return [redact(v, path) for v in data]
+    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_secret_path(path) or _SECRET_VALUE.search(data)):
         return '***'
     return data
 
@@ -346,12 +353,13 @@ def main(argv: list[str] | None = None) -> int:
             for role, refs in build_router().resolved_roles().items():
                 print(f"{role:<9} {' > '.join(refs) or '-'}")
         elif a.op == 'show':
-            print(json.dumps(cfg.resolved(), indent=2, sort_keys=True))
+            print(json.dumps(redact(cfg.resolved()), indent=2, sort_keys=True))
         elif a.op == 'get':
             v = cfg.get(a.key, _MISSING)
             if v is _MISSING:
                 print(f'exo config: {a.key} is not set', file=sys.stderr)
                 return 1
+            v = redact(v, a.key.split('.'))
             print(v if isinstance(v, str) else json.dumps(v))
         elif a.op == 'set':
             cfg.set(a.key, _parse_value(a.value))

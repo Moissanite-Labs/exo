@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 from pathlib import Path
 
 from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
+from exo.protocol import schema as s
 from exo_tui import parse
 from exo_tui.app import ExoApp
 from exo_tui.conn import LocalClient
@@ -90,3 +93,31 @@ def test_banner_counts_auto_approved_calls(tmp_path):
         await app.load_permissions()
         assert "(1 auto-approved)" in app.status_text() and "1 auto-approved" in strip_text(app)
     run(tmp_path, sc, skip_permissions=True)
+
+
+def test_a_window_that_joins_the_core_gets_the_cores_bypass(monkeypatch):
+    """What the /tab note claims, checked on the wire (#669 review): the new window drops the flag but keeps
+    --seat and EXO_HOME, so it joins this core, and the core's mode is what it gets. The second client sends no
+    permission command of its own, yet it sees bypass."""
+    from exo.core.agentlog import socket_path
+    from exo.protocol.client import Client
+
+    # A unix socket path must stay under 104 bytes, so the tree sits in /tmp, as in test_shared_core.
+    home = Path(tempfile.mkdtemp(dir="/tmp", prefix="exo-"))
+    monkeypatch.setenv("EXO_HOME", str(home))
+    eng = engine(home)
+    path = socket_path(home, "tester")
+
+    async def go():
+        one = LocalClient(eng, serve=path)
+        await one.call(s.CommandRun(name="permissions", args="bypass launch"))
+        two = Client(socket=str(path), principal="tui")  # the joined window: no flag, no /permissions
+        state = (await two.call(s.CommandRun(name="permissions", args="json")))["output"]
+        assert state["mode"] == "bypass" and state["via"] == "launch flag" and state["by"] == "principal:tui"
+        await two.aclose()
+        await one.aclose()
+
+    try:
+        asyncio.run(go())
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
