@@ -164,7 +164,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
 ## How it works
 
 - Each exod writes a presence file in `$EXO_PEERS_DIR`, else `$XDG_RUNTIME_DIR/exo/peers`, else
-  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). `exo serve` with no running
+  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). Malformed records,
+  including a non-object JSON body or a pid that is not an integer, are skipped and pruned; one bad
+  record does not hide other live peers. Internal `scan(prune=False)` skips them without deletion. `exo serve` with no running
   daemon in the TUI starts a small socket of its own so the TUI is also reachable. A Unix socket path must stay
   under 104 bytes: when a long `HOME` would push `exo-<pid>.sock` past that, the core uses
   `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default

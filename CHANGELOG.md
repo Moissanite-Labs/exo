@@ -179,6 +179,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
 
+- Malformed peer presence records no longer break discovery or hide other live peers (#638).
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 
