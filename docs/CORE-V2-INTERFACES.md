@@ -72,7 +72,11 @@ Envelopes:
   body is read or any stream opens. Each of the three must be ASCII digits up to 2^63 - 1, SQLite's largest
   integer (#264). Leading zeros are allowed. A word, a sign, a decimal point or a larger value is a 400. A
   length over 8 MB, within that bound, is 413. An empty `Last-Event-ID` counts as none. A number inside a
-  command body still gets a typed `Response`, as the `events.subscribe` case above does.
+  command body still gets a typed `Response`, as the `events.subscribe` case above does. The first command
+  starts the core's runtime (the provider readiness probe when no main role is configured, then the MCP
+  servers). A start that raises is that command's error, `internal` unless classified, and the next command
+  starts again; so does one after a cancelled start (exo-desktop #14). An MCP server that fails does not fail
+  the start: it is recorded in its status and skipped.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is
