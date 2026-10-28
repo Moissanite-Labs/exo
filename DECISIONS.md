@@ -5215,6 +5215,26 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/WORK-NOTEBOOK.md`, user guide §1, developer guide §1, command reference, docs map and
   changelog. Whitepaper coverage is deferred to the next batch.
 
+### D-086 amendment: automatic record-derived continuity (2026-10-27)
+
+- Add a separate default-on `work_checkpoint` index, controlled by `enabled` and
+  `resume_chars`. It is not an agent-authored notebook revision or a task runner.
+- Reconstruct from the latest 40 visible session messages and 8 job metadata rows;
+  render at most 12 tool records, newest first, within the configured character
+  budget. Capture at turn end and before compression, and reconstruct before
+  injection so abrupt restart recovery does not depend on shutdown hooks.
+- Ordinary root threads only; exclude private, child/fork, scheduled and other-agent
+  sessions. Bind saved rows to the configured principal. Undo excludes reverted
+  transcript facts and suppresses jobs whose schema has no transcript anchor.
+- Copy no conversation text, tool arguments/output, commands, paths or job logs.
+  Tool success is a reported result, not effect verification. Interrupted or
+  missing results explicitly leave effects unknown. Nothing is automatically replayed.
+- `/checkpoint` requires a principal connection. It exposes record metadata without
+  a new approval path. Existing manual working notes and their gated tool are unchanged.
+- This is a bounded slice of #683: filesystem diffs, task-goal synthesis and child
+  work tracking remain outside scope. Docs: `docs/WORK-CHECKPOINT.md`, user/developer
+  guides, command reference, docs map and changelog; whitepaper deferred to next batch.
+
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
 - **Counter clarification 2026-10-27:** after resolving a relative import to `exo`, inspect its imported names
   with the same real-module lookup as `from exo import ...`. This closes a spelling gap without counting exported
