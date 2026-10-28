@@ -27,6 +27,13 @@ FLOOR = [
     ("search_replace", {"path": "~/.exo/policies/gates.yaml", "search": "ask", "replace": "bypass"}),
     ("findAndReplace", {"path": "~/.exo/policies/gates.yaml", "oldString": "ask", "newString": "bypass"}),
     ("find_and_replace", {"path": "~/.exo/config.json", "old_string": '"ask"', "new_string": '"bypass"'}),
+    # #591: a reading of an `env -S` text as before is credentials while the call's first reading is not (env
+    # refuses the text, or runs a program named -S): the floor sees every such reading, as main e0968a2b's one did
+    ("terminal", {"command": "env -S \"'X=a b' gh auth token \\d\""}),
+    ("terminal", {"command": "env -- -S \"'X=a b' muse login\""}),
+    ("terminal", {"command": "env -S \"'X=a b' muse login 'unclosed\""}),
+    # verify 2 of #707: a spelling main missed hides no nested `env -S` text main read, so its floor stays
+    ("terminal", {"command": "env -iStrue sh -c 'env -S \"'\"'\"'X=a b'\"'\"' gh auth token\"'"}),
 ]
 
 
@@ -154,6 +161,37 @@ def test_a_post_that_breaks_the_posting_rules_is_held_with_the_fix_not_asked(key
     [row] = rows(store)
     assert row["outcome"] == "deny" and row["decided_by"] == "bypass" and row["decision"]["rule"] == "bypass_hold"
     assert g.permissions.held == 1 and g.permissions.auto_approved == 0
+
+
+MISSED_HOLDS = [
+    'env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"',
+    'env -vS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"',
+    'env --split "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"',
+    'env -i0vS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"',
+    "env -iS sh -c 'env -S \"gh pr comment 6 -R myorg/app --body '\"'\"'Zork leaked'\"'\"'\"'",
+]
+
+
+@pytest.mark.parametrize("line", MISSED_HOLDS)
+def test_a_missed_spelling_beside_a_post_is_held_as_on_main(keyed_store, as_caller, line):
+    """#591 (verify 3 of #707): a spelling main missed is also read as `-S TEXT`, where a secret read can lead. The
+    floor goes first only for main's own reading, so a post main held (58503282) is still held, not asked once."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "block" and "Fix:" in r["message"]
+    [row] = rows(store)
+    assert row["decided_by"] == "bypass" and row["decision"]["rule"] == "bypass_hold"
+    assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
+
+
+def test_the_s_spelling_beside_a_post_still_asks_at_the_floor(keyed_store, as_caller):
+    """Main's own reading of `env -S "gh auth token"` is credentials, so its floor ask comes before the hold."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": 'env -S "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"'})
+    assert r["action"] == "approve" and r.get("once") is True
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and row["bypass"]["floor"] == "credentials"
+    assert g.permissions.floor_asks == 1 and g.permissions.held == 0 and g.permissions.auto_approved == 0
 
 
 def test_secrets_in_an_auto_approved_call_are_redacted_in_the_ledger(keyed_store, as_caller):

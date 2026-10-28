@@ -81,6 +81,14 @@ def _every_part(c: gate.Classification) -> list:
     return out
 
 
+def _floor(c: gate.Classification, main: bool = False) -> str:
+    """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any."""
+    rs = (c.split_readings[:1] or [c]) if main else [c, *c.split_readings]
+    return next((r.category for r in rs if r.category in perm.FLOOR), "")
+
+
 def _body_path(f: str) -> Optional[Path]:
     """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
     /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
@@ -379,11 +387,11 @@ class Gate:
         a post that breaks the posting rules with such a reading only is held, as before."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if c.category in perm.FLOOR:
+        if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
         if d.violations:
             return "hold"
-        return "floor" if gate.no_grant(c) else "allow"
+        return "floor" if _floor(c) or gate.no_grant(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -748,9 +756,9 @@ class Gate:
             body["turn_author"] = author  # the turn the bypass served (#598)
             if bypass == "allow":
                 body["bypass"] = asked
-        elif bypass == "floor":   # the line's floor category, or else the first a reading or part has (#602)
-            body["bypass"] = {"floor": next((x.category for x in _every_part(c) if x.category in perm.FLOOR),
-                                            c.category)}
+        elif bypass == "floor":   # main's reading's floor, a split reading's, or the first a part has (#591, #602)
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c) or next(
+                (x.category for x in _every_part(c) if x.category in perm.FLOOR), c.category)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}

@@ -39,6 +39,56 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Gate: an `env -S` text keeps the ssh hop's host and is split as env splits it (#591, follow-up to #634, review
+  5665626829). #634 read the text's leading words as env's argv beside the text as a shell line, in the call's
+  one reading. Behind an ssh hop its new part took the host (the hop's lead, or #320's copy on a secret or store
+  line), so the `opaque_exec` part lost it: under `rules: [{match: {category: opaque_exec, target: host},
+  decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask, below its plain
+  `-S` spelling, and the `rm -rf` and `echo '...' | ssh host` forms did too; `reserved: [tool:terminal]` lost the
+  `(opaque_exec, me@host)` hit of `ssh -p 22 me@host 'env -S ...'`. Now `classify` reads the call again with each
+  text a shell line only, as before #634, and, whenever any `env -S` text or spelling is read, with #634's
+  reading, as main read it, each as a call of its own
+  (`Classification.split_readings`, listed by `gate.readings`), and `decide` keeps the strictest with every
+  reserved hit and violation, so each part keeps the host it had. The call's first reading reads the line env
+  runs (`_env_split_lines`): the text split by env's own rules (quotes, escapes, `\_`, `#`, `\c`, `${NAME}`; `;`,
+  `&`, `|` and `>` are characters of a word, so `'X=a b';x` is one assignment), after `--` a `NAME=value` still
+  an assignment (`env -- prog= true` runs `true`), in every spelling GNU env 9.4 takes: `--split` and each
+  unambiguous `--split-string` prefix, `-S` in a word of short options (`-iS`, `-vS`, `-i0vS`), and `-S'..'`
+  read whole (only `--split-string=` splits at its `=`). A spelling main missed reads as `-S TEXT` does, its
+  `opaque_exec` part included and no environment dump read in it, in the first reading and in one more of the
+  text as a shell line only, so `categories: {opaque_exec: deny}` denies `env --split-s="..."` and `env
+  -i0vS"..."` as it denies `env -S "..."`, and the host rule does so behind ssh; the reading as before keeps
+  what main read there. Each of `env --split`, `env -iS`, `env -vS`, `env -S'"X=a b" rm -rf /srv/data'`, `env
+  -iS "rm -rf /srv/data"`, `env -S "-- 'X=a b' rm -rf /srv/data"` and `env -S "'X=a b';x rm -rf /srv/data"` now
+  denies under `deny: [delete]` (main: ask); under `categories: {opaque_exec: allow}` the `--split`, `-iS`, `-vS`
+  and `;x` rows now ask (main: allow; it asked on the `-S'..'` and `--` rows already). The exo-gate hook's
+  bypass floor reads the category of each of these readings, so a line main kept as a credentials or store ask
+  in bypass (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`) still asks there. Main's
+  reading is taken whenever any `env -S` text or spelling is read (verify 2): taken only where #634's words found
+  a command in the first reading, it was dropped where a spelling main missed, read as `-S TEXT`, hid a nested
+  text main read, and `env -iS'\q' sh -c 'env -S "'"'"'X=a b'"'"' rm -rf /srv/data"'` went deny -> ask under
+  `deny: [delete]` (its `gh auth token` form: deny -> ask under `deny: [credentials]`, `no_grant` lost, and in
+  bypass allowed where main asked at the floor); it decides as on main again. The bypass floor keeps main's order
+  for main's own reading, which classify puts first in `split_readings` (verify 3): the floor when that reading is
+  a floor category, then the hold of a post that breaks the posting rules, then the floor of any other reading.
+  Checked before the hold for every reading, it turned 65 of 1,694 hook lines main held into an ask at the floor
+  (`env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"`); they are held again, as on main. A
+  call with an `env -S` text costs up to four readings, each linear in the text, and a spelling main missed is read
+  in full: `env -S "'X=a b' rm -rf /srv/data"` takes 6 ms (main 58503282: 3 ms), `env --split="..."` with a 40 KB
+  text of 20,000 words 3.7-4.4 s (main: 0.06 s). The #423 differential (main's script, `--jobs 2`) lowers 0 pairs
+  against main 58503282 on the built-in corpus without variants (12,117 actions x 88 policies; 381 pairs tightened)
+  and on an aimed corpus of 20,818 `env -S` lines without variants (28 spellings with 12 assignment prefixes before
+  10 payloads, bare, behind sudo, doas, nice and timeout, 16 spellings behind ssh, mosh and stdin-fed ssh, and 20
+  spellings before `sh -c` and `bash -c` with a nested `env -S` text, bare, behind those wrappers and hops) under
+  180 policies (the built-in ones and rules, category lines, deny and reserved entries on the host and on ten
+  categories; 98,066 pairs tightened). A hook probe of 3,626 lines through `pre_tool_call` (bypass on, and ask
+  mode) lowers none.
+  Tests:
+  `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py` (the `--`
+  row now denies; the post row uses `posting.forbid_words` and asserts `forbidden word: Zork`),
+  `plugins/exo-gate/tests/test_bypass.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038), `docs/DOCS-MAP.md`.
+
 - The climb no longer takes a lesson whose evidence has decayed, and it catches a lesson that breaks another
   domain (exo-desktop #35 by orda-aska, ported with the follow-up from abu-aska's review there; issue 13 on the fork).
   A climb candidate needs a computed evidence weight of medium or high, not a stored `confidence`; a year after its
@@ -251,10 +301,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `--split-string` and behind `sudo` and `doas`, and the text from that word on is classified beside the shell
   line's reading, so the hidden command's category reaches the decision the way the spelling without `-S` does
   (`git push origin feature && env -S "'X=a b' git push --force origin main"` now asks under the allow line, not
-  logs). After `--` a quoted `NAME=value` word is the command, a word a shell operator would separate stays with
-  the line's own reading (a word of argv to env), and a split inside the split is not followed — each reads as
-  before, so nothing lowers; an unknown program first is still the command and its arguments run nothing. The
-  differential against main 3bf26afc (11438 actions, 88 policies) found nothing lowered. Tests:
+  logs). This reading took a quoted `NAME=value` word after `--` for the command (env still reads it as an
+  assignment; the follow-up above reads it so), left a word with a shell operator in it to the line's own
+  reading, and does not follow a split inside the split; an unknown program first is still the command and its
+  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
+  lowered; it held no ssh-wrapped `-S` line, and behind a hop this reading did lower (the follow-up above). Tests:
   `tests/security/test_gate_category_deny_parts.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
   types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
