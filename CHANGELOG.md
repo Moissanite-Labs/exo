@@ -11,6 +11,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings
+  without clearing newer command errors or general notices.
 - The core budget prices coupling, not only lines, and its ceiling is dropped (D-083, amending D-077).
   The line ceiling set on 2026-10-15 was already failing its own test: `main` at `13cea687` counted 15,828
   against 15,824, 4 over, while the work it blocked was ordinary product work, and each earlier raise
