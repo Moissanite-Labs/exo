@@ -5212,7 +5212,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
 
 ## D-084 (2026-10-27) An internal gate error asks once, and only once
-- **Status:** Accepted 2026-10-27 (ported from exo-desktop #23, fail-closed gate errors).
-- **Why:** a classification error used to let read tools through silently, and an error card answered "always" could stand as a grant for later errors.
-- **Decision:** when classification fails, the hook asks with an approval card, including for reads. The card is once-only in every case. A failed classification that still read a store write or a secret goes to the principal alone, in every mode. Observe mode still lets non-store actions ahead by design, logged. The safe-on-error read set for side calls is unchanged.
-- **Docs:** `docs/GATE.md` "Who may approve" gains the error-card paragraph.
+- **Status:** Accepted 2026-10-27 in aska-digital/exo-desktop #23 (orda-aska, ahrazzle, sparky-118); ported to
+  exo in #742, with the removal of `_SAFE_ON_ERROR`, `gate_diff`'s error model, the bypass and observe tests and the
+  Cost, Limits and Validation below in its follow-up. D-084 is the same number in both repos; see exo-desktop #77.
+- **Why:** when the gate's own checks raised, the exo-gate hook's error path returned no card for a read tool (the
+  `_SAFE_ON_ERROR` set: every tool `gate.TOOLS` calls `read`), so the read was allowed silently. Its card was
+  once-only only when the gate still read a store write, so an "always" answer to any other error card stood as a
+  grant for every later error on that tool, and a secret whose check raised got a card any approver could answer.
+  A read is not harmless when the gate cannot say what it reads: a broken policy pattern or a classifier bug then
+  let any `read_file` or `search_files` run unasked. On main `cd371aed`, with `gate.classify` or the rules lookup
+  raising in enforce mode, `read_file README.md`, `search_files .` and a call with non-dict arguments returned no
+  card, in ordinary and bypass sessions, with the decision model on and off.
+- **Decision:** when the gate's own checks raise, the hook asks with an approval card, reads included. The card is
+  once-only in every mode, bypass included: the core offers allow and deny, an "always" answer gives no grant and
+  runs nothing, and the next such error asks again. A call the gate still reads as a store write or a secret goes
+  to the principal alone, in every mode (D-033); a secret check that raises counts as a secret. Observe mode still
+  lets a call ahead when the gate does not read it as a store write or a secret, and logs the error. A required
+  executor still blocks (D-020). `_SAFE_ON_ERROR` is removed: nothing in exo reads it any more, and
+  `scripts/gate_diff.py` models an error as an ask for every tool.
+- **Cost:** an unattended run now waits on such a read until someone answers or the turn is stopped.
+  `approvals.ask` has no timeout, and "Default if no reply: skip" is only the card's text.
+- **Limits:** when classification itself raises, the gate cannot see a store path or a secret named inside a
+  shell command; the secret check reads only path arguments. Unless that check finds a secret, a store write or a
+  command such as `cat ~/.ssh/id_rsa` then gets a once-only card any approver may answer in enforce mode, and goes
+  ahead in observe mode as it did before.
+- **Validation:** measured against main `cd371aed`, before #742. A hook probe that makes `gate.classify`, the rules lookup,
+  `gate.args_sensitive`, or the rules lookup and `gate.args_sensitive` together raise, over enforce and observe,
+  ordinary and bypass sessions, the decision model on and off, and six calls (`read_file README.md`, `read_file
+  ~/.exo/keys/seat.key`, `search_files .`, `terminal ls`, a store write, non-dict arguments): 192 cases, 132
+  stricter, 60 the same, none lower. Main's `scripts/gate_diff.py` (`--no-variants --jobs 2 --timeout 0`) found
+  nothing lowered on 12,164 actions x 88 policies and nothing lowered or tightened on 18 aimed read, search, secret
+  and store actions. `plugins/exo-gate/tests`, `tests/integration/test_required_gate.py`, `tests/security`,
+  `tests/docs`, `tests/test_gate_diff.py` and `tests/test_type_baseline.py` gave 12,208 passed and 117 skipped. The
+  branch's changed test files on main's code: 18 failed, 421 passed; the 18 are the new and changed error-path rows.
+- **Docs:** `docs/GATE.md` "An internal gate error asks once (D-084)" (before "Who answered"), the store section's
+  fallback line, the read-only tools paragraph and the bypass "Not covered" line; `docs/EXECUTORS.md`;
+  `docs/DEVELOPER-GUIDE.md` (`gate_diff`'s error model); `docs/DOCS-MAP.md`; `CHANGELOG.md`. Tests:
+  `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/integration/test_required_gate.py`, `tests/test_gate_diff.py`.

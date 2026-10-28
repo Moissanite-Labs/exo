@@ -27,6 +27,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - A gate error on a read tool asks instead of allowing the call, and the error card is once-only, so "always" cannot become a standing grant. A failed classification that read a store or secret goes to the principal alone (D-084).
 
+- D-084 follow-up to #742 (port of aska-digital/exo-desktop #23 by orda-aska, ahrazzle and sparky-118). The
+  unused `_SAFE_ON_ERROR` set is gone, and `scripts/gate_diff.py` models a gate error as an ask for every tool,
+  reads included; it still modelled a read tool's error as allow. `docs/GATE.md`, `docs/EXECUTORS.md` and
+  `docs/DEVELOPER-GUIDE.md` no longer say a read runs when the gate errs. D-084 gains Cost (an unattended run waits
+  on the card), Limits and Validation. New tests cover bypass and observe mode: with `gate.classify` or the rules
+  lookup raising, a bypass session asks once, as an ordinary one does, and in observe mode a store write or a
+  secret goes to the principal while other calls run and the error is logged. Measured against `cd371aed`, before
+  #742: a hook probe (192 cases) gave 132 stricter and 60 the same, none lower, and main's `gate_diff` found
+  nothing lowered on 12,164 actions x 88 policies. Tests: `plugins/exo-gate/tests/test_hook.py`, `test_bypass.py`,
+  `tests/integration/test_required_gate.py`, `tests/test_gate_diff.py`.
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last

@@ -548,7 +548,7 @@ one main hid shows nothing. A text the head lists fewer times than main does is 
 while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
 violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
 grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
-hook's answer to an error: ask, or allow for a read tool.
+hook's answer to an error: ask, a read tool too (D-084).
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
