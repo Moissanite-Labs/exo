@@ -18,7 +18,7 @@ def test_roundtrip(tmp_path, monkeypatch):
     cfg.set("plugins", ["exo-memory", "exo-context"])
     cfg.set_plugin_config("exo-memory", {"pack_budget": 900})
     cfg.set_plugin_config("exo-memory", {"agent_id": "seat-1"})
-    cfg.set("future.key", 3)
+    cfg.set("future.option", 3)
     path = cfg.save()
     assert oct(path.stat().st_mode & 0o777) == "0o600"
 
@@ -26,7 +26,7 @@ def test_roundtrip(tmp_path, monkeypatch):
     assert again.principal == "sam"
     assert again.plugins == ["exo-memory", "exo-context"]
     assert again.plugin_config("exo-memory") == {"pack_budget": 900, "agent_id": "seat-1"}
-    assert again.get("future.key") == 3
+    assert again.get("future.option") == 3
     assert again.store_root() == home / "principals" / "sam"
     assert json.loads(path.read_text())["version"] == xc.VERSION
 

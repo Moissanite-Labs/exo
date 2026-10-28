@@ -31,6 +31,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Config refuses and masks literal credential fragments beside environment references and numeric secrets
+  under secret-shaped names, `env` and `headers`; reference-only authentication schemes remain valid (#738).
+
 - Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
   the connection without a response. They send no approval answer to the core (#740).
 

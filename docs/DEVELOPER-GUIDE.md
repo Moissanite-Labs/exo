@@ -220,6 +220,10 @@ as `unknown` beside it, and any reading counts.
 If the tool sends something outward, its category must be one the gate treats as outward, so approvals bind to the
 exact text (`docs/GATE.md`).
 
+Config writes and display share `exo.config._is_secret`. Secret paths accept reference-only strings
+(optionally a `Bearer`, `Basic` or `token` scheme), empty strings and null. Other scalar values are
+refused on write and masked in CLI and protocol output, including literals mixed with references.
+
 **Keep secrets out.** The registry removes known key values from every tool result before it reaches the model or a
 client. A tool that runs a subprocess must use the filtered environment (`docs/TOOLS.md`, "Environment of bash and
 jobs"). A tool that needs a secret reads it from the keys file or the environment, never from its arguments, and

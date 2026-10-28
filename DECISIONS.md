@@ -1095,6 +1095,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-28 (#738):** config writes and display share one secret test. Beneath a secret-shaped
+  name, `env` or `headers`, nonempty strings must contain only `${VAR}` references, optionally preceded by
+  `Bearer`, `Basic` or `token` and whitespace. Literal fragments beside references and non-null numeric or
+  boolean values are refused on write and masked on display. Empty strings and null remain valid.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments

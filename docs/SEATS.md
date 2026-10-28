@@ -103,7 +103,9 @@ is never replaced: the clash is refused, listed under `refused` in the server's 
 `config.get` returns the effective config with secret-looking values masked. `config.set` writes
 `$EXO_HOME/config.json` and refuses secrets: names such as `api_key` or `token` (names ending `_env` are
 fine, they hold an environment variable name), literals under `env` or `headers` (use `"${VAR}"`), and
-values shaped like API keys. Changes apply on the next start.
+values shaped like API keys. Under secret-shaped names, `env` and `headers`, use only `${VAR}` references,
+optionally prefixed by `Bearer`, `Basic` or `token` and a space. Literal fragments beside a reference and
+numeric or boolean secrets are refused and masked; empty strings and null remain valid. Changes apply on the next start.
 
 ## Channels
 

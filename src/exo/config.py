@@ -60,7 +60,6 @@ SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
                            r'-----BEGIN [A-Z ]*PRIVATE KEY)')
-_VAR_REF = re.compile(r'\$\{\w+\}')
 
 
 def _is_secret_name(name: str) -> bool:
@@ -73,6 +72,21 @@ def _secret_path(path: Sequence[str]) -> bool:
     return any(_is_secret_name(p) or p in ('env', 'headers') for p in path)
 
 
+def _is_secret(path: Sequence[str], value: Any) -> bool:
+    """Share the write/display rule, including literals mixed with environment references."""
+    if isinstance(value, str):
+        if not value:
+            return False
+        if _SECRET_VALUE.search(value):
+            return True
+        if not _secret_path(path):
+            return False
+        # References may carry an authentication scheme, but never a literal credential fragment.
+        return not re.fullmatch(r'(?:(?:Bearer|Basic|token)[ \t]+)?(?:\$\{\w+\}\s*)+',
+                                value.strip(), re.I)
+    return value is not None and _secret_path(path)
+
+
 def check_not_secret(key: str, value: Any) -> None:
     """Raise ConfigError when (key, value) would put a secret into config.json."""
     def walk(path: list[str], v: Any) -> None:
@@ -82,10 +96,9 @@ def check_not_secret(key: str, value: Any) -> None:
         elif isinstance(v, list):
             for x in v:
                 walk(path, x)
-        elif isinstance(v, str) and v:
-            if _SECRET_VALUE.search(v) or (_secret_path(path) and not _VAR_REF.search(v)):
-                raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
-                                  f'use "${{VAR}}" or a *_env key naming an environment variable')
+        elif _is_secret(path, v):
+            raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
+                              f'use "${{VAR}}" or a *_env key naming an environment variable')
     walk(key.split('.'), value)
 
 
@@ -96,9 +109,7 @@ def redact(data: Any, path: Sequence[str] = ()) -> Any:
         return {k: redact(v, [*path, str(k)]) for k, v in data.items()}
     if isinstance(data, list):
         return [redact(v, path) for v in data]
-    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_secret_path(path) or _SECRET_VALUE.search(data)):
-        return '***'
-    return data
+    return '***' if _is_secret(path, data) else data
 
 
 def config_path(home: str | os.PathLike | None = None) -> Path:

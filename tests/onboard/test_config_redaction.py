@@ -79,3 +79,48 @@ def test_a_write_refuses_a_container_under_a_secret_name(home):
 def test_a_plain_container_keeps_the_leaf_rule(home):
     assert redact({"n": {"token": "t"}, "visible": "x"}) == {"n": {"token": "***"}, "visible": "x"}
     assert redact({"n": {"name": "x"}}, ["plugin_config"]) == {"n": {"name": "x"}}
+
+
+@pytest.mark.parametrize("key,value", [
+    ("token", "${USER}:hunter2"),
+    ("plugin_config.x.headers.Authorization", "Basic ${X}hunter2"),
+    ("token", "b${TOKEN}earer"), ("token", "${TOKEN}Bearer"),
+    ("token", 123456), ("api_key", 9876543210), ("mcp.s.env.PIN", 4321),
+    ("token", {"nested": [123456, "${USER}:hunter2"]}),
+    ("token", "${USER}:sk-abcdefghijklmnopqrst"),
+])
+def test_literal_fragments_and_numbers_are_refused_and_masked(home, capsys, key, value):
+    cfg = Config(home=home)
+    with pytest.raises(ConfigError):
+        cfg.set(key, value)
+    masked = redact(value, key.split("."))
+    assert "hunter2" not in json.dumps(masked)
+    assert "123456" not in json.dumps(masked)
+    if not isinstance(value, (dict, list)):
+        assert masked == "***"
+    # A hand-edited file must not bypass the same output rule through either CLI surface.
+    data = {}
+    cursor = data
+    for part in key.split(".")[:-1]:
+        cursor = cursor.setdefault(part, {})
+    cursor[key.split(".")[-1]] = value
+    _write(home, data)
+    assert main(["get", key]) == 0
+    shown = capsys.readouterr().out.strip()
+    assert shown == (masked if isinstance(masked, str) else json.dumps(masked))
+    assert main(["show"]) == 0
+    shown_config = json.loads(capsys.readouterr().out)
+    for part in key.split("."):
+        shown_config = shown_config[part]
+    assert shown_config == masked
+    api = types.SimpleNamespace(home=home)
+    result = asyncio.run(CoreRuntime._config_get(api, ConfigGet(key=key)))
+    assert result["value"] == masked
+
+
+@pytest.mark.parametrize("value", ["${TOKEN}", "Bearer ${TOKEN}", "Basic ${TOKEN}", "token ${TOKEN}",
+                                    "${FIRST}${SECOND}", "", None])
+def test_reference_only_values_keep_working(home, value):
+    cfg = Config(home=home)
+    cfg.set("token", value)
+    assert redact(value, ["token"]) == value
