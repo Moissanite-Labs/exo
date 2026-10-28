@@ -156,6 +156,7 @@ class Loop:
         st = self.state(session)
         if not st.accepting_steers:
             return False
+        msg.id = msg.id or new_id("m")
         st.steer.append(msg)
         return True
 
