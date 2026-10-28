@@ -1915,3 +1915,41 @@ def test_a_rebind_leaves_alone_a_pin_the_parent_undid(tmp_path):
     assert MINE not in pins(tmp_path, "c")["ruling"]
     out = cached.select_context([SYS, mine("go on")], session_id="c")
     assert out is None or MINE not in hf.message_text(out[0])
+
+
+def test_recalled_memory_fences_do_not_become_principal_pins(tmp_path):
+    engine = ExoContextEngine(write_handoffs=False)
+    original = mine("What is next?\n<memory-context>\n" + RECALL + "\n</memory-context>")
+    engine.select_context([SYS, original], session_id="recall-fence")
+    assert engine._load_pins("recall-fence")["ruling"] == []
+    assert "<memory-context>" in original["content"]
+    engine.select_context([SYS, mine(MINE + "\n<memory-context>\n" + RECALL + "\n</memory-context>")],
+                          session_id="recall-fence")
+    assert pins(tmp_path, "recall-fence")["ruling"] == [MINE]
+
+
+def test_canonical_host_messages_exclude_unfenced_plugin_context(tmp_path):
+    engine = ExoContextEngine(write_handoffs=False)
+    raw = mine("What is next?")
+    wire = mine(raw["content"] + "\n\n" + RECALL)
+    engine.select_context([SYS, wire], session_id="plugin-context", conversation_messages=[raw], incoming_message=raw)
+    assert engine._load_pins("plugin-context")["ruling"] == []
+    assert RECALL not in "\n".join(hf.message_text(message) for message in engine.messages)
+    assert wire["content"].endswith(RECALL)
+    assert raw["content"] == "What is next?"
+
+
+@pytest.mark.parametrize("fenced", [
+    "<MEMORY-CONTEXT>" + RECALL + "</MEMORY-CONTEXT>",
+    "<memory-context><memory-context>nested</memory-context>" + RECALL + "</memory-context>",
+    "<memory-context>" + RECALL,
+])
+def test_memory_fence_variants_are_excluded_from_capture_and_completed_windows(tmp_path, fenced):
+    engine = ExoContextEngine(write_handoffs=False)
+    message = mine(MINE + "\n" + fenced)
+    message["content"] = [{"type": "text", "text": message["content"]}]
+    engine.select_context([SYS, message], session_id="fence-variants")
+    engine.on_turn_complete([message], session_id="fence-variants")
+    assert pins(tmp_path, "fence-variants")["ruling"] == [MINE]
+    assert all(RECALL not in hf.message_text(row) for row in engine.messages)
+    assert RECALL in hf.message_text(message)

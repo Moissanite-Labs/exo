@@ -92,7 +92,7 @@ def _holder(messages: list[dict[str, Any]]) -> Callable[[str, str], bool]:
     """The test both undo paths apply (D-041): does a principal message in `messages` hold the pin (kind, text)?
     It does when the pin is classified there, whitespace folded, or quoted inside a principal user message. A
     pinned block is the engine's own copy of its pins, never their source, so a block holds nothing."""
-    rows = [m for m in messages if isinstance(m, dict)]
+    rows = _capture_messages(messages, {})
     held = [hf.Signal('', hf.strip_pinned(hf.message_text(m))).key() for m in provenance.principal_view(rows)
             if m.get('role') == 'user']
     try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
@@ -111,6 +111,50 @@ def _holder(messages: list[dict[str, Any]]) -> Callable[[str, str], bool]:
 def _digest(text: str) -> str:
     """A short name for a pin or a pinned block, whitespace folded, so the pins file holds no more text (#389)."""
     return hashlib.sha256(' '.join(text.split()).encode('utf-8')).hexdigest()[:16]
+
+
+_HOST_MEMORY_TAG = re.compile(r'<\s*(/?)\s*memory-context\b[^>]*>', re.I)
+
+
+def _without_host_memory(text: str) -> str:
+    """Drop balanced/nested host recall fences; an unfinished fence stays excluded to the end."""
+    parts, depth, cursor, seen = [], 0, 0, False
+    for match in _HOST_MEMORY_TAG.finditer(text):
+        if not match[1]:
+            if depth == 0:
+                parts.append(text[cursor:match.start()])
+            depth, seen = depth + 1, True
+        elif depth:
+            depth -= 1
+            if depth == 0:
+                cursor = match.end()
+    if not seen:
+        return text
+    if depth == 0:
+        parts.append(text[cursor:])
+    return ''.join(parts).strip()
+
+
+def _capture_messages(requests: list[dict[str, Any]], kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The host's canonical history/current input, rather than its API-only plugin additions."""
+    canonical = kwargs.get('conversation_messages')
+    source = list(canonical) if isinstance(canonical, list) else list(requests)
+    incoming = kwargs.get('incoming_message')
+    if isinstance(canonical, list) and isinstance(incoming, dict) and (not source or incoming != source[-1]):
+        source.append(incoming)
+    out = []
+    for message in source:
+        if not isinstance(message, dict):
+            continue
+        row = dict(message)
+        if row.get('role') == 'user':
+            content = hf.content_text(row.get('content'))
+            clean = _without_host_memory(content)
+            if clean != content:
+                row['content'] = clean
+            row.pop('api_content', None)
+        out.append(row)
+    return out
 
 
 def _pin_digest(kind: str, text: str) -> str:
@@ -432,7 +476,7 @@ class ExoContextEngine(ContextEngine):
                          **kwargs: Any) -> None:
         self._bind(kwargs.get('session_id'))
         if messages:  # the core passes the real recent transcript
-            self._x_messages = list(messages)
+            self._x_messages = _capture_messages(messages, kwargs)
             self._saw(self._x_session_id)
         _set_live(self)
         if self.inner is not None and hasattr(self.inner, 'on_turn_complete'):
@@ -620,10 +664,11 @@ class ExoContextEngine(ContextEngine):
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
         msgs = list(selected if selected is not None else request_messages)
-        pins = self._observe(msgs)
+        capture = _capture_messages(msgs, kwargs)
+        pins = self._observe(capture)
         hidden = self._hidden(msgs, pins)
         full = self._block_for(pins)
-        self._x_messages = list(msgs) + ([{'role': 'system', 'content': full}] if full else [])
+        self._x_messages = capture + ([{'role': 'system', 'content': full}] if full else [])
         self._saw(self._x_session_id)
         parts = [self._block_for(hidden, self._x_last_handoff) if hidden else '', self._x_resume_block]
         extra = '\n\n'.join(p for p in parts if p)
@@ -670,6 +715,7 @@ class ExoContextEngine(ContextEngine):
     def _observe(self, msgs: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Add the rulings, corrections and open decisions visible in `msgs` to this session's pins."""
         pins = self._load_pins()
+        msgs = _capture_messages(msgs, {})
         try:
             rulings, corrections = sg.classified([m for m in msgs if isinstance(m, dict)])
             decisions = sg.pinned_open_decisions(msgs)
@@ -745,7 +791,7 @@ class ExoContextEngine(ContextEngine):
         the pins. An undo passes the topic the file was written under, so the rewrite replaces it."""
         nodes = self._x_nodes.get(sid, {})
         summary = '\n\n'.join(t for _, t, _ in sorted(nodes.values(), key=lambda x: x[0]) if t)[-6000:]
-        window = [] if windowless else self._x_messages
+        window = [] if windowless else _capture_messages(self._x_messages, {})
         topic = topic or self._topic_for(sid)
         try:
             signals = sg.extract(window)
@@ -773,8 +819,9 @@ class ExoContextEngine(ContextEngine):
         if self.inner is None:  # the core never calls update_model: build the default inner now
             self._build_inner(model='', context_length=0)
         try:
-            pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
-            signals = sg.extract(messages)
+            capture = _capture_messages(messages, kwargs)
+            pins = self._observe(capture)  # #371: pins observed from principal text carry across summaries
+            signals = sg.extract(capture)
             signals = dataclasses.replace(
                 signals,
                 rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
