@@ -37,6 +37,13 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
 pending continuity and supervision work. It changes no runtime contract or policy.
 
+**Automatic continuity checkpoints.** `exo.work_checkpoint` derives a bounded
+record index from visible session messages and job metadata. Composition enables
+it by default; it chains existing callbacks and workspace injection, adds no
+model calls or replay, and reconstructs after abrupt exits. Keep it separate from
+manual working notes. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md) for privacy, undo,
+uncertain-effects semantics and acceptance tests.
+
 **Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
 state in `sessions.sqlite`. Composition validates `work_notes` before opening
 runtime resources, then attaches the gated tool, per-session prompt and handoff
