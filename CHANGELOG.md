@@ -31,6 +31,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Symlinked ledgers defer target snapshots until first read and reject copies that fail SQLite
+  integrity validation. Closing an unread reader makes no copy (#535, #565).
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 

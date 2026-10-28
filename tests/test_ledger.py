@@ -385,11 +385,11 @@ def test_opening_a_ledger_symlinked_to_another_exo_ledger_makes_no_wal_or_shm_fi
         assert sorted(p.name for p in other.parent.iterdir()) == beside
 
 
-def test_reads_through_a_symlink_are_a_snapshot_of_the_target_at_open(tmp_path, signer):
+def test_reads_through_a_symlink_are_a_snapshot_of_the_target_at_first_read(tmp_path, signer):
     """A read-only open of a closed target (no `-wal` beside it) held an `immutable=1` connection to the target
     itself: a writer that appended and checkpointed replaced the file under it, so the reader stayed stale and
-    reading raised `database disk image is malformed` (#317). The target is copied at open now: reads
-    are the target as it stood at open, and a fresh open sees it as it stands then."""
+    reading raised `database disk image is malformed` (#317). The target is copied at first read now: later reads
+    retain that snapshot, and a fresh reader sees later appends."""
     target = tmp_path / "target.sqlite"
     with Ledger(target, signer) as led:
         for i in range(3):
@@ -476,7 +476,7 @@ def test_a_target_changed_during_every_copy_is_read_live(tmp_path, signer, monke
         added.append(1)
     made = _write_during_copies(monkeypatch, write, copies=SNAPSHOT_TRIES)
     with Ledger(path, signer) as reader:
-        assert len(made) == SNAPSHOT_TRIES and len(reader) == 100 + 10 * SNAPSHOT_TRIES
+        assert len(reader) == 100 + 10 * SNAPSHOT_TRIES and len(made) == SNAPSHOT_TRIES
         assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         _padded(target, signer, len(reader), len(reader) + 1)
         assert len(reader) == 101 + 10 * SNAPSHOT_TRIES
@@ -503,7 +503,7 @@ def test_a_copy_that_fails_on_an_unchanged_target_is_read_live_at_once(tmp_path,
     monkeypatch.setattr(sqlite3, "connect", lambda db, *a, **k: connect(
         db, *a, **({**k, "factory": Full} if isinstance(db, str) and "immutable=1" in db else k)))
     with Ledger(path, signer) as reader:
-        assert tried == [1, 1] and len(reader) == 4
+        assert len(reader) == 4 and tried == [1, 1]
         _padded(target, signer, 4, 5)
         assert len(reader) == 5  # read live
         _refuses(reader)

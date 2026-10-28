@@ -3669,6 +3669,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads, as on main, for the reader has no value to check a path line against.
+- *Amendment 2026-10-28 (#535, #565):* a symlinked ledger defers opening/copying its target until the
+  first connection access. Closing an unread reader never opens the target. The retained backup must pass
+  SQLite `integrity_check` as well as the existing target-state checks. Failed checks reject the copy and
+  use the existing retry/live-read fallback. The fallback may still create target-side WAL/shared-memory
+  files (#564); this change does not claim to remove that limit.
 - *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
   held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it, so
   the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open, and

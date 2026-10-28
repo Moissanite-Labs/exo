@@ -32,7 +32,7 @@ anchor remains fails too (`missing_ledger_problem`). A ledger file that is a sym
 anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
 opening it writes nothing through the link. The exceptions are SQLite's own `-shm` file beside a target that
 already has a `-wal` file, and its `-wal` and `-shm` files beside a target read live because no copy of it could be
-taken at open (`_snapshot`). `verify` warns when the anchors are more than one event apart. `append` also refuses to
+taken at first connection access (`_snapshot`). `verify` warns when the anchors are more than one event apart. `append` also refuses to
 write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
 `anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
 `verify` reports it.
@@ -155,9 +155,11 @@ class Ledger:
         self.signer = signer
         self._lock = threading.Lock()
         self.missing_triggers: list[str] = []
+        self._db: sqlite3.Connection | None = None
+        self._db_lock = threading.Lock()
+        self._closed = False
         if authority is None and self.path.is_symlink():  # opened without writing through the link (#277)
-            self.db = _open_symlinked(self.path)
-            return
+            return  # the first connection access chooses the read-only snapshot (#535)
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
@@ -166,6 +168,19 @@ class Ledger:
             logger.warning("ledger %s: append-only trigger(s) %s were missing; recreated", self.path,
                            ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        with self._db_lock:
+            if self._db is None:
+                if self._closed:
+                    raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+                self._db = _open_symlinked(self.path)
+            return self._db
+
+    @db.setter
+    def db(self, value: sqlite3.Connection) -> None:
+        self._db = value
 
     def _missing_triggers(self) -> list[str]:
         """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
@@ -374,7 +389,10 @@ class Ledger:
         return self.signer.author if self.signer else None
 
     def close(self) -> None:
-        self.db.close()
+        with self._db_lock:
+            self._closed = True
+            if self._db is not None:
+                self._db.close()
 
     def __enter__(self):
         return self
@@ -600,8 +618,8 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
     """A ledger file that is a symlink, opened read-only: no WAL switch, no schema, no file made at a dangling target.
     Only a regular file is opened: opening a FIFO would block. A target with a `-wal` file beside it has a writer: it
     is read live (SQLite's `mode=ro`) through the writer's own files, and stays current. A target without one holds
-    all its data in its main file, and `_snapshot` copies it at open (#317). Reads are then a snapshot of the target
-    as it stood at open: a fresh open sees later appends. The rare target a writer changes during every copy is read
+    all its data in its main file, and `_snapshot` copies it on the first connection access (#317, #535). Reads are then a snapshot of the target
+    as it stood at that access: constructing an unread Ledger does not copy it. The rare target a writer changes during every copy is read
     live too, and so is one whose copy fails (a full temporary folder). SQLite may then leave its `-wal` and `-shm`
     files beside it. A target that is gone, not a regular file, not a database or without an events table reads as an
     empty ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor
@@ -662,7 +680,8 @@ def _snapshot(target: Path) -> sqlite3.Connection | None:
     `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp`, `/tmp` and the current folder. SQLite makes it owner-only,
     unlinks it at once and drops it at close. So an open reader holds disk space the size of the ledger, not memory.
     (A SQLite built with `SQLITE_TEMP_STORE` 2 or 3 keeps this database in memory. The default build does not.)
-    `query_only` keeps the copy read-only, as the target was."""
+    `integrity_check` must accept the copied database before it is retained (#565). A failed check rejects the
+    copy and uses the existing retry/live-fallback policy. `query_only` keeps a retained copy read-only."""
     for _ in range(SNAPSHOT_TRIES):
         before = _target_state(target)
         if before is None:
@@ -675,6 +694,8 @@ def _snapshot(target: Path) -> sqlite3.Connection | None:
             db = sqlite3.connect("", check_same_thread=False, isolation_level=None)
             try:
                 src.backup(db)
+                if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                    raise sqlite3.DatabaseError("snapshot integrity check failed")
             except sqlite3.DatabaseError:  # a target cut short under the copy: try again
                 db.close()
                 if _target_state(target) == before:  # the copy itself failed (a full temporary folder): read live

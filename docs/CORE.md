@@ -108,11 +108,12 @@ back, and the shorter chain still links. So each append also writes the head (se
   ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
   fails `verify()`, and `append()` and `anchor()` refuse it. A `Ledger` without an authority opens such a file
   read-only (#277), and only when it is a regular file, so opening it writes nothing through the link: no WAL
-  switch, no tables, no file made at a dangling target. A target with no `-wal` file beside it is copied at open
-  (#317), and reads come from the copy. They show the target as it stood at open. A fresh open shows later
-  appends. The copy reads the target with SQLite's `immutable` flag, which makes no `-wal` or `-shm` file beside
+  switch, no tables, no file made at a dangling target. A target with no `-wal` file beside it is copied at the first connection access
+  (#317, #535), and reads come from the copy. Constructing and closing an unread reader makes no copy;
+  appends between construction and first read are visible. Later reads retain the first-read snapshot. The copy reads the target with SQLite's `immutable` flag, which makes no `-wal` or `-shm` file beside
   it but takes no lock. So the open checks the target's inode, size and mtime, and that no `-wal` file is there,
-  before and after the copy. A copy taken while any of them changed is taken again. The copy goes into SQLite's
+  before and after the copy. A copy taken while any of them changed is taken again. The copy must pass
+  SQLite `integrity_check` before it is retained (#565); a failed check follows the existing retry/live fallback. The copy goes into SQLite's
   private temporary database. About 2 MB of it stays in memory. The rest is an owner-only temporary file in
   SQLite's temporary folder, unlinked at once and gone at close. So an open reader holds disk space the size of the
   ledger, not memory: a 99 MB ledger adds 99 MB there and about 6 MB of memory. The copy is read-only. A target
