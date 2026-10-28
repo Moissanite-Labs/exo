@@ -133,6 +133,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   before the research says what to lift (wastes the 2026 work in Hermes).
 
 ## D-010 (2026-10-12) Standalone core: lean Python core, lifted Hermes parts, protocol-first UI
+- **Amendment 2026-10-28 (#677, partial):** `/fresh` is a principal-only idle conversation-tag reset.
+  It preserves transcripts, does not replay turns or tools, leaves other threads unchanged and emits
+  a reset notice. Provider tag support is required for a remote effect; full stream recovery remains open.
 - **Decision:** Exo gets its own core in Python, in this repo. It lifts a small set of Hermes modules
   (memory and context slot interfaces, provider message types and two transports, selected built-in tool
   logic, compressor prompts, and later individual platform adapters) and rewrites the loop, routing,

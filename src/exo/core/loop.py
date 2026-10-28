@@ -84,6 +84,7 @@ class _SessionState:
         self.steer: list[Message] = []
         self.running = self.accepting_steers = False
         self.total = Usage()
+        self.provider_context, self.provider_context_used = "", False
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
@@ -143,6 +144,19 @@ class Loop:
         if hasattr(self.context, "note"):
             await maybe_await(self.context.note(session))
         return self.store.get_session(session)  # type: ignore[return-value]
+
+    def fresh_provider_context(self, session: str) -> bool:
+        """Rotate an idle conversation's provider tag without changing its transcript or replaying tools."""
+        if self.store.get_session(session) is None:
+            raise KeyError(session)
+        self.store.assert_open(session)
+        state = self.state(session)
+        if state.running or state.lock.locked():
+            raise ValueError("stop the running turn before resetting provider context")
+        if not state.provider_context_used and (state.provider_context or self.store.last_seq(session) == 0):
+            return False
+        state.provider_context, state.provider_context_used = new_id("fresh"), False
+        return True
 
     def interrupt(self, session: str) -> bool:
         st = self.state(session)
@@ -447,6 +461,9 @@ class Loop:
         # conversation to them (D-028), so they share the provider's prompt cache
         key = getattr(self.context, "cache_key", None)
         opts["session_id"] = (key(session) if callable(key) else None) or session
+        if st.provider_context:
+            opts["session_id"] += "/" + st.provider_context
+        st.provider_context_used = True
         if tool_choice:  # "none": the tools stay declared, the model may not call them
             opts["tool_choice"] = tool_choice
         specs = self._specs()

@@ -1078,3 +1078,11 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Idle provider conversation reset
+
+`Loop.fresh_provider_context` rotates only an idle selected conversation's transient tag; `/fresh`
+requires a live principal and an owned conversation. Provider requests append the tag to the existing
+context cache key. Reset writes no messages, runs no tools and emits a notice through the existing
+command/event path. Providers may ignore session tags; active replay and shared-client recreation
+are outside this #677 slice.

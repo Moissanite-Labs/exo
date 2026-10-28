@@ -306,3 +306,10 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 `0` is success. `1` is a failed check (`lint`, `log verify`, `memory`, a failed decision call, an unset `config get`).
 `2` is a usage error from `exo decide` and `exo upstream`. Argument parsing errors exit with `2`, as `argparse` does.
 `exo chat` exits with `130` on ctrl+c. Most other errors print one line and exit.
+
+### `/fresh` (manual idle reset)
+
+Use `/fresh` in an idle conversation to rotate its provider conversation tag. It is principal-only,
+keeps the transcript and never replays a turn or tool. A running turn must be stopped first. The
+existing command list exposes it to terminal and web clients. Provider support and remaining recovery
+limits are documented in `docs/CORE.md` "Manual idle provider-context reset" (#677, partial).

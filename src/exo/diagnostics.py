@@ -193,6 +193,25 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
     if b.name == "work":
         from exo.work_notebook import command
         return await command(eng, b)
+    if b.name == "fresh":
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "only the principal can reset provider context" + demoted())
+        if not b.session or b.args.strip():
+            raise CommandFailed("bad_request", "usage: /fresh in an idle conversation")
+        info = eng.store.get_session(b.session)
+        if info is None:
+            raise CommandFailed("not_found", "conversation not found")
+        if info.agent != eng.agent:
+            raise CommandFailed("forbidden", "conversation belongs to another agent")
+        try:
+            reset = eng.loop.fresh_provider_context(b.session)
+        except ValueError as exc:
+            raise CommandFailed("busy", str(exc)) from None
+        if reset:
+            eng.hub.publish(s.Notice(text="Provider conversation tag reset; transcript kept. No turn replayed.",
+                                     source="provider_reset"), b.session)
+        return {"reset": reset, "replayed": False, "text": "Provider conversation tag reset; transcript kept."
+                if reset else "No new provider request state to reset."}
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
             raise CommandFailed("bad_request", "usage: /context [json]")

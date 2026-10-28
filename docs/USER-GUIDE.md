@@ -629,3 +629,11 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Reset an idle provider conversation
+
+After stopping a stuck turn, `/fresh` gives this conversation a new provider conversation tag and
+keeps its transcript. It never replays a turn or repeats a completed tool. Send the next message
+yourself. Other conversations keep their state. A provider must honor conversation tags for this
+to affect its cache; it is not an automatic stream restart or a guaranteed remote cache purge.
+Repeated resets without another request do nothing. Full active-stream recovery remains in #677.

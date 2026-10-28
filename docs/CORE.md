@@ -233,3 +233,16 @@ The active principal comes from `--principal`, else `$EXO_PRINCIPAL`.
 test in `tests/acceptance/` copies a populated store (`EXO_ACCEPTANCE_STORE`) to a temp dir,
 without `corpus/private`, and checks lint, find and ctx on three queries. It skips when no
 such store is present.
+
+### Manual idle provider-context reset
+
+`/fresh` rotates the selected idle conversation's provider conversation tag without modifying its
+transcript or replaying a turn. Only a live principal can invoke it. A running turn must be stopped
+first. A new empty conversation or a repeated reset without another request is a cheap no-op.
+The reset is recorded as a `provider_reset` notice. Other conversations retain their tags.
+
+Providers that honor the session identifier or configured conversation header receive the new tag;
+providers that ignore it remain unchanged. This does not recreate shared HTTP clients or guarantee
+a remote cache purge. The tag is local to the running core; after restart, reset a resumed thread
+again if needed. Automatic stall detection, active-stream recovery and safe automatic replay remain
+open in #677. This is the manual idle request-state reset slice only.
