@@ -3383,6 +3383,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `decision`. Arrays, null and scalars get a 400 JSON error and send no `approval.respond` to the core, as the
   shared POST body reader already requires. Malformed JSON keeps its `bad json` response; token checks and valid
   approval answers are unchanged. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (follow-up to #751):* the approval and shared POST body readers catch JSON decoder
+  recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
+  limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
+  keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
