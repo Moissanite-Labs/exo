@@ -404,6 +404,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   feature building continue in the main session. Promotion of lessons still needs held-out wins (D-022).
 
 ## D-025 (2026-10-12) Harness self-observation: trace, findings, re-verification
+- **Amendment 2026-10-28 (#748):** recorded fallback counts require a serving route without a terminal error.
+  Failed attempts remain observable as errors or timeouts instead of claiming recovery. Legacy traces without
+  model-call records retain their notice-derived semantics. Routing, cooldowns and retry policy are unchanged.
 - **Why:** A asked the first agent (exo-razi) to evaluate its environment. It missed the biggest problems
   because it could not see how the harness performed: an 8 min 20 s first turn with no event saying why, no record of
   which route served a call or of fallbacks, a shown model that disagreed with the served one, a test suite
