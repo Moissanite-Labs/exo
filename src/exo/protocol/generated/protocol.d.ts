@@ -180,6 +180,7 @@ export interface ModelCall {
   stop_reason?: string;
   error?: string;
   retries?: number;
+  call_id?: string;
 }
 
 export interface ModelsList {
@@ -194,6 +195,8 @@ export interface ModelsSet {
 export interface Notice {
   text: string;
   level?: "info" | "warn";
+  source?: string;
+  call_id?: string;
 }
 
 export interface PeerDelivery {
