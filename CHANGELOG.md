@@ -2041,8 +2041,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   sender verifies it against the keys pinned here for the seat the message went to, as `receipt` does. A reply
   that does not verify is not published, and the send fails. For a seat no key is pinned for, both checks step
   aside and the receive side's trust ladder decides what arrived, as before (an unpinned sender is held as
-  `other`). Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned,
-  as an older `exo`'s are, cannot be reached for a pinned seat (D-026 amendment; `docs/PEERS.md` "Limits").
+  `other`). Stricter than before for two honest setups: a daemon whose presence file or first receipt is unsigned,
+  as an older `exo`'s are, cannot be reached for a pinned seat, and neither can a seat whose key was made again
+  until the new key is pinned here (`exo keys pin <seat> <pub> --replace`, USER-GUIDE §7) (D-026 amendment;
+  `docs/PEERS.md` "Limits").
+- A signed first reply is no longer a receipt (#603 review, on #523 and #132). Since #523 a daemon signs its first
+  answer to any `deliver`, an envelope that does not verify too, and the answer had a later receipt's fields, so a
+  client of a daemon's socket could read a held message's id from its `peers list`, send it a junk envelope with
+  that id, and hand the signed `denied` to the sender's `receipt`: the sender published `denied` for a message
+  still held, against #132's rule that a later receipt comes only from the seat the message went to. The first
+  answer now signs `kind: "reply"` and a later receipt `kind: "receipt"`. `receipt` refuses a reply, and the send
+  path refuses anything but a reply. An older `exo`'s receipt, which names no kind, is still taken; a #523 build's
+  first reply names none either and is told apart by the `mode` and `session` it signs, so `receipt` refuses it and
+  a send to a #523 build still completes. A send that fails on its first reply has already delivered the text; the
+  user guide now says to check with the peer before sending again. Also: a presence entry's signature is checked over
+  its JSON as written, so a newer `exo` that signs an extra field still verifies, and a first reply that is not a
+  mapping fails the send with a plain error (D-026 amendment).
 - `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
   approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
   denies.
