@@ -3828,6 +3828,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
+- **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
+  process-tree sibling, so it skips where `/proc` is unavailable. The existing SIGHUP guard stays. The cleanup
+  signal-handler test still runs where SIGHUP is available; gate-diff runtime and gate policy are unchanged.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
