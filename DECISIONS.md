@@ -3906,6 +3906,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
+  conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
+  page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
+  Unconfirmed sends retain recoverable text at their originating conversation, including a newly created one,
+  without replacing newer edits or sending again automatically. Recovery asks the user to inspect the thread
+  before sending again because a lost acknowledgement does not prove rejection. Delayed opens and unsteer
+  replies cannot redirect newer navigation or put one conversation's text into another composer.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
