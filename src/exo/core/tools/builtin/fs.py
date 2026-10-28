@@ -6,7 +6,10 @@ Relative paths resolve against ``ToolContext.cwd``.
 
 from __future__ import annotations
 
+import difflib
+import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +21,44 @@ DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
 
 
+_HINT_PRIVATE = re.compile(r'(?:^|[_.-])(?:credentials?|secrets?|passwords?|tokens?|id_rsa|id_ed25519|api[_-]?key)(?:$|[_.-])', re.I)
+
+
+def _missing_hint(ctx: ToolContext, path: Path) -> str:
+    """Sample a bounded parent directory, never reading candidate contents or leaving the working tree."""
+    advice = "; use glob to locate the file"
+    names: list[str] = []
+    truncated = False
+    try:
+        parent = path.parent.resolve()
+        if not parent.is_relative_to(Path(ctx.cwd).expanduser().resolve()):
+            return advice
+        with os.scandir(parent) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 256:
+                    truncated = True
+                    break
+                name = entry.name
+                if (name.startswith('.') or len(name) > 128 or _HINT_PRIVATE.search(name)
+                        or Path(name).suffix.lower() in {'.pem', '.key', '.p12', '.pfx', '.kdbx'} or entry.is_symlink()):
+                    continue
+                if entry.is_file(follow_symlinks=False) or entry.is_dir(follow_symlinks=False):
+                    names.append(name)
+    except OSError:
+        return advice
+    ranked = sorted(names, key=lambda name: (-difflib.SequenceMatcher(
+        None, path.name[:128].casefold(), name.casefold()).ratio(), name))[:5]
+    if ranked:
+        advice += "; nearby names: " + json.dumps(ranked, ensure_ascii=True)
+    if truncated:
+        advice += " [directory sample limited to 256 entries]"
+    return advice
+
+
 def _read_existing(ctx: ToolContext, path: str) -> str:
     p = ctx.resolve(path)
     if not p.exists():
-        raise ToolError(f"File not found: {path}")
+        raise ToolError(f"File not found: {path}" + _missing_hint(ctx, p))
     if p.is_dir():
         raise ToolError(f"{path} is a directory; use glob to list it")
     raw = read_regular(p, MAX_READ_BYTES)

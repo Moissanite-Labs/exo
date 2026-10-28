@@ -628,3 +628,9 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Missing file names
+
+When a file read misses inside the working folder, its error can suggest up to five nearby names
+and a `glob` next step. The hint reads names only and remains an error; it does not open a guessed
+file or apply an edit (#681).
