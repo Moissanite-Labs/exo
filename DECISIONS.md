@@ -4757,7 +4757,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read is a `credentials` part. `terminal`, `bash` and `exec_command` running `cat config` with `workdir` `~/.kube`,
   and `bash` running `ls` with `cwd` `~/.exo/keys`, `~/.aws` or `~/.claude`, ran in bypass on main 58503282. They
   ask once since #703, in enforce and observe mode, with `bypass.floor` `credentials`. `cat ~/.kube/config` asked
-  before too, and a shell call in an ordinary folder still runs. This decision wants that: secrets still ask.
+  before too, and a shell call in an ordinary folder decides as before. This decision wants that: secrets still ask.
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,

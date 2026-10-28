@@ -176,9 +176,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   category (`read` for `cat` and `ls`), and the store read is a `credentials` part, which the floor now reads. So
   `terminal`, `bash` and `exec_command` running `cat config` with `workdir` `~/.kube`, and `bash` running `ls` with
   `cwd` `~/.exo/keys`, `~/.aws` or `~/.claude`, ran in bypass on main 58503282 and ask once since #703. This is
-  what D-065 asks for: secrets still ask. `cat ~/.kube/config` asked on both. A shell call in an ordinary folder still
-  runs. No code change. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`. **Docs:** `docs/GATE.md`,
-  `DECISIONS.md` (D-065), `docs/DOCS-MAP.md`.
+  what D-065 asks for: secrets still ask. `cat ~/.kube/config` asked on both. A shell call in an ordinary folder
+  decides as before. No code change. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-065), `docs/DOCS-MAP.md`.
 - `/tab` tells the user when the new window loses a permission flag (#669). The flag is dropped from the
   new command, but the new window keeps `--seat` and `EXO_HOME`, so it joins this core (D-028, D-039) and
   the core's permission mode still applies there, bypass included: the warning says that rather than
