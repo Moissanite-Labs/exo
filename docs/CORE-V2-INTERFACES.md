@@ -25,6 +25,13 @@ additively (new optional fields with defaults). Ask the lead before changing any
 - `Provider` (runtime-checkable Protocol): `name: str`;
   `stream(messages, tools, **opts) -> AsyncIterator[ProviderEvent]` (an async generator).
 
+Reasoning levels: the `reasoning` opt (one of the common opts below) is Exo's level, `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max` or `ultra`. Each transport sends only what its API takes, since a 400 ends the call
+with no fallback (exo-desktop #52). OpenAI-compatible transports send `max` and `ultra` as `xhigh`, the top of
+OpenAI's and OpenRouter's scale, and leave out a level they do not know. Anthropic models that take a thinking
+budget get one of at least 1,024 tokens and below `max_tokens`. With a `max_tokens` of 1,024 or less there is no
+room, so thinking stays off.
+
 Provider contract: deltas arrive as `text` / `reasoning`; tool calls arrive whole (`tool_call`, the
 transport assembles argument deltas); `usage` may repeat, last wins; the stream ends with exactly one
 `done` (with `stop_reason` and the assembled assistant `message`) or one `error` (with `retryable` and
