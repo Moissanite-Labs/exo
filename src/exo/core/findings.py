@@ -163,7 +163,7 @@ class Findings:
             return {"at": at, "counts": {**counts, "total": sum(counts.values())}, "pending": pending,
                     "by_severity": severity, "by_age": ages, "oldest": rows, "shown": len(rows)}
 
-        return self.store._tx(read)
+        return self.store._read(read)
 
     def backlog_text(self, limit: int = 20) -> str:
         report = self.backlog(limit)
