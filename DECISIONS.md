@@ -561,6 +561,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
 ## D-028 (2026-10-12) One agent, one continuous memory
+- *Amendment 2026-10-28 (#450):* fork copies retain a derived indexed original position. Context lookups no longer parse each copy JSON; the one-time backfill leaves signed data and log hashes untouched.
 - **Why (A, verbatim):** "well if the harness is built according to my vision for the implemenation of the optchat
   memory system all sessions should technically be the same agent with continuous memory". Exo had taken the turn
   model (D-013) but kept sessions: a summary tree per session, `/new` as a blank mind, exo-memory's daily log as a
@@ -4752,7 +4753,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and their controls, under the default policies and four aimed `gates.yaml` files, in enforce and observe mode,
   with and without bypass, at no, high and low registry risk, gives 1360 lines on main e0968a2b and here: 164 change,
   each to an ask or to a bypass row that records the ask, and none runs here that main asks about or blocks.
-  `gate_diff` sees neither check (both are past `decide`).
+  `gate_diff` sees neither check (both are past `decide`). *2026-10-27, review 5675164403 of #703:* the rows above
+  are not the only ones. The floor reads each part too, so a snake shell call whose own folder argument is a secret
+  folder (#311) also asks once in bypass. Its line keeps its own category (`read` for `cat` and `ls`), and the store
+  read is a `credentials` part. `terminal`, `bash` and `exec_command` running `cat config` with `workdir` `~/.kube`,
+  and `bash` running `ls` with `cwd` `~/.exo/keys`, `~/.aws` or `~/.claude`, ran in bypass on main 58503282. They
+  ask once since #703, in enforce and observe mode, with `bypass.floor` `credentials`. `cat ~/.kube/config` asked
+  before too, and a shell call in an ordinary folder decides as before. This decision wants that: secrets still ask.
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,

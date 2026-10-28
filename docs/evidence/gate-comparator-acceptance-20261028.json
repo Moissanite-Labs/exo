@@ -1,0 +1,44 @@
+{
+  "base": "64bfee2c4e075e91f7789a97fec7c2c8dd82407d",
+  "scope": "Executable verification/performance acceptance, no gate or comparator implementation changed",
+  "validation": "4 passed, 4 strict xfailed; --runxfail exposes 4 failed, 4 passed",
+  "observations": [
+    {
+      "issue": 550,
+      "case": "URL operand decision Python-call growth",
+      "small_operands": 8,
+      "large_operands": 32,
+      "small_calls": 4187,
+      "large_calls": 51739,
+      "acceptance": "large <= 6 * small + 200",
+      "status": "strict xfail",
+      "limit": "Deterministic Python-call proxy; not an end-to-end timing claim"
+    },
+    {
+      "issue": 551,
+      "case": "ask to unknown Ask",
+      "observed": "not counted lowered",
+      "acceptance": "count executable unknown as lowering or reject malformed outcome",
+      "status": "strict xfail"
+    },
+    {
+      "issue": 551,
+      "case": "allow to unknown block",
+      "observed": "counted tightened",
+      "acceptance": "do not claim executable unknown is tighter, or reject malformed outcome",
+      "status": "strict xfail"
+    },
+    {
+      "issue": 551,
+      "case": "built-in repeated-store-folder budget family",
+      "observed": "no built-in candidate reaches the reported cap",
+      "status": "strict xfail"
+    },
+    {
+      "issue": 551,
+      "case": "explicit long seed against fail-open temporary source mutant",
+      "observed": "detects lowering with exit 1",
+      "status": "passing guard"
+    }
+  ]
+}
