@@ -5,7 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
+
 ### Fixed
+
+- Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).
@@ -203,6 +207,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   posting fixes stays held. Snake names and camelCase calls with no floor reading decide as before. Hook probe
   against main e0968a2b: 1360 lines, 164 changed, 0 lowered. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
+- A correction to the #703 entry above (review 5675164403 of #703): not every snake name decides as before. A snake
+  shell call whose own folder argument is a secret folder (#311) now asks once in bypass too. Its line keeps its own
+  category (`read` for `cat` and `ls`), and the store read is a `credentials` part, which the floor now reads. So
+  `terminal`, `bash` and `exec_command` running `cat config` with `workdir` `~/.kube`, and `bash` running `ls` with
+  `cwd` `~/.exo/keys`, `~/.aws` or `~/.claude`, ran in bypass on main 58503282 and ask once since #703. This is
+  what D-065 asks for: secrets still ask. `cat ~/.kube/config` asked on both. A shell call in an ordinary folder
+  decides as before. No code change. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-065), `docs/DOCS-MAP.md`.
 - `/tab` tells the user when the new window loses a permission flag (#669). The flag is dropped from the
   new command, but the new window keeps `--seat` and `EXO_HOME`, so it joins this core (D-028, D-039) and
   the core's permission mode still applies there, bypass included: the warning says that rather than
