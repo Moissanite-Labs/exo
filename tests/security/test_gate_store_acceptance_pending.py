@@ -59,7 +59,7 @@ CASES = [
 ]
 
 KNOWN_GAPS = {
-    "for_second_pass_store_cwd", "while_second_pass_store_cwd", "until_second_pass_store_cwd",
+    # #479 (for/while/until second pass) is fixed: its three cases pass and carry no marker.
     "tar_relative_key_target", "cd_relative_key_target", "sed_read_only_store", "tree_read_only_store",
     "sort_read_only_store", "uniq_read_only_store", "xxd_read_only_store", "rsync_dry_run_store",
     "cat_output_outside_store", "grep_output_outside_store", "recursive_home_landing", "copy_home_itself",
