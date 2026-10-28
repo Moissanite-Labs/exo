@@ -203,10 +203,19 @@ class SessionStore:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 out = fn(self._db)
+                self._db.execute("COMMIT")
             except BaseException:
-                self._db.execute("ROLLBACK")
+                try:
+                    if self._db.in_transaction:
+                        self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    poisoned, self._conn = self._conn, None  # never read an uncommitted transition after failed rollback
+                    if poisoned is not None:
+                        try:
+                            poisoned.close()
+                        except sqlite3.Error:
+                            pass  # detached even if close fails; preserve the original operation/commit error
                 raise
-            self._db.execute("COMMIT")
             return out
 
     # ---------------------------------------------------------------- sessions

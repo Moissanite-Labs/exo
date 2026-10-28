@@ -545,7 +545,7 @@ class ExoApp(App):
             async for ev in self.client.events(since=since, reconnect=True):
                 if isinstance(ev.body, s.SteerCancelled):
                     self.record_steer_cancel(ev.body.message_id)
-                elif isinstance(ev.body, s.MessageCompleted) and ev.body.message.role == "user":
+                elif isinstance(ev.body, s.MessageCompleted) and ev.body.message.role == "user" and ev.body.message.id:
                     self._retired_steers.add(ev.body.message.id)
                 if ev.session not in (None, self.session):
                     continue
