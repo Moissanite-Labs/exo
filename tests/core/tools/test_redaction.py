@@ -266,3 +266,39 @@ def test_tool_output_events_equal_the_redacted_result(monkeypatch, tmp_path):
     pieces = [e.body.text for e in eng.hub.since(0) if isinstance(e.body, s.ToolOutput)]
     assert r.text() == "[redacted]tail-9999 end\n[exit 0]"
     assert "".join(pieces) == "[redacted]tail-9999 end"
+
+
+@pytest.mark.parametrize("value", ["fake-[redacted]-tail", 'fake-"quote"-tail', "fake-\\slash-tail"])
+def test_bound_command_redacts_direct_result_and_split_stream(monkeypatch, tmp_path, value):
+    """A bound lookup remembers its value before drain starts, even when it is absent from the host env."""
+    from exo.core import github_auth
+    from exo.core.tools.builtin.shell import run_command
+    monkeypatch.setattr(keys, "_loaded", set())
+    monkeypatch.setattr(github_auth, "binding", lambda *_: {"mode": "token", "host": "github.com", "store": "keychain"})
+    monkeypatch.setattr(keys, "keychain_get", lambda _: value)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    # Files avoid putting the synthetic credential in command quoting or process arguments.
+    (tmp_path / "part1").write_text(value[:7])
+    (tmp_path / "part2").write_text(value[7:] + " done")
+    seen = []
+    code, output, status = run_command("cat part1; sleep 0.05; cat part2", str(tmp_path),
+                                       github_auth=(str(tmp_path / "home"), "test"), emit=seen.append)
+    assert (code, status) == (0, "ok")
+    assert value in keys.known_secret_values()
+    assert output == "[redacted] done" and "".join(seen) == output
+
+
+@pytest.mark.parametrize("value", ["fake-[redacted]-tail", 'fake-"quote"-tail', "fake-\\slash-tail"])
+def test_registry_strictly_redacts_literal_marker_and_escaped_credentials(monkeypatch, tmp_path, value):
+    """A raw credential containing the marker must still be removed by the strict Registry pass."""
+    from exo.core import github_auth
+    monkeypatch.setattr(keys, "_loaded", set())
+    monkeypatch.setattr(github_auth, "binding", lambda *_: {"mode": "token", "host": "github.com", "store": "keychain"})
+    monkeypatch.setattr(keys, "keychain_get", lambda _: value)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    (tmp_path / "output").write_text(value + " done")
+    seen = []
+    result = asyncio.run(default_registry().call(ToolCall("c1", "bash", {"command": "cat output"}),
+        ToolContext(cwd=str(tmp_path), emit=seen.append, meta={"github_auth": (str(tmp_path / "home"), "test")})))
+    assert result.text() == "[redacted] done\n[exit 0]"
+    assert "".join(seen) == "[redacted] done"
