@@ -5,6 +5,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
+
 ### Fixed
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
