@@ -617,13 +617,17 @@ class Gate:
                 store = gate.no_grant(c)    # a part and each reading count too (#311, #399)
             except Exception:
                 pass
-            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
+            if self.settings.mode == "observe" and not (secret or store):
+                # Observe mode only watches: the action goes ahead by design, and the
+                # error is logged above.
                 return None
+            # A read tool (or any tool) whose classification raised must fail CLOSED (ask),
+            # not open. Previously read tools returned None here and were silently allowed.
             card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
-                    "rule_key": f"exo-gate:error:{tool_name}"}
-            if store:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
-                card.update(approvers=["principal"], once=True)
+                    "rule_key": f"exo-gate:error:{tool_name}", "once": True}
+            if store or secret:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
+                card.update(approvers=["principal"])
             return card
 
     def _rules(self, tool: str, args: dict, risk: str, cwd: str = "", c: Optional[gate.Classification] = None,
