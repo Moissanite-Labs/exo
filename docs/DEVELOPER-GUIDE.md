@@ -34,6 +34,9 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
+pending continuity and supervision work. It changes no runtime contract or policy.
+
 **Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
 state in `sessions.sqlite`. Composition validates `work_notes` before opening
 runtime resources, then attaches the gated tool, per-session prompt and handoff
@@ -588,6 +591,8 @@ and a line in its decision amendment:
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
+The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve

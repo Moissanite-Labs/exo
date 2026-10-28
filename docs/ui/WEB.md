@@ -158,7 +158,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
-  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  automatically. Each card shows the answer sequence for its available options and says "Ctrl+F to focus the first
+  approval". The help changes during always confirmation and deny-note entry. A deliberately focused card has an
+  accent outline. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
