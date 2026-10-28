@@ -78,6 +78,10 @@ same-origin or none. Besides the launch route, only the page shell (`/`, `/stati
 Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
 below.
 
+`POST /api/approvals/<id>` takes a JSON object with `decision` (`allow`, `deny` or `allow_always`) and an optional
+`note`. An array, null or scalar gets 400 with `{"error": "body must be a json object"}` before any approval answer
+reaches the core; malformed JSON keeps its 400 `{"error": "bad json"}` response (#740).
+
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
 credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
