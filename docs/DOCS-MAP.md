@@ -31,6 +31,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 
 | Feature | Technical doc | User guide | Developer guide | Whitepaper |
 |---|---|---|---|---|
+| Agent and human work vessel (PROPOSAL, pending) | `docs/AGENT-OPERATOR-DESIGN.md` | n/a (proposal only) | §1 proposal pointer | n/a (proposal only) |
 | D-086 Optional session working notes (In progress) | `docs/WORK-NOTEBOOK.md`, `docs/evidence/work-notebook-gate-2026-10-23.json` | §1 "Saved working notes" | §1 "Session working notes" | MISSING (next batch) |
 | D-001 Work lives in this repo, phases leave handoffs | `DECISIONS.md` D-001 (process) | n/a | §8 | n/a |
 | D-002 Research as parallel subagents | `DECISIONS.md` D-002 (process) | n/a | n/a | n/a |
