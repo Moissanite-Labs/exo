@@ -2688,7 +2688,18 @@ folder Exo loads code from (#459), a gh download into the store (#461) and a glo
 store's folder (#594) ask, a here-document body in the line ends only on its exact delimiter
 line (#328), and since main 58503282 also `env -S`'s own argv (#591), a backslash-newline after a
 `$` (#585), a `$((` bash runs as a `$( ( )` (#553), a store name in any letter case (#601), a
-`${..@P}` (#579) and legacy arithmetic `$[ ]` (#588) read in a word as alone. So
+`${..@P}` (#579) and legacy arithmetic `$[ ]` (#588) read in a word as alone. Since main f28934a3
+the two readings compose with main's readings of a call's `env -S` texts (#591, #707): classify
+reads each `env -S` reading (the line env runs, and each text as a shell line, in `split_readings`)
+both ways, each with its own joined and `ordinary` readings, and the stdin of a `sudo -s` or
+`sudo -i` shell (#491, #718) is read both ways with its reading as before #491 at the end of its
+floors. `gate.readings` lists the `ordinary` and `split_readings` of every reading, so `decide`,
+`binds_exact`, `no_grant`, `call_approvers` and the hook's bypass floor (through `no_grant`) read
+each:
+`env --split='echo ${v:-$(git push --force origin main)}'`, `env -S 'cat ${v:-<(rm -rf ./work)}'`
+and `sudo -i <<< 'echo ${v:-$(git push --force origin main)}'` deny under a deny on the command's
+category, and a store write in such a word is answered by the principal only. A text main does not
+read (`env -S 'sudo -s'` fed a stdin) still asks, as on main. So
 `echo ${v:-$(cat <<'EOF '`, a line `hi`, a line `EOF ` (with its space), a push and a line `)}` is
 denied under a push deny: the body ends on `EOF ` and the push after it runs, where before #333 the
 body ran on to the end of the text and hid it. A part bash's reading adds can lead the
