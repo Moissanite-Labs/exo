@@ -1,4 +1,4 @@
-"""sessions.sqlite: sessions, messages, events, summaries and FTS5 search.
+"""sessions.sqlite: sessions, messages, durable queued steers, events, summaries and FTS5 search.
 
 One file per Exo home. A session is a thread of an agent (D-028, docs/MEMORY-MODEL.md): a message in an
 agent thread also gets ``pos``, its place in the agent's one append-only log, and a hash that chains it to
@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL,
     turn_id TEXT, created TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session, seq)
 );
+CREATE TABLE IF NOT EXISTS queued_steers (
+    ordinal INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+    session TEXT NOT NULL REFERENCES sessions(id), basis_message TEXT, data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS queued_steers_session ON queued_steers (session, ordinal);
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, msg_id UNINDEXED, session UNINDEXED);
 CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL, session TEXT, type TEXT NOT NULL,
@@ -198,10 +203,19 @@ class SessionStore:
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 out = fn(self._db)
+                self._db.execute("COMMIT")
             except BaseException:
-                self._db.execute("ROLLBACK")
+                try:
+                    if self._db.in_transaction:
+                        self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    poisoned, self._conn = self._conn, None  # never read an uncommitted transition after failed rollback
+                    if poisoned is not None:
+                        try:
+                            poisoned.close()
+                        except sqlite3.Error:
+                            pass  # detached even if close fails; preserve the original operation/commit error
                 raise
-            self._db.execute("COMMIT")
             return out
 
     # ---------------------------------------------------------------- sessions
@@ -298,32 +312,112 @@ class SessionStore:
         if turn_id:
             msg.meta.setdefault("turn_id", turn_id)
 
-        def write(db: sqlite3.Connection) -> None:
-            (seq,) = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session=?",
-                                (sid,)).fetchone()
-            msg.meta["seq"] = seq
-            row = db.execute("SELECT agent, kind FROM sessions WHERE id=?", (sid,)).fetchone()
-            agent = row["agent"] if row and row["kind"] in LOGGED_KINDS and not msg.meta.get("local") else None
-            pos = digest = None
-            if agent:  # the next place in the agent's one log, given inside this write transaction
-                last = db.execute("SELECT pos, hash FROM messages WHERE agent=? AND pos IS NOT NULL"
-                                  " ORDER BY pos DESC LIMIT 1", (agent,)).fetchone()
-                pos = (last["pos"] if last else 0) + 1
-                msg.meta["pos"] = pos
-            data = json.dumps(to_dict(msg), ensure_ascii=False)
-            if agent:
-                digest = _chain(last["hash"] if last else "", agent, pos, sid, data)
-            db.execute("INSERT INTO messages (id, session, seq, role, turn_id, created, data, agent, pos, hash)"
-                       " VALUES (?,?,?,?,?,?,?,?,?,?)", (msg.id, sid, seq, msg.role, turn_id, now_ts(), data,
-                                                         agent, pos, digest))
-            text = _fts_text(msg)
-            if text:
-                db.execute("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)",
-                           (text, msg.id, sid))
-            db.execute("UPDATE sessions SET updated=? WHERE id=?", (now_ts(), sid))
-
-        self._tx(write)
+        self._tx(lambda db: self._append_message(db, sid, msg, turn_id))
         return msg
+
+    def _append_message(self, db: sqlite3.Connection, sid: str, msg: Message, turn_id: str | None) -> None:
+        """Append under the caller's transaction, also used by atomic steer delivery."""
+        (seq,) = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session=?",
+                            (sid,)).fetchone()
+        msg.meta["seq"] = seq
+        row = db.execute("SELECT agent, kind FROM sessions WHERE id=?", (sid,)).fetchone()
+        agent = row["agent"] if row and row["kind"] in LOGGED_KINDS and not msg.meta.get("local") else None
+        pos = digest = None
+        if agent:  # the next place in the agent's one log, given inside this write transaction
+            last = db.execute("SELECT pos, hash FROM messages WHERE agent=? AND pos IS NOT NULL"
+                              " ORDER BY pos DESC LIMIT 1", (agent,)).fetchone()
+            pos = (last["pos"] if last else 0) + 1
+            msg.meta["pos"] = pos
+        data = json.dumps(to_dict(msg), ensure_ascii=False)
+        if agent:
+            digest = _chain(last["hash"] if last else "", agent, pos, sid, data)
+        db.execute("INSERT INTO messages (id, session, seq, role, turn_id, created, data, agent, pos, hash)"
+                   " VALUES (?,?,?,?,?,?,?,?,?,?)", (msg.id, sid, seq, msg.role, turn_id, now_ts(), data,
+                                                     agent, pos, digest))
+        text = _fts_text(msg)
+        if text:
+            db.execute("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)",
+                       (text, msg.id, sid))
+        db.execute("UPDATE sessions SET updated=? WHERE id=?", (now_ts(), sid))
+
+    @staticmethod
+    def _steer_payload(msg: Message) -> dict[str, Any]:
+        data = to_dict(msg)
+        data["meta"] = {k: v for k, v in data.get("meta", {}).items() if k not in ("seq", "pos", "turn_id")}
+        return data
+
+    def queue_steer(self, sid: str, msg: Message) -> None:
+        """Commit before acceptance. Reusing an ID is idempotent only for the same session and payload."""
+        msg.id = msg.id or new_id("m")
+
+        def write(db: sqlite3.Connection) -> None:
+            session = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
+            if session is None:
+                raise KeyError(sid)
+            if reason := json.loads(session["meta"]).get("locked"):
+                raise SessionLocked(f"session {sid} is finished ({reason}) and takes no new turns")
+            # A previously delivered (even subsequently hidden) message must never be queued again.
+            for table in ("messages", "queued_steers"):
+                row = db.execute(f"SELECT session, data FROM {table} WHERE id=?", (msg.id,)).fetchone()
+                if row is not None:
+                    old = from_dict(Message, json.loads(row["data"]), strict=False)
+                    if row["session"] != sid or self._steer_payload(old) != self._steer_payload(msg):
+                        raise ValueError(f"steer message ID {msg.id} already names different content or session")
+                    return
+            anchor = db.execute("SELECT id FROM messages WHERE session=? AND hidden=0 AND "
+                                "json_extract(data, '$.meta.note') IS NULL ORDER BY seq DESC LIMIT 1", (sid,)).fetchone()
+            db.execute("INSERT INTO queued_steers (id, session, basis_message, data) VALUES (?,?,?,?)",
+                       (msg.id, sid, anchor["id"] if anchor else None, json.dumps(to_dict(msg), ensure_ascii=False)))
+        self._tx(write)
+
+    def pending_steers(self, sid: str) -> list[Message]:
+        rows = self._q("SELECT data FROM queued_steers WHERE session=? ORDER BY ordinal", (sid,))
+        return [from_dict(Message, json.loads(row["data"]), strict=False) for row in rows]
+
+    def cancel_steers(self, sid: str, message_id: str = "", *,
+                      allowed: Callable[[Message], bool] | None = None) -> list[Message]:
+        """Atomically retract one still-pending message permitted by the caller's authority predicate."""
+
+        def write(db: sqlite3.Connection) -> list[Message]:
+            rows = db.execute("SELECT id, data FROM queued_steers WHERE session=? ORDER BY ordinal DESC", (sid,)).fetchall()
+            for row in rows:
+                msg = from_dict(Message, json.loads(row["data"]), strict=False)
+                if (not message_id or row["id"] == message_id) and (allowed is None or allowed(msg)):
+                    db.execute("DELETE FROM queued_steers WHERE session=? AND id=?", (sid, row["id"]))
+                    return [msg]
+            return []
+        return self._tx(write)
+
+    def deliver_steers(self, sid: str, turn_id: str, ids: tuple[str, ...] | None = None) -> list[Message]:
+        """Commit queue removal and transcript/log/FTS insertion together, before delivery events.
+
+        This guarantees transcript delivery once, not exactly-once model processing or tool effects.
+        ``ids`` restricts restart recovery to messages accepted before the new user turn began.
+        """
+        def write(db: sqlite3.Connection) -> list[Message]:
+            rows = db.execute("SELECT * FROM queued_steers WHERE session=? ORDER BY ordinal", (sid,)).fetchall()
+            delivered = []
+            for row in rows:
+                if ids is not None and row["id"] not in ids:
+                    continue
+                anchor = row["basis_message"]
+                if anchor and not db.execute("SELECT 1 FROM messages WHERE session=? AND id=? AND hidden=0",
+                                             (sid, anchor)).fetchone():
+                    db.execute("DELETE FROM queued_steers WHERE id=?", (row["id"],))
+                    continue  # undo retired the source work; never revive its queued intent
+                msg = from_dict(Message, json.loads(row["data"]), strict=False)
+                prior = db.execute("SELECT session, data FROM messages WHERE id=?", (msg.id,)).fetchone()
+                if prior is not None:
+                    old = from_dict(Message, json.loads(prior["data"]), strict=False)
+                    if prior["session"] != sid or self._steer_payload(old) != self._steer_payload(msg):
+                        raise ValueError(f"steer message ID {msg.id} already names different content or session")
+                else:
+                    msg.meta.setdefault("turn_id", turn_id)
+                    self._append_message(db, sid, msg, turn_id)
+                    delivered.append(msg)
+                db.execute("DELETE FROM queued_steers WHERE id=?", (row["id"],))
+            return delivered
+        return self._tx(write)
 
     def messages(self, sid: str, since: int = 0, upto: int | None = None) -> list[Message]:
         """Messages with ``since < seq <= upto``, in order."""
@@ -349,6 +443,7 @@ class SessionStore:
                 db.execute("DELETE FROM summaries WHERE session=? AND EXISTS (SELECT 1 FROM messages m WHERE m.session=?"
                            " AND m.seq>? AND m.hidden=0 AND m.pos BETWEEN summaries.start_seq AND summaries.end_seq)",
                            (f"agent:{logged['agent']}", sid, after_seq))
+            db.executemany("DELETE FROM queued_steers WHERE session=? AND basis_message=?", [(sid, i) for i in ids])
             db.executemany("DELETE FROM messages_fts WHERE msg_id=?", [(i,) for i in ids])
             db.execute("UPDATE messages SET hidden=1 WHERE session=? AND seq>? AND pos IS NOT NULL", (sid, after_seq))
             db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL" + keep, (sid, after_seq))

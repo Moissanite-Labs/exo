@@ -779,10 +779,8 @@ def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):
 
     async def go():
         s = await loop.create_session()
-        st = loop.state(s.id)
-
         async def late(*a, **k):  # arrives while the turn is closing, after the model's final reply
-            st.steer.append(Message.user("late note"))
+            assert loop.steer(s.id, Message.user("late note"))
         orig = loop._rounds
         calls = []
 

@@ -226,6 +226,10 @@ class ExoApp(App):
         self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
+        self._retired_steers: set[str] = set()
+        self._cancelled_steers: dict[str, int] = {}
+        self._steer_revision = 0
+        self._session_load_generation = 0
         self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
         self.sending_messages: dict[Block, set[str]] = {}  # delivery events may arrive before turn.send's reply
         self.question: str | None = None
@@ -292,6 +296,7 @@ class ExoApp(App):
         self.apply_layout(self.layout, save=False)
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
+        self.client.on_reconnect = self.refresh_queued_steers
         self.set_interval(1.0, self.reconcile_approvals)
         self.set_interval(3.0, lambda: self.run_worker(self.load_permissions(), exit_on_error=False))  # another window may switch it
         if self.motion:
@@ -538,6 +543,10 @@ class ExoApp(App):
     async def pump(self, since: int) -> None:
         try:
             async for ev in self.client.events(since=since, reconnect=True):
+                if isinstance(ev.body, s.SteerCancelled):
+                    self.record_steer_cancel(ev.body.message_id)
+                elif isinstance(ev.body, s.MessageCompleted) and ev.body.message.role == "user" and ev.body.message.id:
+                    self._retired_steers.add(ev.body.message.id)
                 if ev.session not in (None, self.session):
                     continue
                 try:
@@ -904,9 +913,17 @@ class ExoApp(App):
             self.files = cm.FileIndex(root, executor_required=self.files.executor_required)
 
     async def load_session(self, sid: str, resume: bool = True) -> None:
+        self._session_load_generation += 1
+        generation = self._session_load_generation
+        had = {mid for mid, _ in self.pending_steers}
+        cutoff = self._steer_revision
         got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
+        if generation != self._session_load_generation:
+            return
         if sid != self.session:
             await self.leave_thread(sid)
+        if generation != self._session_load_generation:
+            return
         self.session = sid
         info = got["session"]
         self.set_session_cwd(info.get("cwd"))
@@ -917,6 +934,7 @@ class ExoApp(App):
         self.thread_label = self.label_of(info)
         self.clear_transcript()
         self.render_history(got.get("messages", []))
+        self.restore_queued_steers(got, had, cutoff, remount=True)
         n = sum(1 for m in got.get("messages", []) if not (m.get("meta") or {}).get("note"))
         title = info.get("title") or ""
         what = "private thread" if info.get("kind") == "private" else "thread"
@@ -936,6 +954,7 @@ class ExoApp(App):
 
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
+        self._session_load_generation += 1
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind, cwd=self.new_cwd))
         await self.leave_thread()
         self.session = got["session"]["id"]
@@ -1260,6 +1279,7 @@ class ExoApp(App):
 
     def steer_landed(self, message_id: str) -> None:
         """The steer reached the conversation (message.completed): it is no longer pending."""
+        self._retired_steers.add(message_id)
         for received in self.sending_messages.values():
             received.add(message_id)
         for mid, block in self.pending_steers:
@@ -1272,13 +1292,69 @@ class ExoApp(App):
                 self.refresh_activity()
                 return
 
+    def record_steer_cancel(self, message_id: str) -> None:
+        self._steer_revision += 1
+        self._cancelled_steers[message_id] = self._steer_revision
+
     def drop_pending_steer(self, message_id: str) -> None:
+        self.record_steer_cancel(message_id)
         for mid, block in self.pending_steers:
             if mid == message_id:
                 self.pending_steers.remove((mid, block))
                 block.remove()
                 self.refresh_activity()
                 return
+
+    def restore_queued_steers(self, snapshot: dict[str, Any], had: set[str], cutoff: int | None = None, remount: bool = False) -> None:
+        """Restore cancellable inputs without delivering them or changing their recorded author."""
+        cutoff = self._steer_revision if cutoff is None else cutoff
+        queued = snapshot.get("queued_steers")
+        existing = dict(self.pending_steers)
+        delivered = {m.get("id") for m in snapshot.get("messages", [])}
+        if isinstance(queued, list):
+            ids = {m.get("id") for m in queued}
+            for mid in had - ids:
+                if block := existing.pop(mid, None):
+                    if mid in delivered and not remount:
+                        block.pending, block.steer_state = False, "delivered"
+                        if block.is_mounted:
+                            block.flush()
+                    elif block.is_mounted:
+                        block.remove()
+            for m in queued:
+                mid = m.get("id")
+                if (not mid or mid in self._retired_steers or mid in delivered or mid in existing
+                        or self._cancelled_steers.get(mid, 0) > cutoff):
+                    continue
+                text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
+                author = (m.get("meta") or {}).get("author", "unknown")
+                existing[mid] = Block(text or "[non-text message]", "user" if author == "principal" else "peer",
+                                      meta=f"queued · {author}", steer=True)
+        self.pending_steers = []
+        for mid, block in existing.items():
+            if mid in self._retired_steers or mid in delivered:
+                continue
+            if remount:
+                block = Block(block.text, block.kind, meta=block.meta, steer=True)
+            block.pending = True
+            self.pending_steers.append((mid, block))
+            if remount or not block.is_mounted:
+                self.add(block)
+        self.refresh_activity()
+
+    async def refresh_queued_steers(self) -> None:
+        """A transport reconnect only re-reads the queue. It never resumes model work."""
+        sid, generation = self.session, self._session_load_generation
+        if not sid:
+            return
+        had = {mid for mid, _ in self.pending_steers}
+        cutoff = self._steer_revision
+        try:
+            got = await self.client.call(s.SessionGet(session=sid))
+        except Exception:
+            return  # the transport can still be reconnecting
+        if sid == self.session and generation == self._session_load_generation:
+            self.restore_queued_steers(got, had, cutoff)
 
     async def unsteer(self) -> bool:
         """Pull the newest queued steer message back into the composer (D-045). Never stops the turn."""

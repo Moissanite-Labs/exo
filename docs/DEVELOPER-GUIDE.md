@@ -34,6 +34,13 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+**Durable steering (D-045, #763).** `SessionStore` owns queued messages, cancellation,
+undo anchors and atomic queue-to-transcript delivery. The loop projects this queue
+without another mutable cache. Snapshots add optional `queued_steers` Message
+records alongside existing IDs; clients use them to restore pending controls.
+Resume/read paths never start a provider turn. See [DURABLE-STEERING.md](DURABLE-STEERING.md)
+for ordering, crash boundaries, authority and regression checks.
+
 **Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
 state in `sessions.sqlite`. Composition validates `work_notes` before opening
 runtime resources, then attaches the gated tool, per-session prompt and handoff

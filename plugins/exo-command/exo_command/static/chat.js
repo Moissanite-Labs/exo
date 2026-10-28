@@ -158,7 +158,9 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- events
 
-  let lastEvent = 0;
+  let lastEvent = 0, steerRevision = 0;
+  const cancelledSteers = new Map();
+  const cancelledSteer = id => cancelledSteers.set(id, ++steerRevision);
   function handle(ev) {
     if (ev.seq) lastEvent = Math.max(lastEvent, ev.seq);
     if (loading) { pending.push(ev); return; }
@@ -170,7 +172,7 @@ export function mount(root) {
       if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
     }
     switch (ev.type) {
-      case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
+      case "steer.cancelled": cancelledSteer(b.message_id); if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
       case "session.created": case "session.updated": refreshSessions(); return;
       case "approval.requested": if (gone.has(b.request_id)) return; approvals[b.request_id] = { ...b, session: ev.session, seq: ev.seq }; drawApprovals(); drawSessions(); return;
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
@@ -490,7 +492,7 @@ export function mount(root) {
   async function open(id) {
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
-    const generation = ++snapshotGeneration, had = Object.keys(steers);
+    const generation = ++snapshotGeneration, had = Object.keys(steers), steerCutoff = steerRevision;
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
@@ -498,7 +500,7 @@ export function mount(root) {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
-      dropSteers(id, had, d.steers);
+      restoreSteers(id, had, d, steerCutoff);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
@@ -512,7 +514,7 @@ export function mount(root) {
   }
 
   async function recover() {
-    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers), steerCutoff = steerRevision;
     loading = true;
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
@@ -521,7 +523,7 @@ export function mount(root) {
       sessions = freshSessions;
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
-        dropSteers(id, had, d.steers);
+        restoreSteers(id, had, d, steerCutoff);
         loadedSeq = Math.min(cutoff, d.seq || 0);
         busy = sessions.some((s) => s.id === id && s.status === "live");
         model = d.session.model || model;
@@ -696,12 +698,24 @@ export function mount(root) {
   function drawSteers() {
     const mine = Object.values(steers).filter((x) => x.session === current);
     steerEl.replaceChildren(...mine.map((x) => h("div", { class: "xc-steer-chip", "data-steer": x.id },
-      h("span", { class: "xc-i" }, "steer queued"), h("span", { class: "xc-text" }, short(x.text, 140)),
+      h("span", { class: "xc-i" }, "steer queued" + (x.author ? " · " + x.author : "")), h("span", { class: "xc-text" }, short(x.text, 140)),
       h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
         onclick: () => unsteer(x) }, "\u00D7"))));
   }
-  // A chip the core no longer queues (a restart lost the message, D-045) goes when the thread is read again. Only a
+  // A chip the core no longer queues (it was delivered or cancelled, D-045) goes when the thread is read again. Only a
   // chip drawn before the read was asked for can be judged by it; a core without the list leaves them all.
+  function restoreSteers(sid, had, snapshot, cutoff) {
+    const queued = snapshot.queued_steers;
+    if (!Array.isArray(queued)) { dropSteers(sid, had, snapshot.steers); return; }
+    const ids = queued.map(m => m.id);
+    dropSteers(sid, had, ids);
+    for (const m of queued) {
+      if (!m.id || landed.has(m.id) || steers[m.id] || (cancelledSteers.get(m.id) || 0) > cutoff) continue;
+      steers[m.id] = { id: m.id, text: partsText(m.content) || "[non-text message]", session: sid,
+        author: (m.meta || {}).author || "unknown" };
+    }
+    drawSteers();
+  }
   function dropSteers(sid, had, queued) {
     if (!Array.isArray(queued)) return;
     for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) delete steers[k];
@@ -710,7 +724,7 @@ export function mount(root) {
   async function unsteer(x) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
-      delete steers[x.id]; drawSteers();
+      cancelledSteer(x.id); delete steers[x.id]; drawSteers();
       if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
       else flash("no longer queued");
     } catch (e) { fail(e); }

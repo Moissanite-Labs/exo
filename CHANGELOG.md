@@ -5,6 +5,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Accepted queued corrections and cancellations survive core process restart. Queue removal and transcript
+  insertion commit together, preventing duplicate transcript delivery after a lost event. Reopened terminal
+  and web clients restore queued text and cancellation controls; resume never starts work automatically.
+  Fresh user input follows recovered corrections and retains its own author (D-045, #763).
+
 ### Added
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
