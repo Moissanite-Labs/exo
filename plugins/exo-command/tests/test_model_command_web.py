@@ -106,7 +106,7 @@ def test_paths_and_unknown_words_are_messages_and_core_commands_are_held(page):
         while len(src.sent()) <= i and time.monotonic() < end:
             time.sleep(0.05)
         # Core receipt can precede the HTTP reply. A new submission waits for the pending guard to settle.
-        b.wait("!document.querySelector('.xc-btnrow button').disabled")
+        b.wait("!document.querySelector('.xc-composer .xc-btnrow button').disabled")
     assert src.sent() == lines
 
 
