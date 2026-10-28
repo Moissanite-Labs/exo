@@ -1,10 +1,32 @@
 # Web client look (D-031)
 
-The web client (`plugins/exo-command/exo_command/static/`) now speaks the language of the project site
-(`site/assets/style.css`, the `figure.term` section): same tokens, hairlines instead of boxes, mono uppercase
-labels, `·` as the separator, orange only for the one thing that matters, cold blue for what the system knows.
-Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
-or file from outside.
+The web client (`plugins/exo-command/exo_command/static/`) is a shared workspace for a person and an agent.
+Conversation text uses a readable sans serif face; code and measurements use monospace. Angular forms,
+quiet surface levels and the orange accent retain the project's identity. Strong color identifies the
+current action, attention requests and errors. Text names each state as well.
+
+The application bar keeps navigation, connection state and Appearance available across views. Dark is the
+default; Light and System are explicit choices. Only that choice is saved in browser storage, alongside
+the existing conversation layout preference. No font, asset or dependency loads from another site.
+
+Navigation links support browser Back and Forward. The keyboard skip link moves directly to the main
+content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
+“Connected” describes the event connection, while the conversation reports its own work state.
+
+## Conversation drafts and unconfirmed sends (D-045)
+
+Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
+visiting another web view restores that conversation's draft. New thread starts with its own composer;
+returning to the source conversation restores its draft. The initial composer belongs to the conversation
+created by its first submission. Drafts live only in JavaScript memory, never browser storage or the core.
+Reloading or closing the page discards them.
+
+While a submission is pending, Send says “Sending…” and repeated Enter does not submit it twice. You can
+keep drafting or visit another conversation. If the reply fails, the original text returns to an unchanged
+empty composer. If you wrote something newer, “Restore text” adds the failed text ahead of that newer
+draft when you choose it. Recovery stays with the originating conversation, including through view changes.
+Check the transcript before sending again: an unconfirmed reply may have reached the core. Nothing retries
+automatically. “Dismiss” removes the recovery notice; it does not erase the current draft.
 
 ## Connecting to the core (D-036)
 
@@ -78,6 +100,13 @@ same-origin or none. Besides the launch route, only the page shell (`/`, `/stati
 Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
 below.
 
+`POST /api/approvals/<id>` takes a JSON object with `decision` (`allow`, `deny` or `allow_always`) and an optional
+`note`. An array, null or scalar gets 400 with `{"error": "body must be a json object"}` before any approval answer
+reaches the core; malformed JSON keeps its 400 `{"error": "bad json"}` response (#740).
+JSON deeper than the decoder supports gets that same approval error. The shared body reader used by chat and
+provider POSTs rejects such input with its existing 400 `{"error": "body must be a json object"}` response
+(follow-up to #751).
+
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
 credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
@@ -119,6 +148,11 @@ the policy and does not run with it.
 
 ## Screens
 
+Current workspace samples are `docs/ui/workspace-dark.png`, `workspace-light.png` and
+`workspace-mobile.png`. They contain synthetic conversations. `scripts/shots_workspace.py OUTDIR`
+renders both themes at 320, 390, 768, 1024 and 1440 pixels and records viewport geometry. It uses a
+temporary browser profile and a stand-in server, without a real core or credentials.
+
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
 instrument column on the right), `web-02-turn.png` (a turn with tools running), `web-03-approval.png` (an
 approval panel) and `web-04-memory.png` (the memory column filled in). `scripts/promo_shots_web.py` makes them.
@@ -126,13 +160,15 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 ## What is where
 
-- **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
-  pulses orange while a turn runs and is hollow when idle.
-- **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
+- **Brand bar.** The Exo mark, selected conversation, navigation links, Appearance and connection state.
+  The square activity indicator turns orange while a turn runs and is hollow when idle.
+- **Status strip** (wrapping instruments, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
   `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
+  Instruments wrap within the available conversation width; model names and values remain readable. Notices
+  occupy a full row and wrap, including long unbroken text, in both classic and inverse layouts.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
   and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with
@@ -151,7 +187,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
-  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  automatically. Each card shows the answer sequence for its available options and says "Ctrl+F to focus the first
+  approval". The help changes during always confirmation and deny-note entry. A deliberately focused card has an
+  accent outline. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
@@ -162,15 +200,27 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   message has the sender in the header, a grey rule and the line "from another session, not from you": it never
   looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
   (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
-  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
-- **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
-  `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
+  live `peer.message` and its stored message make one card.
+- **Composer.** A framed writing area with a separate action row. The desktop prompt says `steer ›` instead of
+  `›` while a turn runs. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
-- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
-  the core `rename` built-in, principal only (D-069).
+- **Conversation list.** Find a conversation filters loaded titles, IDs and agent names. The count names its
+  loaded scope; this is not full-history or message search. The status selector shows all conversations,
+  working conversations or those with an approval waiting. Search and filtering do not switch the active
+  conversation or touch its draft. Clear or Show all conversations resets the search.
+  Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
+  search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
+  does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
+  Each thread has a Rename button. It opens a labeled title field with Save and Cancel.
+  Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
+  current composer draft. A refused save keeps the title draft and shows the error.
+- **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
+  It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
+  readers already at the newest item continue following it. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -181,18 +231,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
   whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
   reconnects and gets the reset.
-- **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
-  route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
-  `?boot=0`, and after the first time in a tab.
+- **Startup.** The workspace opens directly. Connection status and authentication errors remain visible;
+  there is no timed boot overlay or duplicate startup request for a visual check sequence.
 
 ## Empty thread and instrument column
 
-- An empty thread shows the site's hero: the masked hairline grid and the node shell around an orange core
-  (`hero.js`, ported from `site/assets/main.js`), behind a brand block (`E X O`, agent, model, memory line)
-  and key hints as chips. It fades out when the first item arrives. It draws about 24 frames a second with the
-  pixel ratio capped at 1.5, stops when the tab is hidden or the canvas is off screen, and draws one still
-  frame under reduced motion. Measured in headless Chrome on an idle empty thread: 1.7 percent main-thread
-  time with motion, 0.0 percent with reduced motion.
+- An empty thread asks “What are we working on?” with a short prompt and relevant keyboard hints.
+  Its presentation is static. Opening an empty conversation starts no canvas animation,
+  observers or model calls. The prompt disappears when the first transcript item arrives.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
   ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
@@ -247,7 +293,7 @@ with the approval cards under it, then the thread with the newest item first; cl
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
-(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+(`localStorage` key `xc-layout`; Appearance uses the separate `xc-appearance` key). The code is `static/layout.js` (pure, tested in node)
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
@@ -321,8 +367,9 @@ table and snapshot stubbed, no key read) and shoots every tab with data and empt
 
 ## Motion and accessibility
 
-Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
-turns them all off and hides the boot. The page is dark only, like the site, and paints its own background.
+Motion respects `prefers-reduced-motion: reduce`. Focus remains visible in both themes. Appearance can
+follow the operating system or keep an explicit light or dark choice. The mobile composer puts its writing
+area above its actions so a narrow window does not squeeze the text between buttons.
 
 ## Fix found on the way
 
@@ -343,3 +390,12 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+### Chat notice ownership
+
+The chat status strip shows notices for the selected session only. Unscoped notices do not replace its
+status. Model retry and fallback notices carry `source: model_route` and a `call_id` matching the
+`model.call` record. A successful matching call clears that transient warning; another call cannot.
+Turn completion clears any remaining route warning, while newer general notices and command errors
+remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
+notices until another status message or thread selection replaces them.

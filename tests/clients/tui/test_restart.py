@@ -1,4 +1,4 @@
-from exo_tui.restart import has_opener, open_tab, restart_command
+from exo_tui.restart import dropped_permission_flags, has_opener, open_tab, restart_command
 
 
 def test_command_from_env_and_fallback():
@@ -68,3 +68,20 @@ def test_native_opener_wait_is_bounded(monkeypatch):
     monkeypatch.setattr(rs.subprocess, 'run', timed_out)
     result = rs.open_tab(['exo'], {}, 'darwin')
     assert result != 'opened' and seen == [15]
+
+
+def test_dropped_permission_flags_reads_the_command_new_command_starts_from():
+    assert dropped_permission_flags({}, ["exo", "tui", "--seat", "c"]) == []
+    assert dropped_permission_flags({}, ["exo", "tui", "--skip-permissions"]) == ["--skip-permissions"]
+    assert dropped_permission_flags({}, ["exo", "tui", "--dangerously-skip-permissions"]) == [
+        "--dangerously-skip-permissions"]
+    # argparse takes an unambiguous abbreviation, and new_command strips it, so it is dropped too.
+    assert dropped_permission_flags({}, ["exo", "tui", "--skip-perm"]) == ["--skip-permissions"]
+    assert dropped_permission_flags({}, ["exo", "--not-a-flag"]) == []
+
+
+def test_dropped_permission_flags_follows_restart_cmd_not_argv():
+    # With EXO_RESTART_CMD set the new window runs that command, so that command is what can carry the flag.
+    env = {"EXO_RESTART_CMD": "exo-canary --skip-permissions"}
+    assert dropped_permission_flags(env, ["exo", "tui"]) == ["--skip-permissions"]
+    assert dropped_permission_flags({"EXO_RESTART_CMD": "exo-canary"}, ["exo", "tui", "--skip-permissions"]) == []

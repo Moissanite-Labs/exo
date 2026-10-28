@@ -235,6 +235,47 @@ def test_nightly_add_candidate_never_wins_on_its_own_evidence(learner, monkeypat
     assert status(learner, res["id"]) == "proposed"
 
 
+def test_candidates_for_filters_by_computed_weight_not_confidence(learner, monkeypatch):
+    """issue 13 (#2): climb candidacy keys on the noisy-or weight label, not the stale `confidence` field. A
+    low-weight lesson whose stored `confidence` says otherwise must not slip through as a climb candidate."""
+    from exo import taste
+    from exo.consolidate import load_state
+
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    edit = correction(rt, "plain status lines please", "s1")
+    res = propose(rt, evidence=[edit["id"]])
+    assert load_state(rt.ledger).proposals[res["id"]].confidence != "low"
+
+    # Force the computed weight label to "low" (as a genuinely low-weight lesson computes). The old
+    # `p.confidence == "low"` check would have admitted it; the fix keys on the label.
+    monkeypatch.setattr(taste, "label", lambda w, *a, **k: "low")
+    assert all(c["proposal"] != res["id"] for c in candidates_for(learner, 10))
+
+    # Control: with the real (medium) label it remains a candidate.
+    monkeypatch.setattr(taste, "label", lambda w, *a, **k: "medium")
+    assert any(c["proposal"] == res["id"] for c in candidates_for(learner, 10))
+
+
+def test_candidates_for_drops_a_lesson_whose_evidence_has_decayed(learner, monkeypatch):
+    """Nothing mocked but the clock: a year after its one correction a preference has decayed to a low weight
+    (half-life 30 days), so it is no longer a climb candidate though its stored `confidence` never changed."""
+    from datetime import datetime, timedelta, timezone
+
+    from exo.consolidate import load_state
+
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    res = propose(rt, evidence=[correction(rt, "plain status lines please", "s1")["id"]])
+    assert any(c["proposal"] == res["id"] for c in candidates_for(learner, 10))   # fresh: medium weight
+    later = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    monkeypatch.setattr("exo.learn.climb._now", lambda: later, raising=False)
+    assert load_state(rt.ledger).proposals[res["id"]].confidence != "low"
+    assert all(c["proposal"] != res["id"] for c in candidates_for(learner, 10))
+
+
 def test_nightly_drop_candidate_is_not_held_back_by_its_own_evidence(learner, monkeypatch):
     """A harmful auto-promoted lesson is judged on the cases it was not learned from. Before, the replays of the
     verdicts it cites, and the preference pair its acceptance wrote, sat in the held-out set and kept it."""

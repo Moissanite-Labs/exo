@@ -65,8 +65,6 @@ DEFAULTS: Dict[str, Any] = {
     "decision_model": True,     # ask the decision role to tighten (never loosen) rule outcomes
 }
 _MAX_BODY_FILE = 256 * 1024
-# Tools that cannot change anything; on an internal error these still run.
-_SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
@@ -81,6 +79,20 @@ def _every_part(c: gate.Classification) -> list:
             out.append(p)
             todo += p.parts
     return out
+
+
+def _floor(c: gate.Classification, main: bool = False) -> str:
+    """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any.
+    A line with a quoted prefix assignment (#471) was read by main as its reading as before (``before``), so with
+    ``main`` that reading's is taken, and without it that reading and its split readings count too."""
+    if main:
+        m = c.before if c.before is not None else c
+        rs = m.split_readings[:1] or [m]
+    else:
+        rs = [c, *c.split_readings] + ([c.before, *c.before.split_readings] if c.before is not None else [])
+    return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
 def _body_path(f: str) -> Optional[Path]:
@@ -376,12 +388,16 @@ class Gate:
         """What bypass does with an ask in a turn the principal started: ``allow``, ``hold`` (a post that breaks
         the posting rules goes back to the agent with the fixes) or ``floor`` (store writes and secrets still ask).
         None when bypass is off, or the turn was started by anyone else (#598): a peer, bus wake, job notice or
-        local caller keeps its card, as when bypass was off."""
+        local caller keeps its card, as when bypass was off. The floor counts each reading and part (``gate.no_grant``):
+        a camelCase tool leads with its hump word, and its store write or secret is in its ``floor`` reading (#602);
+        a post that breaks the posting rules with such a reading only is held, as before."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if c.category in perm.FLOOR:
+        if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
-        return "hold" if d.violations else "allow"
+        if d.violations:
+            return "hold"
+        return "floor" if _floor(c) or gate.no_grant(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -605,13 +621,14 @@ class Gate:
                 store = gate.no_grant(c)    # a part and each reading count too (#311, #399, #471)
             except Exception:
                 pass
-            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
-                return None
+            if self.settings.mode == "observe" and not (secret or store):
+                return None     # observe mode only watches: the action goes ahead, and the error is logged above
+            # Any other call asks, reads included, and the card is once-only so no answer becomes a grant (D-084).
             card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
-                    "rule_key": f"exo-gate:error:{tool_name}"}
-            if store:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
-                card.update(approvers=["principal"], once=True)
+                    "rule_key": f"exo-gate:error:{tool_name}", "once": True}
+            if store or secret:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
+                card.update(approvers=["principal"])
             return card
 
     def _rules(self, tool: str, args: dict, risk: str, cwd: str = "", c: Optional[gate.Classification] = None,
@@ -657,8 +674,11 @@ class Gate:
                 d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
                 d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
-        if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
-            d.reason += f" (registry risk is high and {tool} is not a known tool)"
+        # Any reading counts: a camelCase MCP tool leads with its hump word and is `unknown` in its floor (#602).
+        unknown = any(r.category == "unknown" for r in gate.readings(c))
+        if risk == "high" and unknown and _RANK[d.outcome] < _RANK["ask"]:
+            known = "is not a known tool" if c.category == "unknown" else "is known only by its hump words"
+            d.reason += f" (registry risk is high and {tool} {known})"
             d.outcome = "ask"
         # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
         if self.executor_required and d.outcome != "deny" and any(
@@ -742,8 +762,9 @@ class Gate:
             body["turn_author"] = author  # the turn the bypass served (#598)
             if bypass == "allow":
                 body["bypass"] = asked
-        elif bypass == "floor":
-            body["bypass"] = {"floor": c.category}
+        elif bypass == "floor":   # main's reading's floor, a split reading's, or the first a part has (#591, #602)
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c) or next(
+                (x.category for x in _every_part(c) if x.category in perm.FLOOR), c.category)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
