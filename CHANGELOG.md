@@ -31,6 +31,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- The core retries its start after a failed or cancelled start instead of failing every later command
+  (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
+  raise once and leave every later command with the same `internal` error until exod restarted. A start cut
+  short inside the MCP step no longer leaves its servers running: the retry stops them first, and engine close
+  always closes MCP. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 

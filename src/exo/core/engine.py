@@ -271,7 +271,7 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -280,7 +280,14 @@ class CoreRuntime:
             self._started = asyncio.ensure_future(self._start_runtime())
             if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
-        await asyncio.shield(self._started)
+        try:
+            await asyncio.shield(self._started)
+        except BaseException:
+            # A start that raised (the _main_status provider probe, any error) or was cancelled is cleared to retry.
+            task = self._started
+            if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
+                self._started = None
+            raise
 
     async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         from exo import providers_setup
@@ -360,9 +367,8 @@ class CoreRuntime:
                 self.scheduler.close()
 
     async def _close_mcp(self) -> None:
-        if self._started is not None:
-            await self.mcp.close()
-            self._started = None
+        await self.mcp.close()  # always: a start cleared after failing may have left servers running
+        self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
