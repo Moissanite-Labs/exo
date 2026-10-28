@@ -42,6 +42,8 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    from exo.work_checkpoint import CheckpointConfig
+    checkpoint_config = CheckpointConfig(cfg.get("work_checkpoint"))
     notebook_config = None
     if "work_notes" in cfg.data:
         from exo.work_notebook import NotebookConfig
@@ -109,6 +111,8 @@ def create(seat: str | None = None) -> CoreEngine:
     if notebook_config is not None and notebook_config.enabled:
         from exo.work_notebook import attach as attach_work_notebook
         attach_work_notebook(eng, notebook_config, principal=principal)
+    from exo.work_checkpoint import attach as attach_work_checkpoint
+    attach_work_checkpoint(eng, checkpoint_config, principal=principal or "")
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)

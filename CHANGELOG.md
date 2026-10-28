@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Automatic continuity checkpoints index recent tool and job records after interruption,
+  compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
+  private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
