@@ -4843,7 +4843,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 - **Amendment (2026-10-27, #732):** the web keeps last-call input usage separate from the last `/context`
   next-call estimate. Usage events never overwrite that estimate or its reported capacity. Both labels
-  identify their source state. Parent usage rollups do not count as one model call. No provider limit, routing or token accounting rule changes.
+  identify their source state. Parent usage rollups do not count as one model call.
+  The estimate and its capacity come from one matching report. New turns, route changes and refreshes
+  invalidate the estimate. A known current-route capacity can remain visible while the estimate is pending
+  or unavailable, without a utilization gauge. Session, route and request-generation checks reject late reports. No provider limit, routing or token accounting rule changes.
 
 - **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
 - **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,

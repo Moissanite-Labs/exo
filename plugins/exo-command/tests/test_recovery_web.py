@@ -80,7 +80,7 @@ const input=nodes.find(x=>x.tagName==="TEXTAREA"), send=nodes.find(x=>x.attrs.cl
 const log=nodes.find(x=>x.attrs.class==="xc-log"), strip=nodes.find(x=>x.attrs.class==="xc-strip");
 assert.match(strip.textContent,/4.2k of 8.2k/); assert.ok(!strip.textContent.includes("200k"));
 // Usage describes the completed call, not the independent next-call estimate.
-bus.emit({seq:101,session:"s1",type:"model.call",body:{route:"fake:y",usage:{input_tokens:5000,cache_read_tokens:2000}}});
+bus.emit({seq:101,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:5000,cache_read_tokens:2000}}});
 assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
 assert.match(strip.textContent,/last call7\.0k input tokens/);
 const side=nodes.find(x=>x.attrs.class==="xc-side");
@@ -91,9 +91,9 @@ assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
 assert.match(strip.textContent,/last call7\.0k input tokens/);
 // A newer call with absent, empty, or zero usage must not retain the prior call's counts.
 for (const [seq, usage] of [[104,undefined],[106,{}],[108,{input_tokens:0,cache_read_tokens:0}]]) {
-  bus.emit({seq:seq-1,session:"s1",type:"model.call",body:{route:"fake:y",usage:{input_tokens:5000,cache_read_tokens:2000}}});
+  bus.emit({seq:seq-1,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:5000,cache_read_tokens:2000}}});
   assert.match(strip.textContent,/last call7\.0k input tokens/);
-  bus.emit({seq,session:"s1",type:"model.call",body:{route:"fake:y",usage}});
+  bus.emit({seq,session:"s1",type:"model.call",body:{route:"fake:x",usage}});
   assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
   assert.ok(!strip.textContent.includes("last call"));
   assert.ok(!strip.textContent.includes("cache29%"));
