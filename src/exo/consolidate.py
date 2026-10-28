@@ -526,7 +526,7 @@ Reply with one JSON object and nothing else:
 _JSON_STARTS = 64   # brace positions tried before the reply counts as having no object
 
 
-def _decode_model_json(raw: str) -> dict:
+def _decode_model_json(raw: str) -> Any:
     """Decode the first JSON object in model output, skipping the prose around it.
 
     The old greedy match ran to the last brace in the text, so a trailing
