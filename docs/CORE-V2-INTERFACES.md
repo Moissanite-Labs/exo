@@ -8,7 +8,9 @@ additively (new optional fields with defaults). Ask the lead before changing any
 
 - `ContentPart`: type `text/image/reasoning`, text = "", data? (base64), mime?, url?, signature?
   (opaque reasoning token, send back unchanged). Helper `ContentPart.of_text(s)`.
-- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON).
+- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON). Arguments that did not parse as a JSON object
+  arrive as `BadArguments`, an empty dict whose `error` says why. The registry answers that call with an error
+  result and runs no hook and no tool (exo-desktop #52, `docs/TOOLS.md` "Arguments that did not parse").
 - `ToolResult`: call_id, content: list[ContentPart] = [], is_error = False. Helpers `of_text()`, `.text()`.
 - `Message`: role `system/user/assistant/tool`, content: list[ContentPart] = [], tool_calls: list[ToolCall]
   = [], tool_results: list[ToolResult] = [], id?, meta: dict = {} (never sent to a provider).
