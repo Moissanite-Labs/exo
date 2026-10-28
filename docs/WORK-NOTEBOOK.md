@@ -15,10 +15,24 @@ exo
 ```
 
 Configuration is read when the core starts. Ask the agent to maintain working
-notes for the task. In the TUI or `exo chat`, `/work` shows the current document
-and `/work history` lists recent revisions. These commands require a principal
+notes for the task. `/work` shows the current document and `/work history` lists recent
+revisions in the TUI, `exo chat` and web Chat. These commands require a principal
 connection and pass through the normal tool gate and configured executor.
-The web composer does not yet execute `/work`.
+
+In web Chat, **Working notes** opens an inspector beside the transcript. It shows the
+goal, constraints, step statuses, blockers, next action, sources, revision and transcript
+anchor. History shows recent revision metadata, not saved document bodies. Notes are
+agent-authored working claims. A source names a transcript record; its presence is not
+independent verification. Stale notes stay visible for inspection with an undo warning.
+Review them and ask the agent to correct the notes in a message before reusing them.
+
+The inspector reads only when opened, switched to another conversation, explicitly
+refreshed, or a turn completes while it is open. Button actions leave the composer text
+and selection intact. Loading, empty, disabled and refused reads are shown explicitly;
+opening the inspector never enables notes or writes a revision. Reads use the existing
+principal connection, tool gate and configured executor. The inspector does not read the
+session database. Closing the inspector or leaving Chat invalidates pending responses;
+a late response cannot replace another conversation's notes.
 
 An example configuration in `$EXO_HOME/config.json`:
 

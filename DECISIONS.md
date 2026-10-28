@@ -5119,6 +5119,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-086: Optional session working notes
 
+- **Amendment 2026-10-27 (web inspector):** expose existing principal-only `/work [show|history]`
+  reads in web Chat and a discoverable Working notes inspector. Show structured agent-authored
+  claims, revision metadata, sources and stale-after-undo warnings. Source presence is not
+  verification. Buttons preserve the composer; stale notes are corrected by asking the agent in
+  a message. Session and request generations guard reads, background turn refreshes and unmounts.
+  Disabled and refused reads remain explicit. No notebook enabling, writes, direct database reads,
+  new authority path or delegate control surface is added.
+
 - **Date:** 2026-10-23
 - **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
 - **Problem:** A long task's current goal, constraints, blockers and next action can become scattered

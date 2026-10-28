@@ -126,7 +126,9 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 
 `/work [show|history]` reads the current session's saved working notes when
 `work_notes.enabled` is true. It requires a principal connection and passes
-through the tool gate and configured executor. See [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
+through the tool gate and configured executor. In web Chat it opens the structured Working notes
+inspector, also available from its button. No read enables notes or writes a revision.
+See [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
 
 All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 

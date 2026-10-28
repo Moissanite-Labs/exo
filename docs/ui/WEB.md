@@ -6,6 +6,20 @@ labels, `·` as the separator, orange only for the one thing that matters, cold 
 Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
 or file from outside.
 
+## Working notes (D-086)
+
+In Chat, **Working notes** opens a read-only inspector for the selected conversation.
+`/work [show|history]` opens the same inspector. Goal, constraints, steps, blockers, next
+action and sources are agent-authored claims. Revision metadata and stale-after-undo
+warnings explain which saved document you are reading. A source identifies a transcript
+record, not independent verification. Ask the agent in a message to correct stale notes.
+
+The inspector preserves composer text and selection. It refreshes on demand, on thread
+switches and after completed turns while open. History lists revision metadata. Empty,
+disabled and refused states are explicit. Reads use the same principal-only command,
+gate and executor as other clients. Opening the inspector does not enable or write notes.
+See [working notes](../WORK-NOTEBOOK.md) for configuration and limits.
+
 ## Connecting to the core (D-036)
 
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
