@@ -417,10 +417,10 @@ class Loop:
         role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
         st.stats["model_calls"] += 1
         st.stats["model_ms"] += s.total_ms
-        st.stats["fallbacks"] += sum(1 for a in s.attempts if a.get("outcome") not in ("ok", None))
         served = ""
         if s.error is None:  # the route the router stamped, else the attempt that succeeded (D-025)
             served = s.route or next((a.get("route", "") for a in reversed(s.attempts) if a.get("outcome") == "ok"), "")
+        st.stats["fallbacks"] += trace.recovered_fallbacks(s.attempts, served)
         selection = st.reasoning_opts.get("_exo_reasoning")
         reasoning = next((a["reasoning"] for a in reversed(s.attempts) if "reasoning" in a),
                          {"requested": selection["requested"], "sent": None, "requested_route": selection["route"],

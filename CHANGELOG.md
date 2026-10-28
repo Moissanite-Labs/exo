@@ -23,6 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Failed model calls no longer count as recovered fallbacks or produce findings claiming the call fell back. Successful recovery and legacy trace inference remain visible (#748).
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - Bound GitHub token and disabled modes prevent ordinary gh host-keyring fallback after a command removes token environment variables. Only a public invalid fallback is written to private gh configuration.
