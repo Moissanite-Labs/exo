@@ -65,8 +65,6 @@ DEFAULTS: Dict[str, Any] = {
     "decision_model": True,     # ask the decision role to tighten (never loosen) rule outcomes
 }
 _MAX_BODY_FILE = 256 * 1024
-# Tools that cannot change anything; on an internal error these still run.
-_SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
@@ -81,6 +79,14 @@ def _every_part(c: gate.Classification) -> list:
             out.append(p)
             todo += p.parts
     return out
+
+
+def _floor(c: gate.Classification, main: bool = False) -> str:
+    """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any."""
+    rs = (c.split_readings[:1] or [c]) if main else [c, *c.split_readings]
+    return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
 def _body_path(f: str) -> Optional[Path]:
@@ -381,11 +387,11 @@ class Gate:
         a post that breaks the posting rules with such a reading only is held, as before."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if c.category in perm.FLOOR:
+        if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
         if d.violations:
             return "hold"
-        return "floor" if gate.no_grant(c) else "allow"
+        return "floor" if _floor(c) or gate.no_grant(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -610,11 +616,8 @@ class Gate:
             except Exception:
                 pass
             if self.settings.mode == "observe" and not (secret or store):
-                # Observe mode only watches: the action goes ahead by design, and the
-                # error is logged above.
-                return None
-            # A read tool (or any tool) whose classification raised must fail CLOSED (ask),
-            # not open. Previously read tools returned None here and were silently allowed.
+                return None     # observe mode only watches: the action goes ahead, and the error is logged above
+            # Any other call asks, reads included, and the card is once-only so no answer becomes a grant (D-084).
             card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
                     "rule_key": f"exo-gate:error:{tool_name}", "once": True}
@@ -753,9 +756,9 @@ class Gate:
             body["turn_author"] = author  # the turn the bypass served (#598)
             if bypass == "allow":
                 body["bypass"] = asked
-        elif bypass == "floor":   # the line's floor category, or else the first a reading or part has (#602)
-            body["bypass"] = {"floor": next((x.category for x in _every_part(c) if x.category in perm.FLOOR),
-                                            c.category)}
+        elif bypass == "floor":   # main's reading's floor, a split reading's, or the first a part has (#591, #602)
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c) or next(
+                (x.category for x in _every_part(c) if x.category in perm.FLOOR), c.category)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}

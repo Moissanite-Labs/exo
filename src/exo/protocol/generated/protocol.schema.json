@@ -969,6 +969,10 @@
         "retries": {
           "type": "integer",
           "default": 0
+        },
+        "call_id": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
@@ -1018,6 +1022,14 @@
             "warn"
           ],
           "default": "info"
+        },
+        "source": {
+          "type": "string",
+          "default": ""
+        },
+        "call_id": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,

@@ -219,7 +219,7 @@ def test_agent_principal_private_child_and_locked_boundaries(storage):
 
 def test_disabled_has_no_storage_registration_or_prompt_work(tmp_path, monkeypatch):
     assert attach(SimpleNamespace(), {"enabled": False}) is None
-    eng = engine(tmp_path, monkeypatch, work_notes={"enabled": False})
+    eng = engine(tmp_path, monkeypatch, work_notes={"enabled": False}, work_checkpoint={"enabled": False})
 
     async def scenario():
         try:
