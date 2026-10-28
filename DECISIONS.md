@@ -6323,7 +6323,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   under that number. #601 then merged a second D-082, which #725 moved to D-087, and #613 merged D-083. #510
   holds D-084 on #508's branch, open PR #511 holds D-085 and #512 merged D-086. So this decision is D-088. The
   messages of #500's first two commits still say D-082. #508's text, taken in later, is renumbered the same way.
-  On 2026-10-28 #742 merged a second D-084 into main, and open PR #747 took D-089. No other PR uses D-088.
+  On 2026-10-28 #742 merged a second D-084 into main, and #747 merged D-089. No other PR uses D-088.
 - **Amendment 2026-10-27 (checker round on #500):** four more routes past the shutdown steps, each now tested.
   A learner that failed to close skipped plugin cleanup, the writer release and the store close. It is now
   recorded like a failed step. A step that failed before the bound was lost when the drain timed out, so a job
