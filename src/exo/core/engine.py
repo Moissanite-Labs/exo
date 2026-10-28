@@ -588,8 +588,9 @@ class CoreRuntime:
                 "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
-        info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
-        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session)), "steers": queued}
+        info, queued = self._info(b.session), self.store.pending_steers(b.session)
+        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session)),
+                "steers": [m.id for m in queued], "queued_steers": to_dict(queued)}
 
     async def _session_resume(self, b: s.SessionResume) -> dict[str, Any]:
         self._info(b.session)
@@ -606,7 +607,12 @@ class CoreRuntime:
 
     async def _session_undo(self, b: s.SessionUndo) -> dict[str, Any]:
         self._info(b.session)
+        queued = self.store.pending_steers(b.session)
         removed = self.store.undo(b.session, b.turns)
+        remaining = {m.id for m in self.store.pending_steers(b.session)}
+        for message in queued:
+            if message.id not in remaining:
+                self.hub.publish(s.SteerCancelled(message_id=message.id or "", text=message.text()), b.session)
         if removed and (rewound := getattr(self.loop.context, "rewound", None)):
             rewound(b.session)  # the context plugin drops what it kept from the undone turns (D-041)
         info = self.store.update_session(b.session)

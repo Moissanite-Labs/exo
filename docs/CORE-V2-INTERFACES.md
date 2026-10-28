@@ -96,9 +96,13 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `session.create` SessionCreate: title = "", seat?, model?, cwd?
 - `session.list` SessionList: limit = 50, seat?
 - `session.get` SessionGet: session
-  Its queued `steers` list contains message IDs. `Loop.steer` assigns a missing ID only after the running turn
-  accepts the message, preserving a supplied ID. Snapshot, cancellation and delivered transcript use that same
-  identity. Refusal leaves the message and queue unchanged.
+  Its queued `steers` list contains message IDs. Optional `queued_steers: [Message]` carries the same saved
+  queue's content parts and original authors, allowing clients to restore pending controls after reconnect.
+  Present `[]` is authoritative; absence means an older core. Both projections use one queue read.
+  `Loop.steer` assigns a missing ID and commits accepted content before acknowledgement, preserving a
+  supplied ID. Snapshot, cancellation and delivered transcript use that identity. Refusal leaves the
+  message and queue unchanged. Reads never deliver pending steers or start a turn. See
+  [durable queued steering](DURABLE-STEERING.md) for atomic delivery, undo and restart behavior.
 - `session.fork` SessionFork: session, at_message?, title = ""
 - `session.resume` SessionResume: session. It closes a tool round a crash left open. While a turn is running in
   the session it only reads, so a second window never writes into a live tool call

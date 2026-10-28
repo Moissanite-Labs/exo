@@ -164,8 +164,11 @@ async def _create(c, p, q, body):
 async def _transcript(c, p, q, body):
     since = c.state.seq  # before the RPC: replay events arriving while the snapshot is read
     res = await c.source.call(s.SessionGet(session=p[2]))
-    return {"session": res.get("session"), "messages": res.get("messages") or [], "steers": res.get("steers") or [],
-            "seq": since}
+    out = {"session": res.get("session"), "messages": res.get("messages") or [], "steers": res.get("steers") or [],
+           "seq": since}
+    if "queued_steers" in res:  # absence preserves compatibility with older cores
+        out["queued_steers"] = res["queued_steers"]
+    return out
 
 
 async def _send(c, p, q, body):

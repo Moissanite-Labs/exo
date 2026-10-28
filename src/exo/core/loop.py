@@ -78,13 +78,18 @@ WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; to
 
 
 class _SessionState:
-    def __init__(self) -> None:
+    def __init__(self, store: SessionStore, session: str) -> None:
+        self.store, self.session = store, session
         self.lock = asyncio.Lock()
         self.interrupt = asyncio.Event()
-        self.steer: list[Message] = []
         self.running = self.accepting_steers = False
         self.total = Usage()
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
+
+    @property
+    def steer(self) -> list[Message]:
+        """The durable queue, projected without a second mutable cache."""
+        return self.store.pending_steers(self.session)
 
 
 class Loop:
@@ -121,7 +126,9 @@ class Loop:
     # ---------------------------------------------------------------- public
 
     def state(self, session: str) -> _SessionState:
-        return self._state.setdefault(session, _SessionState())
+        if session not in self._state:
+            self._state[session] = _SessionState(self.store, session)
+        return self._state[session]
 
     async def create_session(self, **kw: Any) -> ev.SessionInfo:
         info = self.store.create_session(**kw)
@@ -156,20 +163,16 @@ class Loop:
         st = self.state(session)
         if not st.accepting_steers:
             return False
-        msg.id = msg.id or new_id("m")
-        st.steer.append(msg)
+        msg.meta.setdefault("author", provenance.infer(msg.role, msg.meta))
+        self.store.queue_steer(session, msg)
         return True
 
     def unsteer(self, session: str, message_id: str = "", principal: bool = True) -> list[Message]:
         """Pull queued steer messages back before they are delivered (D-045): the one with ``message_id``, or
         with no id the newest. A message already added to the conversation is not here any more: nothing is
         removed and the list is empty. ``principal=False`` (a local caller) never removes the principal's words."""
-        st = self.state(session)
-        mine = [m for m in st.steer if principal or not provenance.is_principal_author(provenance.author_of(m))]
-        gone = [m for m in mine if m.id == message_id] if message_id else mine[-1:]
-        for m in gone:
-            st.steer.remove(m)
-        return gone
+        return self.store.cancel_steers(session, message_id, allowed=lambda m:
+            principal or not provenance.is_principal_author(provenance.author_of(m)))
 
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
                    mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
@@ -188,8 +191,7 @@ class Loop:
         msg.meta.setdefault("author", provenance.infer("user", msg.meta))
         st = self.state(session)
         if mode == "steer" and st.accepting_steers:
-            msg.id = msg.id or new_id("m")  # a client can name it to cancel it (D-045)
-            st.steer.append(msg)
+            self.store.queue_steer(session, msg)  # persisted before the caller can acknowledge acceptance
             return None
         async with st.lock:
             self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
@@ -220,7 +222,9 @@ class Loop:
         turn_id, t0 = new_id("t"), time.monotonic()
         st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
         waited = self.approval_ms.get(session, 0)
+        recovered = tuple(m.id for m in st.steer if m.id)  # accepted before this newer user message
         await self._repair(session)
+        await self._deliver_steers(session, turn_id, recovered)  # recovery never supersedes the fresh ingress author
         await self._add(session, user, turn_id)
         soul = ""
         if self.before_turn is not None:
@@ -238,11 +242,9 @@ class Loop:
         try:
             await self._rounds(session, turn_id, user, st, result)
             while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
-                late = list(st.steer)
-                st.steer.clear()
-                for m in late:
-                    await self._add(session, m, turn_id)
-                await self._rounds(session, turn_id, late[-1], st, result)
+                late = await self._deliver_steers(session, turn_id)
+                if late:
+                    await self._rounds(session, turn_id, late[-1], st, result)
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
@@ -279,12 +281,14 @@ class Loop:
     async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> str:
         """Add the queued steers as context. Returns the newest author drained ("" when none), so the rounds
         after a steer run for the steer's author (#598): bypass stops lowering once the turn takes anyone else's."""
-        out = ""
-        for m in st.steer:
-            await self._add(session, m, turn_id)
-            out = provenance.author_of(m)
-        st.steer.clear()
-        return out
+        messages = await self._deliver_steers(session, turn_id)
+        return provenance.author_of(messages[-1]) if messages else ""
+
+    async def _deliver_steers(self, session: str, turn_id: str, ids: tuple[str, ...] | None = None) -> list[Message]:
+        messages = self.store.deliver_steers(session, turn_id, ids)
+        for message in messages:
+            await self._emit(ev.MessageCompleted(message=message), session)
+        return messages
 
     def _takes_recall(self) -> bool:
         """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system

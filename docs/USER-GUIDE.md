@@ -99,6 +99,13 @@ Keys:
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
 
+**Queued corrections survive a core restart.** Reopening the conversation restores
+saved queued text and its cancellation controls. It stays queued until a later
+turn; reading the conversation does not restart work. Your next message follows
+the recovered corrections and remains the newer instruction. Undo removes pending
+corrections tied to the work you undid. Forks start with no pending corrections.
+See [durable queued steering](DURABLE-STEERING.md).
+
 `/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
 and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
 
