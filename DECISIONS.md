@@ -3378,6 +3378,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `~/.Kube//config` with a second operand). It loses the host's `delete` as main's plain spelling does (group 1).
   Neither tree had a classify or decide error. The many-short-words cost is 2.6 to 4.0 times main's CPU time at the
   merge (best of three, main and the merge in turn), as before the merge.
+  *2026-10-28 (#513, an independent check of the merges):* (bb) Since #706 a line lists each store it names, so each
+  text with a backslash that names a store only in its lexical form is read as the shell reads it (z), not only the
+  first. Each such read spelt every word of the line out again, so the work grew with the square of the line. A line
+  of 1,000 such words (`cat ~/.kube/x0/../\config ~/.kube/x1/../\config ...`) took 16.7 s at the merge, where main
+  takes 0.12 s and 76f33d16 0.2 s. The words are now spelt once per call, and each text is found in their joined
+  text. That line takes 0.32 s, about three times main. No decision changes: 25,536 probe rows on the code the merges
+  touched, 204 rows aimed at such words and the reviews' 33 rows decide the same before and after it. The cost in (z)
+  and (aa) is the line of short words with links, which this does not change. The merge of main 0d077c8d brought no
+  gate code.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

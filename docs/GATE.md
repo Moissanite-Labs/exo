@@ -850,7 +850,9 @@ target (#320), and main's target part does not take its place. So `ssh prod 'cat
 denied under `deny: [{category: read, target: prod}]`, as on main. A line main read the same way gets no such part.
 Since the #609 follow-up each other store a line names is a part of its own too ("A glob in a store's folder", below),
 and those stores are read in the spellings #446 reads. So `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under
-`deny: [target:*/.kube/config]`, as its plain spelling is on main. The host's copy passes over those parts as well,
+`deny: [target:*/.kube/config]`, as its plain spelling is on main. Each word with such a backslash is read as the
+shell reads it, with the line's words spelt once per call, so a line of 1,000 of them costs about three times main.
+The host's copy passes over those parts as well,
 so `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'` is denied under
 `deny: [{category: read, target: prod}]` and under `deny: [target:*/.aws/*]`, as on main. A shell call's own folders
 work the same way (#311, "The tool's own folder"). The read's target is the first folder that names a store,
