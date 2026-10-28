@@ -44,6 +44,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
   **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
 
+- The core retries its start after a failed or cancelled start instead of failing every later command
+  (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
+  raise once and leave every later command with the same `internal` error until exod restarted. A start cut
+  short inside the MCP step no longer leaves its servers running: the retry stops them first, and engine close
+  always closes MCP. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 
@@ -87,6 +95,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
+
+- Web approval cards show the keyboard sequence for their available answers and the current confirmation or deny-note
+  step. Ctrl+F focuses the first approval without losing the composer draft, and the focused card has an accent outline.
+
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).

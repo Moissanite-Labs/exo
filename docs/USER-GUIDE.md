@@ -316,8 +316,10 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
-press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. Both clients show the answer sequence: `Ctrl+F`, then `o` once, `a` followed by Enter
+for always, or `d` followed by Enter to deny. The web card lists its available choices and changes its help during
+confirmation or note entry. Press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays
+in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
