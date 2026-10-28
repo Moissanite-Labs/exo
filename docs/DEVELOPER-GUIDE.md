@@ -1055,3 +1055,10 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+## Public history preparation
+
+Before sharing repository history, follow `docs/PUBLIC-HISTORY-CLEANUP.md`. The read-only
+`scripts/audit_public_history.py` reports counts for the historical paths in #49 without printing
+matched content. It does not rewrite or push history. The runbook separates private rehearsal,
+independent verification, final remote-ref approval and retained-copy review.
