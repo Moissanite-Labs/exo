@@ -275,11 +275,12 @@ def _inward_modules(node: ast.AST, package: tuple[str, ...]) -> list[str]:
         return [a.name for a in node.names]
     if not isinstance(node, ast.ImportFrom):
         return []
+    module = node.module or ""
     if node.level:  # relative: this file's package, up (level - 1), then the written module
         parts = list(package[: len(package) - node.level + 1])
-        return [".".join(parts + (node.module.split(".") if node.module else []))]
-    if node.module != "exo":
-        return [node.module or ""]
+        module = ".".join(parts + (module.split(".") if module else []))
+    if module != "exo":
+        return [module]
     base = REPO / "src" / "exo"
     return [f"exo.{a.name}" for a in node.names
             if (base / a.name).is_dir() or (base / f"{a.name}.py").exists()]
@@ -330,6 +331,92 @@ def _scorecard(root: Path) -> tuple[_Score, _Score]:
                 reads.append((where, node.attr))
     return _Score("inward product imports", INWARD_IMPORTS_MAX, sorted(imports)), _Score(
         "cross-module private-state reads", PRIVATE_STATE_MAX, reads)
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("reader.py", "from .. import envscrub"),
+    ("models/reader.py", "from ... import envscrub"),
+    ("reader.py", "from .. import envscrub as scrub"),
+    ("models/reader.py", "from ... import envscrub as scrub"),
+    ("reader.py", "from exo import envscrub"),
+    ("reader.py", "from ..envscrub import scrub_env"),
+    ("models/reader.py", "from ...envscrub import scrub_env"),
+    ("reader.py", "import exo.envscrub as scrub"),
+])
+def test_scorecard_counts_each_absolute_and_relative_module_form(tmp_path, monkeypatch, reader, statement):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    package = tmp_path / "src/exo"
+    package.mkdir(parents=True)
+    (package / "envscrub.py").write_text("def scrub_env(): pass\n")
+    path = package / "core" / reader
+    path.parent.mkdir(parents=True)
+    path.write_text(statement + "\n")
+    imports, reads = _scorecard(package / "core")
+    assert imports.hits == [(path.relative_to(tmp_path).as_posix(), "envscrub")]
+    assert reads.total == 0
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("reader.py", "from . import sessions"),
+    ("models/reader.py", "from .. import sessions"),
+])
+def test_scorecard_excludes_normal_core_relative_imports(tmp_path, monkeypatch, reader, statement):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    core = tmp_path / "src/exo/core"
+    core.mkdir(parents=True)
+    (core / "sessions.py").write_text("")
+    path = core / reader
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(statement + "\n")
+    imports, reads = _scorecard(core)
+    assert imports.total == reads.total == 0
+
+
+def test_scorecard_deduplicates_forms_and_excludes_core_packages_and_exported_symbols(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    package = tmp_path / "src/exo"
+    for name in ("core", "protocol", "server", "bus"):
+        directory = package / name
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("")
+    (package / "__init__.py").write_text('__version__ = "fixture"\n')
+    (package / "envscrub.py").write_text("def scrub_env(): pass\n")
+    path = package / "core/reader.py"
+    path.write_text("from .. import envscrub, bus, core, protocol, server, __version__\n")
+    imports, reads = _scorecard(package / "core")
+    expected = [("src/exo/core/reader.py", "bus"), ("src/exo/core/reader.py", "envscrub")]
+    assert imports.hits == expected and reads.total == 0
+    path.write_text(path.read_text() + """from exo import envscrub as scrub, bus as bus_alias, core, protocol, server, __version__
+from ..envscrub import scrub_env
+import exo.envscrub
+from ..bus import send
+""")
+    imports, reads = _scorecard(package / "core")
+    assert imports.hits == expected
+    assert imports.by_name == {"bus": 1, "envscrub": 1}
+    assert reads.total == 0
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("extra.py", "from exo import envscrub"),
+    ("extra.py", "from .. import envscrub"),
+    ("models/extra.py", "from ... import envscrub as scrub"),
+])
+def test_scorecard_cap_rejects_extra_dependency_in_absolute_and_relative_forms(tmp_path, monkeypatch, reader, statement):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    package = tmp_path / "src/exo"
+    for name in ("core", "protocol", "server"):
+        (package / name).mkdir(parents=True)
+    for name in ("cli_chat.py", "upstream.py", "envscrub.py"):
+        (package / name).write_text("")
+    for index in range(INWARD_IMPORTS_MAX):
+        (package / f"core/reader{index}.py").write_text("from exo import envscrub\n")
+    test_core_line_budget()  # exactly the existing cap passes
+    path = package / "core" / reader
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(statement + "\n")
+    with pytest.raises(AssertionError, match=f"{INWARD_IMPORTS_MAX + 1} inward product imports"):
+        test_core_line_budget()  # spelling cannot hide the extra dependency from the actual gate
 
 
 def test_dependencies_are_listed():
