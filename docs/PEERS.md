@@ -125,8 +125,8 @@ The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `
 omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
 `to=0` remains accepted for an empty log, but an empty or inverted range answers ok false with
 checked 0: it verifies nothing, so it must not read as a clean log. The exception is a verify with no
-range at all on an empty log, which answers ok true with an empty marker: the whole log was checked
-and there is nothing in it. `to` is clamped to the current
+`to`, and `from` at its default of 1, on an empty log, which answers ok true with an empty marker: the
+whole log was checked and there is nothing in it. `to` is clamped to the current
 head, so the returned range matches what was checked. These bounds match SQLite's integer range and keep read pages bounded.
 
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
