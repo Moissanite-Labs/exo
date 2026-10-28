@@ -133,6 +133,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   before the research says what to lift (wastes the 2026 work in Hermes).
 
 ## D-010 (2026-10-12) Standalone core: lean Python core, lifted Hermes parts, protocol-first UI
+- **Amendment 2026-10-28 (#660):** turn and summary retries wait for the larger of their backoff and
+  the provider/router retry hint. Automatic per-attempt waiting is capped at 60 seconds; a longer hint
+  fails promptly instead of consuming empty retries. Turn waits remain interruptible and retries remain
+  finite and disabled after visible output. Summary failures retain the hint so background scheduling
+  does not retry before the reported reset.
 - **Decision:** Exo gets its own core in Python, in this repo. It lifts a small set of Hermes modules
   (memory and context slot interfaces, provider message types and two transports, selected built-in tool
   logic, compressor prompts, and later individual platform adapters) and rewrites the loop, routing,

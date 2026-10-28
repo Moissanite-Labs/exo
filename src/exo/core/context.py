@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -205,10 +206,16 @@ def render_message(msg: Message, limit: int = 4000) -> str:
 # ---------------------------------------------------------------- compressor
 
 
+def model_retry_wait(backoff: float, retry_after: float | None, limit: float = 60.0) -> float | None:
+    """A finite wait that reaches the provider reset, or None when automatic waiting is excessive."""
+    delay = max(0.0, backoff, retry_after or 0.0)
+    return delay if math.isfinite(delay) and delay <= limit else None
+
+
 class SummaryError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = True):
+    def __init__(self, message: str, *, retryable: bool = True, retry_after: float | None = None):
         super().__init__(message)
-        self.retryable = retryable
+        self.retryable, self.retry_after = retryable, retry_after
 
 
 class DefaultCompressor:
@@ -231,11 +238,12 @@ class DefaultCompressor:
             opts["session_id"] = session  # providers that need a per-conversation header (session_header)
         if self.model:
             opts["model"] = self.model
-        last_error = "no output"
+        last_error, delay = "no output", 0.0
+        retry_after: float | None = None
         for attempt in range(self.retries + 1):
             if attempt:
-                await asyncio.sleep(self.retry_delay * (2 ** (attempt - 1)))
-            text, done_text, retryable = [], None, True
+                await asyncio.sleep(delay)
+            text, done_text, retryable, retry_after = [], None, True, None
             try:
                 async for ev in self.provider.stream([Message.user(prompt)], [], **opts):
                     if ev.kind == "text":
@@ -244,15 +252,20 @@ class DefaultCompressor:
                         done_text = ev.message.text() if ev.message else None
                     elif ev.kind == "error":
                         last_error, retryable = ev.error or "provider error", ev.retryable or bool(ev.retry_after)
+                        retry_after = ev.retry_after
             except Exception as exc:  # transport failure: treat as retryable
                 last_error = str(exc) or type(exc).__name__
-                continue
+                text, done_text = [], None
             out = (done_text or "".join(text)).strip()
             if out:
                 return out
             if not retryable:
                 break
-        raise SummaryError(f"summary failed: {last_error}", retryable=retryable)
+            wait = model_retry_wait(self.retry_delay * 2 ** attempt, retry_after)
+            if wait is None:
+                break
+            delay = wait
+        raise SummaryError(f"summary failed: {last_error}", retryable=retryable, retry_after=retry_after)
 
 
 # ---------------------------------------------------------------- tree
@@ -468,6 +481,9 @@ class TreeContext:
                                  f"after {node.attempts} tries, kept verbatim: {exc}", self._event_session(node.session))
                 else:
                     delay = min(300.0, self.retry_backoff * 2 ** min(node.attempts - 1, 16))
+                    retry_after = getattr(exc, "retry_after", None)
+                    if retry_after is not None and math.isfinite(retry_after):
+                        delay = max(delay, retry_after)
                     if transient:
                         delay = max(1.0, delay)  # a zero/negative setting must not turn an outage into a hot loop
                     self._retry_at[node.id] = time.monotonic() + delay
