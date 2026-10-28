@@ -129,6 +129,19 @@ def test_legacy_keeps_discovery_and_existing_runtime_defaults(tmp_path, monkeypa
         asyncio.run(engine.close())
 
 
+def test_without_a_profile_a_core_plugins_entry_main_skips_does_not_stop_startup(tmp_path, monkeypatch):
+    """Main skips an empty name in core_plugins and loads the rest. Without a profile, startup and the learner's
+    lazy settings do the same here. Only a profile refuses the list."""
+    from exo.learn.runtime import load_settings
+    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate", ""], learn={"enabled": False})
+    engine = compose.create()
+    try:
+        assert set(engine.plugins.plugins) == {"exo-gate"} and not engine.harness_plan.explicit
+        assert load_settings(engine)["enabled"] is False
+    finally:
+        asyncio.run(engine.close())
+
+
 def test_disabled_tool_calls_fail_even_if_not_advertised(tmp_path, monkeypatch):
     configured(tmp_path, monkeypatch)
     engine = compose.create()

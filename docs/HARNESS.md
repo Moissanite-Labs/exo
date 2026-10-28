@@ -80,6 +80,8 @@ even when another plugin registers its own hook. Profiles do not change the gate
 policy. Profiles cannot disable an executor's mandatory plugins or bypass its trusted
 inventory. When an executor requires a third-party plugin, list it in `core_plugins` (or
 the seat's `plugins`). Otherwise startup stops and names the plugin.
+With a profile, `core_plugins` must be a list of nonempty names. Without one it is read as
+before D-088: an entry that is not a name selects no plugin and does not stop startup.
 
 ## Precedence and runtime behavior
 

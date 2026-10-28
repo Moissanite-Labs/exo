@@ -6397,3 +6397,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     checkpoint still records ordinary root threads only.
   - *Count.* The counted core is 16,267 lines (main `f28934a3`: 15,847), which D-083 reports and does not
     assert. Product imports and private-state reads stay at 39 and 8.
+- **Amendment 2026-10-28 (third review):** the rebases since main `5486af21` met no code conflict. A fresh
+  review found one change from main's behaviour and two smaller items.
+  - *No profile, odd `core_plugins`.* `resolve()` checked `core_plugins` before it returned the plan for an
+    install without a profile. compose and the learner both call it. So an empty name in that list, or a string
+    value, stopped startup, though main skips such an entry and starts. Only a profile checks the list now.
+    Without one, startup reads it as main does, and `exo harness show` names the plugins it can select.

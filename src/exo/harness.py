@@ -96,6 +96,16 @@ def _names(value: Any, label: str, *, known: bool = True) -> list[str]:
     return list(dict.fromkeys(value))
 
 
+def _legacy_plugins(value: Any) -> list[str] | None:
+    """The names the loader matches without a profile. It reads core_plugins as a set and refuses nothing, so an
+    entry that is not a nonempty name, or a string value, selects no plugin."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, dict)):
+        return []
+    return list(dict.fromkeys(name for name in value if isinstance(name, str) and name))
+
+
 def _disable(settings: dict[str, Any], key: str) -> None:
     old = settings.get(key)
     settings[key] = {**(old if isinstance(old, dict) else {}), 'enabled': False}
@@ -114,14 +124,15 @@ def resolve(data: dict[str, Any], *, env: Mapping[str, str] | None = None) -> Ha
     env = os.environ if env is None else env
     override = env.get('EXO_PROFILE')
     settings = copy.deepcopy(data)
+    if 'harness' not in data and not override:
+        # Without a profile, a config that starts on main still starts: only a profile checks core_plugins.
+        return HarnessPlan('legacy', tuple(n for n in CAPABILITIES if n != 'instructions'),
+                           _legacy_plugins(data.get('core_plugins')), settings, False,
+                           {name: 'default:off' if name == 'instructions' else 'default:legacy'
+                            for name in CAPABILITIES})
     plugins = data.get('core_plugins')
     if plugins is not None:
         plugins = _names(plugins, 'core_plugins', known=False)
-    if 'harness' not in data and not override:
-        return HarnessPlan('legacy', tuple(n for n in CAPABILITIES if n != 'instructions'),
-                           plugins, settings, False,
-                           {name: 'default:off' if name == 'instructions' else 'default:legacy'
-                            for name in CAPABILITIES})
     raw = data.get('harness', {})
     if not isinstance(raw, dict):
         raise ConfigError('harness must be an object')

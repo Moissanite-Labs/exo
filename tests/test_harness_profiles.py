@@ -19,6 +19,19 @@ def test_legacy_configuration_is_preserved_without_opting_in():
     assert resolve({'core_plugins': ['test-allow']}, env={}).plugins == ['test-allow']
 
 
+@pytest.mark.parametrize('value,loaded', [(['exo-gate', ''], ['exo-gate']), ('exo-gate', []),
+                                          ([None, 'exo-gate', 'exo-gate'], ['exo-gate'])])
+def test_without_a_profile_core_plugins_is_read_as_main_reads_it(value, loaded):
+    """Main's loader matches core_plugins as a set of names and refuses nothing. Without a profile the plan does
+    the same, so a config that starts on main still starts. A profile, saved or from EXO_PROFILE, checks it."""
+    plan = resolve({'core_plugins': value}, env={})
+    assert not plan.explicit and plan.plugins == loaded and plan.settings['core_plugins'] == value
+    for data, env in (({'core_plugins': value, 'harness': {'profile': 'lean'}}, {}),
+                      ({'core_plugins': value}, {'EXO_PROFILE': 'lean'})):
+        with pytest.raises(ConfigError, match='core_plugins must be a list of nonempty names'):
+            resolve(data, env=env)
+
+
 @pytest.mark.parametrize('profile', PROFILES)
 def test_profiles_have_stable_capability_and_plugin_order(profile):
     data = {'harness': {'profile': profile}}
