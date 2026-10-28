@@ -1078,3 +1078,11 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Retry hints and summary scheduling
+
+`model_retry_wait` shares finite, bounded retry-delay selection between the turn loop and summary
+compressor. It waits at least the positive provider/router hint and ordinary backoff; hints beyond
+60 seconds stop automatic in-call retries. `SummaryError.retry_after` carries the remaining hint to
+background tree scheduling. Preserve interruptible waits, finite attempts and no retry after output
+when changing these paths (#660).
