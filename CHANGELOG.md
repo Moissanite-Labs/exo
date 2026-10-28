@@ -13,6 +13,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- The catalog's cache-read rate for `anthropic:claude-sonnet-5-5` is corrected from 0.20 to 0.10 per million
+  tokens. The vendor page prices a cache read at 0.05x base input on Opus 5.5 and Sonnet 5.5 ($0.20 and
+  $0.10 respectively) and 0.025x on Fable 5.1, not at the 0.1x default the code applies to an unlisted model.
+  Opus already carried 0.20; Sonnet carried 0.20, which over-charged cache reads by double (D-090).
+- A call is charged the clock-window rates in force when it started, not the ones in force when its usage
+  landed, so a stream that runs past a window boundary is not billed at the next window's rate (D-090).
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
@@ -51,6 +57,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
 ### Added
+- Catalog prices carry a `source` page and a `verified` date, and an entry can name clock windows
+  (DeepSeek peak and off-peak) whose rates replace only the keys they name. A call is charged the rates
+  in force when it was made, not when the entry was read. `exo models --prices` prints the table: rates,
+  window in force, source and age, and names stale, undated or unreadable entries. An unpriced route
+  still reads `unknown`, never `$0` (D-090, `docs/PROVIDERS.md` "Prices (D-090)").
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
