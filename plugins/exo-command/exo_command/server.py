@@ -363,7 +363,7 @@ class WebServer:
             return None
         try:
             body = json.loads(await reader.readexactly(n)) if n else {}
-        except ValueError:
+        except (ValueError, RecursionError):
             body = None
         if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
             await self._json(writer, 403, BAD_TOKEN)
@@ -414,7 +414,7 @@ class WebServer:
             return await self._json(writer, 400, {"error": "body too large"})
         try:
             body = json.loads(await reader.readexactly(n)) if n else {}
-        except ValueError:
+        except (ValueError, RecursionError):
             return await self._json(writer, 400, {"error": "bad json"})
         if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
             return await self._json(writer, 403, BAD_TOKEN)
