@@ -21,7 +21,7 @@ A client reads the line and decides. Three things can answer:
    unknown name fails with the error code `not_found`.
 
 `commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`), optional `work`, plus every plugin command, each with a name, a description and an argument hint.
+`compact`, `trace`, `findings`), optional `work` and `checkpoint`, plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -123,6 +123,11 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 `docs/ui/WEB.md` "The composer".
 
 ### Core built-ins (`command.run`)
+
+`/checkpoint` shows the current conversation's record-derived continuity index
+when `work_checkpoint.enabled` is true (default). It requires a principal
+connection and accepts no arguments. It never executes indexed work. See
+[WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
 
 `/work [show|history]` reads the current session's saved working notes when
 `work_notes.enabled` is true. It requires a principal connection and passes

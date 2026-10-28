@@ -767,6 +767,7 @@ def test_a_stop_signal_during_the_cleanup_is_ignored(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="needs SIGHUP")
+@pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="finds the tree processes in /proc")
 def test_a_run_under_nohup_ignores_sighup(tmp_path):
     # nohup starts the script with SIGHUP ignored: a closed terminal must not stop a long run.
     base = _tree(tmp_path, "base")
@@ -856,6 +857,25 @@ def test_a_corpus_action_runs_with_its_session_folder(tmp_path):
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert [x["action"].get("cwd") for x in rep["lowered"]] == ["/zz-cwd"]
     assert "rm -rf build" in proc.stdout and "in /zz-cwd" in proc.stdout
+
+
+def test_a_read_tool_the_gate_cannot_classify_is_an_ask(tmp_path):
+    # D-084: the hook asks when classify raises, for a read tool too. So a head that raises on a read tightens it,
+    # and a head that reads what the base raised on as an allowed read lowers it.
+    clean = _tree(tmp_path, "clean")
+    raises = _tree(tmp_path, "raises", (CLASSIFY_DOC_END, CLASSIFY_DOC_END + "    if 'zz-raise' in str(action):\n"
+                                                                             "        raise RuntimeError('zz')\n"))
+    corpus = tmp_path / "reads.json"
+    corpus.write_text(json.dumps([{"tool": "read_file", "args": {"path": "zz-raise.md"}},
+                                  {"tool": "search_files", "args": {"pattern": "zz-raise", "path": "."}}]),
+                      encoding="utf-8")
+    args = ("--only-corpus", "--no-variants", "--corpus", str(corpus), "--pick", "default", "--jobs", "1")
+    proc, rep = _gate_diff(clean, raises, tmp_path, *args)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert rep["counts"]["tightened_actions"] == 2 and rep["counts"]["lowered_pairs"] == 0, rep["counts"]
+    proc, rep = _gate_diff(raises, clean, tmp_path, *args)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert list(rep["lowered_by_transition"]) == ["error ask -> read allow"], rep["lowered_by_transition"]
 
 
 def _stream(path: Path, rows: list, names: list[str]) -> None:

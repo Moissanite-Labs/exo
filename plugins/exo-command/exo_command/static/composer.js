@@ -152,6 +152,7 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
 
   return {
     menuEl: menu, guideEl,
+    restore() { browse = -1; draft = ""; closedFor = null; tip = null; drawTip(); refresh(); },
     // The page tells us what happened; we only keep a few flags.
     note(ev) { Object.assign(state, ev); pickTip(); },
     sent(text) {
