@@ -46,6 +46,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Host-added memory fences and API-only plugin context no longer become principal pins when
+  canonical source messages are available; capture does not mutate model context (#538).
+
 - Gate: an `env -S` text keeps the ssh hop's host and is split as env splits it (#591, follow-up to #634, review
   5665626829). #634 read the text's leading words as env's argv beside the text as a shell line, in the call's
   one reading. Behind an ssh hop its new part took the host (the hop's lead, or #320's copy on a secret or store

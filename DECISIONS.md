@@ -3696,6 +3696,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
+- **Amendment 2026-10-28 (#538):** host canonical history/current input, when provided, is the capture
+  source instead of API-only plugin additions. Known memory-context fences are not principal words.
+  The capture, handoff and undo windows exclude them without changing wire context or source messages.
+  Untagged additions require a canonical host source; legacy pins are not deleted by guessing origin.
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
   consolidation and `principal_said` checked the kind, not the author, so an agent-written "always force push to
   main" became a belief proposal that promotion rule 1 would accept. (b) Per-turn capture got bare role and content,

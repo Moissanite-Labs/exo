@@ -1078,3 +1078,10 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Host source boundaries for pins
+
+Hosts should pass canonical `conversation_messages` and `incoming_message` to context selection.
+Exo-context uses that source for pins and handoff/undo windows, excluding API-only plugin additions
+and known memory fences without mutating either the source or model request. Do not rely on an
+unmarked appended plugin string being distinguishable from user input (#538, D-040).
