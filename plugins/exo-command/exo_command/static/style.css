@@ -799,6 +799,13 @@ body { margin: 0; background: #08090a; }
 .xc-md .xc-code { white-space: pre; max-width: 100%; overflow-x: auto; }
 .xc-table-cell { min-width: 6rem; max-width: 28rem; overflow-wrap: anywhere; white-space: normal; }
 
+/* Unsent intent recovery shares the composer's full width. */
+.xc-composer:has(.xc-draft-recovery:not(:empty)) { flex-wrap: wrap; }
+.xc-draft-recovery { flex-basis: 100%; color: var(--fg-2); font-size: 12px; }
+.xc-draft-recovery:empty { display: none; }
+.xc-draft-failed { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.xc-draft-failed > span { flex: 1; min-width: 180px; }
+
 /* Keep rename controls outside the thread-selection button. */
 .xc-session-row { display: flex; align-items: center; min-width: 0; }
 .xc-session-row .xc-sess { flex: 1; min-width: 0; }

@@ -137,6 +137,12 @@ The web page has its own sub-pages for Tasks, Schedule, Command and Providers. I
 Double-click opens the same editor. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
 
+Web conversation drafts stay with each thread while the page is open, including when you visit another
+view. A pending send lets you keep writing and blocks duplicate Enter submissions. If a send is unconfirmed,
+your text remains recoverable in that thread without replacing newer edits. Check the transcript before
+sending again; a lost reply may still have reached the core. Reloading or closing the page discards drafts.
+See [conversation drafts](ui/WEB.md#conversation-drafts-and-unconfirmed-sends-d-045).
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.

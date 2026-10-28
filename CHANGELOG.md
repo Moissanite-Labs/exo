@@ -10,6 +10,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
 
+- Web conversation drafts retain text and selection across thread and view switches in page memory.
+  Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
+  conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
+
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
