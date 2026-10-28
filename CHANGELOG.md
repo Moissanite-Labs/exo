@@ -9,6 +9,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- `scripts/gate_diff.py` no longer reports "0 lowered" for three kinds of looser gate: one that fails open once a
+  shared classify budget is spent (six long budget lines now run with the harvest, also under `--no-variants`), one
+  whose `decide` returns an outcome the hook runs but does not know (`"Ask"`, `"block"`: ranked as allow in the head),
+  and one that drops a hook check after `decide` at the same outcome (`no_grant`, `body_unseen`, `binds_exact`, a
+  reserved hit on another part). The summary counts each (#551).
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.

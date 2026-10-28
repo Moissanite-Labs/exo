@@ -542,9 +542,16 @@ lines get the same generated forms as the harvested ones.
 - `--only-corpus` runs the `--corpus` items, the compound forms of their simple lines, and each line under one other
   shell tool name and key. It skips the harvest, the seeds, the lines and calls of the tables, the posts, the folder
   rows and the calls of the other tools.
-- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the lines and calls of the
-  tables, the posts, the compound forms, the other shell tool names and keys, the folder rows and the calls of the
-  other tools.
+- `--no-variants` runs only the `--corpus` items, the harvest and the six budget lines (#551, below). It skips the
+  seeds, the lines and calls of the tables, the posts, the compound forms, the other shell tool names and keys, the
+  folder rows and the calls of the other tools.
+
+The budget lines (`BUDGET_LINES`, #551) are long lines no test line reaches: 70 `cd`s into store folders (past the 64
+`_exo_relative` resolves), a store folder 62 deep with 1,600 names, the stress tests' `_NEAR_CAP` line, two `<( )`
+of 400 names each (each under `_EXO_PARTS` alone, past it together), and four brace words of 1,000 forms and a fifth
+for `cat` and `touch` (past `_BRACE_BUDGET`). Each asks on main only because its budget is spent, so a head that
+fails open past a budget is lowered on it. A test checks that main reaches each budget and allows the line once the
+budget is lifted; when a budget moves, resize its line.
 
 Neither reads the gate's tables for lines, so neither names a table it cannot read.
 
@@ -565,6 +572,17 @@ while another post still has it, or one of two posts of one name skipped. At an 
 violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
 grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
 hook's answer to an error: ask, a read tool too (D-084).
+At the same outcome below deny a pair is also lower when the head loses one of the hook's checks after `decide`
+that depend only on the call and the decision (#551), each run with the tree's own gate: `no_grant` (the once rule),
+`body_unseen` (a post body the gate did not see), `binds_exact` (an approval bound to the exact call) and
+`reserved_elsewhere` (a reserved hit on another part than the line's own category and target, which keeps a standing
+grant from covering the call). The summary counts each one lost. A check a tree's gate does not have is not held; one
+that raises sends the hook to its error card, so the pair counts as that error. The card is once-only, so a head
+pair that is one loses none of these checks and no reserved hit. The script marks such a pair with `error_card` in
+its flags, which no gate decision can carry, so a decision whose rule is `"error"` is compared like any other. An
+outcome other than allow, log, ask or deny (`"Ask"`, `"block"`) is one the hook runs (with a decision model on,
+`tighten_only` raises on it and the hook gives its error card): it ranks as allow in the head and as ask in the base,
+and the summary counts such pairs on each side.
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
