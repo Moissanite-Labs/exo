@@ -3940,6 +3940,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
+
+- **Amendment 2026-10-27:** web approval cards state their available answer sequence and the deliberate Ctrl+F focus
+  step. Instructions change for always confirmation and deny-note entry. A focused card has an accent outline.
+  Existing focus, confirmation and approval authority rules remain unchanged.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
