@@ -630,6 +630,9 @@ and must be fixed. Resolved errors also fail until their stale entries are remov
     uv run --frozen --all-extras python scripts/check_types.py --update
 
 Review and commit the smaller baseline. `--update` refuses new errors and never expands it. CI never writes it.
+When a local name changes meaning, use a fresh name rather than widening its type. Read-only
+environment parameters accept `Mapping[str, str]`; bind the selected environment to a new local
+instead of assigning `os.environ` back into an optional dictionary parameter (#710).
 `--initialize` creates a first baseline only when the file is absent, for a separately reviewed migration of the
 compiler or check scope. The helper refuses missing dependencies, mismatched settings and malformed or fatal
 compiler output. It uses no disk cache. `--root PATH --baseline PATH` can check another checkout without changing
