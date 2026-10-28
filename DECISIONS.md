@@ -5155,6 +5155,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   changelog. Whitepaper coverage is deferred to the next batch.
 
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
+- **Counter clarification 2026-10-27:** after resolving a relative import to `exo`, inspect its imported names
+  with the same real-module lookup as `from exo import ...`. This closes a spelling gap without counting exported
+  symbols, changing exclusions or counting repeated dependencies twice. Existing counts and caps remain 39 and 8.
 - **Status:** Accepted 2026-10-26 by the lead (reversible), amended 2026-10-27 by the principal's ruling "we're
   dropping the ceiling for now as we build out the codebase, it was too restrictive". It amends D-077: the line
   ceiling is off, and two of the engine split's step 4 numbers are assertions instead of printouts. The floor and its
