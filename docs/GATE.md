@@ -482,7 +482,7 @@ tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` 
 has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
 "The store is credentials").
 
-### An internal gate error asks once (D-084)
+## An internal gate error asks once (D-084)
 
 When the gate's own checks raise (classification, a policy rule, the secret check), the hook
 asks with a card instead of allowing the call. Read tools ask too. The card is once-only in every

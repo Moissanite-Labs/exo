@@ -5238,9 +5238,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ahead in observe mode as it did before.
 - **Validation:** measured against main `cd371aed`, before #742. A hook probe that makes `gate.classify`, the rules lookup,
   `gate.args_sensitive`, or the rules lookup and `gate.args_sensitive` together raise, over enforce and observe,
-  ordinary and bypass sessions, the decision model on and off, and six calls (`read_file README.md`, `read_file
-  ~/.exo/keys/seat.key`, `search_files .`, `terminal ls`, a store write, non-dict arguments): 192 cases, 132
-  stricter, 60 the same, none lower. Main's `scripts/gate_diff.py` (`--no-variants --jobs 2 --timeout 0`) found
+  ordinary and bypass sessions, the decision model on and off, and seven calls (`read_file README.md`,
+  `read_file ~/.exo/keys/seat.key`, `search_files .`, `terminal ls`, a store write, non-dict arguments,
+  `terminal cat ~/.ssh/id_rsa`): 224 cases, 136 stricter, 88 the same, none lower. Main's `scripts/gate_diff.py` (`--no-variants --jobs 2 --timeout 0`) found
   nothing lowered on 12,164 actions x 88 policies and nothing lowered or tightened on 18 aimed read, search, secret
   and store actions. `plugins/exo-gate/tests`, `tests/integration/test_required_gate.py`, `tests/security`,
   `tests/docs`, `tests/test_gate_diff.py` and `tests/test_type_baseline.py` gave 12,208 passed and 117 skipped. The
