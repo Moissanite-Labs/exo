@@ -11,6 +11,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Successful pipelines with an earlier-stage failure note remain successful (#791).
 
 ### Added
+- Web workspace design with coordinated dark and light themes, readable conversation typography,
+  a full-width writing area, persistent accessible navigation and a saved Appearance choice.
+  Loaded conversations can be searched and filtered; Show latest messages restores the newest item
+  while streaming preserves the reader's position. Startup opens directly without a timed overlay.
+
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).

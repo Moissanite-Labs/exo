@@ -146,6 +146,11 @@ your text remains recoverable in that thread without replacing newer edits. Chec
 sending again; a lost reply may still have reached the core. Reloading or closing the page discards drafts.
 See [conversation drafts](ui/WEB.md#conversation-drafts-and-unconfirmed-sends-d-045).
 
+Find a conversation searches the loaded titles, IDs and agent names. Use the status selector to show
+working conversations or those waiting for an approval. It does not search message contents. Show latest
+messages returns to the newest message when you have scrolled away. Appearance offers Dark, Light or
+System; that preference is saved in this browser. Back and Forward move between the web views.
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.

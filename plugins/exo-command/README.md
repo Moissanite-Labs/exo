@@ -68,9 +68,15 @@ events as on start, so one reply never carries the whole gap. An approval asked 
 
 ## The web UI
 
-`exo web` serves one page on 127.0.0.1:7342 with four views: **Chat** (the default), **Tasks**,
-**Schedule** and **Command** (the overview below). It is plain HTML, CSS and ES modules, with no build step
-and nothing loaded from another site. It follows the system light or dark setting.
+`exo web` serves one page on 127.0.0.1:7342 with five views: **Chat** (the default), **Tasks**,
+**Schedule**, **Command** (the overview below) and **Providers**. It is plain HTML, CSS and ES modules, with no build step
+and nothing loaded from another site. Appearance offers Dark (the default), Light or System and saves
+only that choice in browser storage. Navigation supports Back, Forward and a keyboard skip link.
+
+Chat uses readable conversation text, a separate composer action row, local search over loaded
+conversation titles, IDs and agent names, and a Show latest messages control for both conversation
+layouts. Status filters show working conversations and pending approvals. Search never submits a
+prompt or changes the selected conversation.
 
 - **Chat:** sessions on the left, a transcript with streamed text, tool lines, approval cards and a composer
   in the middle, and the side panel area on the right. A reply streams as plain text and, once complete, is

@@ -127,7 +127,7 @@ assert.equal(s.answers.length,0); assert.equal(document.activeElement,s.card); s
 def test_chat_wires_the_approval_controller_and_sends_deny_notes():
     chat = (STATIC / "chat.js").read_text()
     assert 'from "./approvals.js"' in chat and "approvalView.draw(mine)" in chat and "approvalView.stop()" in chat
-    assert "{ decision, note }" in chat and 'chip("o a d", "approvals")' in chat
+    assert "{ decision, note }" in chat
 
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")

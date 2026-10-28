@@ -675,6 +675,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
 
 ## D-031 (2026-10-12) UI/UX overhaul, terminal half: make the TUI look like the site's terminal figure
+- **Web amendment, 2026-10-28:** at the principal's request, the shared web workspace keeps the angular
+  identity while using readable sans serif conversation text, restrained surfaces and explicit attention
+  states. Dark remains the default; Light and System are saved presentation choices. Persistent navigation
+  supports browser history and keyboard access. Loaded-conversation search, status filters and Show latest
+  messages use existing records and preserve drafts. The web boot overlay is removed. This changes no
+  model, permission, storage or execution policy; desktop consumes the shared implementation under D-089.
+  Current behavior is documented in `docs/ui/WEB.md` and `docs/USER-GUIDE.md`.
 - **Why (A, verbatim):** "UI/UX needs an overhaul. the project website at exo.askaconsult.com gives such a
   futuristic feeling - our ui/ux should be deliver on it".
 - **Decision:** the language already exists on the site (`figure.term`, `style.css`), so the TUI takes it
