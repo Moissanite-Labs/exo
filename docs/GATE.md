@@ -3251,3 +3251,8 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.
+
+
+### Security repair #473
+
+Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
