@@ -518,11 +518,12 @@ def test_a_line_lowered_on_purpose_under_a_rule_on_costly_parts(command, direct)
 
 def test_the_direct_form_keeps_its_reserved_hits():
     """ssh's own part beside the part that runs the stdin keeps the target it had inside it (none): the hop part
-    names the host, so each hit main listed is still listed."""
+    names the host, so each hit main listed is still listed. The opaque part nested below the delete has a copy on
+    the host beside it (#461 follow-up), one hit more."""
     c = gate.classify_shell("echo 'rm -rf /data' | ssh prod-db")
     d = gate.decide(c, {"gates": {"reserved": ["command:\\brm\\b"]}})
     assert set(d.reserved) == {("delete", "/data"), ("opaque_exec", ""), ("shell", ""), ("shell", "prod-db"),
-                               ("read", "")}, d
+                               ("read", ""), ("opaque_exec", "prod-db")}, d
 
 
 @pytest.mark.parametrize("command", [

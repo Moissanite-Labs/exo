@@ -115,6 +115,7 @@ class Loop:
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
+        self.workspace_extra: Callable[[str | None, str], str] | None = None
         self._state: dict[str, _SessionState] = {}
 
     # ---------------------------------------------------------------- public
@@ -155,6 +156,7 @@ class Loop:
         st = self.state(session)
         if not st.accepting_steers:
             return False
+        msg.id = msg.id or new_id("m")
         st.steer.append(msg)
         return True
 
@@ -298,7 +300,8 @@ class Loop:
         extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
         info = self.store.get_session(session) if session else None
         where = WORKDIR_LINE.format(cwd=info.cwd) if info and info.cwd else ""
-        parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, extra)
+        workspace = self.workspace_extra(session, info.cwd if info and info.cwd else "") if self.workspace_extra else ""
+        parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, workspace, extra)
         return "\n\n".join(p for p in parts if p)
 
     async def _system(self, session: str, query: str) -> tuple[str, str]:
