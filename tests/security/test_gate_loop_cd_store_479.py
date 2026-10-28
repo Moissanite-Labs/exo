@@ -165,9 +165,20 @@ HEADER_ROWS = [
 ARITH_ROWS += HEADER_ROWS
 BRACE_ROWS += ARITH_ROWS
 CONTROL = "cd ~/.exo/policies; cp /tmp/evil gates.yaml"
+# #857: a `while` or `until` condition runs again on every pass, so when its first command is the `cd` into the
+# store, a substitution in that command runs there from the second pass. bash 5.2 confirms the write lands on pass 2
+# for each row. On main 1401ff81 all six are allowed reads, also under `deny: [store_write]`.
+COND_ROWS = [
+    "while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "until ! cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while cd ~/.exo/policies`cp /tmp/evil gates.yaml`; do sleep 1; done",
+    "while pushd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while cd ~/.exo/policies < <(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while if cd ~/.exo/policies$(cp /tmp/evil gates.yaml); then :; fi; do sleep 1; done",
+]
 
 
-@pytest.mark.parametrize("line", ISSUE_ROWS + MORE_ROWS + BRACE_ROWS + [CONTROL])
+@pytest.mark.parametrize("line", ISSUE_ROWS + MORE_ROWS + BRACE_ROWS + COND_ROWS + [CONTROL])
 def test_a_write_before_the_loops_cd_into_the_store_is_a_store_write(line):
     c = _bash(line)
     assert _store_write_part(c), (line, [r.category for r in gate.readings(c)])
@@ -213,6 +224,11 @@ def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     ("for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "allow"),               # no cd in the loop
     ("for i in 1 2; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "allow"),  # a cd into a plain folder
     ("while :; do cp a b; cd ../src; done", "read", "allow"),
+    # #857: a condition's `cd` into the store with nothing written, a closer's redirection (run once, before the
+    # first pass) and a condition's `cd` into a plain folder keep their reading
+    ("while cd ~/.exo/policies; do sleep 1; done", "read", "allow"),
+    ("while cd ~/.exo/policies; do :; done < <(cp /tmp/evil gates.yaml)", "read", "allow"),
+    ("while cd /tmp/proj$(cp /tmp/evil gates.yaml); do sleep 1; done", "read", "allow"),
     # only the loop runs again: a write before the loop runs once, where the line started
     ("cp /tmp/evil gates.yaml; for i in 1 2; do cd ~/.exo/policies; done", "shell", "allow"),
     # bash expands a `for` word list once, before the first pass, so its $( ) runs where the line started
@@ -404,7 +420,7 @@ def _run(ctx, line):
 
 
 @pytest.mark.parametrize("bypass", [False, True])
-@pytest.mark.parametrize("line", ISSUE_ROWS[:3] + BRACE_ROWS[:1] + ARITH_ROWS[:3] + ARITH_ROWS[6:8])
+@pytest.mark.parametrize("line", ISSUE_ROWS[:3] + BRACE_ROWS[:1] + ARITH_ROWS[:3] + ARITH_ROWS[6:8] + COND_ROWS[:2])
 def test_the_hook_asks_the_principal_and_bypass_keeps_the_floor(tmp_path, bypass, line):
     g, ctx, root = _gate(tmp_path, bypass)
     r = _run(ctx, line)

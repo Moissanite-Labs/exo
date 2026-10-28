@@ -6442,9 +6442,11 @@ def _brace_head(cmds: list[_Cmd], b: int) -> int:
 
 
 def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int, int]]:
-    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder after
-    its first command (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A
-    `for` or `select` loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify)."""
+    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder
+    (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A `for` or `select`
+    loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify). The first command counts
+    too: for `while` and `until` it is the condition's, which runs again on every pass, so a substitution in a
+    `while cd ~/.exo/policies$(..)` runs in the store from the second pass (#857); a `for` header holds no `cd`."""
     spans: list[tuple[int, int]] = []
     for e, k in enumerate(cmds):
         if k.opens is None:
@@ -6462,7 +6464,7 @@ def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int
             spans.pop()
         spans.append((s, e))
     at = [n for n, _ in went]
-    return [(s, e) for s, e in spans if (i := bisect.bisect_right(at, s)) < len(at) and at[i] <= e]
+    return [(s, e) for s, e in spans if (i := bisect.bisect_left(at, s)) < len(at) and at[i] <= e]
 
 
 def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple[int, str]], cmd: str, depth: int,
