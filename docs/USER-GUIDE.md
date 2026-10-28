@@ -632,3 +632,10 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Continuity request references
+
+Automatic checkpoints identify up to three saved principal requests by message ID and sequence,
+even when a long tool batch has pushed them outside the recent tool window. No user text is
+copied. These are historical source references, not new instructions or an inferred task plan.
+Private and child conversations remain excluded (#683, source-reference slice).

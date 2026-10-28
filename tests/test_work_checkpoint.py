@@ -271,3 +271,59 @@ def test_checkpoint_command_principal_scope_and_single_capture(harness, monkeypa
         finally:
             CALLER.reset(token)
     asyncio.run(scenario())
+
+
+def test_request_sources_survive_a_long_tool_batch_without_copying_user_text(harness):
+    engine, checkpoint, sid = harness
+    source = engine.store.messages(sid)[0].id
+    for index in range(50):
+        call(engine.store, sid, str(index), False)
+    body = checkpoint.snapshot(sid)
+    assert body["window_messages"] == 40
+    assert body["requests"] == [{"message": source, "seq": 1, "author": "principal"}]
+    assert "SECRET" not in json.dumps(body)
+    assert source in checkpoint.render(sid)
+    assert "does not infer or repeat" in checkpoint.render(sid)
+
+
+def test_request_sources_are_bounded_principal_only_and_follow_undo(harness):
+    engine, checkpoint, sid = harness
+    expected = []
+    for index in range(20):
+        message = Message.user(f"SECRET USER REQUEST {index}")
+        message.meta["author"] = "principal"
+        engine.store.append_message(sid, message)
+        expected.append(message.id)
+    peer = Message.user("SECRET PEER REQUEST")
+    peer.meta["author"] = "principal"  # ingress provenance still outranks a forged author
+    peer.meta["peer"] = {"from": "fixture"}
+    engine.store.append_message(sid, peer)
+    body = checkpoint.snapshot(sid)
+    assert [row["message"] for row in body["requests"]] == expected[-3:]
+    assert body["request_search_rows"] <= 16
+    assert "SECRET" not in json.dumps(body)
+    engine.store.undo(sid, 2)
+    after = checkpoint.snapshot(sid)
+    assert expected[-1] not in [row["message"] for row in after["requests"]]
+    assert peer.id not in [row["message"] for row in after["requests"]]
+
+
+def test_request_sources_are_reconstructed_after_restart(harness):
+    engine, checkpoint, sid = harness
+    source = engine.store.messages(sid)[0].id
+    path = engine.store.path
+    engine.store.close()
+    store = SessionStore(path)
+    try:
+        recovered = WorkCheckpoint(SimpleNamespace(store=store, agent="default"), CheckpointConfig(), "")
+        assert recovered.snapshot(sid)["requests"][0]["message"] == source
+        assert "SECRET" not in recovered.render(sid)
+    finally:
+        store.close()
+
+
+def test_request_reference_lookup_uses_the_partial_user_index(harness):
+    engine, checkpoint, sid = harness
+    plan = engine.store._q("EXPLAIN QUERY PLAN SELECT id, seq, json_extract(data, '$.meta') AS meta "
+        "FROM messages WHERE session=? AND role='user' AND hidden=0 ORDER BY seq DESC LIMIT 16", (sid,))
+    assert any("checkpoint_user_sources" in str(tuple(row)) for row in plan)

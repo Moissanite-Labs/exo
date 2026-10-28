@@ -11,6 +11,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Successful pipelines with an earlier-stage failure note remain successful (#791).
 
 ### Added
+
+- Automatic continuity checkpoints retain bounded principal-request source IDs beyond the recent
+  tool window, without copying user text or inferring a task plan (#683, partial).
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).

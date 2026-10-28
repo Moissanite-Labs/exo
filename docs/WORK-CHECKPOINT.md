@@ -1,6 +1,6 @@
 # Automatic continuity checkpoints
 
-Exo keeps a short index of recent tool and background-job records for an ordinary
+Exo keeps a short index of recent principal-request references, tool and background-job records for an ordinary
 conversation. It helps the next model request find what ran, what reported an
 error, and which interrupted operations need a live-state check. The index is
 separate from the agent's optional [working notes](WORK-NOTEBOOK.md).
@@ -31,7 +31,7 @@ labels and the truncation notice. To disable it, run
 `exo config set work_checkpoint.enabled false` and restart Exo. Disabling stops
 capture and injection; it does not delete the previously saved index.
 
-The default can add up to 3000 characters to each model request once tool or job
+The default can add up to 3000 characters to each model request once request, tool or job
 records exist. Private threads, child/fork threads, scheduled sessions, and other
 agents' sessions receive no checkpoint. There is no cross-session inheritance.
 
@@ -46,7 +46,11 @@ agents' sessions receive no checkpoint. There is no cross-session inheritance.
 - A job state is the stored state, not a fresh process check.
 
 The index includes at most the latest 12 tool calls from 40 visible transcript
-messages, newest first, and at most 8 session-owned job records. Older work can
+messages, newest first, and at most 8 session-owned job records. It also identifies up to three saved
+principal requests, sampled from at most the latest 16 visible user rows through an indexed query.
+Only message IDs, sequence numbers and author labels are copied. These source anchors can outlive
+the 40-message tool window during a long batch. Inspect the saved source to recover its goal; the
+index neither infers that goal nor repeats old instructions. Older work can
 fall outside the window. It copies no user text, assistant text, tool arguments,
 output bodies, commands, paths, or job logs. Identifiers are bounded and restricted
 to single-line identifier characters. It grants no permission and carries no
@@ -72,4 +76,5 @@ is never used as a fallback. Existing manual notebook revisions remain untouched
 
 This is the record-index slice of issue #683. It does not inspect uncommitted
 filesystem changes, synthesize a task goal, track child-agent work, or reconstruct
-a complete historical task. Tests are in `tests/test_work_checkpoint.py`.
+a complete historical task. Source-request anchors are a separate bounded slice; they are not a
+claim that goal inference or recovery is complete. Tests are in `tests/test_work_checkpoint.py`.

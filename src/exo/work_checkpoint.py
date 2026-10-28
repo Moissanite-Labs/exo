@@ -16,7 +16,7 @@ from exo.core.hooks import maybe_await
 from exo.core.types import Message, from_dict
 from exo.principal import require_principal
 from exo.protocol import schema as s
-from exo.provenance import defuse_pins
+from exo.provenance import author_of, defuse_pins
 from exo.server.engine import CommandFailed
 
 TABLE = """CREATE TABLE IF NOT EXISTS work_checkpoints (
@@ -51,6 +51,8 @@ class WorkCheckpoint:
     def __init__(self, engine: Any, config: CheckpointConfig, principal: str) -> None:
         self.engine, self.store, self.config, self.principal = engine, engine.store, config, principal
         self.store._q(TABLE)
+        self.store._q("CREATE INDEX IF NOT EXISTS checkpoint_user_sources ON messages (session, seq DESC) "
+                      "WHERE role='user' AND hidden=0")
 
     def capture(self, session: str | None, reason: str = "request") -> dict[str, Any] | None:
         if not session:
@@ -69,6 +71,19 @@ class WorkCheckpoint:
             messages = [from_dict(Message, json.loads(row["data"]), strict=False) for row in reversed(rows)]
             if not messages:
                 return None
+            requests = []
+            candidates = db.execute("SELECT id, seq, json_extract(data, '$.meta') AS meta FROM messages "
+                "WHERE session=? AND role='user' AND hidden=0 ORDER BY seq DESC LIMIT 16", (session,)).fetchall()
+            for row in candidates:
+                try:
+                    meta = json.loads(row["meta"]) if row["meta"] else {}
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(meta, dict) or meta.get("note") or author_of({"role": "user", "meta": meta}) != "principal":
+                    continue
+                requests.append({"message": _label(row["id"]), "seq": row["seq"], "author": "principal"})
+                if len(requests) == 3:
+                    break
             results = {r.call_id: r for m in messages for r in m.tool_results}
             tools = []
             for message in messages:
@@ -89,7 +104,8 @@ class WorkCheckpoint:
             undone = bool(previous and not db.execute("SELECT 1 FROM messages WHERE session=? AND id=? AND hidden=0",
                                                      (session, previous["basis_message"])).fetchone())
             body = {"source": "visible transcript and job records", "reason": reason, "rebuilt_after_undo": undone,
-                    "basis_message": _label(messages[-1].id), "tools": list(reversed(tools[-12:])),
+                    "basis_message": _label(messages[-1].id), "requests": list(reversed(requests)),
+                    "request_search_rows": len(candidates), "tools": list(reversed(tools[-12:])),
                     "jobs_omitted_after_undo": has_undo,
                     "jobs": [{"id": _label(row["id"]), "state": _label(row["state"], 40), "exit_code": row["exit_code"]}
                              for row in jobs], "window_messages": len(messages)}
@@ -109,9 +125,12 @@ class WorkCheckpoint:
         return self.render_snapshot(self.snapshot(session))
 
     def render_snapshot(self, body: dict[str, Any] | None) -> str:
-        if not body or not (body["tools"] or body["jobs"] or body["jobs_omitted_after_undo"]):
+        if not body or not (body.get("requests") or body["tools"] or body["jobs"] or body["jobs_omitted_after_undo"]):
             return ""
         lines = [HEADER, f"Basis message: {body['basis_message']}; recent {body['window_messages']} messages only."]
+        for request in body.get("requests", []):
+            lines.append(f"Historical principal request source: message={request['message']}, seq={request['seq']}. "
+                         "Inspect the saved source for the goal; this index does not infer or repeat its instructions.")
         if body["rebuilt_after_undo"]:
             lines.append("Rebuilt after transcript undo; reverted transcript records were excluded.")
         if body["jobs_omitted_after_undo"]:

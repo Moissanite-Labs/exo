@@ -5407,6 +5407,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ### D-086 amendment: automatic record-derived continuity (2026-10-27)
 
+- **Amendment 2026-10-28 (#683, source-reference slice):** add at most three principal request
+  anchors from an indexed sample of 16 visible user rows. Copy IDs, sequence and author only; no
+  source text or inferred instructions. Reconstruct on resume and follow undo under the same
+  privacy/ownership bounds. Full goal, diff and child-work recovery remains outside this slice.
+
 - Add a separate default-on `work_checkpoint` index, controlled by `enabled` and
   `resume_chars`. It is not an agent-authored notebook revision or a task runner.
 - Reconstruct from the latest 40 visible session messages and 8 job metadata rows;

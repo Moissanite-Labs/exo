@@ -1078,3 +1078,11 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Checkpoint request-source anchors
+
+Checkpoint capture separately samples at most 16 visible user rows through the partial
+`checkpoint_user_sources` index and retains at most three principal message IDs/sequence numbers.
+Authors and ingress tags determine principal status; notes, peers and undone rows are excluded.
+No user prose, arguments or outputs are copied. This supplies source-of-goal references beyond
+the 40-message tool window, not goal inference or a replay plan (#683, partial).
