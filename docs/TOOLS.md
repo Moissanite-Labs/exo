@@ -199,3 +199,15 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).
+
+### Missing file recovery hints
+
+A missing `read_file` path returns an error with a `glob` next step and up to five nearby names
+from its existing parent inside the current working directory. The directory sample inspects at
+most 256 entries and reports truncation. Hidden names, likely credential names, symlinks and
+private-key suffixes are excluded. Candidate contents are never read; names are JSON-escaped.
+Missing parents or paths outside the working directory get the generic next step without a
+sibling listing. The same read helper keeps edit failures strict; no edit is applied (#681).
+
+This is the missing-path slice of #681. Search timeout partial results, continuation tokens and
+a general error-recovery contract remain separate work.

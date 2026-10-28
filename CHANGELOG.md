@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+
+- Missing file reads offer a bounded, content-free sibling-name hint and an explicit search
+  next step while remaining errors (#681, missing-path slice).
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).

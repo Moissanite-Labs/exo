@@ -1078,3 +1078,10 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Missing-path tool errors
+
+The file reader adds a bounded sibling-name hint on a missing path inside `ToolContext.cwd`.
+It samples at most 256 directory entries, returns up to five ranked names, skips hidden/likely
+credential/symlink candidates and JSON-escapes names. No contents are read, no path is guessed
+for execution and the tool remains an error. `docs/TOOLS.md` records the remaining #681 scope.
