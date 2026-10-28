@@ -39,6 +39,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Private compaction leaves measure tool-call arguments in full, so argument-heavy spans no longer
+  remain verbatim because their auxiliary previews fall below the size floor (#524).
+
 - Gate: an `env -S` text keeps the ssh hop's host and is split as env splits it (#591, follow-up to #634, review
   5665626829). #634 read the text's leading words as env's argv beside the text as a shell line, in the call's
   one reading. Behind an ssh hop its new part took the host (the hop's lead, or #320's copy on a secret or store

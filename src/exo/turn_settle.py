@@ -28,12 +28,16 @@ OVERFLOW_SETTLE = 5.0  # seconds a turn waits for summaries when the verbatim vi
 SUMMARIZING_MARKER = "[earlier messages are being summarized]"  # stands where cut_pending left a span out (issue #244)
 
 
+def argument_overflow_cost(m: Any) -> int:
+    """Tool-argument tokens omitted by the 400-character auxiliary preview."""
+    return sum(max(0, len(json.dumps(c.arguments, ensure_ascii=False)) - 400) for c in m.tool_calls) // 4
+
+
 def _cost(m: Any) -> int:
-    """``estimate_tokens``, with tool-call arguments in full: ``render_message`` cuts them at 400 characters."""
+    """``estimate_tokens``, with complete tool arguments for the private pending-span cut."""
     from exo.core.context import estimate_tokens  # core imports this module
 
-    return estimate_tokens(m) + sum(max(0, len(json.dumps(c.arguments, ensure_ascii=False)) - 400)
-                                    for c in m.tool_calls) // 4
+    return estimate_tokens(m) + argument_overflow_cost(m)
 
 
 def _turn_start(ctx: Any, session: str, since: int, tail: list, turn_id: str) -> int:
