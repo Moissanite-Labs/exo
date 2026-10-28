@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable, Iterable
 
 from exo import provenance
 from exo.core import trace
-from exo.core.context import TreeContext
+from exo.core.context import TreeContext, model_retry_wait
 from exo.core.hooks import accepted, maybe_await
 from exo.core.sessions import EventBus, SessionStore, new_id
 from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult, ToolSpec, Usage
@@ -450,12 +450,12 @@ class Loop:
         if tool_choice:  # "none": the tools stay declared, the model may not call them
             opts["tool_choice"] = tool_choice
         specs = self._specs()
-        attempt, history, t0 = 0, [], time.monotonic()
+        attempt, history, t0, delay = 0, [], time.monotonic(), 0.0
         while True:
             s = _Stream(t0=t0)
             try:
                 if attempt:  # the backoff is inside the try: a stop during it still records the failed tries
-                    await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
+                    await self._interruptible(asyncio.sleep(delay), st)
                 await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
             except _Interrupted:  # the wait up to the stop is model time, not harness time (like f_8e7f52cd)
                 s.total_ms, s.retries, s.attempts = int((time.monotonic() - t0) * 1000), attempt, history + s.attempts
@@ -475,6 +475,12 @@ class Loop:
             shown = bool(s.text or s.reasoning or s.calls)
             if not s.error.retryable or shown or attempt >= self.max_retries:
                 return s
+            wait = model_retry_wait(self.retry_delay * 2 ** attempt, s.error.retry_after)
+            if wait is None:
+                await self._emit(ev.Notice(text="provider cooldown exceeds the automatic retry wait; "
+                                           "try again after the reported reset", level="warn"), session)
+                return s
+            delay = wait
             attempt += 1
             history = s.attempts
             await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"

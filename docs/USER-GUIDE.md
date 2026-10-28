@@ -629,3 +629,10 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Provider cooldowns
+
+If every route is cooling down, a turn waits for the reported retry window before trying again,
+within a 60-second automatic wait limit. You can still interrupt the wait. Longer windows fail
+promptly with a cooldown notice rather than exhausting retries while the route remains closed.
+Already shown output is never replayed by this retry path (#660).

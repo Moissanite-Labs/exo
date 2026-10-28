@@ -378,3 +378,16 @@ started, and a CLI must be installed and logged in.
 
 No command prints a key value. A key from the environment, the Keychain (macOS), the Secret Service (Linux) or keys.env is read only by the real CLI;
 tests build engines with `env={}` so a shell key never causes spend.
+
+## Cooldown-aware retries
+
+Turn and summary retries respect the router/provider `retry_after` hint rather than spending their
+retry budget during a known cooldown (#660). Each automatic wait uses the larger of the normal
+backoff and the hint, up to 60 seconds. Longer hints end automatic retries promptly; the original
+error and a cooldown notice remain visible. Turn waits can be interrupted, retry counts stay finite
+and a call is never retried after visible output.
+
+The summary compressor follows the same bounded wait rule. If it cannot recover, `SummaryError`
+retains the retry hint; background tree scheduling defers the next attempt until that reset instead
+of consuming attempts during the closed window. A lone-credential router may report an earlier
+allowed probe time rather than the full provider reset, under its existing cooldown policy.
