@@ -1078,3 +1078,9 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Argument-heavy compaction leaves
+
+`turn_settle.argument_overflow_cost` accounts for complete serialized tool arguments in both private
+pending-span cuts and leaf compaction size/shrink decisions. `render_message` remains a bounded auxiliary preview.
+Do not use that preview length to skip an argument-heavy leaf permanently (#524, D-068).

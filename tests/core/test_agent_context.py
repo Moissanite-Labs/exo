@@ -733,12 +733,12 @@ def test_the_view_cut_keeps_a_question_in_the_oldest_pending_leaf():
     assert "## Messages 1-8 (verbatim, summary pending)" in view and estimate_tokens(view) > ctx.view_budget
 
 
-@pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "skipped")])
+@pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "done")])
 def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
     """Issue #244: the overflow check measures a pending span as the view renders it, cut short, and cut_pending
     measures it in full. So the turn also waits when the cut would apply: the leaf this call scheduled runs first.
-    A fast summarizer lands it (three 12k tool results), or it is skipped as too small (three calls with 20k
-    arguments, which a leaf counts at 400 characters). Either way nothing is cut and no marker shows."""
+    A fast summarizer lands it for both three 12k tool results and three calls with 20k arguments.
+    The argument-heavy leaf now measures complete arguments (#524); neither case needs a marker."""
     store, ctx, prov, loop, _ = setup(min_compact_tokens=1000)
 
     async def go():
@@ -1343,3 +1343,33 @@ def test_the_kept_copies_lookup_reads_only_a_forks_copies():
         store._db.set_progress_handler(None, 100)
         steps[sid] = len(count)
     assert steps[a.id] == 0 and steps[child.id] <= 10  # were 30 and 35: every row of each thread was read
+
+
+@pytest.mark.parametrize("slow", [False, True])
+def test_argument_heavy_private_leaves_are_summarized_instead_of_skipped(slow):
+    """#524: the floor and shrink comparison use full arguments, even though auxiliary source is bounded."""
+    summ = SlowSumm() if slow else Summ()
+    store, ctx, prov, loop, _ = slow_private(summ, min_compact_tokens=1500)
+    async def exercise():
+        if slow:
+            summ.gate = asyncio.Event()
+        session = await loop.create_session(agent="razi", kind="private")
+        for index in range(30):
+            store.append_message(session.id, Message.user(f"write {index}"))
+            store.append_message(session.id, Message.assistant("", [ToolCall(
+                id=f"w{index}", name="write_file", arguments={"path": f"f{index}", "text": "a" * 20000})]))
+            store.append_message(session.id, Message.tool([ToolResult.of_text(f"w{index}", "ok")]))
+        await loop.send(session.id, "done?")
+        if slow:
+            summ.gate.set()
+        await settle_own(ctx, session.id)
+        await loop.send(session.id, "what remains?")
+        await settle_own(ctx, session.id)
+        leaves = [node for node in store.summaries(session.id) if node.level == 0]
+        assert leaves and all(node.status == "done" for node in leaves)
+        arguments = sum(len(call.arguments.get("text", "")) for message in prov.calls[-1]
+                        for call in message.tool_calls)
+        assert arguments <= 6 * 20000
+        assert "what remains?" in texts(prov.calls[-1])
+        store.close()
+    run(exercise())
