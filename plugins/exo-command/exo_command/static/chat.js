@@ -268,7 +268,7 @@ export function mount(root) {
       }
       case "model.call":
         if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
-        help.note({ providerError: !!b.error });
+        help.note({ providerError: b.error || "" });   // the text, so the tip can tell a refusal from a transport failure (#756)
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
