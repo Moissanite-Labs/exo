@@ -113,6 +113,33 @@ def test_store_writes_and_secret_reads_still_ask_in_bypass(keyed_store, as_calle
     assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
 
 
+ERROR_CASES = [
+    ("read_file", {"path": "README.md"}, []),
+    ("search_files", {"pattern": "x", "path": "."}, []),
+    ("terminal", {"command": "ls"}, []),
+    ("read_file", {"path": "~/.exo/keys/seat.key"}, ["principal"]),
+    ("write_file", {"path": "~/.exo/policies/gates.yaml", "content": "x"}, ["principal"]),
+]
+
+
+@pytest.mark.parametrize("decision_model", [False, True])
+@pytest.mark.parametrize("tool,args,approvers", ERROR_CASES)
+def test_bypass_does_not_lower_an_internal_gate_error(keyed_store, as_caller, monkeypatch, decision_model, tool, args,
+                                                      approvers):
+    """D-084: when the gate's own checks raise, a bypass session gets the card an ordinary one gets. Bypass does not
+    auto-approve it, a read asks too, and the card is once-only, so no answer to it becomes a standing grant."""
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, decision_model=decision_model)
+    as_caller("principal:tui")
+    hook.permissions_command(g, "bypass")
+    assert g.bypass_on
+    monkeypatch.setattr(g, "_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = call(ctx, tool, args)
+    assert r["action"] == "approve" and r["once"] is True and r.get("approvers", []) == approvers, r
+    assert r["rule_key"] == f"exo-gate:error:{tool}"
+    assert g.permissions.auto_approved == 0
+
+
 def test_deny_rules_still_block_in_bypass(keyed_store, as_caller):
     _, ctx, store = bypassed(keyed_store, as_caller)
     r = call(ctx, "terminal", {"command": "git push --force origin main"})
