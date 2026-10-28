@@ -50,6 +50,19 @@ def test_request_auth_and_replay_rejection():
         wire.verify_request(headers, "GET", "/v1/head", lambda s: None, wire.ReplayCache())
 
 
+def test_query_string_is_bound_to_request_signature():
+    # A signed read must not be replayable with different query parameters (issue 12).
+    key, replay = SigningKey.generate(), wire.ReplayCache()
+    pub = wire.pubkey_b64(key)
+    headers = {k.lower(): v for k, v in wire.request_headers("s", key, "GET", "/v1/messages", query="since=0&to=x").items()}
+    assert wire.verify_request(headers, "GET", "/v1/messages", lambda s: pub, replay, query="since=0&to=x") == "s"
+    # Tampered parameters, or omitting the query, must not verify.
+    with pytest.raises(ValueError, match="bad request signature"):
+        wire.verify_request(headers, "GET", "/v1/messages", lambda s: pub, wire.ReplayCache(), query="since=1&to=x")
+    with pytest.raises(ValueError, match="bad request signature"):
+        wire.verify_request(headers, "GET", "/v1/messages", lambda s: pub, wire.ReplayCache())
+
+
 def test_load_signing_key_accepts_file_or_inline_seed(tmp_path):
     key = SigningKey.generate()
     seed = wire.b64(bytes(key))

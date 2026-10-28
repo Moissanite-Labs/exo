@@ -113,13 +113,17 @@ def decrypt_body(body_b64: str, enc: dict, my_key: SigningKey, from_pub_b64: str
 
 # --- signed request headers for reads -------------------------------------------------
 
-def request_message(method: str, path: str, ts: str) -> bytes:
-    return f"{method.upper()}\n{path}\n{ts}".encode("utf-8")
+def request_message(method: str, path: str, ts: str, query: str = "") -> bytes:
+    # The query is signed too, so a signed read cannot be replayed with other parameters. An empty query
+    # leaves the message as it was, so an unqueried request signs the same bytes as before.
+    msg = f"{method.upper()}\n{path}\n{ts}"
+    return (f"{msg}\n{query}" if query else msg).encode("utf-8")
 
 
-def request_headers(seat: str, key: SigningKey, method: str, path: str) -> dict[str, str]:
+def request_headers(seat: str, key: SigningKey, method: str, path: str, query: str = "") -> dict[str, str]:
     ts = now_ts()
-    return {HEADER_SEAT: seat, HEADER_TS: ts, HEADER_SIG: b64(key.sign(request_message(method, path, ts)).signature)}
+    return {HEADER_SEAT: seat, HEADER_TS: ts,
+            HEADER_SIG: b64(key.sign(request_message(method, path, ts, query)).signature)}
 
 
 class ReplayCache:
@@ -142,7 +146,7 @@ class ReplayCache:
             return True
 
 
-def verify_request(headers, method: str, path: str, pubkey_for, replay: ReplayCache) -> str:
+def verify_request(headers, method: str, path: str, pubkey_for, replay: ReplayCache, query: str = "") -> str:
     """Return the authenticated seat or raise ValueError with a short reason.
 
     `headers` is any case-insensitive mapping (or a dict with lower-case keys);
@@ -157,7 +161,7 @@ def verify_request(headers, method: str, path: str, pubkey_for, replay: ReplayCa
     if not ts_within(ts, REPLAY_MINUTES):
         raise ValueError("request timestamp outside the 5-minute window")
     try:
-        verify_key(pub).verify(request_message(method, path, ts), unb64(sig))
+        verify_key(pub).verify(request_message(method, path, ts, query), unb64(sig))
     except (BadSignatureError, ValueError):
         raise ValueError("bad request signature") from None
     if not replay.first_use(seat, ts, sig):
