@@ -12,6 +12,7 @@ decision is never lower than main's. Classification and decision only; nothing h
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -350,9 +351,10 @@ class _Ctx:
         self.hooks.setdefault(name, []).append(cb)
 
 
-def test_an_always_through_the_hook_binds_the_exact_line_as_for_bash(tmp_path):
+def test_an_always_through_the_hook_binds_the_exact_line_as_for_bash(tmp_path, monkeypatch):
     # `echo 'rm -rf x' | bash` binds its approval to the exact line on main: an always covers that line only. The sudo
     # shell line does the same, and neither covers the other or a bare `rm -rf x`.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "plugins" / "exo-gate"))
     from exo_gate import hook
 
     store = tmp_path / "store"
