@@ -23,6 +23,7 @@ import time
 from typing import Any, Callable, Iterable
 
 from exo.core.tools.registry import Registry, ToolContext, ToolError
+from exo.core.types import ToolResult
 
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 600
@@ -300,7 +301,7 @@ def timeout_arg(args: dict[str, Any], check: bool = True) -> float:
     return timeout
 
 
-def bash(args: dict[str, Any], ctx: ToolContext) -> str:
+def bash(args: dict[str, Any], ctx: ToolContext) -> str | ToolResult:
     background = args.get("background") is True
     timeout = timeout_arg(args, check=not background)
     cwd = ctx.resolve(args.get("cwd") or ".")
@@ -317,7 +318,8 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str:
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"
     elif status == "interrupted":
         output += "\n[Command interrupted]"
-    return f"{output.lstrip() if output.strip() else '(no output)'}\n[exit {code}]"
+    text = f"{output.lstrip() if output.strip() else '(no output)'}\n[exit {code}]"
+    return ToolResult.of_text(ctx.call_id, text, is_error=code != 0)
 
 
 def register(reg: Registry) -> None:
