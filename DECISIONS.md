@@ -3914,6 +3914,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   validation, as malformed integers already did. This prevents SQLite overflow errors from answering 500 and
   negative limits from lifting the page cap. Rejected: clamping invalid values, which silently changes the
   requested range, or catching database overflow after dispatch, which leaves negative limits unbounded.
+  *Amendment 2026-10-28 (aska-digital/exo-desktop #70 by sparky-118, ported in #835):* `Store.verify`, which
+  answers `/v1/verify` and the `verify_ledger` MCP tool, answers ok false with checked 0 when the range it
+  would check is empty: an inverted range, a `from` past the head, or an explicit range on an empty log. It
+  answered ok true, so a caller that read only `ok` took a check of nothing for a clean log. `to` is clamped
+  to the head, so the answer names the range it checked. One case stays ok true: no `to`, and `from` at its
+  default of 1, on an empty log. That call asks about the whole log, which holds nothing, so it answers
+  `empty: true`, as `exo bus verify` (the client's own walk of the log) already did. An empty-range answer's
+  `head` is the log head, not the chain hash at `from - 1`. Rejected: ok true plus an `empty` flag for every
+  empty range, which leaves a caller that reads only `ok` with the old answer.
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
