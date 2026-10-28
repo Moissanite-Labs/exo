@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -43,6 +43,8 @@ class Client:
         self._http = httpx.AsyncClient(base_url=url or "http://exod", transport=transport,
                                        headers=headers, timeout=timeout)
         self.idle, self.instance, self.last_seq = idle, "", 0
+        self.on_reconnect: Callable[[], Awaitable[None]] | None = None  # optional async observer after a successful subscription
+        self._stream_connected = False
 
     async def __aenter__(self) -> Client:
         return self
@@ -104,6 +106,12 @@ class Client:
         async with self._http.stream("GET", "/events", params=params, timeout=timeout) as r:
             if r.status_code != 200:
                 raise ClientError(s.ErrorInfo(code=f"http_{r.status_code}", message=(await r.aread()).decode()))
+            again, self._stream_connected = self._stream_connected, True
+            if again and self.on_reconnect is not None:
+                try:
+                    await self.on_reconnect()
+                except Exception as exc:
+                    log.warning("reconnect observer failed: %s", type(exc).__name__)
             async for comments, data in sse_frames(bounded_lines(r.aiter_text()), self.idle):
                 if data:
                     try:

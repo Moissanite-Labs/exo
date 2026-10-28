@@ -12,7 +12,7 @@ import os
 import socket as _socket
 import time
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from exo.protocol import schema as s
 from exo.ensure_core import START_TIMEOUT, startup_lock
@@ -27,6 +27,8 @@ class LocalClient:
         self.engine = engine
         self.dispatcher = Dispatcher(engine, caller="principal:tui")  # D-039: this window is the principal
         self.last_seq = 0
+        self.on_reconnect: Callable[[], Awaitable[None]] | None = None
+        self._stream_connected = False
         self.serve_path = Path(serve) if serve else None  # other windows of this agent join here
         self._server: Any = None
 
@@ -63,6 +65,13 @@ class LocalClient:
         while not hub.closed:
             sub = hub.subscribe(last, session)
             try:
+                again, self._stream_connected = self._stream_connected, True
+                if again and self.on_reconnect is not None:
+                    try:
+                        await self.on_reconnect()
+                    except Exception as exc:
+                        from exo.core import trace
+                        trace.report("reconnect observer", exc)
                 async for ev in sub:
                     self.last_seq = last = ev.seq
                     yield ev
@@ -129,6 +138,7 @@ class SharedClient:
     def __init__(self, home: Path, agent: str, inner: Any):
         self.home, self.agent, self.inner = home, agent, inner
         self.last_seq = 0
+        self.on_reconnect: Callable[[], Awaitable[None]] | None = None
 
     async def _failover(self) -> None:
         try:
@@ -137,6 +147,7 @@ class SharedClient:
             pass
         # the socket probe, engine start and the wait for another window all block: keep them off the event loop
         self.inner = await asyncio.to_thread(_open, self.home, self.agent)
+        self.inner._stream_connected = True  # its first subscription replaces a previous connection
 
     async def send(self, body: Any) -> s.Response:
         """After a lost connection, rejoin. Resend only what cannot have acted twice: a command that never left
@@ -172,6 +183,7 @@ class SharedClient:
         self.last_seq = since
         while True:
             try:
+                self.inner.on_reconnect = self.on_reconnect
                 async for ev in self.inner.events(since=self.last_seq, session=session):
                     self.last_seq = ev.seq
                     yield ev

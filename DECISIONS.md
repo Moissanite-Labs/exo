@@ -3906,6 +3906,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (#763):** accepted client and internal steers are committed in the session
+  database before acknowledgement, preserving their message ID, content parts and original author.
+  Loop state projects the durable queue rather than caching a second mutable list. Session reads and
+  resumes do not run a turn or deliver pending messages. `session.get`/`session.resume` retain `steers`
+  IDs and add optional `queued_steers` Message records for restored cancellation controls.
+  Cancellation commits before acknowledgement. Queue-to-transcript insertion, log hash/FTS updates
+  and queue removal share one transaction; events follow commit. Restart cannot duplicate a committed
+  transcript delivery when its event was lost. Recovered corrections precede fresh user input without
+  taking over that newer input's author. Forks inherit no pending messages; undo retires queue entries
+  tied to removed visible anchors, and delivery revalidates anchors. No new event types, automatic
+  continuation or exactly-once tool-effect claim. See `docs/DURABLE-STEERING.md` for limits and tests.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
