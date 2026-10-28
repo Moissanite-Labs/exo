@@ -409,3 +409,25 @@ def test_successful_reauthorization_bumps_scope_but_refresh_does_not(tmp_path, m
     store.values[service._account(profile)]['expires_at'] = 0
     service.headers()
     assert scope == auth.continuation_scope(tmp_path, 'seat')
+
+
+def test_registration_accepts_issued_client_without_example_prefix(tmp_path):
+    validated = []
+    def verify(token, audience, nonce):
+        validated.append((audience, nonce))
+        return {'sub': 'account-one', 'email': 'test@example.invalid'}
+    service, _, calls, _ = setup(tmp_path, verify=verify)
+    service.start()
+    nonce = service.pending['nonce']
+    assert finish(service, client='issued-exo-client:public.123')
+    assert validated == [('issued-exo-client:public.123', nonce)]
+    assert parse_qs(calls[0].content.decode())['client_id'] == ['issued-exo-client:public.123']
+    assert service.status()['profiles'][0]['client_id'] == 'issued-exo-client:public.123'
+
+
+@pytest.mark.parametrize('client', ['dynamic_agent_client', '', 'x' * 257, 'client with space', 'client\tvalue', 'client\nvalue', 'client\x7fvalue'])
+def test_invalid_issued_identifier_refused_before_code_exchange(tmp_path, client):
+    service, store, calls, _ = setup(tmp_path)
+    service.start()
+    assert not finish(service, client=client)
+    assert not calls and not store.values and not service.status()['available']

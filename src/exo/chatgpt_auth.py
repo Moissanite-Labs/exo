@@ -330,7 +330,9 @@ class Service:
                 codes, issued = query.get('code', []), query.get('client_id', [])
                 client_id = pending['client_id']
                 if client_id == 'dynamic_agent_client':
-                    if len(issued) != 1 or not issued[0].startswith('oaiapp_'):
+                    if (len(issued) != 1 or not 1 <= len(issued[0]) <= 256
+                            or issued[0] == 'dynamic_agent_client'
+                            or any(not 33 <= ord(char) <= 126 for char in issued[0])):
                         raise AuthError('ChatGPT registration was incomplete. Try again.')
                     client_id = issued[0]
                 elif issued and issued != [client_id]:
