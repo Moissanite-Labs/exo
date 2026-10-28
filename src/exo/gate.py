@@ -7914,6 +7914,26 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
             return hit
         every += [_expand_text(w) for w in words if hits([w])]
         first = first or hit
+    spelt: list = []
+
+    def holders(piece: str) -> tuple[list[str], int]:
+        # The words whose text, as the line spells it, holds ``piece`` (each once, in the line's order), and the copies
+        # of it all the words hold. Since #706 every such piece is read, not only the first. Each word is spelt once for
+        # all of them, and a piece is found by one search of the joined texts. Spelling every word again for each piece
+        # took 16.7 s on a line of 1,000 such pieces, where main takes 0.12 s (#513).
+        if not spelt:
+            each = {raw: _expand_text(raw) for raw in raws or []}
+            spelt.extend([each, list(each), "\0".join(each.values()), "\0".join(each[raw] for raw in raws or []),
+                          list(itertools.accumulate((len(t) + 1 for t in each.values()), initial=0))])
+        each, words, joined, copies, starts = spelt
+        if "\0" in piece:           # a piece a join could make up across two words: word by word
+            return [w for w, t in each.items() if piece in t], sum(each[raw].count(piece) for raw in raws or [])
+        found, at = [], joined.find(piece)
+        while at >= 0:              # a match holds no "\0", so it lies in one word: on to the next word
+            i = bisect.bisect_right(starts, at) - 1
+            found.append(words[i])
+            at = joined.find(piece, starts[i + 1])
+        return found, copies.count(piece)
 
     def shell_reads(piece: str) -> str:
         # #513, third review: such a piece is read as the shell reads the word that holds it. Unquoted, `\c` is `c`, so
@@ -7925,9 +7945,8 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         # another shell may read again (`su -c '...'`), keeps the piece as the target (fails closed). The line's
         # copies of the piece are counted, so a quoted word with the same text beside a heredoc body
         # (`bash -s "$HOME/.kube/\config" <<'X'`) does not stand in for the body.
-        read = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for raw in dict.fromkeys(raws or [])
-                if piece in _expand_text(raw) for d in _dequote(raw)]
-        held = sum(_expand_text(raw).count(piece) for raw in raws or [])
+        found, held = holders(piece)
+        read = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for raw in found for d in _dequote(raw)]
         if not read or held < text.count(piece) or any(re.search(r"[\s<>;|&()`]", d) for d in read):
             return piece
         return next((d for d in read if _sensitive_words([d, os.path.normpath(d)] if "\\" in d else [d],

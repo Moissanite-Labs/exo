@@ -1338,6 +1338,45 @@ def test_each_store_past_an_odd_first_store_keeps_its_reserved_hit():
     assert {p.target.rsplit("/", 2)[-2] for p in gate._each_part(c) if p.other_store} == {".ssh", ".aws"}
 
 
+def _many_kube_words(n, backslash=True):
+    # n words that name the kube config only in the lexical form, each with a backslash the shell drops, or without it
+    name = "\\config" if backslash else "config"
+    return "cat " + " ".join(f"~/.kube/x{i}/../{name}" for i in range(n))
+
+
+def test_each_backslash_word_is_read_with_the_line_spelt_once(monkeypatch):
+    # Since #706 each such word is read as the shell reads it, not only the first, so each is a part of its own. Each
+    # read spelt every word of the line out again, so 400 words cost 16 times what 100 cost (#513, the merge of main
+    # eb0ba7e2). The words are now spelt once per call.
+    calls, real = [0], gate._expand_text
+
+    def counting(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    monkeypatch.setattr(gate, "_expand_text", counting)
+    seen = []
+    for n in (100, 400):
+        calls[0] = 0
+        assert full(_many_kube_words(n), {"gates": {"deny": ["target:*/.kube/config"]}})[:2] == ("credentials", "deny")
+        seen.append(calls[0])
+    assert seen[1] < 5 * seen[0], seen
+
+
+def test_a_line_of_many_backslash_words_costs_about_what_it_costs_without_them():
+    # 1,000 such words took 16.7 s, against 0.25 s without the backslashes. CPU time, retried only when over the bound.
+    policy = {"gates": {"deny": ["target:*/.kube/config"]}}
+    lines = [_many_kube_words(1000, backslash=False), _many_kube_words(1000)]
+    for _ in range(3):
+        took = []
+        for line in lines:
+            start = time.process_time()
+            assert full(line, policy)[:2] == ("credentials", "deny")
+            took.append(time.process_time() - start)
+        if took[1] < 4 * took[0] + 0.2:
+            break
+    assert took[1] < 4 * took[0] + 0.2, took
+
+
 # Since #707 (#634 follow-up) the gate reads an `env -S` text as the line env runs, and since #718 and #799 (#491) the
 # stdin and the command of a `sudo -s` or `sudo -i` shell. Each reads its text as a shell line, so the spellings #446
 # reads, main's target part and each other store's part hold there as on the line itself: the odd line is denied where
