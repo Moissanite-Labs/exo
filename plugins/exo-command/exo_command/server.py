@@ -418,6 +418,8 @@ class WebServer:
             return await self._json(writer, 400, {"error": "bad json"})
         if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
             return await self._json(writer, 403, BAD_TOKEN)
+        if not isinstance(body, dict):
+            return await self._json(writer, 400, {"error": "body must be a json object"})
         decision = body.get("decision")
         if decision not in DECISIONS:
             return await self._json(writer, 400, {"error": "decision must be one of {}".format(", ".join(DECISIONS))})
