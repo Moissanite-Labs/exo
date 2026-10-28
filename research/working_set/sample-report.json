@@ -1,0 +1,99 @@
+{
+  "limits": "No representative quality, true tokenizer, latency or runtime integration claim",
+  "scope": "Handwritten synthetic examples; recency comparator is not existing Exo recall",
+  "tasks": [
+    {
+      "recency_baseline": {
+        "estimated_tokens": 63,
+        "expected": 2,
+        "precision": 0.5,
+        "recall": 0.5,
+        "relevant": 1,
+        "selected": [
+          "recent-noise",
+          "alpha-correction"
+        ]
+      },
+      "selector": {
+        "estimated_tokens": 66,
+        "expected": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "relevant": 2,
+        "selected": [
+          "alpha-correction",
+          "alpha-proof"
+        ]
+      },
+      "task": "project-alpha"
+    },
+    {
+      "recency_baseline": {
+        "estimated_tokens": 63,
+        "expected": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relevant": 0,
+        "selected": [
+          "recent-noise",
+          "alpha-correction"
+        ]
+      },
+      "selector": {
+        "estimated_tokens": 31,
+        "expected": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "relevant": 1,
+        "selected": [
+          "beta-proof"
+        ]
+      },
+      "task": "task-change-to-beta"
+    },
+    {
+      "recency_baseline": {
+        "estimated_tokens": 63,
+        "expected": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relevant": 0,
+        "selected": [
+          "recent-noise",
+          "alpha-correction"
+        ]
+      },
+      "selector": {
+        "estimated_tokens": 0,
+        "expected": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "relevant": 0,
+        "selected": []
+      },
+      "task": "known-synonym-failure"
+    },
+    {
+      "recency_baseline": {
+        "estimated_tokens": 63,
+        "expected": 0,
+        "precision": 0.0,
+        "recall": 1.0,
+        "relevant": 0,
+        "selected": [
+          "recent-noise",
+          "alpha-correction"
+        ]
+      },
+      "selector": {
+        "estimated_tokens": 0,
+        "expected": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "relevant": 0,
+        "selected": []
+      },
+      "task": "private-query-denied"
+    }
+  ]
+}
