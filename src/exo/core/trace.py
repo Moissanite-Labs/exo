@@ -713,7 +713,8 @@ def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
                        if c.spent and c.cost_usd is None} - {""})
     lines += [price_hint(ref) for ref in unpriced[:3]]
     if len(unpriced) > 3:
-        lines.append(f"no price for {len(unpriced) - 3} more routes, the same key prices each of them")
+        lines.append(f"no price for {len(unpriced) - 3} more routes; each takes its own key under "
+                     "models.models, as above")
     for i, t in enumerate(turns, 1):
         if t.calls and (calls or t is turns[-1]):
             lines += ["", *_call_lines(t, i)]
