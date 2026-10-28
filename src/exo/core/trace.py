@@ -218,6 +218,11 @@ class Thresholds:
 # ---------------------------------------------------------------- trace rows
 
 
+def recovered_fallbacks(attempts: list[dict[str, Any]], served: str) -> int:
+    """Recorded fallback failures count as recoveries only when a route actually served the call."""
+    return sum(a.get("outcome") in ("fallback", "timeout") for a in attempts) if served else 0
+
+
 @dataclass
 class Call:
     iteration: int = 0
@@ -506,7 +511,7 @@ class _Parse:
         t.calls, t.derived = (self.recorded or self.guess), not self.recorded
         if self.recorded:
             t.served = list(dict.fromkeys(c.route for c in self.recorded if c.route))
-            t.fallbacks = sum(1 for c in t.calls for a in c.attempts if a.get("outcome") not in ("ok", None))
+            t.fallbacks = sum(recovered_fallbacks(c.attempts, c.route if not c.error else "") for c in t.calls)
         else:
             t.fallbacks = self.fell
 
@@ -574,7 +579,7 @@ def eligible(signature: str, t: TurnTrace) -> bool | None:
     rule = {"turn.slow": t.complete, "turn.wall": t.complete, "subagent.slow": any(x.tasks for x in xs),
             "model.mismatch": any(x.shown and x.served for x in xs), "shell.masked_exit": "bash" in tools,
             "tool.error": key.split(":")[0] in tools, "tool.repeat": key in tools}
-    if kind in ("model.wait", "model.slow", "model.fallback", "model.timeout"):
+    if kind in ("model.wait", "model.slow", "model.fallback", "model.timeout", "model.error"):
         return any(key in (c.route or x.shown, *(a.get("route") for a in c.attempts)) for x in xs for c in x.calls)
     return rule.get(kind)
 
@@ -626,7 +631,10 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
                     f"{a.get('error', '')} (after {_fmt_ms(a.get('ms', 0))})".strip())
             elif a.get("outcome") in ("fallback", "error"):
                 cool = a.get("cooldown_s")  # the route's circuit breaker opened on this failure
-                add(f"model.fallback:{a['route']}", "bug", f"{a['route']} failed; the call fell back",
+                recovered = bool(c.route and not c.error)
+                kind = "model.fallback" if a.get("outcome") == "fallback" and (recovered or t.derived) else "model.error"
+                title = f"{a['route']} failed" + ("; the call fell back" if kind == "model.fallback" else "")
+                add(f"{kind}:{a['route']}", "bug", title,
                     str(a.get("error", "")) + (f" (route skipped for {_fmt_ms(cool * 1000)})" if cool else ""))
     for tr in t.tools:
         if tr.is_error:
