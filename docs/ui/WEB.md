@@ -347,3 +347,12 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+### Chat notice ownership
+
+The chat status strip shows notices for the selected session only. Unscoped notices do not replace its
+status. Model retry and fallback notices carry `source: model_route` and a `call_id` matching the
+`model.call` record. A successful matching call clears that transient warning; another call cannot.
+Turn completion clears any remaining route warning, while newer general notices and command errors
+remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
+notices until another status message or thread selection replaces them.

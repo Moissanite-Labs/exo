@@ -3927,6 +3927,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
