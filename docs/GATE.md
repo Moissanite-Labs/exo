@@ -743,6 +743,9 @@ system or bash will.
   The gate cannot tell a planted link from a system one. On macOS `/tmp` is a link to `/private/tmp`, and an allow
   rule matches the call as spelt while the part is decided on its own (#191). So a policy that denies `local_write`
   and allows `target:/tmp/*` denies `write_file /tmp/x` until it allows `target:/private/tmp/*` too.
+  A reserved entry that matches another part of a call keeps the principal's ask from any grant (D-075). So a
+  reserved entry on the place, or on `local_write`, asks for such a write each time: an "always" for `o/plain.txt`
+  does not cover the next one, since the link may lead elsewhere by then.
 - **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes

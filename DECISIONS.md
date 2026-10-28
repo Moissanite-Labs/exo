@@ -4194,8 +4194,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `o` a link to that folder, was an allowed local write: the link was the one spelling no entry on the place could
   reach. Now each path whose folders a link leads elsewhere adds a `local_write` part whose target is the place it
   lands (the folders resolved, the last name kept), and the call's summary names that place. The call keeps its
-  category and its target as spelt, so its grants and its approvers stay as before. A relative path is read from
-  the session's folder as resolved, so a link to that folder itself adds nothing. The tools are unchanged.
+  category and its target as spelt, so its approvers stay as before and a grant is keyed on the spelling. A
+  relative path is read from the session's folder as resolved, so a link to that folder itself adds nothing. The
+  tools are unchanged.
   Chosen over a refusal in the tools: they take absolute paths and `..` by design, so a write outside the working
   folder was never refused. A refusal of a link that leads out of it would refuse a store write the principal
   approved, which the #241 amendment rules out, and every write through a system link such as macOS `/tmp`. The
@@ -4209,8 +4210,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   link to `/private/tmp`, so `write_file /tmp/x` adds a part for `/private/tmp/x`. An allow rule matches the call as
   spelt, and the part is decided on its own (#191). So a policy that denies `local_write` and allows
   `target:/tmp/*` now denies that write, naming the place, until it allows `target:/private/tmp/*` too. The default
-  policy still allows it.
-  Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main).
+  policy still allows it. A reserved entry that matches another part of a call keeps the principal's ask from any
+  grant (D-075). So under a reserved entry on the place, or `reserved: [local_write]`, an "always" for
+  `o/plain.txt` no longer covers the next such write, which asks each time: the link may lead elsewhere by then.
+  On main the entry on the place did not reach the write, and a grant covered it under `reserved: [local_write]`.
+  Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main) and the grant rows in
+  `plugins/exo-gate/tests/test_approvals.py` (both fail on main).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
