@@ -78,6 +78,13 @@ same-origin or none. Besides the launch route, only the page shell (`/`, `/stati
 Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
 below.
 
+`POST /api/approvals/<id>` takes a JSON object with `decision` (`allow`, `deny` or `allow_always`) and an optional
+`note`. An array, null or scalar gets 400 with `{"error": "body must be a json object"}` before any approval answer
+reaches the core; malformed JSON keeps its 400 `{"error": "bad json"}` response (#740).
+JSON deeper than the decoder supports gets that same approval error. The shared body reader used by chat and
+provider POSTs rejects such input with its existing 400 `{"error": "body must be a json object"}` response
+(follow-up to #751).
+
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
 credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
@@ -171,8 +178,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
-- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
-  the core `rename` built-in, principal only (D-069).
+- **Thread list.** Each thread has a visible Rename button. It opens a labeled title field with Save and Cancel.
+  Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
+  current composer draft. A refused save keeps the title draft and shows the error.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -345,3 +354,12 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+### Chat notice ownership
+
+The chat status strip shows notices for the selected session only. Unscoped notices do not replace its
+status. Model retry and fallback notices carry `source: model_route` and a `call_id` matching the
+`model.call` record. A successful matching call clears that transient warning; another call cannot.
+Turn completion clears any remaining route warning, while newer general notices and command errors
+remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
+notices until another status message or thread selection replaces them.
