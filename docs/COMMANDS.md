@@ -268,6 +268,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo models` | Providers, whether a key is found (yes or no, never the value), the route per role, and the `code_find` status. | `--remote PROVIDER` lists that provider's models over the network | `cmd_models` in `src/exo/models_cmd.py` |
+| `exo models --prices` | The price table (D-090): USD per million tokens in force now, whether a clock window applies, the `source` page and how many days ago it was read, plus problems and stale entries. | `--prices` | `render_prices` in `src/exo/models_cmd.py` |
 | `exo providers` | Provider setup (D-034): status table; `add NAME` (getpass, needs a terminal, never from argv), `test NAME`, `remove NAME`, `default REF`. | `--store keychain\|secret-service\|file` and `--no-test` (skip the live test) on add; `--yes` on remove; `--role` on default | `src/exo/providers_cmd.py`, `src/exo/providers_setup.py` |
 | `exo decide <question>` | Asks the decision model one question and prints the probability of each option and the route used. | `--options a,b,c` (required, at least two), `--state TEXT`, `--role ROLE` (default `decision`) | `cmd_decide` in `src/exo/decide_cmd.py` |
 

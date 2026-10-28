@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+import datetime as dt
 import concurrent.futures
 import shutil
 import threading
@@ -31,6 +32,7 @@ from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
+from exo.core.models.prices import rates_at
 from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
 from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
@@ -398,17 +400,22 @@ class Router:
     def route_ok(self, ref: str) -> None:
         self.breakers.pop(ref, None)
 
-    def price(self, route: Route, usage: Usage | None) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None, at: float | dt.datetime | None = None) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
         None stays None when the route has no price (never 0). ``input_tokens`` is the uncached input on every
-        transport (D-080); cache reads and writes are charged at their own rates on top."""
+        transport (D-080); cache reads and writes are charged at their own rates on top. A vendor that bills by
+        clock time lists the off-peak rates in a window (prices.py, D-090), so the rates in force at ``at``
+        (default: now) are the ones charged."""
         info = self.models.get(route.ref)
-        if usage is None or usage.cost_usd is not None or not info or "input" not in info:
+        if usage is None or usage.cost_usd is not None:
             return usage
-        inp = info["input"]
-        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * info.get("output", 0)
-                + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
-                + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
+        rates = rates_at(info, at)
+        if rates is None:
+            return usage
+        inp = rates["input"]
+        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * rates.get("output", 0)
+                + usage.cache_read_tokens * rates.get("cache_read", inp * 0.1)
+                + usage.cache_write_tokens * rates.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
 
     # --- streaming -----------------------------------------------------------

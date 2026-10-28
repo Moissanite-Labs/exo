@@ -99,26 +99,41 @@ base_url = "https://api.typesafe.ai/v1"
 key_env = "TYPESAFE_API_KEY"
 roles = ["decision"]
 
-# Models are keyed "provider:model".
+# Models are keyed "provider:model". Prices are USD per million tokens, and every priced entry
+# carries the page it was read from (`source`) and the UTC day it was read (`verified`); see
+# docs/PROVIDERS.md "Prices" and src/exo/core/models/prices.py. `cache_read` defaults to 0.1x input
+# and `cache_write` (the 5-minute cache write) to 1.25x input when an entry leaves them out.
+# A vendor that bills by clock time lists its other published rates in a window:
+#   [[models."provider:model".window]]
+#   days = ["mon", "tue"]            # optional, default every day
+#   hours = ["01:00-04:00"]          # optional, UTC, half-open, may wrap midnight
+#   input = 0.15                     # only the rates the window names are replaced
+# The entry's own rates are the default, so they should be the vendor's standard (highest) rate.
 [models."anthropic:claude-opus-5-5"]
 context = 1000000
 max_output = 128000
 input = 4.00
 output = 20.00
 cache_read = 0.20
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+verified = "2026-10-28"
 
 [models."anthropic:claude-sonnet-5-5"]
 context = 1000000
 max_output = 128000
 input = 2.00
 output = 10.00
-cache_read = 0.20
+cache_read = 0.10
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+verified = "2026-10-28"
 
 [models."anthropic:claude-haiku-5-5"]
 context = 1000000
 max_output = 128000
 input = 0.10
 output = 0.50
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+verified = "2026-10-28"
 
 [models."anthropic:claude-fable-5-1"]
 context = 1000000
@@ -126,6 +141,8 @@ max_output = 128000
 input = 10.00
 output = 50.00
 cache_read = 0.25
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+verified = "2026-10-28"
 
 # Roles: each is an ordered route list; the first available route serves, the rest
 # are fallbacks. Resolution when a role is empty or every route fails:
