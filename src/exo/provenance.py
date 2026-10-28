@@ -204,7 +204,7 @@ def principal_view(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]
     return out
 
 
-def principal_names(store: Any = None, extra: Iterable[str] = ()) -> frozenset[str]:
+def principal_names(store: Any = None, extra: Iterable[str] = (), *, home: Any = None) -> frozenset[str]:
     """Ledger authors that are the principal: ``principal``, the store's id (its directory name), principal ids
     pinned in the key registry, and ``extra``."""
     names = {PRINCIPAL, *[str(x) for x in extra if x]}
@@ -213,7 +213,7 @@ def principal_names(store: Any = None, extra: Iterable[str] = ()) -> frozenset[s
         names.add(root.name)
     try:
         from .keyring import KeyRegistry
-        names.update(KeyRegistry.load(create=False).principals)
+        names.update(KeyRegistry.load(home, create=False).principals)
     except Exception:  # no registry yet, or unreadable: the defaults still hold
         pass
     return frozenset(names)

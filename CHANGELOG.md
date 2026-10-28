@@ -11,6 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Successful pipelines with an earlier-stage failure note remain successful (#791).
 
 ### Added
+- Exopet in the web workspace: a small activity glyph, optional growth card and empty-thread lattice,
+  with Mini, Full and Off controls. Personal growth is read from verified ledger records; failed verification
+  freezes the last trusted result. XP remains banked in the egg while the community hatch is pending.
+  No community requests, install reports or pet notifications (`docs/ui/EXOPET.md`, D-048).
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item

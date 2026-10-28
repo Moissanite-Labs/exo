@@ -9,6 +9,7 @@ import * as schedule from "./schedule.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
 import * as permissions from "./permissions.js";
+import { createPet } from "./pet.js";
 
 const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
 
@@ -58,6 +59,7 @@ const connText = h("span", null, "");
 const conn = h("span", { class: "xc-conn", role: "status", "aria-live": "polite", "aria-atomic": "true" }, led, connText);
 let unmount = null, current = null, workspaceReady = false, authGeneration = 0;
 let connecting = Promise.resolve();
+const pet = createPet({ authorized: () => !!token() && workspaceReady, onMode: mode => { dot.hidden = mode !== "off"; } });
 const appearance = h("select", { class: "xc-appearance", "aria-label": "Appearance",
   onchange: () => { appearance.value = setAppearance(appearance.value); } },
   ...[["dark", "Dark"], ["light", "Light"], ["system", "System"]].map(([value, label]) => h("option", { value }, label)));
@@ -65,8 +67,8 @@ appearance.value = applyAppearance(getAppearance());
 const appearanceControl = h("label", { class: "xc-appearance-wrap" }, h("span", null, "Appearance"), appearance);
 const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
 nav.replaceChildren(h("strong", { class: "xc-brand" },
-  h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, "Exo"),
-  where, ...links, appearanceControl, conn);
+  h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, pet.glyph, "Exo"),
+  where, ...links, appearanceControl, pet.control, conn);
 const skip = document.getElementById("xc-skip");
 if (skip && skip.addEventListener) skip.addEventListener("click", (event) => { event.preventDefault(); main.focus(); });
 
@@ -95,7 +97,8 @@ function show(id) {
     main.replaceChildren(h("p", { class: "xc-loading", role: "status" }, "Connecting to the workspace…"));
     return;
   }
-  unmount = v[2].mount(main) || null;
+  pet.start();
+  unmount = v[2].mount(main, { pet }) || null;
 }
 
 bus.onState((s) => {
@@ -112,7 +115,7 @@ show((location.hash || "").slice(1));
 window.addEventListener("hashchange", async () => {
   const fresh = takeToken() || await takeCode();
   if (fresh) {
-    const generation = ++authGeneration; workspaceReady = false;
+    const generation = ++authGeneration; workspaceReady = false; pet.suspend();
     await connecting;  // a previous bootstrap cannot overwrite the fresh connection's panel snapshot
     if (generation !== authGeneration) return;
     connecting = bus.restart();

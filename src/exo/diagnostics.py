@@ -187,6 +187,9 @@ def memory_status(eng: CoreEngine) -> dict[str, str]:
     return {"state": "on", "provider": mem.name, "text": ""}
 
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
+    if b.name == "pet":
+        from exo.pet.status import command
+        return await command(eng, b)
     if b.name == "checkpoint":
         from exo.work_checkpoint import command
         return await command(eng, b)

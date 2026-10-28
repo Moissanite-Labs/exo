@@ -28,6 +28,13 @@ draft when you choose it. Recovery stays with the originating conversation, incl
 Check the transcript before sending again: an unconfirmed reply may have reached the core. Nothing retries
 automatically. “Dismiss” removes the recovery notice; it does not erase the current draft.
 
+## Exopet (D-048)
+
+The brand bar offers Mini, Full and Off for the local lattice companion. Full adds a growth card and an
+empty-thread drawing. The companion reports observed conversation activity; verified personal growth comes from
+the core's read-only `pet` command. The community hatch is pending and no site requests are made. See
+[Exopet in the workspace](EXOPET.md) for controls, verification and implementation limits.
+
 ## Connecting to the core (D-036)
 
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then

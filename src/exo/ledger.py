@@ -167,6 +167,32 @@ class Ledger:
                            ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
 
+    @classmethod
+    def read_only(cls, path: str | os.PathLike) -> "Ledger":
+        """Open a stable read transaction without creating a ledger, repairing triggers or changing journal mode."""
+        path = _ledger_key(path)  # bind relative folders without resolving away a file symlink
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise LedgerError("read-only ledger must be a regular, non-symlink file")
+        reader = cls.__new__(cls)
+        reader.path, reader.signer = path, None
+        reader.authority, reader.authority_author = None, None
+        reader._lock = threading.Lock()
+        reader.missing_triggers = []
+        reader.db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False,
+                                    isolation_level=None, timeout=5)
+        try:
+            reader.db.execute("PRAGMA query_only=ON")
+            reader.db.execute("BEGIN")
+            reader.head()  # establish the snapshot before verification and scoring share it
+            after = path.lstat()
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or not stat.S_ISREG(after.st_mode):
+                raise LedgerError("ledger path changed during read-only open")
+        except BaseException:
+            reader.close()
+            raise
+        return reader
+
     def _missing_triggers(self) -> list[str]:
         """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():

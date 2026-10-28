@@ -132,6 +132,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/peers`, `/send`: peers, above.
 - `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`: watch, steer and stop a subagent that is working for you.
 - `/trace`, `/findings`: trace and findings, above.
+- `/pet [status]`: verified personal growth. The community hatch is pending, so XP is banked in the egg.
 - `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
   paths) to `$EXO_HOME/handoffs/<seat>-<date>.md` (or `$EXO_HANDOFF_DIR`, or `handoff_dir` in `config.json`), or to the path you give. It uses the exo-handoff skill and the
   normal write tool, so the approval gate sees it.
