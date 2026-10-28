@@ -301,6 +301,17 @@ zero-shot and over-confident (research/DECISION-MODELS.md); do not gate on its r
 installed or downloaded here because torch plus weights is over 2 GB. If port 8000 clashes with vLLM,
 set `LAYA_PORT` and override only `base_url` under `[models.providers.laya]`.
 
+HTTP streams have separate byte-idle and meaningful-progress deadlines. `read_timeout` bounds a wait
+for network bytes. `progress_timeout` bounds time without recognized model output, usage, reasoning
+or buffered tool arguments; SSE comments, pings and unknown data do not reset it (#668). By default
+it inherits `read_timeout` (normally 60 seconds). Set a larger positive value for models that reason
+silently for longer, or `progress_timeout = 0` to disable this guard deliberately. CLI transports keep
+their existing timeout behavior. The setting is finite and nonnegative.
+
+A progress timeout closes the response and reports a retryable read timeout. Existing router rules
+may retry or fall back before visible output; they do not replay a call after output is shown. This is
+a transport watchdog slice of #682, not a new latency-based route-health or automatic replay policy.
+
 Add or change a provider in config under `[models.providers.NAME]` with `transport`, `base_url`,
 `key_env`. A table for a catalog provider merges over the catalog entry key by key: the keys you set win and
 the rest stay. So `base_url` alone keeps Laya's `decision` transport, `local` flag and decision-only `roles`,

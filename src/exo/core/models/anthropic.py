@@ -280,6 +280,7 @@ class AnthropicProvider(HttpTransport):
         kind = d.get("type", event)
         blocks: dict[int, dict] = st.meta.setdefault("_blocks", {})
         if kind == "message_start":
+            st.progress += 1
             u = (d.get("message") or {}).get("usage") or {}
             st.meta["_usage_complete"] = False
             st.meta["_usage_input"] = ("_usage_input" not in st.meta and
@@ -291,6 +292,7 @@ class AnthropicProvider(HttpTransport):
             cb = dict(d.get("content_block") or {})
             cb["_json"] = ""
             blocks[d.get("index", 0)] = cb
+            st.progress += 1
             if cb.get("type") == "redacted_thinking":
                 st.parts.append(ContentPart(type="reasoning", data=cb.get("data")))
             elif cb.get("type") == "thinking":
@@ -310,8 +312,12 @@ class AnthropicProvider(HttpTransport):
                 if delta.get("thinking"):
                     yield ProviderEvent(kind="reasoning", text=delta["thinking"])
             elif dt == "signature_delta" and cb.get("_part") is not None:
+                if delta.get("signature"):
+                    st.progress += 1
                 cb["_part"].signature = (cb["_part"].signature or "") + delta.get("signature", "")
             elif dt == "input_json_delta":
+                if delta.get("partial_json"):
+                    st.progress += 1
                 cb["_json"] = cb.get("_json", "") + delta.get("partial_json", "")
         elif kind == "content_block_stop":
             cb = blocks.pop(d.get("index", 0), {})

@@ -161,6 +161,8 @@ class OpenAIChatProvider(HttpTransport):
                 slot["id"] = slot["id"] or tc.get("id") or ""
                 slot["name"] += fn.get("name") or ""
                 slot["args"] += fn.get("arguments") or ""
+                if tc.get("id") or fn.get("name") or fn.get("arguments"):
+                    st.progress += 1
             if choice.get("finish_reason"):
                 st.stop_reason = map_finish_reason(choice["finish_reason"], _FINISH_MAP)
                 yield from self._flush_tools(st)
