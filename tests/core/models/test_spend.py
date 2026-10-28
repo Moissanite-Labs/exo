@@ -76,6 +76,17 @@ def test_reserve_before_send_exact_body_and_immutable_price(tmp_path):
     assert rows(cfg) == [(2_000_000, 200_000)]
 
 
+def test_unpriced_route_refusal_names_the_price_key(tmp_path):
+    from exo.core import trace
+    cfg = policy(tmp_path); cfg['routes'] = {}  # the journal pins no contract for test:m
+    r = router(cfg, lambda req: response())
+    event = call(r)[-1]
+    assert event.kind == 'error' and not event.retryable
+    assert 'no pinned model-spend contract for test:m' in event.error
+    assert trace.price_hint('test:m') in event.error
+    assert 'models.models in config.json' in event.error and event.attempts[0]['outcome'] == 'spend_refused'
+
+
 @pytest.mark.parametrize('field', ['daily_usd', 'monthly_usd'])
 def test_cap_denial_zero_calls_no_fallback(tmp_path, field):
     cfg = policy(tmp_path); cfg[field] = '.001'
