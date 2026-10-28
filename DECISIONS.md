@@ -4759,6 +4759,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
 
 ## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Amendment 2026-10-28 (#524):** summary leaves use the existing full-tool-argument cost for their
+  minimum-size and shrink tests. Argument-heavy private spans therefore become pending/done summaries
+  rather than permanently skipped spans merely because their bounded auxiliary preview is short. The
+  summarizer source rendering stays bounded; original arguments remain in the transcript.
 - **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
   bookkeeping delayed replies (issue #99).
 - **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in

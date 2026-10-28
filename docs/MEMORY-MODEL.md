@@ -116,8 +116,9 @@ A span that is not pending stays whole too: one skipped for good, one waiting to
 `tail_messages`, which are in no leaf yet. A tool call and its results
 are kept or cut together. The cut moves only when it must grow, and then by a whole leaf, so the calls in between
 extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A span
-of large tool-call arguments can still be skipped as too small, since a leaf's size cuts each call's arguments at
-400 characters, and then it stays verbatim. The system message is the same as in the agent's other threads, so
+of large tool-call arguments is measured in full for the leaf floor and the shrink test, even though the
+auxiliary summarizer receives bounded rendered arguments. It is not skipped merely because that rendered
+preview is short (#524). The system message is the same as in the agent's other threads, so
 the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
 `capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
 `from_seq` is the first stored message there. It finds the turn by the thread's last turn id, so during a turn it

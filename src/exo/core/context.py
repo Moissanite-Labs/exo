@@ -27,7 +27,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
-from exo.turn_settle import settle_for_turn, thread_tail
+from exo.turn_settle import argument_overflow_cost, settle_for_turn, thread_tail
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -435,12 +435,13 @@ class TreeContext:
                 if node.level == 0:
                     msgs = self._read(node.session, node.start - 1, node.end)
                     source = "\n\n".join(render_message(m) for m in msgs)
+                    source_tokens = estimate_tokens(source) + sum(argument_overflow_cost(m) for m in msgs)
                     principal = [m for m in msgs if is_principal(m)]
                     extra = ""
                     if self.on_pre_compress is not None and self._hooked(node.session):
                         extra = str(await maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
-                    text = "" if estimate_tokens(source) < self.min_compact_tokens else \
+                    text = "" if source_tokens < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
                     if text:
                         lost = missing_directives(text, principal)
@@ -450,12 +451,13 @@ class TreeContext:
                 else:
                     left, right = (self._body(c) for c in self._children(node))  # a skipped child counts verbatim
                     source = left + right
+                    source_tokens = estimate_tokens(source)
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, right, previous=left)
                 # #279: a summary is never the principal's words; a summarizer may decode an escaped tag or write one
                 text = provenance.defuse_pins(text)
                 # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
-                node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
+                node.text, node.status = (text, "done") if text and estimate_tokens(text) < source_tokens \
                     else ("", "skipped")
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
