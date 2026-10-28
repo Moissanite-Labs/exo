@@ -558,7 +558,7 @@ export function mount(root) {
       if (!node.children.length) return out;
       const running = node.children.filter((c) => c.session.status === "live").length;
       const folded = collapsedGroups.has(s.id);
-      out.push(h("button", { class: "xc-sess-toggle", "aria-expanded": !folded, onclick: () => { if (folded) collapsedGroups.delete(s.id); else collapsedGroups.add(s.id); drawSessions(); } },
+      out.push(h("button", { class: "xc-sess-toggle", "aria-expanded": String(!folded), onclick: () => { if (folded) collapsedGroups.delete(s.id); else collapsedGroups.add(s.id); drawSessions(); } },
         (folded ? "▸ " : "▾ ") + node.children.length + " scout" + (node.children.length === 1 ? "" : "s") + (running ? " · " + running + " running" : "")));
       if (!folded) for (const c of node.children) out.push(...renderGroup(c, true));
       return out;
