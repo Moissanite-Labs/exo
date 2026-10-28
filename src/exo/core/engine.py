@@ -738,6 +738,8 @@ class CoreRuntime:
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]
+        if getattr(self, "work_checkpoint", None) is not None:
+            own.append({"name": "checkpoint", "description": "record-derived continuity index", "args": ""})
         if getattr(self, "work_notebook", None) is not None:
             own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
