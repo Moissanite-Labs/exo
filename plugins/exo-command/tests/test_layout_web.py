@@ -214,3 +214,54 @@ def test_a_new_message_in_classic_lands_at_the_bottom_and_keeps_the_view_there(p
     b.wait("document.querySelector('.xc-log').lastElementChild.textContent.includes('streaming now')")
     g = b.eval(GEOMETRY)
     assert abs(g["top"] - (g["h"] - g["c"])) < 2
+
+
+@needs_chrome
+@pytest.mark.parametrize("layout", ["classic", "inverse"])
+def test_status_instruments_and_notices_fit_after_window_and_pane_resize(page, layout):
+    srv, b = page
+    open_chat(srv, b, layout)
+    # Mount demanding status contents in the real themed chat. The longer estimate
+    # also covers the experimental display without depending on its unmerged JS.
+    b.eval('''(() => {
+      const strip = document.querySelector('.xc-strip');
+      const cell = (label, value, cls = '') => {
+        const node = document.createElement('span'); node.className = cls;
+        const key = document.createElement('span'); key.className = 'xc-i'; key.textContent = label;
+        const val = document.createElement('span'); val.className = 'xc-v'; val.textContent = value;
+        node.append(key, val); return node;
+      };
+      const model = cell('model', 'provider/' + 'long-model-name-'.repeat(8), 'xc-model');
+      const fallback = document.createElement('span'); fallback.className = 'xc-via';
+      fallback.textContent = '← fallback'; model.append(fallback);
+      const state = cell('state', 'working', 'xc-state on');
+      const wire = document.createElement('span'); wire.className = 'xc-wire';
+      const notice = document.createElement('span'); notice.className = 'xc-flash';
+      notice.textContent = 'Repeated call detected: exec_command; check the last result before repeating. ' + 'unbroken'.repeat(35);
+      strip.replaceChildren(state, model,
+        cell('memory', 'Estimated next call: about 15k. Limit unknown. Next model: gpt-6.1-sol.', 'xc-opt'),
+        cell('last call', '14k input tokens'), cell('cache', '72%', 'xc-opt'),
+        cell('findings', '2', 'xc-opt'), cell('cost', 'unknown'), wire, notice);
+    })()''')
+    for width, pane in [(2000, None), (1460, None), (1460, 320), (900, None), (360, None), (2000, None)]:
+        b.call("Emulation.setDeviceMetricsOverride", width=width, height=1000, deviceScaleFactor=1, mobile=False)
+        b.eval(f"document.querySelector('.xc-chat').style.gridTemplateColumns = {json.dumps('224px 320px 340px' if pane else '')}")
+        got = b.eval('''(() => {
+          const strip = document.querySelector('.xc-strip'), box = strip.getBoundingClientRect();
+          const visible = el => el.getClientRects().length && getComputedStyle(el).display !== 'none';
+          const bad = [...strip.querySelectorAll('.xc-i, .xc-v, .xc-via, .xc-flash')].filter(visible).filter(el => {
+            const range = document.createRange(); range.selectNodeContents(el);
+            return [...range.getClientRects()].some(r => r.left < box.left - 1 || r.right > box.right + 1 ||
+              r.top < box.top - 1 || r.bottom > box.bottom + 1) || el.scrollWidth > el.clientWidth + 1;
+          }).map(el => el.textContent);
+          const notice = strip.querySelector('.xc-flash').getBoundingClientRect();
+          return {bad, width: box.width, scroll: strip.scrollWidth,
+            page: document.documentElement.scrollWidth, viewport: innerWidth,
+            model: strip.querySelector('.xc-model .xc-v').getBoundingClientRect().width,
+            noticeWidth: notice.width, wire: getComputedStyle(strip.querySelector('.xc-wire')).display};
+        })()''')
+        assert not got["bad"], (layout, width, pane, got)
+        assert got["scroll"] <= got["width"] + 1, got
+        assert got["page"] <= got["viewport"] + 1, got
+        assert got["model"] > 20 and abs(got["noticeWidth"] - got["width"]) < 2, got
+        assert got["wire"] != "none", got
