@@ -38,6 +38,7 @@ export function mount(root) {
 
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
   let data = null, models = null, err = "", picked = "", modelsError = "", savingDefault = false, loadGeneration = 0;
+  let defaultPicker = null, pickerSelection = null, pickerModels = null, pickerError = null;
 
   async function load() {
     const generation = ++loadGeneration;
@@ -129,10 +130,19 @@ export function mount(root) {
 
   function picker() {
     const rows = [...((models && models.models) || []), ...((models && models.available) || [])];
-    const chosen = createModelPicker({ label: "Default model", rows: modelsError ? [] : rows, selected: picked,
-      applyLabel: "Save default", note: "The route the main role calls first.", onApply: saveDefault });
-    if (modelsError) chosen.setError(modelsError + " Reopen Providers to retry.");
+    if (!defaultPicker || pickerSelection !== picked) {
+      const query = defaultPicker?.element.querySelector(".xc-model-search")?.value || "";
+      defaultPicker = createModelPicker({ label: "Default model", rows: modelsError ? [] : rows, selected: picked,
+        applyLabel: "Save default", note: "The route the main role calls first.", onApply: saveDefault });
+      const field = defaultPicker.element.querySelector(".xc-model-search");
+      field.value = query; field.dispatchEvent(new Event("input"));
+      pickerSelection = picked;
+    } else if (pickerModels !== models || pickerError !== modelsError) defaultPicker.setRows(modelsError ? [] : rows);
+    pickerModels = models; pickerError = modelsError;
+    if (modelsError) defaultPicker.setError(modelsError + " Reopen Providers to retry.");
+    const chosen = defaultPicker;
     const res = results._default;
+    if (res && !modelsError) chosen.element.querySelector(".xc-model-status").replaceChildren(res.text);
     return h("section", { class: "xc-prov-def", "aria-label": "Default model" }, chosen.element,
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
@@ -142,7 +152,9 @@ export function mount(root) {
     if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
     const rows = data.providers || [];
     const active = document.activeElement;
-    const keep = active && active.tagName === "INPUT" && ((active.type === "password" && active.value) || active.classList.contains("xc-model-search")) ? active : null;
+    const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value;
+    const searchFocused = active?.classList.contains("xc-model-search");
+    const selection = searchFocused ? [active.selectionStart, active.selectionEnd] : null;
     if (keep) return;   // never redraw while a key is being typed
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
@@ -158,6 +170,10 @@ export function mount(root) {
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
         hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
       picker()].filter(Boolean));
+    if (searchFocused) {
+      const field = defaultPicker.element.querySelector(".xc-model-search");
+      field.focus(); field.setSelectionRange(...selection);
+    }
   }
 
   draw();
