@@ -13,6 +13,7 @@ const STORE_TEXT = {
 function chip(r) {
   const st = r.status || "";
   const lt = r.last_test || {};
+  if (r.needs === "chatgpt") return pill(r.ready ? "ChatGPT connected" : "not connected", r.ready ? "known" : "off");
   if (r.verified) return pill("verified" + (lt.latency_ms != null ? " · " + Math.round(lt.latency_ms) + " ms" : ""), "ok");
   if (st.startsWith("failed")) return pill(st, "fail");
   if (st === "no base_url") return pill(st, "off");  // nothing to call: the router skips it even with a key
@@ -23,10 +24,51 @@ function chip(r) {
 
 export function mount(root) {
   const body = h("div", { class: "xc-prov" });
+  const connection = h("section", { class: "xc-prov-def", "aria-label": "ChatGPT subscription connection" });
   const counts = h("div", { class: "xc-phead-read" });
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
-    lede: "Where model keys live, which providers answer, and the model the main role uses.", aside: counts }), body));
-  let alive = true;
+    lede: "Where model keys live, which providers answer, and the model the main role uses.", aside: counts }), connection, body));
+  let alive = true, authTimer = null, authBusy = false, authState = null;
+
+  function drawChatGPT(message = "") {
+    if (!alive) return;
+    const d = authState;
+    const note = message || (d && d.dependency_available === false ? "Install Exo’s chatgpt extra in the core runtime before signing in." : "") || (d && d.message) || (d && d.available ? "Using ChatGPT plan when a chatgpt model is selected." : "Connect your ChatGPT subscription separately from API keys and CLI logins.");
+    const button = (label, action, profile) => h("button", { class: "xc-btn", type: "button", disabled: authBusy,
+      onclick: () => chatGPT(action, profile) }, label);
+    connection.replaceChildren(h("div", null, h("h2", null, "ChatGPT subscription"),
+      h("p", { role: "status" }, note),
+      h("p", null, "Connecting does not change your default model or enable paid API fallback."),
+      button("Continue with ChatGPT", "start"),
+      d && d.pending ? button("Cancel sign-in", "cancel") : null,
+      h("a", { class: "xc-btn", href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer" }, "Manage ChatGPT usage"),
+      ...((d && d.profiles) || []).map((p) => h("div", { class: "xc-prow" },
+        h("span", null, (p.email || "ChatGPT account") + " · registration " + p.client_id.slice(-8) +
+          (d.active === p.profile ? " · active" : "") + (p.plan_enabled ? "" : " · plan usage not enabled")),
+        button("Sign in to this account", "start", p.profile), button("Disconnect", "disconnect", p.profile)))));
+  }
+
+  async function refreshChatGPT() {
+    try {
+      const previous = authState;
+      authState = await api("GET", "/api/providers/chatgpt"); drawChatGPT();
+      if (alive && previous && ((previous.pending && !authState.pending) || previous.active !== authState.active)) load();
+    }
+    catch (_) { drawChatGPT("ChatGPT connection status is unavailable. This core may need an upgrade."); }
+    if (authTimer) clearTimeout(authTimer);
+    if (alive && authState && authState.pending) authTimer = setTimeout(refreshChatGPT, 1500);
+  }
+
+  async function chatGPT(action, profile) {
+    if (authBusy) return;
+    authBusy = true; drawChatGPT("Updating ChatGPT connection...");
+    try {
+      authState = await api("POST", "/api/providers/chatgpt", { action, ...(profile ? { profile } : {}) });
+      authBusy = false; drawChatGPT();
+      if (alive) { refreshChatGPT(); load(); }
+    } catch (_) { authBusy = false; drawChatGPT("ChatGPT connection action failed. The previous active connection is unchanged unless you chose Disconnect."); }
+  }
+
 
   if (!sessionStorage.getItem("xc-token")) {
     body.replaceChildren(emptyState({ k: "Page token missing", title: "Open the link exo web printed.",
@@ -99,6 +141,8 @@ export function mount(root) {
         h("button", { class: "xc-btn", type: "button", onclick: () => test(r) }, "Test"),
         h("button", { class: "xc-btn", type: "button", onclick: () => remove(r) }, "Remove"));
       kids.push(form);
+    } else if (r.needs === "chatgpt") {
+      kids.push(h("p", { class: "xc-prow-act" }, "Manage this connection in ChatGPT subscription above."));
     } else {
       kids.push(h("div", { class: "xc-prow-act" }, h("button", { class: "xc-btn", type: "button", onclick: () => test(r) }, "Test")));
     }
@@ -158,5 +202,6 @@ export function mount(root) {
 
   draw();
   load();
-  return () => { alive = false; };
+  refreshChatGPT();
+  return () => { alive = false; if (authTimer) clearTimeout(authTimer); };
 }

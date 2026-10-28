@@ -368,6 +368,12 @@ a mask, bind it inside the block and start the server on it after the block, as 
 
 ## 5. Add a seat
 
+**Provider credentials.** ChatGPT subscription access is an application-owned connection, supplied to the
+router through credential callbacks. Its Responses transport does not read a Codex login or fall back to
+an API key. Tests must inject fixture credentials and HTTP responses, with no access to real credential
+stores. Account, refresh and request contracts are in `docs/CHATGPT-PROVIDER.md`. Direct Meta API routes
+reuse the shared Responses transport and the existing provider-key setup.
+
 A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` with a `SOUL.md`. The full format is
 `docs/SEATS.md`. The tables:
 

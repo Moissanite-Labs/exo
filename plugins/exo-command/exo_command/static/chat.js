@@ -452,6 +452,7 @@ export function mount(root) {
       m.classList.add("xc-model");
       if (fell) m.appendChild(h("span", { class: "xc-via", title: "asked " + requested }, "\u2190 fallback"));
       out.push(m);
+      if (model.startsWith("chatgpt:")) out.push(h("a", { href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer" }, "Using ChatGPT plan · Manage usage"));
     }
     if (ctxTokens != null) {
       const pct = capacity ? Math.min(100, Math.round(100 * ctxTokens / capacity)) : 0;

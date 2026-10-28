@@ -78,8 +78,27 @@ output, the token is in that log until the next start.
 ### The agent cannot use this
 
 No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
-any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
+any shell or code that names `/api/providers`, `providers_setup` or `chatgpt_auth`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Use a ChatGPT subscription (`chatgpt`)
+
+In Providers, choose **Continue with ChatGPT** and complete the browser sign-in. Select a connected
+account, then one of its available models. **Manage usage** opens your ChatGPT usage settings. The
+connection stores and refreshes its own credentials, without reading a Codex or Hermes login.
+
+ChatGPT plan usage and `openai` API-key billing are separate. A turn selected for subscription access
+does not silently continue through API-key fallback routes. No default model changes during sign-in.
+See [ChatGPT setup and limits](CHATGPT-PROVIDER.md) for account handling and live acceptance checks.
+
+## Use Meta Model API (`meta`)
+
+Add your Meta Model API key in Providers, or run `exo providers add meta` in a terminal. Exo uses
+`META_API_KEY` for this provider and `https://api.meta.ai/v1` as its endpoint. Its Responses transport
+supports streamed text, reasoning and local tool calls. Choose a discovered model explicitly.
+
+The Meta API connection is separate from the `muse-cli` subscription adapter. It does not require Muse
+Code or Hermes. Test lists the provider's models; a completed agent turn is a separate acceptance step.
 
 ## Use your Claude Code login (`claude-cli`)
 

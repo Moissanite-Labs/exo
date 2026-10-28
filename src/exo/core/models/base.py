@@ -144,6 +144,9 @@ class HttpTransport:
     def headers(self) -> dict[str, str]:
         raise NotImplementedError
 
+    async def request_headers(self) -> dict[str, str]:
+        return self.headers()
+
     def build_body(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -182,14 +185,20 @@ class HttpTransport:
             yield event
 
     async def stream_prepared(self, body: dict[str, Any], *, session_id: str | None = None,
-                              require_usage: bool = False) -> AsyncIterator[ProviderEvent]:
+                              require_usage: bool = False, resolved_headers: dict[str, str] | None = None,
+                              state_meta: dict | None = None) -> AsyncIterator[ProviderEvent]:
         """Send exactly the prepared body. HTTPX's default transport does not retry."""
         url = self.base_url + self.path
-        sent = {"user-agent": USER_AGENT, **self.headers(), **self.extra_headers}
+        try:
+            sent = {"user-agent": USER_AGENT, **(resolved_headers if resolved_headers is not None else await self.request_headers()), **self.extra_headers}
+        except Exception:
+            yield error_event("Provider authentication unavailable", 401, retryable=False)
+            return
         if self.session_header and session_id:
             sent[self.session_header] = str(session_id)
         client = self._client or httpx.AsyncClient(timeout=self._timeout)
         st = StreamState()
+        st.meta.update(state_meta or {})
         try:
             async with client.stream("POST", url, json=body, headers=sent, timeout=self._timeout) as resp:
                 if resp.status_code >= 400:
@@ -211,6 +220,8 @@ class HttpTransport:
                             if out.kind == "error":
                                 return
                     buf = []
+                    if getattr(self, "stop_at_terminal", False) and st.meta.get("_finished"):
+                        break
                 for ev, payload in iter_sse(buf):
                     for out in self.handle(ev, payload, st):
                         yield out
