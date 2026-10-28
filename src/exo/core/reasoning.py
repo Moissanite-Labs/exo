@@ -6,7 +6,6 @@ from pathlib import Path
 
 from exo.core.models.reasoning import capability
 from exo.core.private import atomic_write, private_dir
-from exo.principal import require_principal
 from exo.server.engine import CommandFailed
 
 CAPABILITY = 'main-route-reasoning-v1'
@@ -14,9 +13,10 @@ UNAVAILABLE = 'Saved effort preferences are unavailable. Existing settings are u
 
 
 class ReasoningSettings:
-    def __init__(self, home, seat, router):
+    def __init__(self, home, seat, router, *, authorize=None):
         self.path = Path(home) / 'state' / 'reasoning' / (seat + '.json')
         self.router = router
+        self.authorize = authorize
 
     def load(self):
         try:
@@ -49,7 +49,9 @@ class ReasoningSettings:
         return {'reasoning': value, '_exo_reasoning': {'requested': value, 'route': route}}
 
     def command(self, engine, raw):
-        require_principal('change reasoning effort')
+        if self.authorize is None:
+            raise CommandFailed('forbidden', 'Reasoning settings require principal authority')
+        self.authorize('change reasoning effort')
         try:
             if not isinstance(raw, str) or len(raw) > 4096:
                 raise ValueError('Invalid reasoning request')
@@ -87,6 +89,6 @@ class ReasoningSettings:
                     'scope': 'Saved per-route default for future MAIN turns in this core and seat; other roles are unchanged.',
                     'seat': engine.agent, 'level': data.get(route),
                     'preferences_available': available, 'warning': '' if available else UNAVAILABLE,
-                    'last_call': engine.store.latest_model_call_reasoning()}
+                    'last_call': engine.store.latest_model_call_reasoning(engine.agent)}
         except (ValueError, OSError, KeyError, TypeError, RecursionError):
             raise CommandFailed('bad_reasoning', 'Reasoning setting refused; refresh and choose a supported route and level') from None

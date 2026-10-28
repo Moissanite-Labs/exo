@@ -27,6 +27,8 @@ class Source:
                 raise SourceError('not_found', 'old core')
             request = json.loads(body.args)
             if request['action'] == 'set':
+                if 'level' not in request:
+                    raise SourceError('bad_reasoning', 'Explicit level required')
                 self.writes.append(request)
                 self.data['level'] = request['level']
             elif request['action'] == 'reset':
@@ -131,3 +133,18 @@ def test_browser_explicit_save_keyboard_button_inherit_and_unknown_gateway():
         browser.wait('!!document.querySelector(".xc-chat")')
     finally:
         browser.close(); srv.close()
+
+
+
+def test_http_missing_level_refuses_without_clearing_but_explicit_null_inherits():
+    source = Source(); srv = Served(source)
+    try:
+        route = source.data['route']
+        assert request(srv, 'POST', {'route': route, 'level': 'high'})[0] == 200
+        before = list(source.writes)
+        assert request(srv, 'POST', {'route': route})[0] == 400
+        assert source.data['level'] == 'high' and source.writes == before
+        assert request(srv, 'POST', {'route': route, 'level': None})[0] == 200
+        assert source.data['level'] is None and source.writes[-1]['level'] is None
+    finally:
+        srv.close()

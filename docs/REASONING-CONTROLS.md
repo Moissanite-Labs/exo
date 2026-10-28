@@ -18,7 +18,11 @@ GPT-6 controls are also outside this first version. The [GPT-6.1 Sol model page]
 
 ## Requested and sent
 
-The view reports the last main call's requested effort, the option sent to the adapter and the route used. The core records these fields in `model.call` and its attempt metadata. They describe options forwarded to the provider adapter. A transport can still fail validation before making a network request. They do not confirm delivery or measure adaptive computation.
+The view reports this core agent's last top-level main call's requested effort, the option sent to the adapter and the route used. The core records these fields in `model.call` and its attempt metadata.
+
+They describe options forwarded to the provider adapter. A transport can still fail validation before making a network request. They do not confirm delivery or measure adaptive computation.
+
+Calls from other agents sharing the data home, delegated subagents and scheduled sessions do not replace this readout. Later ordinary or private main threads of this agent do.
 
 Each fallback attempt checks its own route's verified support. An unsupported fallback receives no new reasoning parameter and is reported as using the provider default. Spend refusals and uncertain stopped calls report that sending was not confirmed. The feature does not expand spend limits, change tool permissions or bypass approvals.
 
@@ -26,10 +30,14 @@ Changing a provider configuration can invalidate an earlier preference. The next
 
 ## Authority and persistence
 
-HTTP requests require the existing loopback, Host, Origin and page-token checks. The core independently requires principal authority before reading or changing preferences. The browser cannot choose a different data home or seat. A stale model route is refused rather than saving a setting for the wrong model.
+HTTP requests require the existing loopback, Host, Origin and page-token checks. The core independently requires principal authority before reading or changing preferences. The browser cannot choose a different data home or seat. A stale model route is refused rather than saving a setting for the wrong model. A missing HTTP `level` is refused. Only an explicit `null` requests inherit.
 
 Preferences are nonsecret metadata stored in an owner-only file under `state/reasoning/`. They persist across core and web restarts and changing local web ports. Tokens, API keys and reasoning text are not stored in that preference file.
 
 Unreadable, malformed or oversized preferences never block a main turn. The core uses existing settings and reports a fixed warning without displaying file contents. The view allows an explicit **Reset saved efforts** to clear this seat's saved preferences. A reset requires principal authority and confirmation. Ordinary Save cannot silently overwrite an unavailable preference file.
+
+## Current budget policy
+
+D-083 removed the line ceiling while retaining the structural caps: 39 inward product dependencies and 8 cross-module private-state reads. Reasoning settings receive principal authorization from the engine's existing boundary, adding no product dependency to the settings module. This feature does not raise either cap. See [Engine split budget policy](ENGINE-SPLIT.md#budget-policy).
 
 Tests use disposable homes, fake providers, mocked HTTP and a separate headless browser. No live inference or current runtime settings are changed by verification.
