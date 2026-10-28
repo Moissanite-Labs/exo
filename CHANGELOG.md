@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
+  their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
+  Successful pipelines with an earlier-stage failure note remain successful (#791).
+
 ### Added
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
