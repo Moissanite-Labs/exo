@@ -100,7 +100,6 @@ def test_cli_backlog_text_json_and_invalid_filters(tmp_path, monkeypatch, capsys
 def test_backlog_reads_while_another_process_holds_the_write_lock(tmp_path):
     """The backlog is a read: it must not wait for, or block, a writer on the same file (#797 review)."""
     import sqlite3
-    import time
 
     store = SessionStore(tmp_path / "sessions.sqlite")
     findings = Findings(store, version="fixture")
@@ -109,12 +108,13 @@ def test_backlog_reads_while_another_process_holds_the_write_lock(tmp_path):
     try:
         writer.execute("BEGIN IMMEDIATE")
         writer.execute("UPDATE findings SET title='renamed'")
-        started = time.monotonic()
+        # With the write lock this raised "database is locked" once the busy timeout ran out.
         report = findings.backlog(5, now=NOW)
-        assert time.monotonic() - started < 1
+        assert writer.in_transaction  # it returned while the writer still held its lock
         assert report["pending"] == 1 and report["oldest"][0]["title"] == "pending"  # the snapshot before the write
-        writer.execute("COMMIT")  # the backlog read left no lock behind
+        writer.execute("COMMIT")  # timeout=0: this fails at once if the read had left a lock behind
         assert not store._db.in_transaction
+        assert findings.backlog(5, now=NOW)["oldest"][0]["title"] == "renamed"  # the next read sees the commit
     finally:
         writer.close()
         store.close()
