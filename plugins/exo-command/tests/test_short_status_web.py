@@ -46,6 +46,11 @@ def test_expanded_status_keeps_composer_and_transcript_reachable(page, layout, t
         assert got['notice'] == 'Warning: ' + 'unbroken' * 35, got
         if height == 900:
             assert got['mainScroll'] == 0, got
+        if height == 500:
+            main = b.eval('''(() => { const m=document.querySelector('.xc-chat-main'); m.scrollTop=0;
+              const start=m.scrollTop, max=m.scrollHeight-m.clientHeight; m.scrollTop=m.scrollHeight;
+              const end=m.scrollTop; m.scrollTop=0; return {start, end, max}; })()''')
+            assert main['start'] == 0 and main['max'] > 0 and abs(main['end'] - main['max']) < 2, main
         assert got['scroll'] <= got['width'] + 1 and got['page'] <= width + 1, got
         for selector in ['.xc-flash', '.xc-input', '.xc-log']:
             b.eval(f"document.querySelector('{selector}').scrollIntoView({{block:'center'}})")
