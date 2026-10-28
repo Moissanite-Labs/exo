@@ -22,7 +22,7 @@ function draft(id) {
 }
 
 export function mount(root) {
-  let mounted = true, navigation = 0;
+  let mounted = true, navigation = 0, homeRevision = 0;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
@@ -84,7 +84,7 @@ export function mount(root) {
   const logEl = h("div", { class: "xc-log", id: "xc-transcript", role: "log", "aria-label": "Conversation messages", "aria-live": "polite", tabindex: "0" });
   const latestBtn = h("button", { class: "xc-btn xc-latest", type: "button", hidden: true, "aria-controls": "xc-transcript",
     onclick: () => { home(); logEl.focus(); } }, "Show latest messages");
-  logEl.addEventListener("scroll", updateLatest);
+  logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
@@ -320,7 +320,7 @@ export function mount(root) {
       if (it) {
         const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);   // judged before the redraw: a rendered table is taller than its streamed text
         it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it);
-        if (keep) { home(); requestAnimationFrame(home); }
+        if (keep) { home(); scheduleHome(); }
       }
       else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
@@ -375,7 +375,13 @@ export function mount(root) {
   function updateLatest() {
     latestBtn.hidden = !items.length || nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
   }
-  function home() { logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); updateLatest(); }
+  function home() { ++homeRevision; logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); updateLatest(); }
+  function scheduleHome() {
+    const revision = homeRevision, owner = navigation, session = current, mode = layout, top = logEl.scrollTop;
+    requestAnimationFrame(() => {
+      if (mounted && revision === homeRevision && owner === navigation && session === current && mode === layout && top === logEl.scrollTop) home();
+    });
+  }
   function aboveViewport(element) {
     return element && element.getBoundingClientRect && logEl.getBoundingClientRect
       ? element.getBoundingClientRect().bottom <= logEl.getBoundingClientRect().top : layout === "inverse";
@@ -385,7 +391,7 @@ export function mount(root) {
     const top = logEl.scrollTop, height = logEl.scrollHeight;
     change();
     if (keep) home();
-    else logEl.scrollTop = top + (above ? logEl.scrollHeight - height : 0);
+    else { ++homeRevision; logEl.scrollTop = top + (above ? logEl.scrollHeight - height : 0); }
     updateLatest();
   }
   function push(it) {
@@ -412,7 +418,7 @@ export function mount(root) {
     logEl.replaceChildren(...ordered(items, layout).map(itemEl));
     drawHero();
     home();
-    requestAnimationFrame(home);   // once the new rows have a height: a thread opens on its newest item
+    scheduleHome();   // finish initial positioning only if no newer reading, layout or navigation intent won
   }
 
   function itemEl(it) {
