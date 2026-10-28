@@ -245,4 +245,4 @@ Providers that honor the session identifier or configured conversation header re
 providers that ignore it remain unchanged. This does not recreate shared HTTP clients or guarantee
 a remote cache purge. The tag is local to the running core; after restart, reset a resumed thread
 again if needed. Automatic stall detection, active-stream recovery and safe automatic replay remain
-open in #677. This is the manual idle request-state reset slice only.
+open in #677, as does the web composer flow. This is the manual idle request-state reset slice only.

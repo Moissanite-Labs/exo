@@ -311,5 +311,6 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 
 Use `/fresh` in an idle conversation to rotate its provider conversation tag. It is principal-only,
 keeps the transcript and never replays a turn or tool. A running turn must be stopped first. The
-existing command list exposes it to terminal and web clients. Provider support and remaining recovery
+existing command list exposes it to terminal clients and the core API. The web composer does not
+yet run this mutating command. Provider support and remaining recovery
 limits are documented in `docs/CORE.md` "Manual idle provider-context reset" (#677, partial).

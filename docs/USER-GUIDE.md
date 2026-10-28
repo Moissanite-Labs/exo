@@ -632,8 +632,8 @@ what Exo proposes to learn from the ledger, see `exo consolidate` and `exo propo
 
 ### Reset an idle provider conversation
 
-After stopping a stuck turn, `/fresh` gives this conversation a new provider conversation tag and
+In the terminal client or `exo chat`, after stopping a stuck turn, `/fresh` gives this conversation a new provider conversation tag and
 keeps its transcript. It never replays a turn or repeats a completed tool. Send the next message
 yourself. Other conversations keep their state. A provider must honor conversation tags for this
 to affect its cache; it is not an automatic stream restart or a guaranteed remote cache purge.
-Repeated resets without another request do nothing. Full active-stream recovery remains in #677.
+Repeated resets without another request do nothing. The web composer flow and full active-stream recovery remain in #677.
