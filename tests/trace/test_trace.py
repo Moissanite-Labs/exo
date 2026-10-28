@@ -404,6 +404,22 @@ def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     assert "unknown" in trace.table([u]) and trace.as_dict("s", [u])["turns"][0]["cost_usd"] is None
 
 
+def test_table_names_each_unpriced_route_and_where_its_price_goes():
+    t = tt(calls=[_usage_call("provider:model", None), _usage_call("p:a", 0.01)], t0=1.0)
+    out = trace.table([t])
+    assert "$0.0100+" in out  # the priced call, still marked as a mixed turn
+    assert trace.price_hint("provider:model") in out
+    assert 'models.models in config.json' in out and 'docs/PROVIDERS.md "Prices"' in out
+    assert trace.price_hint("p:a") not in out  # a priced route is never named
+    priced = tt(calls=[_usage_call("p:a", 0.01)], t0=1.0)
+    assert "no price for" not in trace.table([priced])
+    many = tt(calls=[_usage_call(f"p:m{i}", None) for i in range(5)], t0=1.0)
+    capped = trace.table([many])
+    assert capped.count('no price for "') == 3  # three named, the rest in one summary line
+    assert 'no price for "p:m0"' in capped and 'no price for "p:m3"' not in capped
+    assert "no price for 2 more routes" in capped
+
+
 def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
     from exo.core.models.router import Route
 

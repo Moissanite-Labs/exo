@@ -13,6 +13,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- A route with no catalog price now says where its price goes. `exo trace` names each unpriced route with
+  the config key that prices it, and the model-spend refusal for an unpriced route carries the same hint,
+  so a provider added by discovered model IDs no longer reports `unknown` cost with no next step (#841).
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining

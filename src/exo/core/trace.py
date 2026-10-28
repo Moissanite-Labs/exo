@@ -349,6 +349,12 @@ def money(usd: float | None, unpriced: int = 0) -> str:
     return (f"${usd:.4f}" if usd < 1 else f"${usd:.2f}") + ("+" if unpriced else "")
 
 
+def price_hint(ref: str) -> str:
+    """Where a route's missing price goes: the config key, never a guess (D-032)."""
+    return (f'no price for "{ref}": set "input" and "output" (USD per million tokens) for it under '
+            'models.models in config.json, see docs/PROVIDERS.md "Prices"')
+
+
 def _ms(ts: str) -> float:
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000
@@ -703,6 +709,12 @@ def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
         flags += t.flags
     lines.append("~ = derived from timestamps (session recorded before model.call events); "
                  "cost = estimate from catalog prices, + = some calls unpriced, unknown = no price")
+    unpriced = sorted({c.route or c.requested for t in turns for c in t.calls
+                       if c.spent and c.cost_usd is None} - {""})
+    lines += [price_hint(ref) for ref in unpriced[:3]]
+    if len(unpriced) > 3:
+        lines.append(f"no price for {len(unpriced) - 3} more routes; each takes its own key under "
+                     "models.models, as above")
     for i, t in enumerate(turns, 1):
         if t.calls and (calls or t is turns[-1]):
             lines += ["", *_call_lines(t, i)]

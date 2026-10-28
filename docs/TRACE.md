@@ -53,6 +53,8 @@ Add or override a price in config.json under `models.models`, for example
 `{"models": {"models": {"opencode-go:glm-5.3-flash": {"input": 0.3, "output": 1.2}}}}`; a seat can add or
 override prices the same way under `[models.models]`, model by model, and config.json's other prices stay.
 Prices of calls already recorded are as recorded: a price added later applies to new calls only.
+The table names each route it could not price, with the config key that prices it
+(`docs/PROVIDERS.md` "Prices"), so `unknown` is never a dead end.
 
 ## Rules
 Each flag has a stable signature, so the same problem counts instead of repeating. Limits are in the `trace`
