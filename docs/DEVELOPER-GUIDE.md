@@ -849,7 +849,8 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 - **Limits** (`Limits` in `delegate.py`): depth 1 (flat), 10 tasks per call, 4 running children at once, 24 tool
   rounds, 200,000 tokens and 900 seconds per child. Cancelling the parent's tool call interrupts every child.
 - **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
-  ever read the English form.
+  ever read the English form. In code, pin the signer's key: `exo.wire.verify(line, sig, trusted_pub)` returns
+  False without one, because the key a signature carries proves nothing (D-016 amendment).
 - **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
   lives in `src/exo/subagents.py`. Through this built-in only the principal may act: `command()` calls `steer` and
   `stop` without `by`, so the parent-session path (`by=<parent session id>`, which speaks as `delegate`, D-040) is
