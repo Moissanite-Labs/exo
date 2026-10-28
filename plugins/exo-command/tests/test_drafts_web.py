@@ -39,7 +39,7 @@ def hold_send(b):
 
 
 def send(b):
-    b.eval("document.querySelector('.xc-btnrow button').click()")
+    b.eval("document.querySelector('.xc-composer .xc-btnrow button').click()")
     b.wait("window.sends.length === 1")
 
 
@@ -161,7 +161,7 @@ def test_first_submission_recovery_belongs_to_created_thread_after_remount():
                 return fetch0(url,options);
               };})()""")
             put(b, "first instruction")
-            b.eval("document.querySelector('.xc-btnrow button').click()")
+            b.eval("document.querySelector('.xc-composer .xc-btnrow button').click()")
             b.wait("!!window.releaseCreate")
             b.eval("location.hash='#tasks'"); b.wait("!document.querySelector('.xc-composer')")
             b.eval("location.hash='#chat'"); b.wait("!!document.querySelector('.xc-input')")
