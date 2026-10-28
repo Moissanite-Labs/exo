@@ -3826,6 +3826,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
+  `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
+  gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
+  second (bash 5.2 writes the policy file; the same with `until ! cd`, backticks, `pushd`, a `< <(..)` on the `cd`
+  and a `cd` inside an `if` in the condition). `_loop_spans` took a loop only when its `cd` sat after the loop's
+  first command (`bisect_right`), so these six lines were allowed reads on main 1401ff81 under every policy, and
+  the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
+  (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
+  `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
+  condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
+  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 1401ff81 against
+  this change): the built-in corpus with variants lowers 0 of 7,882,688 pairs and tightens 1,505 pairs on 18
+  actions, the six rows above and their tool forms (`read allow` to `store_write ask` or `deny`); an aimed corpus of
+  4,804 `while`/`until` lines (six condition shapes, `cd`, `pushd`, `builtin cd` and `cd -P`, eight folders, five
+  substitution forms, five bodies) and their shell forms, 845,504 pairs, lowers 0 and tightens 238,456 on 2,882
+  actions. Tests:
+  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 10 of its tests fail without the change).
+  *Revisit if:* the same as #479's.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
