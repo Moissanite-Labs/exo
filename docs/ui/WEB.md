@@ -251,7 +251,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   core's principal-only `models.set` for that thread). `/default <ref>` and `/model default <ref>` save the default
   through `POST /api/providers/default`, which answers a loopback page only (D-034): on a page opened at another
   address the note says so, and `/model` still works. Without a reference either one opens a picker under the box,
-  filled from `GET /api/chat/models` (`models.list`); a later `/model` or `/default` replaces a list still loading,
+  filled from `GET /api/chat/models` (`models.list`); it is a search box, not a list you scroll (D-094). Typing
+  narrows the rows and never changes the model; only Enter, a row click or "Use model" applies the exact route of
+  the highlighted row. Search terms match the route and the model name, and an exact route match sorts first. A
+  later `/model` or `/default` replaces a list still loading, and a superseded load is dropped rather than drawn.
   Esc or Cancel closes it, and choosing returns focus to the box. While a change is in flight the box sends nothing.
   A failed change keeps the line in the box. A `bad_model` or `bad_request` core error is a 400, not a 502, on every
   route of `api.py`'s table (chat, tasks, schedule, feedback), so a bad model reference is the caller's mistake (#146).

@@ -5,6 +5,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- `/model` and `/default` open a search box instead of a scrolling list: typing narrows the rows and never
+  changes the model, and Enter, a row click or "Use model" applies the exact route of the highlighted row (D-094).
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed

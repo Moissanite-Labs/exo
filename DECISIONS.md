@@ -5571,3 +5571,26 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
 - **Rejected:** a 503 or 502 status for the models route. The page calls it on every load and treats a non-200 as "no models", which hides the reason; a 200 with an error field lets the caller decide. Also rejected: retrying inside the route. The route runs on the request, and a retry decision belongs to the person reading the sentence.
 - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/COMMANDS.md` unchanged, `CHANGELOG.md`. No settings change, no new key handling.
+
+## D-094 (2026-10-30) The model picker is a search box, and search never changes the model
+- **Status:** Accepted, effective for the next release.
+- **Decision:** `/model` and `/default` without a reference open the same picker, and that picker is a search field over the
+  model rows rather than a scrolling select. Terms are matched case-insensitively against the route and the model name,
+  whitespace separates terms, and a row whose route equals the whole query sorts first. Typing only narrows the rows.
+  Applying takes Enter, a row click or the explicit button, and it applies the exact route of the highlighted row. Escape
+  or Cancel closes the picker. The client keeps a generation counter: a later `/model` or `/default` replaces a list still
+  loading, and an answer to a superseded request is dropped instead of drawn over the newer one.
+- **Why:** a thread's route list is long and mostly unlike the row you want, so scrolling a select is the slow path; the
+  person almost always knows part of the name. The risk a search box adds is accidental application while typing, so the
+  split is explicit: search filters, Enter applies. Issue #146's rule that a client command line is held rather than sent is
+  unaffected, because the picker never touches the input while the command is open.
+- **Safety:** the picker only handles text. It never reads, stores or sends a key, and it holds no address: `/default`
+  still posts to `POST /api/providers/default`, which answers loopback pages only (D-034). Rows are built as DOM nodes with
+  `h()` and text nodes, so a model name cannot become markup. The generation counter is the same discipline D-091 needed:
+  a slow first answer must not overwrite a newer list.
+- **Rejected:** applying on a single click of a search result without a button (a mis-click changes the shared main route);
+  a `<datalist>` (no place to show which routes are configured, which routes are free, or a failure sentence); keeping the
+  select and adding a filter box above it (two controls for one choice, and the select's own arrow keys then fight the
+  filter's).
+- **Docs and user impact:** `docs/ui/WEB.md` ("Commands from the box"), `CHANGELOG.md`, `docs/COMMANDS.md` unchanged (the
+  command syntax and its arguments are the same). No settings change, no protocol change, no new route.
