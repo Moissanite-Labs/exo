@@ -297,8 +297,11 @@ globalThis.mockApi = async (method, path, body) => {
 bus.emit({seq: 20, session: "p1", type: "session.created", body: {}});
 await settle();
 const list = byClass("xc-sessions");
-const rows = () => list.children.map((x) => x.textContent);
-const classes = () => list.children.map((x) => x.attrs.class);
+// main wraps each conversation button in a div.xc-session-row beside its Rename button;
+// the sidebar items are the conversation buttons plus the group toggles, in order.
+const items = () => list.children.flatMap((x) => x.attrs.class === "xc-session-row" ? [x.children[0]] : [x]);
+const rows = () => items().map((x) => x.textContent);
+const classes = () => items().map((x) => x.attrs.class);
 assert.deepEqual(classes(), ["xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess xc-child", "xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess", "xc-sess"]);
 assert.match(rows()[0], /^Research/); assert.match(rows()[0], /2 scouts/);
 assert.match(rows()[1], /2 scouts · 1 running/);
@@ -309,11 +312,11 @@ assert.match(rows()[6], /scout: database search/);
 assert.match(rows()[7], /orphan scout/);
 // collapsing the first group folds only its scouts, and expanding brings them back
 await list.children[1].attrs.onclick(); await settle();
-assert.deepEqual(list.children.map((x) => x.attrs.class), ["xc-sess", "xc-sess-toggle", "xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess", "xc-sess"]);
+assert.deepEqual(classes(), ["xc-sess", "xc-sess-toggle", "xc-sess", "xc-sess-toggle", "xc-sess xc-child", "xc-sess", "xc-sess"]);
 await list.children[1].attrs.onclick(); await settle();
 assert.equal(list.children.length, 9);
 // opening a scout still opens that session, not its parent
-const scout = list.children.find((x) => x.attrs.class === "xc-sess xc-child" && x.textContent.includes("database search goal"));
+const scout = items().find((x) => x.attrs.class === "xc-sess xc-child" && x.textContent.includes("database search goal"));
 await scout.attrs.onclick(); await settle();
 assert.ok(requests.some((x) => x.path === "/api/chat/sessions/a1"));
 ''', setup=f"globalThis.grouped={json.dumps(sessions)};\n")

@@ -821,7 +821,7 @@
       "path": "src/exo/learn/climb.py",
       "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
       "code": "union-attr",
-      "count": 9
+      "count": 7
     },
     {
       "path": "src/exo/learn/climb.py",

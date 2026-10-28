@@ -5,12 +5,39 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Chat Threads sidebar groups delegated scout sessions beneath their parent conversation (canonical port of exo-desktop #83). Grouping uses only the session's own `parent` + `kind="subagent"` metadata from `session.list`, never a title prefix; a scout whose parent is not in the list stays top-level as an orphan, still openable. A thread with no title shows `Untitled thread` (or `Untitled scout`) plus its full session id.
+- Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
+  their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
+  Successful pipelines with an earlier-stage failure note remain successful (#791).
+
+### Added
+- Web workspace design with coordinated dark and light themes, readable conversation typography,
+  a full-width writing area, persistent accessible navigation and a saved Appearance choice.
+  Loaded conversations can be searched and filtered; Show latest messages restores the newest item
+  while streaming preserves the reader's position. Startup opens directly without a timed overlay.
+
+- Automatic continuity checkpoints index recent tool and job records after interruption,
+  compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
+  private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
+
+- Web conversation drafts retain text and selection across thread and view switches in page memory.
+  Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
+  conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
+
+
+- Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
+
 ### Added
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- Chat status instruments wrap within the conversation width. Model names, values and full-row notices
+  remain readable when the window or conversation pane narrows, in both layouts.
+- Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings
+  without clearing newer command errors or general notices.
 - The core budget prices coupling, not only lines, and its ceiling is dropped (D-083, amending D-077).
   The line ceiling set on 2026-10-15 was already failing its own test: `main` at `13cea687` counted 15,828
   against 15,824, 4 over, while the work it blocked was ordinary product work, and each earlier raise
@@ -25,8 +52,105 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
-- Chat Threads sidebar groups delegated scout sessions beneath their parent conversation (canonical port of exo-desktop #83). Grouping uses only the session's own `parent` + `kind="subagent"` metadata from `session.list`, never a title prefix; a scout whose parent is not in the list stays top-level as an orphan, still openable. A thread with no title shows `Untitled thread` (or `Untitled scout`) plus its full session id.
+- `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
+  `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
+  any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
+- `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
+  used the public key carried in the signature itself, which whoever made the packet chose, so any packet
+  signed by any key passed. With no pinned key it now returns False. No production caller used that path.
+- Gate: an `env -S` text keeps the ssh hop's host and is split as env splits it (#591, follow-up to #634, review
+  5665626829). #634 read the text's leading words as env's argv beside the text as a shell line, in the call's
+  one reading. Behind an ssh hop its new part took the host (the hop's lead, or #320's copy on a secret or store
+  line), so the `opaque_exec` part lost it: under `rules: [{match: {category: opaque_exec, target: host},
+  decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask, below its plain
+  `-S` spelling, and the `rm -rf` and `echo '...' | ssh host` forms did too; `reserved: [tool:terminal]` lost the
+  `(opaque_exec, me@host)` hit of `ssh -p 22 me@host 'env -S ...'`. Now `classify` reads the call again with each
+  text a shell line only, as before #634, and, whenever any `env -S` text or spelling is read, with #634's
+  reading, as main read it, each as a call of its own
+  (`Classification.split_readings`, listed by `gate.readings`), and `decide` keeps the strictest with every
+  reserved hit and violation, so each part keeps the host it had. The call's first reading reads the line env
+  runs (`_env_split_lines`): the text split by env's own rules (quotes, escapes, `\_`, `#`, `\c`, `${NAME}`; `;`,
+  `&`, `|` and `>` are characters of a word, so `'X=a b';x` is one assignment), after `--` a `NAME=value` still
+  an assignment (`env -- prog= true` runs `true`), in every spelling GNU env 9.4 takes: `--split` and each
+  unambiguous `--split-string` prefix, `-S` in a word of short options (`-iS`, `-vS`, `-i0vS`), and `-S'..'`
+  read whole (only `--split-string=` splits at its `=`). A spelling main missed reads as `-S TEXT` does, its
+  `opaque_exec` part included and no environment dump read in it, in the first reading and in one more of the
+  text as a shell line only, so `categories: {opaque_exec: deny}` denies `env --split-s="..."` and `env
+  -i0vS"..."` as it denies `env -S "..."`, and the host rule does so behind ssh; the reading as before keeps
+  what main read there. Each of `env --split`, `env -iS`, `env -vS`, `env -S'"X=a b" rm -rf /srv/data'`, `env
+  -iS "rm -rf /srv/data"`, `env -S "-- 'X=a b' rm -rf /srv/data"` and `env -S "'X=a b';x rm -rf /srv/data"` now
+  denies under `deny: [delete]` (main: ask); under `categories: {opaque_exec: allow}` the `--split`, `-iS`, `-vS`
+  and `;x` rows now ask (main: allow; it asked on the `-S'..'` and `--` rows already). The exo-gate hook's
+  bypass floor reads the category of each of these readings, so a line main kept as a credentials or store ask
+  in bypass (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`) still asks there. Main's
+  reading is taken whenever any `env -S` text or spelling is read (verify 2): taken only where #634's words found
+  a command in the first reading, it was dropped where a spelling main missed, read as `-S TEXT`, hid a nested
+  text main read, and `env -iS'\q' sh -c 'env -S "'"'"'X=a b'"'"' rm -rf /srv/data"'` went deny -> ask under
+  `deny: [delete]` (its `gh auth token` form: deny -> ask under `deny: [credentials]`, `no_grant` lost, and in
+  bypass allowed where main asked at the floor); it decides as on main again. The bypass floor keeps main's order
+  for main's own reading, which classify puts first in `split_readings` (verify 3): the floor when that reading is
+  a floor category, then the hold of a post that breaks the posting rules, then the floor of any other reading.
+  Checked before the hold for every reading, it turned 65 of 1,694 hook lines main held into an ask at the floor
+  (`env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"`); they are held again, as on main. A
+  call with an `env -S` text costs up to four readings, each linear in the text, and a spelling main missed is read
+  in full: `env -S "'X=a b' rm -rf /srv/data"` takes 6 ms (main 58503282: 3 ms), `env --split="..."` with a 40 KB
+  text of 20,000 words 3.7-4.4 s (main: 0.06 s). The #423 differential (main's script, `--jobs 2`) lowers 0 pairs
+  against main 58503282 on the built-in corpus without variants (12,117 actions x 88 policies; 381 pairs tightened)
+  and on an aimed corpus of 20,818 `env -S` lines without variants (28 spellings with 12 assignment prefixes before
+  10 payloads, bare, behind sudo, doas, nice and timeout, 16 spellings behind ssh, mosh and stdin-fed ssh, and 20
+  spellings before `sh -c` and `bash -c` with a nested `env -S` text, bare, behind those wrappers and hops) under
+  180 policies (the built-in ones and rules, category lines, deny and reserved entries on the host and on ten
+  categories; 98,066 pairs tightened). A hook probe of 3,626 lines through `pre_tool_call` (bypass on, and ask
+  mode) lowers none.
+  Tests:
+  `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py` (the `--`
+  row now denies; the post row uses `posting.forbid_words` and asserts `forbidden word: Zork`),
+  `plugins/exo-gate/tests/test_bypass.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038), `docs/DOCS-MAP.md`.
+
+- The climb no longer takes a lesson whose evidence has decayed, and it catches a lesson that breaks another
+  domain (exo-desktop #35 by orda-aska, ported with the follow-up from abu-aska's review there; issue 13 on the fork).
+  A climb candidate needs a computed evidence weight of medium or high, not a stored `confidence`; a year after its
+  one correction a preference was still a candidate on 721828fd. The held-out gate checked only the candidate's own
+  domains, so a lesson that broke a work item while it won on mind was accepted. It now also gates each other
+  domain's held-out items on their own; the own-domain check, with the pinned items, is unchanged, since pooling
+  every domain into one composite let a work item that flipped up hide a mind item the candidate broke. An accepted
+  candidate rescores every dev, held-out and pinned item, so `eval/incumbent.json` and the night's composite stop
+  carrying the old incumbent's rows outside its domains; if the call budget runs out first, the merged rows are
+  cached under a key the next night does not trust. A 120-item night with one accepted candidate made 256 responder
+  calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
+  **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
+
+- The core retries its start after a failed or cancelled start instead of failing every later command
+  (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
+  raise once and leave every later command with the same `internal` error until exod restarted. A start cut
+  short inside the MCP step no longer leaves its servers running: the retry stops them first, and engine close
+  always closes MCP. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
+- JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
+  400 JSON input error instead of closing the connection without a response (follow-up to #751).
+
+- Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
+  the connection without a response. They send no approval answer to the core (#740).
+
 - A gate error on a read tool asks instead of allowing the call, and the error card is once-only, so "always" cannot become a standing grant. A failed classification that read a store or secret goes to the principal alone (D-084).
+
+- D-084 follow-up to #742 (port of aska-digital/exo-desktop #23 by orda-aska, ahrazzle and sparky-118). The
+  unused `_SAFE_ON_ERROR` set is gone, and `scripts/gate_diff.py` models a gate error as an ask for every tool,
+  reads included; it still modelled a read tool's error as allow. `docs/GATE.md`, `docs/EXECUTORS.md` and
+  `docs/DEVELOPER-GUIDE.md` no longer say a read runs when the gate errs. D-084 gains Cost (an unattended run waits
+  on the card), Limits and Validation. New tests cover bypass and observe mode: with `gate.classify` or the rules
+  lookup raising, a bypass session asks once, as an ordinary one does, and in observe mode a store write or a
+  secret goes to the principal while other calls run and the error is logged. Measured against `cd371aed`, before
+  #742: a hook probe (224 cases) gave 136 stricter and 88 the same, none lower, and main's `gate_diff` found
+  nothing lowered on 12,164 actions x 88 policies. Tests: `plugins/exo-gate/tests/test_hook.py`, `test_bypass.py`,
+  `tests/integration/test_required_gate.py`, `tests/test_gate_diff.py`.
+
+- Shared changes have one canonical Exo PR, with reviewed desktop syncs instead of duplicate feature implementations or direct automatic main updates (D-089).
+
+- Restore the reviewed relative-import coupling counter and its regressions on main. `from .. import envscrub` counts like its absolute form. Existing exclusions, duplicate handling and caps are unchanged (refs #741).
 
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
@@ -59,6 +183,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
+
+- Web approval cards show the keyboard sequence for their available answers and the current confirmation or deny-note
+  step. Ctrl+F focuses the first approval without losing the composer draft, and the focused card has an accent outline.
+
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
@@ -192,10 +320,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `--split-string` and behind `sudo` and `doas`, and the text from that word on is classified beside the shell
   line's reading, so the hidden command's category reaches the decision the way the spelling without `-S` does
   (`git push origin feature && env -S "'X=a b' git push --force origin main"` now asks under the allow line, not
-  logs). After `--` a quoted `NAME=value` word is the command, a word a shell operator would separate stays with
-  the line's own reading (a word of argv to env), and a split inside the split is not followed — each reads as
-  before, so nothing lowers; an unknown program first is still the command and its arguments run nothing. The
-  differential against main 3bf26afc (11438 actions, 88 policies) found nothing lowered. Tests:
+  logs). This reading took a quoted `NAME=value` word after `--` for the command (env still reads it as an
+  assignment; the follow-up above reads it so), left a word with a shell operator in it to the line's own
+  reading, and does not follow a split inside the split; an unknown program first is still the command and its
+  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
+  lowered; it held no ssh-wrapped `-S` line, and behind a hop this reading did lower (the follow-up above). Tests:
   `tests/security/test_gate_category_deny_parts.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
   types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
@@ -816,6 +945,34 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
+  start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
+  `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'`, a store write with no ask. The gate now reads such a shell as it reads
+  `bash` with no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds it
+  (a pipe, a here-string, a heredoc), so those lines are `delete` or `store_write` and a deny on them denies. A stdin
+  the gate cannot read (`sudo -s < /tmp/script.sh`, a variable) asks, and so does a bare `sudo -s`, as `bash` alone
+  does. sudo's options are read as getopt reads them (`-Es`, `-iu root`, `--user=root`, `--user root`, `--`), behind
+  `env`, `nice`, `timeout`, `command` or another sudo too. A word the gate cannot read that may come to `-s` counts as
+  a shell option: an option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`; not `sudo -u"$U"`,
+  whose expansion is the value), an option's value that may split into several words (`sudo -u $U`, a bracket glob
+  such as `sudo -u [!a]s`, and a brace set, expanded with a word it makes twice kept: `sudo -u {root,-s}` is
+  `sudo -u root -s`, `sudo -p {-s,-s}` is `sudo -p -s -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`, `sudo ~-`); when the line feeds such a command a stdin, it is read as the shell's too, since the word may
+  take the next one as its value (`sudo -$X root` may be `sudo -iu root`). The options are then also read from the
+  word after the next one, and a brace value that ends them elsewhere has its command read as sudo runs it, so
+  `sudo -u {root,-p} echo rm -rf /srv/data` (prompt `echo`, then `rm`; allowed before, on main too) is `delete`, and
+  so is `sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data`, whose moved words are read as bash expanded them too;
+  such readings add only what their command is known to do (`sudo -u $U cat /etc/hosts` stays a read), and a nest of
+  them past the depth cap asks. `sudo -u $U` alone, `sudo -u $U -l` and `sudo -u $U -v` now ask. A long chain of sudos
+  is read in linear time. With a command, sudo runs `$SHELL -c` on its words joined with the shell's metacharacters
+  escaped, and that text is read too where it may differ from the words (a `$`, a newline, an empty word, an option
+  the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such a line still asks as code the
+  gate cannot fully see, as it did as an unknown program; a word the gate cannot read asks. A later sudo's brace value,
+  which that text holds as a literal, is read as bash expanded it (`sudo -s sudo -u "$U" -u {root,-p} echo rm -rf
+  /srv/data` is `delete`). The line's own parts stay beside the new ones, and the call is also read as before
+  (`gate.readings`) and decided on each reading, so no decision is lower than before.
+  `su` and `sudo su` with a stdin still ask as an unknown program without reading the text.
 - Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
   body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
   as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,
@@ -2039,8 +2196,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   sender verifies it against the keys pinned here for the seat the message went to, as `receipt` does. A reply
   that does not verify is not published, and the send fails. For a seat no key is pinned for, both checks step
   aside and the receive side's trust ladder decides what arrived, as before (an unpinned sender is held as
-  `other`). Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned,
-  as an older `exo`'s are, cannot be reached for a pinned seat (D-026 amendment; `docs/PEERS.md` "Limits").
+  `other`). Stricter than before for two honest setups: a daemon whose presence file or first receipt is unsigned,
+  as an older `exo`'s are, cannot be reached for a pinned seat, and neither can a seat whose key was made again
+  until the new key is pinned here (`exo keys pin <seat> <pub> --replace`, USER-GUIDE §7) (D-026 amendment;
+  `docs/PEERS.md` "Limits").
+- A signed first reply is no longer a receipt (#603 review, on #523 and #132). Since #523 a daemon signs its first
+  answer to any `deliver`, an envelope that does not verify too, and the answer had a later receipt's fields, so a
+  client of a daemon's socket could read a held message's id from its `peers list`, send it a junk envelope with
+  that id, and hand the signed `denied` to the sender's `receipt`: the sender published `denied` for a message
+  still held, against #132's rule that a later receipt comes only from the seat the message went to. The first
+  answer now signs `kind: "reply"` and a later receipt `kind: "receipt"`. `receipt` refuses a reply, and the send
+  path refuses anything but a reply. An older `exo`'s receipt, which names no kind, is still taken; a #523 build's
+  first reply names none either and is told apart by the `mode` and `session` it signs, so `receipt` refuses it and
+  a send to a #523 build still completes. A send that fails on its first reply has already delivered the text; the
+  user guide now says to check with the peer before sending again. Also: a presence entry's signature is checked over
+  its JSON as written, so a newer `exo` that signs an extra field still verifies, and a first reply that is not a
+  mapping fails the send with a plain error (D-026 amendment).
 - `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
   approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
   denies.

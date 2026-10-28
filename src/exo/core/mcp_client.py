@@ -108,6 +108,7 @@ class McpManager:
 
     async def start(self, registry: Registry) -> dict[str, dict[str, Any]]:
         """Connect every configured server and register its tools. Returns ``status()``."""
+        await self.close()  # a retried start first stops the servers an earlier, cut-short start left
         self.registry = registry
         if not self.configs:
             return {}
