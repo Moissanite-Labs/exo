@@ -2219,6 +2219,8 @@ in one of three ways:
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
+Bypass keeps the ask too ("Bypass mode (D-065)"). Before #703 bypass read only the line's category,
+so it ran these calls.
 When `decide` fails on the call for a reason the policy loader does not check, the exo-gate hook's
 fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
 A pattern that does not compile is checked at load now (#466), so it refuses the policy there and
@@ -3084,6 +3086,12 @@ naming `~/.aws/credentials` ask in bypass, though their names lead with `read` o
 `bypass.floor` names the floor category. A post that breaks the posting rules and has its floor only in such a
 reading is held first, as before; once rewritten, it asks. Until review 5662071801 bypass checked only the
 category a call led with, so on main e0968a2b those calls ran.
+
+The same holds for a shell call whose own folder argument is a secret folder (#311, "The tool's own folder"). Its
+line keeps its own category, and the store read is a `credentials` part. So `cat config` with `~/.kube` as
+`workdir` (`terminal`, `bash`, `exec_command`), and `ls` with `~/.exo/keys`, `~/.aws` or `~/.claude` as `cwd`, ask
+once in bypass, as `cat ~/.kube/config` does. Before #703 bypass ran them (review 5675164403). A shell call in an
+ordinary folder runs as before.
 
 **Whose turn.** Lowering reaches only a turn the principal started. The core passes the turn's author (D-040) into
 every tool hook, and the gate lowers an ask only when that author is the principal: a turn a local caller, a peer,
