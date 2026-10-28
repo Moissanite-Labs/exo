@@ -52,6 +52,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
 
 ### Fixed
+- Gate (#327): a line feeding one text to many `ssh` commands took quadratic time (decide 22 s at
+  25 KB in the #303 review). For each ssh, the hop copied the fed text's parts and marked them as
+  running on the remote host, so the result held a copy of every fed part per ssh, and decide
+  scoped and matched each copy. The fed parts are now marked once, when the text is first read
+  for the line, and shared by every ssh it is fed to; a hop still weighs the parts as _once read
+  them and marks its own copy. Outcomes match main, but the wording is not exact equality: a part
+  the hop never retargets can make a decision stricter than main's, and a post's violations can
+  name it twice. The ledger view no longer walks the shared parts, so the hook's per-decision
+  view stays linear too. The shape joins the linear-work tests at
+  20 KB and 80 KB. Two #303 test gaps are closed: a stdin the gate cannot read on a descriptor
+  (`ssh host <&3`, `ssh host 0<&3`, `ssh host <> file`) and the flag words after the host
+  (`ssh -- host -T`, `ssh host -n`, `ssh host -- -T`) have rows now.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped

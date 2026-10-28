@@ -174,7 +174,9 @@ class Classification:
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
-        d = asdict(self)
+        # Parts are popped below anyway, and asdict would recurse into them: a text fed to many ssh shares
+        # one marked subtree per ssh, so the plain call expands it once per ssh (#327). Skip that walk.
+        d = asdict(replace(self, parts=[]))
         d.pop("parts", None)
         d.pop("displaced")
         d.pop("ordinary")
@@ -3985,6 +3987,83 @@ def _copy(c: Classification) -> Classification:
     return replace(c, signals=list(c.signals), _command_views=list(c._command_views))
 
 
+def _remote_fed(ctx: dict, key: tuple, k: _Cmd, piped: str | None, depth: int) -> list[Classification]:
+    """_once's parts for ssh's stdin, marked as running on the remote host (D-075), built once per stdin
+    text of the line and shared by every ssh the text is fed to. The hop used to copy and mark the parts
+    per ssh, which cost (number of ssh) x (number of fed parts) in classify and again in decide (#327).
+    What is handed out carries the part's fields as _once's copies do, unmarked, so _combine weighs it
+    as it weighed the copy; under it sits the marked part itself, shared, which no caller changes in
+    place but the hop, and the hop keeps it as it is (_hop_copy). A first call hands out every part and
+    a repeat only the most severe of each category, as _once does."""
+    memo = ctx.setdefault("remote", {})
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, False)
+    if whole not in memo:
+        got = _once(ctx, key, k, piped, lambda t: [classify_shell(t, depth)])
+        ids = ctx.setdefault("remote_ids", {})
+        first = []
+        for c in copy.deepcopy(got):
+            marked = None
+            if c.parts:                       # a part with no parts is handed out as a plain copy
+                marked = copy.deepcopy(c)
+                for p in _each_part(marked):
+                    if EXPOSURE.index(p.exposure) < 1:
+                        p.exposure = "internal"
+                    ids[id(p)] = p
+                    ids[id(p.parts)] = p.parts
+                    ids[id(p.signals)] = p.signals
+                    ids[id(p._command_views)] = p._command_views
+            first.append((c, marked))
+        most = [max((p for p in got if p.category == c), key=_severity)
+                for c in dict.fromkeys(p.category for p in got)]
+        pos = {id(g): n for n, g in enumerate(got)}
+        memo[whole] = (first, [first[pos[id(m)]] for m in most], False)
+    first, rest, called = memo[whole]
+    memo[whole] = (first, rest, True)
+    return [_hand_out(pair) for pair in (rest if called else first)]
+
+
+def _hand_out(pair: tuple) -> Classification:
+    """One ssh's copy of a fed part: the part's own fields, as _once's copy carries them, with the marked
+    part as its only part when there is one, so every ssh the text is fed to shares the one marked
+    subtree instead of listing its parts again (the walks in decide key on the parts themselves). The
+    hop's marking raises this copy's exposure like any other part's, so it ends where the marked part
+    sits; the marked part's own exposure is never read at combine time."""
+    c, marked = pair
+    if marked is None:
+        out = _copy(c)
+        for fname in ("displaced", "floor", "also", "ordinary"):
+            v = getattr(c, fname)
+            if v is not None:
+                setattr(out, fname, _copy(v))
+        return out
+    out = _copy(c)
+    out.parts = [marked]
+    for fname in ("displaced", "floor", "also", "ordinary"):
+        setattr(out, fname, getattr(marked, fname))
+    return out
+
+
+def _hop_copy(c: Classification, shared: dict, memo: dict | None = None) -> Classification:
+    """copy.deepcopy of an ssh hop's result, except the parts _remote_fed marked and shares for the line
+    (in `shared`, by id): those stay shared, so a text fed to many ssh is copied once, not once per ssh.
+    deepcopy keeps a part that is both listed and displaced (or floored, also, ordinary) one object, so
+    the hop's marking walk marks it in both places; replace() alone would leave the field pointing at
+    the unmarked original, and a displaced gh part would keep its private exposure (#327 repair)."""
+    memo = {} if memo is None else memo
+    if id(c) in shared:
+        return c
+    if id(c) in memo:
+        return memo[id(c)]
+    out = replace(c, signals=list(c.signals), _command_views=list(c._command_views), parts=[])
+    memo[id(c)] = out
+    out.parts = list(c.parts) if id(c.parts) in shared else [_hop_copy(p, shared, memo) for p in c.parts]
+    for fname in ("displaced", "floor", "also", "ordinary"):
+        v = getattr(c, fname)
+        if v is not None:
+            setattr(out, fname, _hop_copy(v, shared, memo))
+    return out
+
+
 # Builtins that take a variable name and evaluate an array subscript in it as arithmetic, which runs any
 # $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
 _NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
@@ -4474,7 +4553,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if fed_line:
                 fed[0].signals.append(_LINE_STDIN)
             if depth < _DEPTH:
-                fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+                fed += _remote_fed(ctx, (classify_shell, inner_depth), k, piped, inner_depth)
             lead = direct and _lead([c, *fed]) is not c
             # A part beside ssh's own, not built into it (#316): sudo or a privileged wrapper around ssh still marks
             # ssh's own part costly, as when ssh reads no stdin, and the line takes the more severe part.
@@ -4505,11 +4584,22 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
                     for t in dict.fromkeys(dests) if t]
-        c = copy.deepcopy(c)                  # parts can be shared with a stored result (_own_copy): mark a copy
-        for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
-            if EXPOSURE.index(p.exposure) < 1:
-                p.exposure = "internal"
-        _hop_fill(c, dest)
+        if not here:                          # parts can be shared with a stored result (_own_copy): mark a copy.
+            shared = ctx.get("remote_ids") or {}
+            c = _hop_copy(c, shared)          # the fed parts stay shared: _remote_fed marked them once (#327)
+            todo, seen = [c], set()
+            while todo:                       # every part runs on the remote host (D-075)
+                p = todo.pop()
+                if id(p) in seen or id(p) in shared:
+                    continue
+                seen.add(id(p))
+                if EXPOSURE.index(p.exposure) < 1:
+                    p.exposure = "internal"
+                if id(p.parts) not in shared:
+                    todo.extend(reversed(p.parts))
+        else:
+            c = copy.deepcopy(c)              # as main: the copy stays private for _hop_fill below
+        _hop_fill(c, dest, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
             # A helper names the host as when it led the line, also where the remote line's store write leads (#461)
@@ -4535,10 +4625,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c.signals.append("remote host")
         if stdin is None:
             return [c]
-        stdin = copy.deepcopy(stdin)          # as for c: the stdin runs on the remote host (ssh, never mosh)
-        for p in _each_part(stdin):
+        shared = ctx.get("remote_ids") or {}
+        stdin = _hop_copy(stdin, shared)      # as for c: the stdin runs on the remote host (ssh, never mosh),
+                                              # and the fed parts stay shared instead of one copy per ssh (#327)
+        todo, seen = [stdin], set()
+        while todo:
+            p = todo.pop()
+            if id(p) in seen or id(p) in shared:
+                continue
+            seen.add(id(p))
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
+            if id(p.parts) not in shared:
+                todo.extend(reversed(p.parts))
         if lead:
             stdin.target = dest if "unread hops" in c.signals else (stdin.target or dest)
         elif not direct:                      # the part #316 adds names the host
@@ -4549,9 +4648,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # h`). After a hop that is the first host, where the line hands the stdin over, as for the target.
             stdin.alt_targets = [t for t in dict.fromkeys(t or dest for t in stdin.alt_targets) if t != stdin.target]
             stdin.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in stdin.parts]
-            _hop_fill(stdin, dest)
+            _hop_fill(stdin, dest, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         else:                                 # the remote line leads, as a store write (#461) where its read did not
-            _hop_fill(stdin, dest, whole=True)
+            _hop_fill(stdin, dest, whole=True, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         stdin.signals.append("remote host")
         # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
         # the part that runs the stdin led before: it comes first then, and the line is decided as before.
@@ -5425,19 +5524,51 @@ def _bare_copy(p: Classification, **changes) -> Classification:
         s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"])
 
 
-def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
+def _hop_fill(c: Classification, dest: str, whole: bool = False, memo: dict | None = None,
+              shared: dict | None = None, filled: set | None = None) -> None:
     """#399 below an ssh or mosh hop's line (the hop's own copy): the host joins each nested part's empty other
     target, and a nested part with an empty target gets a copy on the host among the line's parts (_bare_copy).
     Each part keeps its own reading, so a gh read nested under the store write it makes (#461) is still seen by a
     deny, reserved or rule entry on the host, as when it led the line. The copies of a gh action on its other targets
     among the line's own parts take the host in place, as before. With whole, the line and those copies are filled
-    the same way: the part that runs ssh's stdin, which named the host when it led before #461."""
+    the same way: the part that runs ssh's stdin, which named the host when it led before #461. A memo shared
+    across a line's hops keeps one copy per (part, host): a text fed to many ssh on one host gets one copy, not
+    one per ssh, or decide would scope every fed part once per ssh again (#327). A shared subtree already filled
+    for this host is skipped whole: its copies sit on the filling hop's parts, which decide still reads, so a later
+    hop neither walks it again nor lists its copies again."""
     own = set() if whole else {id(p) for p in c.parts if p.alt_copy}
-    nested = [p for p in list(_each_part(c))[0 if whole else 1:] if id(p) not in own]
+    if memo is None:
+        memo = {}
+    if shared is None:
+        shared = {}
+    if filled is None:
+        filled = set()
+    nested = []
+    seen: set[int] = set()
+    todo = [c]
+    while todo:
+        p = todo.pop()
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        if id(p) in shared and (id(p), dest) in filled:
+            continue
+        if id(p) in shared:
+            filled.add((id(p), dest))
+        if not (p is c and not whole) and id(p) not in own:
+            nested.append(p)
+        todo.extend(reversed(p.parts))
     for p in nested:
         if "" in p.alt_targets and p.target != dest:
             p.alt_targets = list(dict.fromkeys([*p.alt_targets, dest]))
-    c.parts += [_bare_copy(p, target=dest) for p in nested if not p.target]
+    appended = []
+    for p in nested:
+        if not p.target:
+            key = (id(p), dest)
+            if key not in memo:
+                memo[key] = _bare_copy(p, target=dest)
+            appended.append(memo[key])
+    c.parts += appended
 
 
 def _write_summary(lead: Classification, write: Classification) -> str:
