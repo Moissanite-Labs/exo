@@ -7,6 +7,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Added
 
+- A read-only full-queue refresh for the original re-review tracker, distinguishing merged closure
+  events from PR references and incomplete timelines (#51).
+
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
 ### Added
