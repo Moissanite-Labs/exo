@@ -3361,6 +3361,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   error. The many-short-words cost is 3.1 to 3.8 times main's CPU time at the merge, and 3.0 to 3.9 times the merge
   base's at 76f33d16 (best of three, the four trees in turn). So the cost is this branch's own, and the merge adds
   none.
+  *2026-10-28 (#513, the merge of main f28934a3):* (aa) Main merged #707 (the #634 follow-up), which reads an `env -S`
+  text as the line env runs and keeps main's earlier readings of it in `split_readings`, and #718 and #799 (#491),
+  which read the stdin and the command of a `sudo -s` or `sudo -i` shell and read the call as before at the end of its
+  floors. `src/exo/gate.py` merged with no conflict, and this branch's change to it is the same as against main
+  eb0ba7e2. Each new reading reads its text as a shell line, so the lexical form, main's target part, each other
+  store's part and the hop's copy hold there as on the line itself. `env -S 'cat ~/.kube//config'`,
+  `sudo -i <<< 'cat ~/.kube//config'` and `sudo -s cat ~/.kube//config` are denied under
+  `deny: [target:*/.kube/config]`, as their plain spellings are, where main asks or allows. A shell call's folders
+  work as before: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, `sudo -s <<< 'ls'` is denied under
+  `deny: [target:*/.ssh*]`, as on main. Main's script (f28934a3) compared main f28934a3 with the merge under the 88
+  built-in policies, on the built-in set with its variants (92,171 actions). It lowered the 17 pairs of the merge
+  before, on 17 actions. A set of 855 calls that wrap this branch's rows in each spelling of `env -S` and each form of
+  a sudo shell, under the built-in and 62 aimed policies, lowered 105 pairs on 21 actions. Each lowered pair is a
+  remote delete of the kube config in an odd spelling, `ssh prod 'rm -rf ~/.kube//config'` in some form (once
+  `~/.Kube//config` with a second operand). It loses the host's `delete` as main's plain spelling does (group 1).
+  Neither tree had a classify or decide error. The many-short-words cost is 2.6 to 4.0 times main's CPU time at the
+  merge (best of three, main and the merge in turn), as before the merge.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

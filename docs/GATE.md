@@ -816,7 +816,9 @@ system or bash will.
   word with an absolute path is read that way too: when its folder part before the glob holds a `..`, that part is
   also resolved. So `cat /dev/fd/../env*` and `cat /proc/thread-self/../../env*`, which reach the process's own
   `environ`, ask, and so does `cat /tmp/k/../conf*` where `/tmp/k` links into `~/.kube`. The Exo-store names are
-  read the same way (see "The store is credentials").
+  read the same way (see "The store is credentials"). So is the line an `env -S` text runs (#591) and what a
+  `sudo -s` or `sudo -i` shell runs (#491): `env -S 'cat ~/.kube//config'` and `sudo -i <<< 'cat ~/.kube//config'`
+  are denied under `deny: [target:*/.kube/config]`, as their plain spellings are.
 
 An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decided lower
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a

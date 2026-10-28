@@ -1336,3 +1336,37 @@ def test_each_store_past_an_odd_first_store_keeps_its_reserved_hit():
     assert full("cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials", policy)[2] == ["credentials", "credentials"]
     c = gate.classify({"tool": "bash", "args": {"command": "cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials"}})
     assert {p.target.rsplit("/", 2)[-2] for p in gate._each_part(c) if p.other_store} == {".ssh", ".aws"}
+
+
+# Since #707 (#634 follow-up) the gate reads an `env -S` text as the line env runs, and since #718 and #799 (#491) the
+# stdin and the command of a `sudo -s` or `sudo -i` shell. Each reads its text as a shell line, so the spellings #446
+# reads, main's target part and each other store's part hold there as on the line itself: the odd line is denied where
+# its plain spelling is (#513, the merge of main f28934a3). Main asks about the odd `~/.kube//config` and backslash rows
+NEW_READINGS = ["env -S '{}'", "env --split '{}'", "env -iS '{}'", "sudo env -S '{}'", "sudo -i <<< '{}'",
+                "echo '{}' | sudo -s", "sudo -s <<'EOF'\n{}\nEOF", "sudo -iu root {}", "sudo -s {}"]
+IN_READINGS = [
+    ("cat ~/.kube//config", "cat ~/.kube/config", {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("cat /pro?/self/environ ~/.ssh/id_rsa", "cat /proc/self/environ ~/.ssh/id_rsa",
+     {"gates": {"deny": ["target:*/.ssh/*"]}}),
+    ("cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials", "cat ~/.kube/config ~/.ssh/id_rsa ~/.aws/credentials",
+     {"gates": {"deny": ["target:*/.aws/*"]}}),
+    ("cp /tmp/x ~/.exo//policies/x", "cp /tmp/x ~/.exo/policies/x", {"gates": {"deny": ["store_write"]}}),
+    ("cat ~/.ssh/id_rsa < ~/.kube/\\config", "cat ~/.ssh/id_rsa < ~/.kube/config",
+     {"gates": {"deny": ["target:*/.kube/config"]}}),
+]
+
+
+@pytest.mark.parametrize("odd, plain, policy", IN_READINGS)
+@pytest.mark.parametrize("form", NEW_READINGS)
+def test_an_env_split_or_sudo_shell_text_reads_the_odd_spellings_as_the_line_does(form, odd, plain, policy):
+    assert full(form.format(odd), policy)[1] == full(form.format(plain), policy)[1] == "deny"
+
+
+@pytest.mark.parametrize("command", ["sudo -s <<< 'ls'", "env -S 'ls'", "echo ls | sudo -i"])
+@pytest.mark.parametrize("tool, key", [("bash", "command"), ("exec_command", "cmd")])
+def test_main_s_folder_stays_a_part_beside_an_env_split_or_sudo_shell_line(tool, key, command):
+    policy = {"gates": {"deny": ["target:*/.ssh*"]}}
+    call = {"tool": tool, "args": {key: command, "cwd": "~/.config//gcloud", "workdir": "~/.ssh"}}
+    assert full(call, policy)[1] == "deny"
+    call["args"]["cwd"] = "~/.config/gcloud"          # control: main read gcloud first, and the call asks as on main
+    assert full(call, policy)[1] == "ask"

@@ -986,8 +986,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cat ~/.KUBE//config` asks, and `ssh prod 'rm -rf ~/.Kube//config'` keeps the host's delete, as its plain spelling
   does on main. Each other store a line names keeps the part the #609 follow-up gives it, also in these spellings, so
   `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under `deny: [target:*/.kube/config]`, as its plain spelling is.
-  Such a line now takes the store's class, and a few lines decide as main decides the plain spelling, lower than
-  before. The D-038 amendment lists the groups.
+  The line an `env -S` text runs (#591) and what a `sudo -s` or `sudo -i` shell runs (#491) are read the same way, so
+  `sudo -i <<< 'cat ~/.kube//config'` is denied under that entry too. Such a line now takes the store's class, and a
+  few lines decide as main decides the plain spelling, lower than before. The D-038 amendment lists the groups.
 - Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
   start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
   `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
