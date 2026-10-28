@@ -133,7 +133,8 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
-`/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
+`/layout` does. Use Rename beside a thread to edit its title, then Save or Cancel. Enter saves and Escape cancels.
+Double-click opens the same editor. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
 
 ## 3. Slash commands
@@ -148,7 +149,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
-| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
+| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where Rename or a double-click opens the title editor. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
 | `/cwd` | Show this thread's working folder. |
@@ -495,6 +496,14 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - If a seat's key was made again, its messages are refused until you pin the new key:
   `exo keys pin <seat> $EXO_HOME/keys/<seat>.pub --replace`. A Hermes profile's name must be a seat id (lowercase
   letters, digits, `-` and `_`), or its messages are refused. `docs/PEERS.md` "Peer keys" lists these cases.
+- A send to a seat whose key this home holds goes out only when that seat signs its presence file and its answer
+  with that key (#523). If the presence file does not verify, the send fails with `presence file does not verify
+  ... not sent` and nothing reaches the peer. That happens when the peer runs an older Exo: update it. It also
+  happens when the peer's key was made again and this home still pins the old one: pin the new key with
+  `exo keys pin <seat> <that home>/keys/<seat>.pub --replace` (add `--peer` for a seat of another home), then send
+  again. If instead the send fails with `first reply that does not verify ... not published`, the text was sent
+  and the peer may already have it; only its answer was refused. Check with the peer before you send again, or it
+  gets the message twice.
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
