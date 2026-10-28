@@ -20,7 +20,8 @@ class AuthGate:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             try:
-                self.relay.authed_seat(Headers(scope=scope), scope["method"], scope["path"])
+                self.relay.authed_seat(Headers(scope=scope), scope["method"], scope["path"],
+                                       query=scope.get("query_string", b"").decode())
             except HTTPException as e:
                 await JSONResponse({"error": e.detail}, status_code=e.status_code)(scope, receive, send)
                 return

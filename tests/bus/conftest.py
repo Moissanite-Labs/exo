@@ -106,8 +106,9 @@ class Bus:
         return http("POST", f"{self.url}/v1/messages", self.envelope(seat, to, body, **kw))
 
     def get(self, seat, path, key=None, **params):
+        query = urlencode(params) if params else ""
         return http("GET", f"{self.url}{path}", params=params,
-                    headers=wire.request_headers(seat, key or self.keys[seat], "GET", path))
+                    headers=wire.request_headers(seat, key or self.keys[seat], "GET", path, query=query))
 
     def head(self):
         return http("GET", f"{self.url}/v1/head")[1]
