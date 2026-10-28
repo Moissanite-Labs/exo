@@ -13,6 +13,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).
+- The bus `Store.verify` (relay `/v1/verify` and the `verify_ledger` MCP tool) answers ok false with checked 0
+  for an inverted range, a range that starts past the head, or an explicit range on an empty log. It
+  answered ok true for all three, so a check of nothing read as a clean log. `to` is clamped to the head.
+  A verify with no range on an empty log still answers ok true, with `empty: true`. Port of
+  aska-digital/exo-desktop #70 by sparky-118 (docs/PEERS.md "Bus seats").
+- Learn review and the consolidation model reflector no longer drop a valid model reply because of a brace in
+  the prose after it. The old greedy match ran to the last brace in the text. Port of aska-digital/exo-desktop
+  #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
+  array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
+  `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
