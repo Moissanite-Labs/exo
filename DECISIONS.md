@@ -169,6 +169,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
   envelope, so the bound is checked before the stream opens. A malformed request line still closes the
   connection with no reply.
+- **Amendment 2026-10-27 (exo-desktop #14, orda-aska; fork issue 2):** a failed core start no longer fails every
+  later command. The core starts its runtime once, at the first command: the provider readiness probe
+  (`_main_status`, run when no main role is configured), then the MCP servers. When that start raised, the engine
+  kept the failed task, and every later command awaited it again and got the same `internal` error until exod
+  restarted. A cancelled start task raised `CancelledError` the same way. Now a start task that raised or was
+  cancelled is cleared, and the next command starts again. Every command waiting on the failed start gets its
+  error, and commands that retry at the same time share one new start. A command cancelled while it waits leaves
+  a running start in place, so the runtime never starts twice. An MCP server that fails is still recorded in
+  `status()` and skipped, and `peers.start()` runs before the start task exists, so neither fails the start. The
+  steps that run again on a retry are guarded: `jobs.recover` returns after its first run, `PeerService.start`
+  once its node is set, `Scheduler.start` once its loop runs. A start cut short inside the MCP step can leave
+  server tasks running, so `McpManager.start` first stops the servers it already holds, and engine close
+  always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
+  cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
+  `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -215,6 +230,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
   style save-without-eval (same); keeping taste separate from memory and skills (the gap in PR #126940).
+- **Amendment 2026-10-27 (exo-desktop #35 by orda-aska, ported to exo with the follow-up from abu-aska's review
+  there):** a lesson is a climb candidate only when its computed evidence weight (`taste.label` of the noisy-or
+  weight, decayed to now) is medium or high; the stored `confidence` no longer decides, so a lesson whose evidence
+  has decayed stops being a candidate. Every rule reaches every domain, so the held-out gate covers them all, in two
+  parts: the candidate's own domains' held-out items (its domain and `general`) and the pinned items, from any
+  domain, are gated together as one pool exactly as before, and each other domain's held-out items are gated on
+  their own (`held_tolerance` 0.0 per domain, plus the rule, guarded-domain and domain-drop checks). Pooling every
+  domain into one held-out check would let a gain in one domain pay for a loss in another: with 15 mind and 10 work
+  held-out items, a candidate that broke one mind item while one work item flipped up passed it. Inside the own
+  pool a gain on one item can still offset a loss on another, as before. An accepted candidate rescores every dev,
+  held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
+  budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
+  accepted candidate made 256 calls, 173 before (+48%).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -3916,6 +3944,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
+- **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
+  process-tree sibling, so it skips where `/proc` is unavailable. The existing SIGHUP guard stays. The cleanup
+  signal-handler test still runs where SIGHUP is available; gate-diff runtime and gate policy are unchanged.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
@@ -4019,12 +4050,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
+  conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
+  page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
+  Unconfirmed sends retain recoverable text at their originating conversation, including a newly created one,
+  without replacing newer edits or sending again automatically. Recovery asks the user to inspect the thread
+  before sending again because a lost acknowledgement does not prove rejection. Delayed opens and unsteer
+  replies cannot redirect newer navigation or put one conversation's text into another composer.
+
 - **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
   and model-call identity fields let a successful matching call clear its route warning without clearing
   newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
+
+- **Amendment 2026-10-27:** web approval cards state their available answer sequence and the deliberate Ctrl+F focus
+  step. Instructions change for always confirmation and deny-note entry. A focused card has an accent outline.
+  Existing focus, confirmation and approval authority rules remain unchanged.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
@@ -5238,6 +5281,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-086: Optional session working notes
 
+- **Pending proposal:** [Agent and human work vessel](docs/AGENT-OPERATOR-DESIGN.md)
+  proposes client use of these notes and further acceptance gates. This pointer
+  approves no new behavior, policy or defaults.
+
 - **Date:** 2026-10-23
 - **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
 - **Problem:** A long task's current goal, constraints, blockers and next action can become scattered
@@ -5276,6 +5323,26 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   checks, disabled composition, workspace instructions and handoff snapshots.
 - **Docs:** `docs/WORK-NOTEBOOK.md`, user guide §1, developer guide §1, command reference, docs map and
   changelog. Whitepaper coverage is deferred to the next batch.
+
+### D-086 amendment: automatic record-derived continuity (2026-10-27)
+
+- Add a separate default-on `work_checkpoint` index, controlled by `enabled` and
+  `resume_chars`. It is not an agent-authored notebook revision or a task runner.
+- Reconstruct from the latest 40 visible session messages and 8 job metadata rows;
+  render at most 12 tool records, newest first, within the configured character
+  budget. Capture at turn end and before compression, and reconstruct before
+  injection so abrupt restart recovery does not depend on shutdown hooks.
+- Ordinary root threads only; exclude private, child/fork, scheduled and other-agent
+  sessions. Bind saved rows to the configured principal. Undo excludes reverted
+  transcript facts and suppresses jobs whose schema has no transcript anchor.
+- Copy no conversation text, tool arguments/output, commands, paths or job logs.
+  Tool success is a reported result, not effect verification. Interrupted or
+  missing results explicitly leave effects unknown. Nothing is automatically replayed.
+- `/checkpoint` requires a principal connection. It exposes record metadata without
+  a new approval path. Existing manual working notes and their gated tool are unchanged.
+- This is a bounded slice of #683: filesystem diffs, task-goal synthesis and child
+  work tracking remain outside scope. Docs: `docs/WORK-CHECKPOINT.md`, user/developer
+  guides, command reference, docs map and changelog; whitepaper deferred to next batch.
 
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
 - **Counter clarification 2026-10-27:** after resolving a relative import to `exo`, inspect its imported names

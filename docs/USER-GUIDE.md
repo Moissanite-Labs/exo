@@ -20,6 +20,13 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
 ## 1. Install and first run
 
+**Continuing after interruption.** Exo automatically includes a short index of recent
+tool and job records when the same ordinary conversation continues. `/checkpoint`
+shows it in the TUI or `exo chat`. Interrupted tool effects remain unknown until
+checked. It never replays work. Disable with
+`exo config set work_checkpoint.enabled false` and restart. See
+[automatic continuity checkpoints](WORK-CHECKPOINT.md) for limits and privacy.
+
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
@@ -129,6 +136,12 @@ The web page has its own sub-pages for Tasks, Schedule, Command and Providers. I
 `/layout` does. Use Rename beside a thread to edit its title, then Save or Cancel. Enter saves and Escape cancels.
 Double-click opens the same editor. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
+
+Web conversation drafts stay with each thread while the page is open, including when you visit another
+view. A pending send lets you keep writing and blocks duplicate Enter submissions. If a send is unconfirmed,
+your text remains recoverable in that thread without replacing newer edits. Check the transcript before
+sending again; a lost reply may still have reached the core. Reloading or closing the page discards drafts.
+See [conversation drafts](ui/WEB.md#conversation-drafts-and-unconfirmed-sends-d-045).
 
 ## 3. Slash commands
 
@@ -316,8 +329,10 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
-press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. Both clients show the answer sequence: `Ctrl+F`, then `o` once, `a` followed by Enter
+for always, or `d` followed by Enter to deny. The web card lists its available choices and changes its help during
+confirmation or note entry. Press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays
+in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
