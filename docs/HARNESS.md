@@ -181,7 +181,8 @@ engine. The engine owns shutdown ordering and startup rollback.
 Engine shutdown runs in this order:
 
 1. It refuses new commands, turns, tools and background jobs. A command fails with
-   `closed`, so it cannot start a service again. A start in progress is cancelled. The
+   `closed`, so it cannot start a service again. A start in progress is cancelled, and a
+   command that waited on it fails with `closed` too. The
    next command retries a failed or cancelled start (D-010 amendment), but not once close
    has begun. A job that ends from here on is
    recorded for its thread and never starts a turn. Active turns are cancelled.

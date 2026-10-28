@@ -125,7 +125,8 @@ commands. Its collaborators have small interfaces:
   `close()` closes schedule.sqlite and is final. `tasks()` lists its loop and running jobs, which the engine's
   close cancels first.
 - `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
-  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. The
+  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. A
+  command that waited on a start that close cancelled fails the same way, unless its own task was cancelled. The
   store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
   it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
   session store closes.

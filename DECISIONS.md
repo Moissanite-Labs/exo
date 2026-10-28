@@ -6406,3 +6406,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   - *Child prompts and the checkpoint.* Delegated and scheduled loops share the workspace prompt, and main's
     checkpoint is part of it. Its capture opened a write transaction before it saw that such a session takes
     no checkpoint, then committed nothing. It now reads the session first, and the transaction checks again.
+  - *A command waiting on the first start.* close() cancels that start. The command that waited on it ended
+    with `CancelledError`, so an HTTP client saw a dropped request. It now fails with `closed`, like every
+    command once close has begun. A caller that cancelled its own command still gets `CancelledError`.
+  - *Count.* The counted core is 16,370 lines (main `080e87ba`: 15,945), which D-083 reports and does not
+    assert. Product imports and private-state reads stay at 39 and 8.

@@ -277,7 +277,8 @@ class CoreRuntime:
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start).
-        Refused once close() has begun, so a start that close() cancelled is not retried."""
+        Refused once close() has begun, so a start that close() cancelled is not retried. A command that waited on
+        that start fails with closed too, unless its own task was cancelled."""
         if getattr(self, "_closing", False):
             raise CommandFailed("closed", "the engine is closing")
         if self._started is None:
@@ -293,11 +294,15 @@ class CoreRuntime:
                 self.scheduler.start()
         try:
             await asyncio.shield(self._started)
-        except BaseException:
+        except BaseException as exc:
             # A start that raised (the _main_status provider probe, any error) or was cancelled is cleared to retry.
             task = self._started
             if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
                 self._started = None
+            caller = asyncio.current_task()
+            if (isinstance(exc, asyncio.CancelledError) and getattr(self, "_closing", False)
+                    and not (caller is not None and caller.cancelling())):  # close() cancelled the start, not the caller
+                raise CommandFailed("closed", "the engine is closing") from exc
             raise
 
     async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
