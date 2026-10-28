@@ -114,14 +114,15 @@ def test_paths_and_unknown_words_are_messages_and_core_commands_are_held(page):
 def test_escape_closes_the_model_picker_and_choosing_refocuses_the_box(page):
     src, b = page
     enter(b, "/model")
-    b.wait("!document.querySelector('.xc-model-picker').hidden && document.activeElement.tagName === 'SELECT'")
+    b.wait("!document.querySelector('.xc-model-picker').hidden && document.activeElement.getAttribute('role') === 'combobox'")
     b.press("Escape", "Escape", 27)
     b.wait("document.querySelector('.xc-model-picker').hidden")
     assert b.eval("document.activeElement === document.querySelector('.xc-input')")
     enter(b, "/model")
-    b.wait("!document.querySelector('.xc-model-picker').hidden")
-    b.eval("(()=>{const s=document.querySelector('.xc-model-picker select');s.value='fake:y';"
-           "[...document.querySelectorAll('.xc-model-picker button')].find(x=>x.textContent==='Use model').click();})()")
+    b.wait("!document.querySelector('.xc-model-picker').hidden && document.querySelectorAll('.xc-model-option').length > 0")
+    b.eval("(()=>{const s=document.querySelector('.xc-model-picker [role=combobox]');s.value='fake:y';"
+           "s.dispatchEvent(new Event('input',{bubbles:true}));"
+           "s.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));})()")
     b.wait("document.querySelector('.xc-model-picker').hidden")
     assert b.eval("document.activeElement === document.querySelector('.xc-input')")
     assert [(c.model, c.session) for c in src.of("models.set")] == [("fake:y", "s1")] and src.sent() == []
