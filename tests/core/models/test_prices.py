@@ -14,9 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from exo.core.models import prices
+from exo.core.models import FakeProvider, prices
 from exo.core.models.router import CATALOG_PATH, Route, Router
-from exo.core.types import Usage
+from exo.core.types import Message, ProviderEvent, Usage
+
+from .conftest import collect
 
 DEEPSEEK = {
     "input": 0.30,
@@ -109,6 +111,32 @@ def test_price_charges_the_window_rate_in_force():
     assert peak.cost_usd == pytest.approx(0.15 + 0.06 + 0.003)
     assert off.cost_usd == pytest.approx(0.30 + 0.12 + 0.006)
     assert usage.cost_usd is None  # the call's own usage is not mutated
+
+
+def test_a_call_is_charged_the_rate_in_force_when_it_started():
+    """A stream that crosses into another window is still billed at the rate it was made under."""
+    class Clock:
+        t = WED_PEAK.timestamp()
+
+        def __call__(self) -> float:
+            return self.t
+
+    class SlowProvider(FakeProvider):
+        async def stream(self, messages, tools, **opts):
+            Clock.t = WED_GAP.timestamp()  # the call runs on past the window; usage lands off-peak
+            async for ev in super().stream(messages, tools, **opts):
+                yield ev
+
+    clock = Clock()
+    router = Router(roles={"main": ["test:peaky"]},
+                    catalog={"models": {"test:peaky": DEEPSEEK}, "providers": {}, "roles": {}},
+                    instances={"test": SlowProvider(
+                        [[ProviderEvent(kind="text", text="hi"),
+                          ProviderEvent(kind="usage", usage=Usage(input_tokens=1_000_000))]])},
+                    env={}, clock=clock)
+    events = collect(router.stream("main", [Message.user("hi")], []))
+    assert [ev.kind for ev in events] == ["text", "usage"]
+    assert events[1].usage.cost_usd == pytest.approx(0.15)  # not the 0.30 in force when usage arrived
 
 
 def test_price_defaults_cache_rates_from_the_rate_in_force():
