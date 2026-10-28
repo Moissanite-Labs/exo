@@ -582,6 +582,17 @@ class SessionStore:
                              ts=r["ts"], id=r["id"]))
         return out
 
+    def latest_model_call_reasoning(self, agent: str) -> dict:
+        rows = self._q("SELECT e.body FROM events e JOIN sessions s ON s.id=e.session"
+                       " WHERE e.type='model.call' AND json_extract(e.body, '$.role')='main'"
+                       " AND s.agent=? AND COALESCE(s.kind,'') NOT IN ('subagent','scheduled')"
+                       " ORDER BY e.seq DESC LIMIT 1", (agent,))
+        if not rows:
+            return {}
+        body = json.loads(rows[0][0])
+        return body.get("reasoning") or {"requested": "inherit", "sent": None,
+                                         "route": body.get("route", ""), "status": "no override recorded"}
+
     def last_event_seq(self) -> int:
         return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]
 

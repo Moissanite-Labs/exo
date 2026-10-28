@@ -25,6 +25,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Reasoning controls keep principal authorization at the engine boundary, scope the last main-call readout to its agent and top-level threads, and refuse missing HTTP levels without clearing saved preferences.
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last

@@ -216,6 +216,9 @@ class CoreRuntime:
                          context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        from exo.core.reasoning import ReasoningSettings
+        self.reasoning_settings = ReasoningSettings(self.home, self.agent, self.router, authorize=require_principal)
+        self.loop.reasoning_settings = self.reasoning_settings
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._tutorial_line
@@ -784,6 +787,8 @@ class CoreRuntime:
         return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
+        if b.name == "reasoning":
+            return {"output": self.reasoning_settings.command(self, b.args)}
         out = await diagnostics.builtin_command(self, b)
         if out is not diagnostics.MISSING:
             return {"output": out}
