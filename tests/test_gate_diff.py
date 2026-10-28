@@ -767,6 +767,7 @@ def test_a_stop_signal_during_the_cleanup_is_ignored(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="needs SIGHUP")
+@pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="finds the tree processes in /proc")
 def test_a_run_under_nohup_ignores_sighup(tmp_path):
     # nohup starts the script with SIGHUP ignored: a closed terminal must not stop a long run.
     base = _tree(tmp_path, "base")
