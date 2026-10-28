@@ -2219,8 +2219,9 @@ in one of three ways:
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
-Bypass keeps the ask too ("Bypass mode (D-065)"). Before #703 bypass read only the line's category,
-so it ran these calls.
+Bypass keeps the ask too, though it holds a post that breaks the posting rules for its fixes first
+("Bypass mode (D-065)"). Before #703 bypass read only the line's category, so it ran a call such as
+`cat config` with `~/.kube` as `workdir`.
 When `decide` fails on the call for a reason the policy loader does not check, the exo-gate hook's
 fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
 A pattern that does not compile is checked at load now (#466), so it refuses the policy there and
