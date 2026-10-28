@@ -4683,6 +4683,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
   can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
   the ruling as written until the next compaction.
+  *Amendment 2026-10-28 (exo-desktop #52):* an audit of the model transports found more bugs no test caught. Each
+  got a failing test first. Reasoning settings now stay valid on the wire, because a 400 ends the call with no
+  fallback. OpenAI-compatible transports sent Exo's `max` and `ultra` as `"max"`, which OpenAI and OpenRouter
+  refuse. They send `xhigh` now, the top of that scale. A legacy Anthropic model got a 1,024-token thinking budget
+  even when `max_tokens` was 1,024 or less, and the API wants the budget below `max_tokens`. Thinking stays off
+  there now. `docs/CORE-V2-INTERFACES.md` "Core types", "Reasoning levels".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
