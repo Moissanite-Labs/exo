@@ -13,8 +13,10 @@ code or inspect file contents. The repository must already have the relevant sou
 objects. `--snapshot FILE` accepts a saved response from the same GraphQL query, exposed as `QUERY`
 in the script. The report pins the compared base, source head and merge commit for every PR.
 
-For each source-listed path, the audit compares Git object kind, mode and hash against the selected
-base. It distinguishes missing paths, exact matches, changed paths and source deletions. It checks
+For each source-listed path and each path present only on the source branch, the audit compares Git object kind, mode and hash against the selected
+base. Source-only branch paths are included even when inherited from the PR's feature-branch base and
+absent from that PR's own changed-file list. A union reports distinct missing paths across the stack.
+It distinguishes missing paths, exact matches, changed paths and source deletions. It checks
 merge ancestry separately. A merge committed with the `ours` strategy, for example, can be an
 ancestor while its source file is missing; a cherry-picked restoration can match without ancestry.
 Missing objects, shallow history and truncated PR-file pagination make the report incomplete and

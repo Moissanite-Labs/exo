@@ -62,8 +62,12 @@ def audit(repo: Path, base: str, pull_requests: list[dict]) -> dict:
             rows.append(row)
             continue
         row["merge_in_base"] = git(repo, "merge-base", "--is-ancestor", merged, head, missing_ok=True) is not None
-        for file in pr["files"]["nodes"]:
-            path = file["path"]
+        listed = {file["path"] for file in pr["files"]["nodes"]}
+        inherited = git(repo, "diff", "--name-only", "-z", "--diff-filter=A", "--no-renames",
+                        "--no-ext-diff", "--no-textconv", head, source)
+        source_only = {path.decode("utf-8", "surrogateescape") for path in inherited.split(b"\0") if path}
+        row["source_only_branch_paths"] = sorted(source_only)
+        for path in sorted(listed | source_only):
             if not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts or "\x00" in path:
                 raise ValueError("invalid source path")
             wanted, current = entry(repo, source, path), entry(repo, head, path)
@@ -82,6 +86,7 @@ def audit(repo: Path, base: str, pull_requests: list[dict]) -> dict:
         rows.append(row)
     return {"schema": 1, "read_only": True, "complete": complete, "ancestry_complete": not shallow,
             "base_commit": head, "pull_requests": rows,
+            "missing_path_union": sorted({path for row in rows for path in row["missing_source_paths"]}),
             "limits": "Ancestry and listed-path blob comparisons do not prove feature behavior, approved removals or complete integration."}
 
 

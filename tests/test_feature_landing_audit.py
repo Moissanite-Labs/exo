@@ -116,3 +116,18 @@ def test_shallow_history_is_incomplete_even_when_source_objects_exist(repo):
 
 def test_fixed_audit_inventory_matches_the_five_prs_named_in_issue_741():
     assert module.PULL_REQUESTS == (508, 510, 630, 686, 723)
+
+
+def test_feature_branch_inherited_paths_are_checked_even_outside_the_pr_diff(repo):
+    feature(repo)
+    (repo / "base.txt").write_text("repair on top of a feature fixture")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "small repair fixture")
+    source = git(repo, "rev-parse", "HEAD")
+    pr = pull_request(source, source)
+    pr["files"]["nodes"] = [{"path": "base.txt"}]
+    report = module.audit(repo, "main", [pr])
+    row = report["pull_requests"][0]
+    assert row["missing_source_paths"] == ["feature.py"]
+    assert row["source_only_branch_paths"] == ["feature.py"]
+    assert report["missing_path_union"] == ["feature.py"]
