@@ -28,7 +28,12 @@ def _show(cli: Client, envs, as_json: bool, reg=None, relay_pub=None) -> None:
         if as_json:
             print(json.dumps(e, ensure_ascii=False))
         else:
-            print(format_line(e, cli.text(e, reg, relay_pub)))
+            reg = reg if reg is not None else cli.registry()
+            if not e.get("enc") and not cli.signer_of(e, reg):
+                text = "<unverifiable plaintext body>"
+            else:
+                text = cli.text(e, reg, relay_pub)
+            print(format_line(e, text))
 
 
 def build_parser() -> argparse.ArgumentParser:
