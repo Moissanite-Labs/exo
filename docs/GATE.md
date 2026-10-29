@@ -2966,7 +2966,8 @@ A loop body runs again after its own `cd` (#479, #480): in `for i in 1 2; do cp 
 cd ~/.exo/policies; done` the `cp` rewrites the policy file on the second pass. When a `for`, `select`, `while`
 or `until` body (a `coproc` one too), nested loops and the loop's condition included, holds a `cd` or `pushd`
 into the store or a descriptor folder, the call is read a second time with that folder
-entered where the outermost such loop starts (named by the loop's first descriptor `cd`, if any), and the
+entered where the outermost such loop starts (named by the loop's first descriptor `cd` after its first command,
+or by a leading condition `cd` when the loop holds no other store `cd`), and the
 commands and substitutions of the loop on that reading are parts of a second reading beside the first
 (`gate.readings`). That reading leads when it is more severe, so the issue's rows are `store_write`: they ask,
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no

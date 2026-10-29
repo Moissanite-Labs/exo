@@ -3851,7 +3851,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the descriptor rule, which took the condition's folder before the body's, lowered 4,992 pairs on 2,048 of the
   mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
   and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
-  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 10 of its tests fail without the change).
+  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 11 of its tests fail without the change: the six condition rows, the descriptor row and four hook rows).
   *Revisit if:* the same as #479's.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
