@@ -234,6 +234,7 @@ class Call:
     cache_read: int = 0
     cache_write: int = 0
     cost_usd: float | None = None  # from the route's catalog price (or the provider's own figure); None = unknown
+    undercounted: bool = False  # a route in this call stopped on its spend limit: the figure may be short of the real one
 
     @property
     def spent(self) -> bool:
@@ -317,6 +318,11 @@ class TurnTrace:
         priced = [c.cost_usd for c in calls if c.cost_usd is not None]
         return (round(sum(priced), 8) if priced else None), len(calls) - len(priced)
 
+    def undercounted(self) -> int:
+        """Calls whose figure may be short: a route in the call stopped on its spend limit after doing work this turn
+        is not billed for. Counted with the unpriced calls, because the sum cannot be trusted for the same reason."""
+        return sum(1 for x in self.everything() for c in x.calls if c.spent and c.undercounted)
+
     def everything(self) -> list[TurnTrace]:
         return [self, *[x for c in self.children for x in c.everything()]]
 
@@ -332,7 +338,9 @@ class TurnTrace:
     def summary(self) -> dict[str, Any]:
         tools = self.all_tools()
         usd, unpriced = self.cost()
-        return {"cost_usd": usd, "cost": money(usd, unpriced), "unpriced_calls": unpriced,
+        under = self.undercounted()
+        return {"cost_usd": usd, "cost": money(usd, unpriced + under), "unpriced_calls": unpriced,
+                "undercounted_calls": under,
                 "harness_ms": self.harness_ms, "session": self.session, "turn": self.turn_id, "started": self.started, "wall_ms": self.wall_ms,
                 "complete": self.complete, "stop_reason": self.stop_reason, "shown": self.shown,
                 "served": self.served_set(), "model_calls": sum(len(x.calls) for x in self.everything()),
@@ -343,7 +351,8 @@ class TurnTrace:
 
 
 def money(usd: float | None, unpriced: int = 0) -> str:
-    """'$0.0123'; '$0.0123+' when some calls had no price; 'unknown' (never '$0') when none did."""
+    """'$0.0123'; '$0.0123+' when the figure is a floor (a call had no price, or a route hit its spend limit);
+    'unknown' (never '$0') when none did."""
     if usd is None:
         return "unknown"
     return (f"${usd:.4f}" if usd < 1 else f"${usd:.2f}") + ("+" if unpriced else "")
@@ -440,7 +449,8 @@ class _Parse:
             self.recorded.append(Call(b.iteration, b.role, b.requested, b.route, list(b.attempts), b.ttft_ms,
                                       b.total_ms, u.input_tokens if u else 0, u.output_tokens if u else 0,
                                       b.error, self.session, u.cache_read_tokens if u else 0,
-                                      u.cache_write_tokens if u else 0, u.cost_usd if u else None))
+                                      u.cache_write_tokens if u else 0, u.cost_usd if u else None,
+                                      any(a.get("outcome") == "spend_limit" for a in b.attempts)))
         elif isinstance(b, ev.UsageUpdated):
             u = b.usage
             t.tokens_in += u.input_tokens
@@ -624,9 +634,13 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             if a.get("outcome") == "timeout":
                 add(f"model.timeout:{a['route']}", "bug", f"{a['route']} timed out",
                     f"{a.get('error', '')} (after {_fmt_ms(a.get('ms', 0))})".strip())
-            elif a.get("outcome") in ("fallback", "error"):
+            elif a.get("outcome") in ("fallback", "error", "spend_limit"):
                 cool = a.get("cooldown_s")  # the route's circuit breaker opened on this failure
-                add(f"model.fallback:{a['route']}", "bug", f"{a['route']} failed; the call fell back",
+                # A spend limit keeps the `model.fallback` signature on purpose: the route that failed is still the
+                # subject, so a finding filed before this outcome existed reopens instead of reading as fixed.
+                said = (f"{a['route']} is over its provider spend limit; the call fell back"
+                        if a.get("outcome") == "spend_limit" else f"{a['route']} failed; the call fell back")
+                add(f"model.fallback:{a['route']}", "bug", said,
                     str(a.get("error", "")) + (f" (route skipped for {_fmt_ms(cool * 1000)})" if cool else ""))
     for tr in t.tools:
         if tr.is_error:
@@ -678,7 +692,7 @@ def _call_lines(t: TurnTrace, n: int) -> list[str]:
     lines = [f"calls in turn {n}"]
     for x in t.everything():
         for c in x.calls:
-            cost = money(c.cost_usd) if c.spent else "-"
+            cost = money(c.cost_usd, 1 if c.undercounted else 0) if c.spent else "-"
             lines.append(f"  {c.iteration:>2}  {_short(c.route or c.requested):<28} {_fmt_ms(c.total_ms):>9}  "
                          f"in {_k(c.tokens_in)} out {_k(c.tokens_out)} cache r/w {_k(c.cache_read)}/{_k(c.cache_write)}"
                          f"  {cost}" + (f"  [{c.error[:60]}]" if c.error else ""))
@@ -702,7 +716,8 @@ def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
                      f"{_k(t.tokens_in):>6}/{_k(t.tokens_out):<6} {s['cost']:>9}  {len(t.flags) or ''}{end}")
         flags += t.flags
     lines.append("~ = derived from timestamps (session recorded before model.call events); "
-                 "cost = estimate from catalog prices, + = some calls unpriced, unknown = no price")
+                 "cost = estimate from catalog prices, + = some calls unpriced or short (a route hit its spend "
+                 "limit), unknown = no price")
     for i, t in enumerate(turns, 1):
         if t.calls and (calls or t is turns[-1]):
             lines += ["", *_call_lines(t, i)]
@@ -735,5 +750,6 @@ def as_dict(session: str, turns: list[TurnTrace]) -> dict[str, Any]:
         "flag_list": [vars(f) for f in t.flags],
         "call_list": [{"iteration": c.iteration, "route": c.route, "ms": c.total_ms, "tokens_in": c.tokens_in,
                        "tokens_out": c.tokens_out, "cache_read": c.cache_read, "cache_write": c.cache_write,
-                       "cost_usd": c.cost_usd, "cost": money(c.cost_usd) if c.spent else "-", "error": c.error}
+                       "cost_usd": c.cost_usd, "cost": money(c.cost_usd, 1 if c.undercounted else 0) if c.spent else "-",
+                       "undercounted": c.undercounted, "error": c.error}
                       for x in t.everything() for c in x.calls]} for t in turns]}
