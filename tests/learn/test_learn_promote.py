@@ -4,7 +4,7 @@ import re
 import pytest
 
 from exo import eval as E
-from exo.consolidate import consolidate_run, load_state, proposal_accept, proposals_list
+from exo.consolidate import consolidate_run, load_state, proposal_accept, proposal_reject, proposals_list
 from exo.ingest import ingest
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
@@ -161,6 +161,23 @@ def test_rule3_conflict_with_a_guarded_belief_stays_held(learner):
     assert status(learner, older["id"]) == "accepted" and status(learner, res["id"]) == "held"
     q = [e for e in rt.ledger.iter(kind="question") if e["body"].get("type") == "belief_conflict"]
     assert len(q) == 1 and "Default 1" in q[0]["body"]["text"]   # guarded: keep the older one
+
+
+def test_rule3_a_rejected_belief_cannot_route_a_ruling_past_a_guarded_conflict(learner):
+    # #861: the repeated ruling matches the rejected p1 best, but it contradicts the accepted, guarded p2.
+    # It must be held on a question (rule 3), not promoted at once by rule 1 beside the belief it contradicts.
+    rt = learner.runtime
+    ruling(rt, "Use tables with headers, not bullet lists.")
+    (p1,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    proposal_reject(rt.store, rt.ledger, p1, "Not a standing preference", author="principal")
+    ruling(rt, "Use bullet lists, not tables, in public GitHub comments.")
+    (p2,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    proposal_accept(rt.store, rt.ledger, p2, author="principal")
+    ruling(rt, "Use tables with headers, not bullet lists.")
+    (p3,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert d.id == p3 and d.action == "held" and d.rule == 3
+    assert [status(learner, p) for p in (p1, p2, p3)] == ["rejected", "accepted", "held"]
 
 
 def test_rule4_two_sessions_high_weight_auto_promotes(learner):
