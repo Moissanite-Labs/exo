@@ -283,8 +283,14 @@ not move the backoff on. So a long core restart never turns a core command into 
 as soon as the core answers. An older core that answers `unknown_command` or `unsupported` for `commands.list` also
 counts as an answer (`core` is `[]`); a core-only name the page then cannot know goes as a message.
 A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
-a finished job, open findings, a slow turn, a long thread). A failed call reads its own error: a refusal (401 or 403, an invalid or missing key, a permission denial) may
-point at the Providers page, a transport failure says the model could not be reached and offers no key advice, and an error that reads as neither points at `/trace` (D-092), one new line per 25 seconds at most, off when the core
+a finished job, open findings, a slow turn, a long thread). A failed call reads its own error and the errors of its
+attempts, since a failure before any output ends as "all routes for 'main' failed or are cooling down" and its cause
+is only in the attempts (#855). A refusal (`HTTP 401` or `HTTP 403`, an invalid or missing key, a permission denial,
+the router's "rejected the key", "refused the login" or "no credentials for role") may point at the Providers page.
+A transport failure (`ReadError`, `ReadTimeout`, `ConnectError` and the like) says the model could not be reached,
+offers no key advice, and Tab fills in `/trace`. An error that reads as neither, a spend limit included, points at
+`/trace` (D-092). Each of the three keeps its own count of two a session. The line shows one new tip per 25 seconds
+at most, and it is off when the core
 config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
 yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back; an
 unset key, which the core answers with `not_found`, is on, and the asking ends once both answers are in),
