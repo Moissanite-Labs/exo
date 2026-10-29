@@ -2035,7 +2035,22 @@ read stops the run with exit 2, since its entries get no lines. The secret path,
 get a string for each alternative. Any other regex alternative or helper pattern is seen only where a test or a seed
 names it. The check also does not see the stores the environment moves, session folders beyond the ones it generates,
 names and keys the gate reads outside its tables unless a test names them, files and links in HOME beyond its own,
-or the hook steps after `decide` (developer guide §7, "Checking a gate change against main").
+or the hook steps after `decide` other than the four below (developer guide §7, "Checking a gate change against
+main").
+
+Since #551 the check also covers three things it missed. Six long budget lines run with the suites' lines, also under
+`--no-variants`: they spend the gate's shared fail-closed budgets of one classify call (past 64 store folders, past
+the join budget of the Exo-store check, also across two nested lines, and past the brace budget for a read and a
+write). Each asks on main only because its budget is spent, so a change that lets such a line through once a budget
+is spent shows as lowered. An outcome `decide` returns that is not `allow`, `log`, `ask` or `deny` (a misspelt
+`"Ask"`, a `"block"`) is one the hook runs (when the decision model gives a verdict, it errs to its ask card instead), so the check
+ranks it as `allow` in the changed tree. And at the same outcome below `deny` it compares four checks the hook makes
+after `decide`: the once rule (`no_grant`), a post body the gate did not see (`body_unseen`), an approval bound to the
+exact call (`binds_exact`), and a reserved hit on a part other than the line's own (which keeps a standing grant from
+covering it). A change that drops one is lowered. When the changed tree's call ends on the hook's error card, which
+is once-only, it loses none of these and no reserved hit.
+Other limits (the per-word brace cap, the inspection depth, the nesting and hop caps) are covered only where a test
+line reaches them.
 
 Known limits. Each one is true of main today; where a fix is open, its PR is named.
 
