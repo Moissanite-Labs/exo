@@ -122,6 +122,15 @@ asked-time), and shown once. `/context` uses typed token counts (`command.run`,
 `args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
 private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
 
+## Delegated approvals (#889)
+
+A parent conversation shows a separate delegated-approval cue and a labeled Open button when an active task
+or its nested tasks need approval. The parent may still be working in parallel. Open navigates to the child's
+own approval card; returning restores the parent's draft. It does not answer the card or grant the child any
+permissions. Ordinary forks and unrelated conversations are excluded. Task snapshots and events establish
+these relationships, and terminal tasks remove them. If task retrieval fails, the last known graph remains;
+the Command page still lists global pending approvals.
+
 ## Content-Security-Policy (#162)
 
 The page builds every node with `h()` and text nodes, never `innerHTML`, so model text cannot become markup. That
