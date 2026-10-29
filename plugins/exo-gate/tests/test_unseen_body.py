@@ -289,6 +289,15 @@ def test_the_card_says_the_file_was_not_read(store, work):
 @pytest.mark.parametrize("line", [
     "cd /tmp && gh pr create -R myorg/app --title \"$T\" --body-file {work}/clean.md",
     "cd /tmp && gh pr comment 5 -R myorg/app --body-file {work}/clean.md --body-file {work}/clean.md",
+    # a writer in a ${..} word on the post's own command, which bash runs before gh (#143, #158): the word is
+    # another part, and a dynamic word on the post
+    P + " ${{x:-$(cp {work}/notes.md {work}/clean.md)}}",
+    # the same post and word in an `env -S` text (#591) and a sudo -s or -i shell's stdin (#491), which main
+    # f28934a3 reads beside this PR's two readings (merge of f28934a3): both notes stay on the card
+    "env -S '" + P + " ${{x:-$(cp {work}/notes.md {work}/clean.md)}}'",
+    "env --split='" + P + " ${{x:-$(cp {work}/notes.md {work}/clean.md)}}'",
+    "sudo -s <<< '" + P + " ${{x:-$(cp {work}/notes.md {work}/clean.md)}}'",
+    "sudo -i <<'END'\n" + P + " ${{x:-$(cp {work}/notes.md {work}/clean.md)}}\nEND",
 ])
 def test_a_post_also_unseen_otherwise_keeps_the_plain_note(store, work, line):
     # The file is left unread for the line, and the post is also unseen for a reason it keeps alone on its line (a
