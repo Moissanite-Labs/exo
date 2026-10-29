@@ -118,6 +118,21 @@ def test_providers_search_saves_exact_default_only_after_enter(page):
     page.wait('document.querySelector(".xc-model-status").textContent.includes("Default set")')
 
 
+def test_providers_keeps_the_search_and_focus_across_the_refresh_after_a_save(page):
+    mount_view(page, 'providers')
+    page.wait('!!document.querySelector(".xc-prov-def [role=combobox]")')
+    page.eval('window.el0 = document.querySelector(".xc-prov-def [role=combobox]")')
+    search(page, 'beta sonnet')
+    key(page, 'Enter')
+    page.wait('document.querySelector(".xc-prov-def .xc-prov-res") !== null')
+    # The refresh that follows a save must not rebuild the picker: same field, same query, same focus.
+    assert page.eval('document.querySelector(".xc-prov-def [role=combobox]") === window.el0')
+    assert page.eval('document.querySelector(".xc-prov-def [role=combobox]").value') == 'beta sonnet'
+    assert page.eval('document.activeElement === window.el0')
+    assert page.eval('document.querySelector(".xc-prov-def .xc-prov-res").textContent') == 'Default set to beta:sonnet.'
+    assert page.eval('document.querySelectorAll(".xc-prov-def [role=combobox]").length') == 1
+
+
 def command(page, text):
     page.eval('(()=>{const input=document.querySelector(".xc-input");input.value=' + repr(text) + ';input.dispatchEvent(new Event("input"));document.querySelector(".xc-composer .xc-btnrow button").click()})()')
 
