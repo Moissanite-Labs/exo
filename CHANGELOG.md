@@ -13,6 +13,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
   web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
   names the Chrome binary and version it drove.
+- Extract the existing policy YAML reader behind the gate facade, retaining legacy parser/error names and removing three type diagnostics (#257). The wider gate split remains a draft.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It

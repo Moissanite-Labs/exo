@@ -4224,6 +4224,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+- **Draft extraction 2026-10-29 (#257):** the policy YAML subset moves into `exo.gate_yaml`, with every existing reader/helper and `PolicyError` re-exported through `exo.gate`. Parsing rules remain unchanged; separate typed list/map locals remove three diagnostics. Lexer, classification, decisions and handler dispatch are not split. Independent security review and the broader decision hold remain required before landing.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
