@@ -14,6 +14,7 @@ this map names does not exist. The full rule, with steps, is in `docs/DEVELOPER-
 
 | Layer | Reader | Depth | Where |
 |---|---|---|---|
+| D-040 derived bus recipient index (#263) | `src/exo/bus/store.py`, `tests/bus/test_recipient_index.py`, `DECISIONS.md` D-040 | n/a (same inbox) | n/a (internal index) | n/a |
 | Whitepaper | A smart person who is not an expert | Why Exo exists and how it works, with no code. | `docs/WHITEPAPER.md`, `site/whitepaper` |
 | User guide | Someone using Exo | Tasks and commands. What to type, what you will see. | `docs/USER-GUIDE.md` |
 | Developer guide | Someone extending Exo | How to add a tool, plugin, seat, skill or command, test it and land it. | `docs/DEVELOPER-GUIDE.md` |
