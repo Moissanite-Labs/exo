@@ -280,17 +280,81 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
     assert (c.category, gate.decide(c, DENY).outcome) == ("read", "allow"), (line, c.category)
 
 
-# A known limit too: `_parse` does not open a compound behind `time`, so such a loop has no second reading. It asks as
-# `opaque_exec` and `deny: [store_write]` does not deny it, as on main f28934a3 (the hook's bypass auto-allows it there
-# too; docs/GATE.md says so).
-@pytest.mark.parametrize("line", [
-    "time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
-    "time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+# #853: `time` is a reserved word: every word after it stays in command position, so a loop behind it is the same
+# loop bash runs. Its body is read with no `time` in front (the reading `for`/`while` get on their own), so the store
+# write the loop's second pass makes is read and `deny: [store_write]` denies it. `!` composes with both spellings,
+# and stacked `time`s and `time`'s own options read alike. Main read the whole line as one program name it could not
+# see into (`opaque_exec`, ask); that reading is kept as a part beside the body's, so no rule that names the category
+# decides looser than it did on main, while a deny on a part read inside the loop still wins (review on #869).
+@pytest.mark.parametrize("line,plain", [
+    ("time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("time -p for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("time -o /tmp/t.log while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("time time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("! time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("! time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
+    ("time ! time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+     "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
 ])
-def test_a_loop_behind_time_is_a_known_limit(line):
+def test_a_loop_behind_time_is_read_inside_and_keeps_main_s_reading(line, plain):
+    c, base = _bash(line), _bash(plain)
+    # the body is read: its store write is a part of the line, and a deny on it still denies
+    assert _store_write_part(c), line
+    assert gate.decide(c, DENY).outcome == gate.decide(base, DENY).outcome == "deny", line
+    # and the one unseen program main read is kept as a part, so the line keeps its category and its ask
+    assert (c.category, gate.decide(c).outcome) == ("opaque_exec", "ask"), line
+
+
+# Review 5692953980 on #869: `time !` compounds. A `!` after `time` leaves the program main could not see into (the
+# whole compound) as a part of the line, exactly as `time X` does, so a policy written against main's `opaque_exec`
+# reading still reaches the line: the category deny, the deny list and the reserved hit all hold, and only the
+# stricter part read inside the body can change the outcome. bash runs every line here (`bash -n`, 5.2.21).
+@pytest.mark.parametrize("line,category", [
+    ("time ! for i in 1 2; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "opaque_exec"),
+    ("time ! while :; do :; done", "opaque_exec"),
+    ("time ! { rm -rf /srv/data; }", "delete"),
+    ("time -p ! { rm -rf /srv/data; }", "delete"),
+    ("time ! { git push --force origin main; }", "force_push"),
+    ("time ! { cat ~/.ssh/id_rsa; }", "credentials"),
+])
+def test_a_compound_behind_time_bang_keeps_main_s_policy_effects(line, category):
     c = _bash(line)
-    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == ("opaque_exec", "ask", "ask"), line
-    assert c.also is None and not _store_write_part(c), line
+    assert (c.category, gate.decide(c).outcome) == (category, "ask"), line
+    # the part main read as one unseen program is still a part, so a policy on the category still reaches the line
+    assert gate.decide(c, _pol(**{"categories": {"opaque_exec": "deny"}})).outcome == "deny", line
+    assert gate.decide(c, _pol(deny=["opaque_exec"])).outcome == "deny", line
+    reserved = gate.decide(c, _pol(reserved=["opaque_exec"]))
+    assert (reserved.outcome, [r[0] for r in reserved.reserved]) == ("ask", ["opaque_exec"]), line
+
+
+# The prefix stays transparent for the rest of the corpus: a `time`, in every spelling, in front of a command whose
+# reading main settled keeps that reading, so nothing this change reads is looser than main.
+@pytest.mark.parametrize("line,category,outcome", [
+    ("time ls /tmp", "read", "allow"),
+    ("time -p ls /tmp", "read", "allow"),
+    ("time rm -rf /tmp/evil", "delete", "ask"),
+    ("time cd ~/.exo/policies", "read", "allow"),      # a `cd` into the store is a read on its own, as on main
+    ("time cat ~/.exo/state/credentials/canary.json", "credentials", "ask"),
+    # main read both as one program name it cannot see into and asked; the fix reads the body too and keeps that
+    # reading as a part, since lowering it would be a looser decision than main's
+    ("time for i in 1 2; do cp /tmp/evil gates.yaml; done", "opaque_exec", "ask"),
+    ("time while :; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "opaque_exec", "ask"),
+    ("time sudo rm -rf /tmp/evil", "delete", "ask"),
+    ("time X=1 cp /tmp/evil gates.yaml", "shell", "allow"),
+    ("time env FOO=1 rm -rf /tmp/evil", "delete", "ask"),
+    ("time nohup while :; do cd ~/.exo/policies; done", "opaque_exec", "ask"),
+])
+def test_a_time_prefix_keeps_the_reading_of_the_command_behind_it(line, category, outcome):
+    c = _bash(line)
+    assert (c.category, gate.decide(c).outcome) == (category, outcome), line
 
 
 # Review 5689293944 on #838: headers the gate's lexer reads apart from bash, which decide as on main 3570be0e. In

@@ -2092,11 +2092,21 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   inspection depth (above); `eval $(...)` and `eval "$(...)"`; a command arriving on stdin,
   `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the body of
-  `time { ...; }` and of `time for x do ...; done`; and the wrapper forms #160 left unread, such as
+  the wrapper forms #160 left unread, such as
   `su -c`, `runuser`, `bwrap`, tmux's `if-shell` and `send-keys`, and `parallel` with no template
-  ("Known limit (#160)" below lists more of them). These are examples, not a complete list. After
-  `time` the gate does not read `{` or `for` as a reserved word, so either is an unknown program
-  there. The body of `time for x; do ...; done` is read.
+  ("Known limit (#160)" below lists more of them). These are examples, not a complete list.
+- **`time` keeps the word after it in command position (#853).** `time`, `time -p`, `time --` and
+  `!` are prefixes, so what follows them is read as it would be without them: `time { ...; }` and
+  `time for x do ...; done` now have their bodies read and denied or asked for what is inside them.
+  The prefix does not hide a command: `time cat ~/.exo/state/credentials/x.json` asks as
+  credentials, and `time cd ~/.exo/policies` reads as a `cd`. `time -o FILE` and `time -f FMT` are
+  not options of the reserved word, they belong to an external `time` program, and a compound after
+  them does not parse (`bash -n` exits 2 under Bash 3.2.57); the gate still keeps the prefix open
+  past their value so such a line is read like the valid spelling rather than misread as a program
+  named `-o`. Before #853 a compound here read as `opaque_exec` and asked. A compound head behind
+  `time` now keeps that reading as an `opaque_exec` part beside the parts read below, so no rule that
+  names the category decides looser than before, while a store write found inside the loop still
+  denies.
 - **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
   action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule

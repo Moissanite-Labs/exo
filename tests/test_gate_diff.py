@@ -513,6 +513,10 @@ def _blind_by_design(entry: tuple, t: dict) -> str:
         return "a prefix of a longer option of the wrapper, which _wrapper_args then reads it as"
     if table == "_SENSITIVE_SAMPLES" and "/" in key and re.search(t["_SENSITIVE_PATH"], "/" + key.rpartition("/")[0] + "/"):
         return "its folder is a secret store by _SENSITIVE_PATH"
+    if table == "_PREFIXES" and key == "time" and not item:
+        return ("a reserved word: _time_prefix reads the keyword form before the prefix loop, so its own form decides "
+                "the same without the entry; the entry is load-bearing through its -o and -f items, which have forms "
+                "of their own (#853)")
     if table == "_STORE_FOLDERS" and key == ".config/netlify":
         return "the folded Netlify name is a store by itself (#601), so the folder's pair adds no form of its own"
     if table == "TOOLS" and key in t["tool_names"]:

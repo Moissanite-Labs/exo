@@ -1391,6 +1391,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     shut_met = 0            # the subs met by the closer of shut
     loop = None             # the reserved word `for` or `select` that opened the latest loop
     lead = True             # every word of cur so far is a reserved word
+    tst = "open"            # #853: cur's words as _time_lead reads them, kept word by word (O(1) a token)
     head, pre = True, 0     # the next word is in command position, as with lead and also after `coproc [NAME]`,
                             # `function NAME` and reserved words after them. Only `do` uses it (#436). pre is where
                             # cur's words after its latest leading reserved words start
@@ -1404,7 +1405,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
+        nonlocal cur, shut, lead, tst, head, o_first, o_body, o_end, o_tok, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         at = o_first if o_body < 0 else o_body
@@ -1420,7 +1421,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         # the next command's pipeline starts here, or where this one's did; a compound before it has no such text.
         # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
         p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
-        cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, True
+        cur, shut, lead, tst, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, \
+            "open", True
         o_first = o_body = o_end = o_tok = -1
 
     def push(entry: tuple) -> None:
@@ -1484,9 +1486,14 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             (a, o_end), o_tok = marks[i], i
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
+            # #853: `time` is a reserved word, so a loop header may sit behind it (`time while ..; do ..; done`
+            # runs the loop) and the words after it stay in command position. Read from cur's words, since after
+            # `time -o` the option's value comes first and the prefix is still open past it. tst holds that
+            # reading word by word, as _time_lead(cur.words) would give it.
+            lead = tst in ("open", "opts")
             if not v.quoted and v.text == "do" and len(cur.words) > 1 and cur.words[-2] is loop:
                 end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
-            cw = not v.quoted and _command_word(cur.words, head, pre)
+            cw = not v.quoted and _command_word(cur.words, lead or head, pre)
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
             if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
                 ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
@@ -1497,10 +1504,11 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     j = max((tops[o][-1] for o in _COMPOUND_CLOSERS[v.text] if tops.get(o)), default=-1)
                     if j >= 0:
                         close(j)
-            lead = lead and not v.quoted and v.text in _OPENERS
             pre, head = (len(cur.words) if head else pre), cw and v.text in _OPENERS
             (a, o_end), o_tok = marks[i], i
-            o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 and not lead else o_body)
+            tst = _time_step(v, tst)
+            o_first, o_body = (a if o_first < 0 else o_first), \
+                (a if o_body < 0 and tst in ("stop", "value") else o_body)
             cur.words.append(v)
             if after is not None:
                 after.operands.append(v)
@@ -1522,6 +1530,80 @@ _PREFIXES = {"sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"
              "caffeinate": {"-t", "-w"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
              "stdbuf": {"-i", "-o", "-e"}}
 _OPENERS = {"if", "then", "elif", "else", "do", "while", "until", "{", "}", "!", "fi", "done", "esac"}
+# Reserved words that open a compound the parser reads as several commands; after a `time` keyword one of these is
+# not a command word, so #853's strip leaves that line to the reading it had before (#869 review).
+_COMPOUND_HEADS = frozenset({"if", "case", "for", "while", "until", "select", "function", "coproc"})
+
+
+def _time_prefix(words: list) -> int:
+    """#853: how many words a `time` keyword at the start takes with its options, or 0 when they do not start with
+    one. `time` is a reserved word, so what follows it is in command position and bash runs a loop there
+    (`time while read l; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done`), where after an ordinary prefix
+    command such as `nohup` or `env X=1` a loop is a syntax error. `-p` and `--` take no value, `-o` and `-f` do
+    (_PREFIXES)."""
+    if not words or words[0].quoted or words[0].text != "time":
+        return 0
+    i = 0
+    while i < len(words) and not words[i].quoted and words[i].text == "time":
+        i += 1
+        while i < len(words):
+            w = words[i]
+            if w.quoted or w.text == "-" or not w.text.startswith("-"):
+                break
+            if w.text in _PREFIXES["time"]:                   # -o FILE, -f FORMAT: the value is the next word
+                if i + 1 >= len(words) or (not words[i + 1].quoted and words[i + 1].text.startswith("-")):
+                    break
+                i += 2
+            else:
+                i += 1
+    return i
+
+
+def _time_words(words: list) -> int:
+    """How many words from the start are reserved words or a `time` keyword with its options, in any order and
+    repeated (`time while ..`, `! time while ..`, `time -o FILE while ..`, `time ! time while ..`), so the words
+    after them are in command position as they would be after none of them (#853)."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if not w.quoted and w.text in _OPENERS:
+            i += 1
+        elif n := _time_prefix(words[i:]):
+            i += n
+        else:
+            break
+    return i
+
+
+def _time_value(words: list) -> bool:
+    """Whether these words end waiting for the value of `time`'s -o or -f (`time -o`), so the next word is that
+    value and not a command word: `time -o if ..` writes to a file named `if` (#853)."""
+    return (_time_words(words) == len(words) and bool(words) and not words[-1].quoted
+            and words[-1].text in _PREFIXES["time"])
+
+
+def _time_lead(words: list) -> bool:
+    """Whether the next word after these is in command position (#853)."""
+    return _time_words(words) == len(words) and not _time_value(words)
+
+
+def _time_step(w: _Word, st: str) -> str:
+    """#853: the parser's own state for _time_lead, advanced one word at a time so a run of thousands of
+    openers stays linear. `open` is no prefix yet, `opts` a `time` keyword with its options, `value` a word
+    after `-o` or `-f` that is its value, and `stop` a word that is no prefix word, which ends the prefix for
+    good. It reads the same words _time_words does: a reserved word anywhere, a repeated `time`, `-o`/`-f`
+    with a value, and after a prefix ends on a word in command position that word opens a compound as any
+    other does (`time -p while ..; do ..; done`)."""
+    if st == "stop":
+        return st
+    if st == "value":
+        # `time -o FILE`: any word is the value, except a word that reads as another option (`time -o -p ls`)
+        return "opts" if w.quoted or w.text == "-" or not w.text.startswith("-") else "stop"
+    if not w.quoted and w.text == "time":
+        return "opts"
+    if st == "opts" and not w.quoted and w.text != "-" and w.text.startswith("-"):
+        return "value" if w.text in _PREFIXES["time"] else "opts"
+    return "open" if not w.quoted and w.text in _OPENERS else "stop"
 # openers that may follow a `coproc` or `function` NAME (`( list )` is split by the lexer and never a word)
 _COMPOUND = frozenset({"{", "while", "until", "if", "for", "case", "select", "[["})
 _SYSTEM_BIN = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin", "/usr/sbin",
@@ -4216,8 +4298,28 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
     words = list(k.words)
-    while words and not words[0].quoted and words[0].text in _OPENERS:
-        words = words[1:]
+    # #853: `time` is a reserved word, so a loop header may follow it (`time while ..; do ..; done`); read the line
+    # as the command time runs, once its own options are off, so the header and the opener strip below see it. It
+    # comes after openers too, since `! time while ..` and `!` keep every word after it in command position.
+    blind = None                     # the head of a compound behind `time`: main read it as one unseen program
+    while words:
+        if not words[0].quoted and words[0].text in _OPENERS:
+            words = words[1:]
+        elif n := _time_prefix(words):
+            rest = words[n:]
+            if rest and not rest[0].quoted and (rest[0].text in _COMPOUND_HEADS or rest[0].text in ("{", "(")):
+                # #853 review: bash runs a compound after `time` (`time for x in a; do :; done`), and before #853
+                # the gate read that compound as one program name it cannot see into, so the line asked. That
+                # reading is kept beside the parts read below, so the line never decides looser than main.
+                blind = blind or rest[0]
+            elif rest and not rest[0].quoted and rest[0].text == "!":
+                # #853 review: main stopped at `!` after `time` and read the `!` itself as the program name, so it
+                # read the whole line as one program it cannot see into (`time ! for i in 1 2; do ..; done` asked
+                # where the parts read below allowed). Keep that reading beside the parts read below.
+                blind = blind or rest[0]
+            words = words[n:]
+        else:
+            break
     loop: list[Classification] = []
     if words and not words[0].quoted and words[0].text == "for":
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
@@ -4229,6 +4331,16 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     sudos: list = []                            # each sudo or doas on the way (#491)
     words, sudo, split = _strip_prefix_words(words, sudos=sudos)
     parts: list[Classification] = []
+    if blind is not None:
+        # #853 review: main read this line as one program name it cannot see into, so it read it as opaque_exec. That
+        # reading is kept as a part, beside the parts read below, so the line never decides looser than main under any
+        # rule that names the category (a `categories` level, or a deny on opaque_exec). A deny on a part read below
+        # still outranks it, so a loop body that writes the store denies as it should.
+        part_blind = _opaque(f"{blind.text} behind time reads as one program name", cmd,
+                             signal="unknown program")
+        part_blind.signals.append("indirection")   # main's reading signed it both ways on some lines
+        parts.append(part_blind)
+        blind = None
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
         # one is gone from here on (#579)
@@ -6407,13 +6519,20 @@ _LOOP_WORDS = frozenset({"while", "until", "for", "select"})
 
 
 def _loop_word(k: _Cmd) -> int:
-    """Where the `while`, `until`, `for` or `select` is among the reserved words k starts with (`do for x in ..`), or
-    after a `coproc [NAME]` or `function NAME` that starts k, where _parse opens a compound too; or -1."""
-    for i, w in enumerate(k.words):
-        if w.quoted or not (w.text in _OPENERS or w.text in _LOOP_WORDS):
-            break
-        if w.text in _LOOP_WORDS:
+    """Where the `while`, `until`, `for` or `select` is among the reserved words k starts with (`do for x in ..`,
+    after a `time` keyword and its options, `time while ..; do ..; done`, #853), or after a `coproc [NAME]` or
+    `function NAME` that starts k, where _parse opens a compound too; or -1."""
+    i = 0
+    while i < len(k.words):
+        w = k.words[i]
+        if not w.quoted and w.text in _LOOP_WORDS:
             return i
+        if not w.quoted and w.text in _OPENERS:
+            i += 1
+        elif n := (0 if w.quoted else _time_prefix(k.words[i:])):
+            i += n
+        else:
+            break
     first = k.words[0] if k.words else None
     if first is not None and not first.quoted and first.text in ("coproc", "function"):
         return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
