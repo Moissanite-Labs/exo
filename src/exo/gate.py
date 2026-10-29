@@ -512,6 +512,37 @@ class _Cmd:
     arith_for: int = -1          # on a `{` right after a `for ((..))` header: the command that holds that `for` (#479)
 
 
+class _UnreadDenyHint(str):
+    """Internal-only candidate category, distinct from any equal-looking raw text."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _UnreadDenyHint) and str(self) == str(other)
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((_UnreadDenyHint, str(self)))
+
+
+_UNREAD_COMMAND = re.compile(r"(?:^|[();|&\n`])[ \t]*(?:sudo[ \t]+)?(?:(?P<rm>rm)\b|git[ \t]+(?P<push>push)\b)(?P<args>[^\n;|&()]*)")
+
+
+def _unread_deny_hints(text: str) -> list[str]:
+    """One linear scan, at most one candidate each for delete and force_push.
+
+    Not a shell parser: candidates can overmatch quoted data in an unread span.
+    They only add conservative parts beside the original unread/ask part.
+    """
+    categories = set()
+    for match in _UNREAD_COMMAND.finditer(text):
+        if match['rm']:
+            categories.add('delete')
+        elif re.search(r"(?:^|[ \t])(?:-f|--force(?:-with-lease)?)(?:[= \t]|$)", match['args']):
+            categories.add('force_push')
+    return [_UnreadDenyHint(category) for category in sorted(categories)]
+
+
 class _OutSub(str):
     """The source of a >( ). Its commands are fed what the command around it writes, a stdin the gate cannot read
     (#316). It stays in the line's substitution sources with the others, so every reader of them still reads it, and
@@ -604,6 +635,7 @@ class _Lexer:
         ends = "".join("\n" + (hd.cut or hd.delim) for hd in read) + "\n" if read else ""
         self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ends + ")"))
         self.subs.append(_TOO_DEEP)
+        self.subs.extend(_unread_deny_hints(s[a + 2:max(a + 2, b - 1)]))
         w.text += "<(..)" if s[a] in "<>" else "$(" + s[a + 2:max(a + 2, b - 1)] + ")"
         w.dynamic = w.started = w.split = True       # not read, so it may be outside double quotes
         self.i = b
@@ -6885,6 +6917,9 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     the mark names one line, and reading that line spends it. A line with a `$` form split by a backslash-newline is
     noted for classify, and on its joined reading (_joining, #584) read joined, a line read again from a word
     (`bash -c`, eval, ssh, a backquoted body) too."""
+    if isinstance(cmd, _UnreadDenyHint):
+        return _make(str(cmd), summary=f"unread span may contain {cmd}", command="", own=None,
+                     signals=["indirection", "unread span candidate"])
     joining = _joining.get()
     if joining is not None and cmd and (line := _join_dollars(cmd)) != cmd:
         joining[1] = True
@@ -7171,6 +7206,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         if into[1]:
             ctx["fd_cwd"] = into[1]
     parts: list[Classification] = []
+    if any(isinstance(sub, _UnreadDenyHint) for sub in subs):
+        # Preserve the original whole-line opaque command context: category/command
+        # reserved and deny entries must not disappear when a candidate leads.
+        guard = _unread_nest()
+        guard.command = cmd
+        parts.append(guard)
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
     # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run

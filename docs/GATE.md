@@ -3507,3 +3507,10 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Unread-span deny candidates (#477)
+
+Recognized destructive words in an unread deep nesting span retain delete/force-push category denies. The existing unknown/ask part stays. This is a conservative candidate scan, not a replacement shell parser; other categories and wrappers remain outside the slice.
+
+Unread candidate parts also retain the original whole-line opaque command context,
+so old command-keyed deny/reserved hits are preserved when the candidate leads.
