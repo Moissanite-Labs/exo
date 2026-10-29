@@ -291,6 +291,20 @@ def sigs(t, **limits):
     return {f.signature for f in trace.detect(t, Thresholds(**limits) if limits else TH)}
 
 
+def test_a_spend_limit_attempt_is_marked_a_floor_and_still_flagged_as_a_fallback():
+    """A route that stopped on its spend limit did work nobody bills this turn. The call's figure is a floor, so it
+    carries the "+" an unpriced call carries, is counted apart (#848, D-093), and keeps the model.fallback signature a
+    finding filed before this outcome existed already uses."""
+    c = Call(route="free:m", tokens_in=100, tokens_out=10, cost_usd=0.0,
+             attempts=[{"route": "paid:m", "outcome": "spend_limit", "error": "HTTP 402: key_spend_limit_reached"},
+                       {"route": "free:m", "outcome": "ok"}], undercounted=True)
+    t = tt(calls=[c])
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["unpriced_calls"] == 0
+    assert t.summary()["cost"] == "$0.0000+"
+    (f,) = [f for f in trace.detect(t, TH) if f.signature == "model.fallback:paid:m"]
+    assert f.title == "paid:m is over its provider spend limit; the call fell back"
+
+
 def test_rule_turn_slow_and_threshold_from_config():
     assert "turn.slow" not in sigs(tt(wall_ms=29_000))
     assert "turn.slow" in sigs(tt(wall_ms=31_000))

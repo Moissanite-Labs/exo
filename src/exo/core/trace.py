@@ -634,9 +634,13 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             if a.get("outcome") == "timeout":
                 add(f"model.timeout:{a['route']}", "bug", f"{a['route']} timed out",
                     f"{a.get('error', '')} (after {_fmt_ms(a.get('ms', 0))})".strip())
-            elif a.get("outcome") in ("fallback", "error"):
+            elif a.get("outcome") in ("fallback", "error", "spend_limit"):
                 cool = a.get("cooldown_s")  # the route's circuit breaker opened on this failure
-                add(f"model.fallback:{a['route']}", "bug", f"{a['route']} failed; the call fell back",
+                # A spend limit keeps the `model.fallback` signature on purpose: the route that failed is still the
+                # subject, so a finding filed before this outcome existed reopens instead of reading as fixed.
+                said = (f"{a['route']} is over its provider spend limit; the call fell back"
+                        if a.get("outcome") == "spend_limit" else f"{a['route']} failed; the call fell back")
+                add(f"model.fallback:{a['route']}", "bug", said,
                     str(a.get("error", "")) + (f" (route skipped for {_fmt_ms(cool * 1000)})" if cool else ""))
     for tr in t.tools:
         if tr.is_error:
