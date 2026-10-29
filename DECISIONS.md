@@ -6258,3 +6258,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 literal relative target amendment — 2026-10-29 (#481)
+
+For the bounded literal-folder slice, `_cd_store_read`'s relative credential name
+retains its written target and gains a resolved secret-path part for each literal
+folder the existing walk found (at most64). The existing lead/category, descriptor
+paths and relative-target policies remain intact. No filesystem content is read.
+Globs, dynamic folders and wider candidate resolution remain outside this slice.
+The 14,155 by88 harvested differential against080e87ba has no lowerings or errors.
