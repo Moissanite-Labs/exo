@@ -13,6 +13,7 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 import { attachPaneLayout } from "./pane_layout.js";
+import { runGuidance } from "./run_state.js";
 
 export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
@@ -71,6 +72,8 @@ export function mount(root) {
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
+  const guidanceEl = h("div", { class: "xc-guidance", role: "status", "aria-live": "polite" });
+  let guidanceShown = "";
   const sideEl = h("aside", { class: "xc-side" });
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
@@ -478,7 +481,13 @@ export function mount(root) {
     if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
     out.push(confirmedBusy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
-    statusEl.replaceChildren(...out);
+    if (guidanceEl.parentNode !== statusEl) statusEl.appendChild(guidanceEl);
+    for (const child of Array.from(statusEl.childNodes)) if (child !== guidanceEl) child.remove();
+    for (const child of out) statusEl.insertBefore(child, guidanceEl);
+    // Persistent guidance: the element never leaves the strip; only a real state change changes its
+    // text, so repeated drawStatus() calls for token telemetry do not re-announce it.
+    const guidance = runGuidance({ connected: coreUsable, webUsable, coreState, stale: !activityFresh, loading, approval: waitingForApproval(current), busy });
+    if (guidance !== guidanceShown) { guidanceShown = guidance; guidanceEl.textContent = guidance; }
     stopBtn.disabled = !busy || !current || coreState === "unavailable";
     stopBtn.textContent = busy && !confirmedBusy ? "Try stop" : "Stop";
     sendBtn.disabled = !coreUsable || !activityFresh;

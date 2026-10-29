@@ -13,7 +13,7 @@ NODE = shutil.which("node")
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_context_estimate_and_capacity_have_distinct_owned_states(tmp_path):
-    for name in ("chat", "chat_state", "approvals", "markdown", "model_picker"):
+    for name in ("chat", "chat_state", "approvals", "markdown", "model_picker", "run_state"):
         if name == "approvals" and not (STATIC / "approvals.js").exists():
             continue  # older chat embeds approval handling; newer chat imports the actual controller
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
@@ -23,9 +23,11 @@ export class El {
   contains(node){return node===this || this.children.some(x=>x instanceof El && x.contains(node));}
   replaceChildren(...xs){this.children=xs.flat(Infinity).filter(x=>x!=null);}
   append(...xs){this.children.push(...xs.flat(Infinity).filter(x=>x!=null));}
-  appendChild(x){this.append(x);} prepend(x){this.children.unshift(x);}
+  get childNodes(){return this.children;}
+  appendChild(x){this.append(x);x.parentNode=this;}
+  insertBefore(x,ref){this.children.splice(this.children.indexOf(ref),0,x);x.parentNode=this;} prepend(x){this.children.unshift(x);}
   setAttribute(k,v){this.attrs[k]=v;} addEventListener(k,f){this.listeners[k]=f;}
-  dispatchEvent(){} setSelectionRange(){} focus(){} remove(){}
+  dispatchEvent(){} setSelectionRange(){} focus(){} remove(){if(this.parentNode){const p=this.parentNode;p.children=p.children.filter(x=>x!==this);this.parentNode=null;}}
   set textContent(v){this.children=[v];} get textContent(){return this.children.map(x=>x instanceof El?x.textContent:String(x)).join("");}
 }
 export const h=(t,a,...c)=>new El(t,a,c);

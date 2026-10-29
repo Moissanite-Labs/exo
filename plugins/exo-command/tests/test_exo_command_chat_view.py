@@ -19,6 +19,9 @@ export class El {
   constructor(tag, attrs={}, children=[]) { this.tagName=tag.toUpperCase(); this.attrs=attrs || {}; this.value=""; this.style={}; this.children=[]; this.listeners={}; this.classList={add(){},remove(){},toggle(){}}; this.scrollHeight=10; this.clientHeight=10; this.scrollTop=0; this.isConnected=false; this.append(children); globalThis.nodes.push(this); }
   append(...xs){for(const x of xs.flat(Infinity).filter(x=>x!=null)){if(x instanceof El){if(x.parent)x.remove();x.parent=this;}this.children.push(x);}}
   replaceChildren(...xs){for(const c of this.children)if(c instanceof El)c.parent=null;this.children=[];this.append(xs);}
+  get childNodes(){return this.children;}
+  get parentNode(){return this.parent;}
+  insertBefore(x,ref){if(x.parent)x.remove();x.parent=this;this.children.splice(this.children.indexOf(ref),0,x);}
   appendChild(x){this.append(x);} prepend(x){this.append(x);this.children.unshift(this.children.pop());}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(x=>x!==this);this.parent=null;}
   contains(x){return x===this||this.children.some(c=>c instanceof El&&c.contains(x));}
@@ -72,7 +75,7 @@ const PEER=(mid,id)=>({id,role:"user",content:[{type:"text",text:"[peer message 
 
 
 def _run(tmp_path, script: str, setup: str = "", panels: str = "") -> None:
-    for name in ("chat", "chat_state", "approvals", "model_picker"):
+    for name in ("chat", "chat_state", "approvals", "model_picker", "run_state"):
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "dom.mjs").write_text(DOM)
     (tmp_path / "bus.mjs").write_text(BUS)

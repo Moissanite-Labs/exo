@@ -1,0 +1,64 @@
+/* Local workspace readability pass (experimental, local build only).
+   Loaded after style.css and pane_layout.css, so these rules only override.
+   Scope: conversation prose and the composer in the chat log. Everything else
+   (tool items, panels, side panes, nav, layout, tokens) is untouched:
+   - .xc-tool-item and .xc-pn keep the mono log treatment and full width.
+   - [hidden], pane sizing, saved layouts, mobile breakpoints: not touched.
+   - Global nav height stays 46px (the pane controller computes from it). */
+
+/* Conversation prose: system sans, 15px/1.7. User text is a plain span,
+   assistant text is the markdown block (.xc-md inside .xc-text). */
+.xc-log .xc-user .xc-text,
+.xc-log .xc-asst .xc-text {
+  font-family: var(--xc-sans);
+  font-size: 15px;
+  line-height: 1.7;
+}
+/* .xc-md sets its own 13px/1.55; bring the assistant markdown body along. */
+.xc-log .xc-asst .xc-md {
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* Code stays mono and slightly smaller than the surrounding prose. */
+.xc-log .xc-asst .xc-md code,
+.xc-log .xc-asst .xc-md .xc-code {
+  font-family: var(--xc-mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Restrained measure on prose only (~78ch). Tool items, system lines and
+   gate/peer panels keep the full column width. */
+.xc-log .xc-msg.xc-user,
+.xc-log .xc-asst .xc-text {
+  max-width: 78ch;
+}
+
+/* Composer: comfortable sans input. The completion ghost (.xc-ghost) overlays
+   the textarea, so it must carry the exact same font metrics. */
+.xc-composer .xc-input,
+.xc-inwrap .xc-ghost {
+  font-family: var(--xc-sans);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* Guidance has its own row so telemetry cannot push it outside the viewport. */
+.xc-strip { flex-wrap: wrap; }
+.xc-strip .xc-guidance {
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 6px 14px;
+  min-height: 0;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--xc-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
+  white-space: normal;
+}
