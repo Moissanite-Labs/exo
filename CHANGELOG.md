@@ -26,6 +26,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   into two descriptor folders is named by its first one. Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
+- The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
+  (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
+  showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
+  now names the token file and offers no retry. A core's own failure is shown in its own words, without
+  `CommandFailed:` or `SourceError:` before it.
 - The web guidance line after a failed model call now reads what the core records (#855, D-092 amendment).
   - A connection drop or timeout says the model could not be reached. Before, it pointed at `/trace`: the router
     reports a failure before any output as "all routes failed or are cooling down", and the `ReadError` or
