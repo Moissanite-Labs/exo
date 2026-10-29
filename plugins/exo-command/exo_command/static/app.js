@@ -1,3 +1,4 @@
+import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
 // Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
 import { h, token, redeem } from "./dom.js";
@@ -22,7 +23,7 @@ function takeToken() {
   let value;
   try { value = decodeURIComponent(t.slice(6)); } catch (e) { return false; }
   if (value) { sessionStorage.setItem("xc-token", value); launchRefused = ""; }
-  const view = parts.find((x) => !x.startsWith("token=")) || "chat";
+  const view = parts.find((x) => !x.startsWith("token=")) || desktopPreference("view") || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
   return !!value;
 }
@@ -33,7 +34,7 @@ async function takeCode() {
   const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
   const c = parts.find((x) => x.startsWith("code="));
   if (!c) return false;
-  const view = parts.find((x) => !x.startsWith("code=")) || "chat";
+  const view = parts.find((x) => !x.startsWith("code=")) || desktopPreference("view") || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
   let got = {};
   try { got = await redeem(decodeURIComponent(c.slice(5))); } catch (e) { got = {}; }
@@ -59,9 +60,9 @@ const conn = h("span", { class: "xc-conn", role: "status", "aria-live": "polite"
 let unmount = null, current = null, workspaceReady = false, authGeneration = 0;
 let connecting = Promise.resolve();
 const appearance = h("select", { class: "xc-appearance", "aria-label": "Appearance",
-  onchange: () => { appearance.value = setAppearance(appearance.value); } },
+  onchange: () => { appearance.value = setAppearance(appearance.value); saveDesktopPreferences({ appearance: appearance.value }); } },
   ...[["dark", "Dark"], ["light", "Light"], ["system", "System"]].map(([value, label]) => h("option", { value }, label)));
-appearance.value = applyAppearance(getAppearance());
+appearance.value = applyAppearance(desktopPreference("appearance") || getAppearance());
 const appearanceControl = h("label", { class: "xc-appearance-wrap" }, h("span", null, "Appearance"), appearance);
 const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
 nav.replaceChildren(h("strong", { class: "xc-brand" },
@@ -79,6 +80,7 @@ function show(id) {
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
+  saveDesktopPreferences({ view: current });
   if (location.hash !== "#" + current) history.replaceState(null, "", "#" + current);
   where.textContent = "";
   dot.classList.remove("on");
@@ -108,7 +110,7 @@ bus.onState((s) => {
 const permBanner = permissions.banner();   // D-065: on every page while the core's gate is in bypass
 app.replaceChildren(nav, permBanner, main);
 // Keep real bootstrap progress inline. Navigation is usable while the initial panel snapshot is read.
-show((location.hash || "").slice(1));
+show((location.hash || "").slice(1) || desktopPreference("view"));
 window.addEventListener("hashchange", async () => {
   const fresh = takeToken() || await takeCode();
   if (fresh) {
@@ -135,3 +137,6 @@ if (token()) {
     show((location.hash || "").slice(1));
   }
 }
+
+// The pet control is supplied by the optional companion module; retain its display choice when present.
+window.addEventListener("change", (event) => { if (event.target?.matches?.(".xc-pet-mode")) saveDesktopPreferences({ petMode: event.target.value }); });

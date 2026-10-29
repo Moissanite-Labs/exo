@@ -700,6 +700,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
 
 ## D-031 (2026-10-12) UI/UX overhaul, terminal half: make the TUI look like the site's terminal figure
+- **Implementation amendment (2026-10-29):** the principal requested persistent desktop workspace choices. The shared web client accepts validated native display preferences and forwards only view, thread ID, layout, appearance, pet mode and scroll fraction. Explicit navigation wins; saved threads missing from the loaded list leave the chooser open. The native host owns scoped persistence. No prompts, drafts, transcript contents or credentials cross the preference bridge. See `docs/ui/WEB.md`, "Native display preferences".
+
 - **Web amendment, 2026-10-28:** at the principal's request, the shared web workspace keeps the angular
   identity while using readable sans serif conversation text, restrained surfaces and explicit attention
   states. Dark remains the default; Light and System are saved presentation choices. Persistent navigation
