@@ -8,6 +8,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate posting checks now inspect `gh api` merge commit titles and messages, retaining all visible text fields (#472, partial).
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It

@@ -3573,17 +3573,30 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
         if not method:
             method = "POST" if fields or _opt(argv, "--input") else "GET"
         endpoint = _gh_api_endpoint(argv)
+        # Preserve the shell heredoc fallback when only newly recognized fields supply text.
+        if not kw["text"] and any(f.startswith("commit_message=") for f in fields) and not any(
+                f.partition("=")[0] in ("body", "text", "message") for f in fields):
+            kw["signals"] = ["merge_message_text"]
+        legacy = dict(kw)
         for f in fields:
             k, _, v = f.partition("=")
             if k in ("body", "text", "message") and not v.startswith("@"):
-                kw["text"] = v
+                legacy["text"] = v
             elif k == "title":
-                kw["title"] = v
+                legacy["title"] = v
+            if k in ("body", "text", "message", "commit_message") and not v.startswith("@"):
+                kw["text"] = "\n".join(filter(None, (kw["text"], v)))
+            elif k in ("title", "commit_title"):
+                kw["title"] = "\n".join(filter(None, (kw["title"], v)))
         if method == "GET":
             return _make("read", summary=f"gh api GET {endpoint}", **kw)
         if method == "DELETE":
             return _make("delete", exposure="public", summary=f"gh api DELETE {endpoint}", **kw)
-        return _make("github_post", summary=f"gh api {method} {endpoint}", **kw)
+        result = _make("github_post", summary=f"gh api {method} {endpoint}", **kw)
+        if (legacy["text"] or legacy["title"]) and (
+                legacy["text"], legacy["title"]) != (kw["text"], kw["title"]):
+            result.parts.append(_make("github_post", summary=result.summary, **legacy))
+        return result
     if group in ("pr", "issue", "discussion"):
         if verb in ("comment", "review", "create", "edit", "ready", "reopen", "develop", "transfer", "lock", "unlock"):
             label = {"pr": "PR", "issue": "issue", "discussion": "discussion"}[group]
@@ -7316,8 +7329,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     body = next((h.body for k in cmds for h in k.heredocs), None)
     if body is not None and c.category in ("store_write", "credentials"):
         _store_post_text(c, body)
-    elif not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
-        c.text = body
+    elif not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
+        if not c.text:
+            c.text = body
+        elif "merge_message_text" in c.signals:
+            # Before #472 this outer shell body supplied the post text. Keep its checks too.
+            c.parts = [*c.parts, replace(c, text=body, parts=[], floor=None)]
     if setters:
         c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
     return c
