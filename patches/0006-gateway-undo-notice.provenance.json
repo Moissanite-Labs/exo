@@ -1,0 +1,8 @@
+{
+  "host_commit": null,
+  "source_path": "gateway/slash_commands_session.py",
+  "source_sha256": "197d43aaa78649f404bb9d9382563d1ba93270a72c99676e710ec57366ba782d",
+  "method_sha256": "81cc11d9b78e43904c1a7858958b6203f6d0ec99af8490f08660d7cad5104741",
+  "scope": "Optional Exo notification before eviction only; no patch applied to an installed host.",
+  "version_note": "The reviewed source archive has no Git metadata; the source and extracted-method SHA256 values identify the exact checked version."
+}
