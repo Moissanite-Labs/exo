@@ -570,6 +570,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
   JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
   that is not a mapping fails the send as a refused reply.
+  *Amendment 2026-10-29 (exo-desktop #52, a named session must take messages):* the path took the session a sender
+  named as given. A peer's `to_session`, or the session the bus channel passed, reached a finished (locked) child,
+  a running subagent, or an id that does not exist. The message was queued or held there, or it started a turn.
+  A peer listing never offers those sessions, and a message with no session never lands in one (D-070). Now the
+  path asks its target first, before the policy. The engine's target takes a named session that exists, is not a
+  subagent and is not locked. A scheduled run can still be named by its id, as before. Any other name gets a
+  denied receipt that names the session, and nothing is held for the principal. A held message whose session
+  finished before the principal allowed it is denied on release, and opens no new thread: that thread is only for
+  a message that named no session (PR #212). A job notice is the harness's own and still reaches its job's
+  session, a subagent's too. Hermes' peers target picks a named session only when it knows it, so it follows.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).

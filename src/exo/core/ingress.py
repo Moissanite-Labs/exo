@@ -91,6 +91,14 @@ class Held:
     task: asyncio.Task | None = field(repr=False, default=None)
 
 
+_UNREACHABLE = "session {} takes no message here: it does not exist, is a subagent, or is finished"
+
+
+def named(ing: Ingress) -> str | None:
+    """The session the sender named, or None when it named none (``*`` names none)."""
+    return ing.session if ing.session and ing.session != "*" else None
+
+
 def frame(ing: Ingress) -> str:
     """The tagged block a peer message enters the context as (a job notice has its own tag, D-032; a bus message
     its own, D-040)."""
@@ -171,6 +179,8 @@ class IngressPath:
             await _call(self.target.notice, ing.session, f"{ing.sender} sent a message that tried to approve or "
                         f"grant something ({refusal}). It was refused; a peer cannot do that. Message id {ing.id}.")
             return await self._close(ing, "denied", f"refused: a peer cannot approve gates or change permissions ({refusal})")
+        if not await self._reachable(ing):
+            return await self._close(ing, "denied", _UNREACHABLE.format(ing.session))
         outcome, reason = self.policy(ing)
         if outcome == "deny":
             return await self._close(ing, "denied", reason)
@@ -196,12 +206,20 @@ class IngressPath:
             return "asks to approve a pending gate"
         return ""
 
+    async def _reachable(self, ing: Ingress) -> bool:
+        """A message that names a session goes only where the target would pick it (exo-desktop #52). A peer
+        listing never offers a subagent or a finished session, so a sender that names one, or an id that does not
+        exist, gets a denied receipt. A harness notice (a finished job) goes to its own job's session."""
+        sid = named(ing)
+        return sid is None or bool(ing.meta.get("local")) or await _call(self.target.pick_session, ing) == sid
+
     # ---------------------------------------------------------------- deliver
 
     async def _deliver(self, ing: Ingress, state: str) -> Receipt:
         t = self.target
-        sid = ing.session if ing.session and ing.session != "*" else None
-        sid = sid or await _call(t.pick_session, ing)
+        if state == "released" and not await self._reachable(ing):  # the session finished while it was held
+            return await self._close(ing, "denied", _UNREACHABLE.format(ing.session), notify=True)
+        sid = named(ing) or await _call(t.pick_session, ing)
         if sid is None:
             return await self._close(ing, "denied", "no session here can take a message")
         running = await _call(t.state, sid) == "running"

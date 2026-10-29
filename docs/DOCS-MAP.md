@@ -63,6 +63,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-025 Trace, findings, re-verification | `docs/TRACE.md` | §9 | §4 (reporting errors) | WP §9, §23 |
 | D-026 Peers and one ingress path | `docs/PEERS.md`, `docs/GATE.md` | §7 | §2 (`peers` command) | WP §7, §8, §12.7 |
 | Issue #638 Malformed peer presence is skipped and pruned (D-026 amendment) | `docs/PEERS.md` "How it works", `DECISIONS.md` D-026 | §7 "Peers" | §1 peer discovery | n/a |
+| exo-desktop #52 A peer or bus message that names a session lands only in one that exists, is not a subagent and is not locked. Any other name gets a denied receipt before the policy runs, and a held message whose session finished meanwhile is denied on release (D-026 amendment) | `docs/PEERS.md` "What you get", `DECISIONS.md` D-026, `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
 | D-027 Reserved, not written (named in D-026 as the next ingress sources) | none | n/a | n/a | n/a |
 | D-028 One agent, one continuous memory | `docs/MEMORY-MODEL.md`, `docs/SEATS.md` "Several seats in one home" | §4 | §4 | WP §5, §17 |
 | #450 Fork-copy lookup uses a derived indexed original position without rewriting signed data | `docs/MEMORY-MODEL.md` "Fork-copy lookup index (#450)", `DECISIONS.md` D-028, `CHANGELOG.md` | n/a (no new steps) | n/a | n/a |

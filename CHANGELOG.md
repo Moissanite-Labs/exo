@@ -1189,6 +1189,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Peers (exo-desktop #52, D-026 amendment): a peer or bus message that names a session lands only in one that
+  exists, is not a subagent and is not finished. A crafted `to_session` used to reach a locked child, a running
+  subagent or an id that does not exist: the message was queued or held there, or it started a turn. Any other
+  name now gets a denied receipt before the policy runs. A held message whose session finished before you
+  allowed it is denied too. Tests: `tests/peers/test_explicit_session.py`. **Docs:** `docs/PEERS.md`,
+  `DECISIONS.md`, `docs/DOCS-MAP.md`.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
   as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was
