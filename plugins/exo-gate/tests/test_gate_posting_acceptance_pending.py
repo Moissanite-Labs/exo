@@ -77,8 +77,9 @@ KNOWN_GAPS = {
     "internal_then_public_comment", "internal_then_public_close", "internal_then_public_semicolon",
     "transfer_destination_operand", "transfer_destination_with_issue_url", "public_merge_subject_scrub",
     "public_merge_body_scrub", "api_merge_commit_title", "api_merge_commit_message",
-    "api_repo_merge_commit_message", "mcp_merge_commit_text", "store_gist_does_not_lower_matrix_deny",
-    "store_s3_does_not_lower_matrix_deny", "store_issue_does_not_lower_matrix_deny", "gh_host_destination",
+    "api_repo_merge_commit_message", "mcp_merge_commit_text",
+    # #547 (store line lift keeps its own text) is fixed: its three store_* cases pass and carry no marker.
+    "gh_host_destination",
     "gh_repo_destination", "exported_gh_repo_destination", "gh_config_directory_changes_execution",
 }
 

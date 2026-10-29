@@ -111,7 +111,8 @@ History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 5
 key or password is never kept.
 
 Guidance. With the composer empty, one dim line may suggest a next step, chosen by local rules: first run (`/intro`),
-a failed model call (`/providers` to check the provider), a finished job (ask for its `job_output`), open findings
+a failed model call (`/providers` to check the provider; the web page's line reads the error instead, see
+`docs/ui/WEB.md` "The composer (D-037)"), a finished job (ask for its `job_output`), open findings
 (`/findings`), a slow turn (`/trace`), a long thread (`/context`). At most one new line per 25 seconds, each rule twice
 a session, none while a turn runs, and a rule stops once you run its command. Tab fills the line in. Turn it off with
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It

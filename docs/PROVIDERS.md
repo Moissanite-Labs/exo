@@ -344,13 +344,17 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 
 The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
 
-- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+- The last route tried refused its key (HTTP 401 or 403): `anthropic rejected the key (HTTP 401: invalid
   x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
   asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
   The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
   401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
   sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
   model (D-081), is not named in a main-role error.
+- The last route tried is over its provider spend limit (HTTP 402): `anthropic is over its provider spend limit
+  (HTTP 402: key_spend_limit_reached): raise the limit or top up the account, then test it in /providers`. A new
+  key does not fix this, so the message does not point at the key field. The route stays benched for its cooldown
+  and the router tries the next one; the notice says so and warns that the turn's cost is a floor (D-093).
 - A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
   test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
   never shown, so it stays out of the session store. With no usable host the error says "its configured
