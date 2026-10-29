@@ -386,9 +386,15 @@ def test_a_log_rule_over_an_allow_cell_matches_the_whole_line(line):
     assert outcome(line, pol(rule("^ls", "log"))) == "log"
 
 
-@pytest.mark.parametrize("line", ['echo "$(', "export PS4='$(", "{ exec < <("])
+@pytest.mark.parametrize("line", ["echo $(", "export PS4=$(", "{ exec < <("])
 def test_a_catch_all_log_rule_logs_a_line_with_parts_that_have_no_own_text(line):
     assert outcome(line, pol(rule(".*", "log"))) == "log"
+
+
+@pytest.mark.parametrize("line", ['echo "$(', "export PS4='$("])
+def test_a_line_left_inside_a_quote_asks_under_a_catch_all_log_rule(line):
+    # #143: a line that ends inside a quote has an opaque part, as a shell may close the quote elsewhere
+    assert outcome(line, pol(rule(".*", "log"))) == "ask"
 
 
 def test_a_log_rule_that_lowers_or_names_opaque_exec_still_names_its_command():
