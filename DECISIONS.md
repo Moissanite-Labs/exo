@@ -6258,3 +6258,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 plain-comment authorization amendment — 2026-10-29 (#458)
+
+An authorizing command rule that would lower a policy decision must still match after unambiguous plain-shell comments are removed. The original raw match is required too, so this view never creates an authorization. Dynamic/nested text, heredocs and here-strings retain their existing behavior and remain open.
