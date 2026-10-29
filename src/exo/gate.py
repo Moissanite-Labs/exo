@@ -518,6 +518,14 @@ class _OutSub(str):
     is told apart by its type: only _classify_sub reads it as fed."""
 
 
+def _backtick_text(text: str, double: bool = False) -> str:
+    """Bash removes a backslash only before $, `, backslash/newline (and double-quote in double quotes)."""
+    def replace(match: re.Match) -> str:
+        ch = match.group(1)
+        return "" if ch == "\n" else ch if ch in "$`\\" or (double and ch == '\"') else match.group(0)
+    return re.sub(r"\\(.)", replace, text, flags=re.S)
+
+
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
@@ -825,7 +833,7 @@ class _Lexer:
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
             if s[j] == "\\" and j + 1 < len(s):
-                out.append(s[j + 1])
+                out.append(_backtick_text(s[j:j + 2], double))
                 j += 2
                 continue
             out.append(s[j])
@@ -1340,12 +1348,12 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.add(s, i, j)
         return j
 
-    def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
+    def backtick(w: _Open, i: int, double: bool = False) -> int:       # as _Lexer._backtick
         j = _match_end(_BT_BODY, s, i + 1)
         j = n if j < n and s[j] == "\\" else j
         w.started, w.digits = True, False
         if w.text is not None:
-            text = "`" + re.sub(r"\\(.)", r"\1", s[i + 1:j], flags=re.S) + "`"
+            text = "`" + _backtick_text(s[i + 1:j], double) + "`"
             w.add(text, 0, len(text))
         return j + 1
 
@@ -1366,7 +1374,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             elif (ch == "'" or s.startswith("$'", i)) and not f.inq:
                 i = _skip(s, i + 1 if ch == "'" else i + 2, "'", ch != "'")
             elif ch == "`":
-                i = backtick(f, i)
+                i = backtick(f, i, double=f.dq or f.inq)
             elif s.startswith("$((", i):
                 i = arith(i)                     # with bash on, as here, it ends where the parser ends it
             elif s.startswith("$(", i) or (ch in "<>" and nxt == "(" and not (f.dq or f.inq)):
@@ -1391,7 +1399,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             elif ch == "$":
                 i = dollar(f.owner, i, True)
             elif ch == "`":
-                i = backtick(f.owner, i)
+                i = backtick(f.owner, i, double=True)
             else:
                 j = max(_match_end(_DQ_RUN, s, i), i + 1)
                 f.owner.add(s, i, j)

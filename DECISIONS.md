@@ -6258,3 +6258,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 backtick escape amendment — 2026-10-29 (#469, #518)
+
+Both backtick readers remove a backslash only before dollar, backtick, backslash
+or newline, additionally before double quote when enclosed by double quotes.
+Backslash-newline removes both characters. Ordinary-character escapes survive for
+the inner shell reader. This replaces the documented escaped-space assignment
+limit: a prefix assignment inside a backtick no longer hides its following push.
+The built-in harvested differential against main 080e87ba covers 14,155 actions
+and 88 policies (1,245,640 pairs), with zero lowered outcomes, lost reserved hits,
+lost violations or errors. The changed decisions tighten hidden commands.
