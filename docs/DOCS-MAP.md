@@ -14,6 +14,7 @@ this map names does not exist. The full rule, with steps, is in `docs/DEVELOPER-
 
 | Layer | Reader | Depth | Where |
 |---|---|---|---|
+| D-013 bounded context memoization (#262, #259) | `src/exo/core/text_cache.py`, `tests/core/test_context_cache.py`, `DECISIONS.md` D-013 | n/a (no visible behavior change) | n/a (internal cache only) | n/a |
 | Whitepaper | A smart person who is not an expert | Why Exo exists and how it works, with no code. | `docs/WHITEPAPER.md`, `site/whitepaper` |
 | User guide | Someone using Exo | Tasks and commands. What to type, what you will see. | `docs/USER-GUIDE.md` |
 | Developer guide | Someone extending Exo | How to add a tool, plugin, seat, skill or command, test it and land it. | `docs/DEVELOPER-GUIDE.md` |
@@ -287,8 +288,6 @@ version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new parts 
   adaptation (WP §22.7).
 
 The whitepaper pass is separate. It batches these per wave, and each batch is a new version (`docs/VERSIONING.md` §3).
-
-| D-013 bounded context memoization (#262, #259) | `src/exo/core/text_cache.py`, `tests/core/test_context_cache.py`, `DECISIONS.md` D-013 | n/a (no visible behavior change) | n/a (internal cache only) | n/a |
 
 ## Open gaps
 
