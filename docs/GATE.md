@@ -2092,11 +2092,16 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   inspection depth (above); `eval $(...)` and `eval "$(...)"`; a command arriving on stdin,
   `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the body of
-  `time { ...; }` and of `time for x do ...; done`; and the wrapper forms #160 left unread, such as
+  the wrapper forms #160 left unread, such as
   `su -c`, `runuser`, `bwrap`, tmux's `if-shell` and `send-keys`, and `parallel` with no template
-  ("Known limit (#160)" below lists more of them). These are examples, not a complete list. After
-  `time` the gate does not read `{` or `for` as a reserved word, so either is an unknown program
-  there. The body of `time for x; do ...; done` is read.
+  ("Known limit (#160)" below lists more of them). These are examples, not a complete list.
+- **`time` keeps the word after it in command position (#853).** `time`, `time -p`, `time -f FMT`,
+  `time -o FILE` and `!` are prefixes, so what follows them is read as it would be without them:
+  `time { ...; }` and `time for x do ...; done` now have their bodies read and denied or asked for
+  what is inside them, and `time -o FILE while read l; do ...; done` likewise. `time -o FILE` still
+  takes its value before the command word. The prefix does not hide a command: `time cat
+  ~/.exo/state/credentials/x.json` asks as credentials, and `time cd ~/.exo/policies` reads as a
+  `cd`. Before #853 these lines read as `opaque_exec` and asked.
 - **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
   action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule

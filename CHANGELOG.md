@@ -8,6 +8,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- A `time` prefix no longer hides the command after it from the gate: `time { ...; }`,
+  `time for x do ...; done` and `time -o FILE while ...; do ...; done` are read line by line and
+  classified on what they run, instead of the whole line asking as unread execution (#853).
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
