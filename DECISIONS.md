@@ -4741,7 +4741,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the second's file. The module now records the plugin that owns it, and another plugin that maps to the same
   name is refused with an error that names both. The same plugin can still load again, from any folder, as a
   fresh manager or a test does. Rejected: a module name that can never clash, such as an escaped or hashed one,
-  since it would rename every plugin's loggers and modules. `docs/DEVELOPER-GUIDE.md` §4.
+  since it would rename every plugin's loggers and modules. `docs/DEVELOPER-GUIDE.md` §4. `Findings.get` put an
+  id or prefix into SQL `LIKE` as a pattern, so `%` and `_` matched other ids. It now escapes them, and an empty
+  id names no finding. `docs/TRACE.md` "Commands".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
