@@ -1,4 +1,6 @@
+import errno
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -181,7 +183,9 @@ def test_domain_half_life_applies_to_new_proposals(template_store, led):
     assert body["half_life"] == 1.0 and body["confidence"] == "low"
 
 
-def test_a_failed_skill_accept_restores_the_skill_and_a_retry_adds_the_lesson_once(template_store, led, monkeypatch):
+@pytest.mark.parametrize("where", ["ledger", "write"])
+def test_a_failed_skill_accept_restores_the_skill_and_a_retry_adds_the_lesson_once(template_store, led, monkeypatch,
+                                                                                   where):
     path = template_store.root / "skills" / "status-update" / "SKILL.md"
     e1, e2 = edit(led, "write status plain"), edit(led, "status has a link", "s2")
     (a,) = C.propose_typed(template_store, led, [{"type": "skill", "skill": "Status Update", "patch": "Write one plain line.",
@@ -190,14 +194,26 @@ def test_a_failed_skill_accept_restores_the_skill_and_a_retry_adds_the_lesson_on
     before = path.read_text()
     (b,) = C.propose_typed(template_store, led, [{"type": "skill", "skill": "Status Update", "patch": "Add the link.",
                                                   "claim": "Status has a link.", "evidence": [e2["id"]]}], author=AUTHOR)
-    real, calls = led.append, []
+    calls = []
+    if where == "ledger":
+        real = led.append
 
-    def append(kind, *args, **kw):   # the ledger write after the skill file fails once
-        if kind == "belief_accepted" and not calls:
-            calls.append(kind)
-            raise OSError("ledger is read-only")
-        return real(kind, *args, **kw)
-    monkeypatch.setattr(led, "append", append)
+        def append(kind, *args, **kw):   # the ledger write after the skill file fails once
+            if kind == "belief_accepted" and not calls:
+                calls.append(kind)
+                raise OSError("ledger is read-only")
+            return real(kind, *args, **kw)
+        monkeypatch.setattr(led, "append", append)
+    else:
+        real_write = Path.write_text
+
+        def write_text(self, data, *a, **kw):   # the skill file write stops halfway on a full disk, once
+            if self == path and not calls:
+                calls.append(1)
+                real_write(self, data[: len(data) // 2], *a, **kw)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real_write(self, data, *a, **kw)
+        monkeypatch.setattr(Path, "write_text", write_text)
     with pytest.raises(OSError):
         C.proposal_accept(template_store, led, b["id"])
     assert path.read_text() == before

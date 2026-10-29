@@ -216,8 +216,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
   `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
-- Accepting a lesson is all or nothing. When indexing or the ledger write fails after the node or skill file
-  was written, the file goes back to what it was. A retry then adds the lesson once, not twice (exo-desktop #54).
+- Accepting a lesson is all or nothing. When the node or skill file write stops partway (a full disk), or indexing
+  or the ledger write fails after it, the file goes back to what it was. A retry then adds the lesson once, not
+  twice (exo-desktop #54).
 
 - An accept given when its answer was not in the transcript no longer becomes an eval replay whose gold answer is
   the placeholder text "(answer not in the transcript)". An accept whose answer was found still counts

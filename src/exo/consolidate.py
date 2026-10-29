@@ -1271,9 +1271,9 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text, encoding="utf-8")
     indexed = False
     try:
+        path.write_text(new_text, encoding="utf-8")   # inside the guard: a write cut short (a full disk) goes back too
         store.reload()
         after = store.lint()
         added = [e for e in after.errors if e not in before.errors]
@@ -1506,15 +1506,15 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     path = store.root / "skills" / str(p.target) / "SKILL.md"
     old = path.read_text(encoding="utf-8") if path.is_file() else None
     new = skill_text_after(old or "", str(p.target), p.patch, (p.created or "")[:10], p.id, p.claim)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new, encoding="utf-8")
     body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old is not None else "create",
             "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence, "ptype": "skill"}
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
     body.update(_question_of(p))
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        path.write_text(new, encoding="utf-8")
         ev = ledger.append("belief_accepted", body, author or ledger.author
                            or "principal", refs=refs)
     except BaseException:

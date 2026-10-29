@@ -1,6 +1,8 @@
 import argparse
+import errno
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -602,7 +604,29 @@ def _fail_once(monkeypatch, obj, name, exc):
     monkeypatch.setattr(obj, name, once)
 
 
-@pytest.mark.parametrize("where", ["index", "ledger"])
+def _cut_short_once(monkeypatch, path):
+    """The first write to `path` stops halfway on a full disk, and leaves the file cut short as a real one does."""
+    real, calls = Path.write_text, []
+
+    def write_text(self, data, *a, **kw):
+        if self == path and not calls:
+            calls.append(1)
+            real(self, data[: len(data) // 2], *a, **kw)
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, data, *a, **kw)
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def _fail(monkeypatch, where, store, led, path):
+    if where == "index":
+        _fail_once(monkeypatch, store, "index", OSError("no space left on device"))
+    elif where == "ledger":
+        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    else:
+        _cut_short_once(monkeypatch, path)
+
+
+@pytest.mark.parametrize("where", ["index", "ledger", "write"])
 def test_a_failed_accept_restores_the_node_and_a_retry_adds_the_lesson_once(template_store, led, monkeypatch, where):
     path, before = _write_other_node(template_store, "mind/formatting")
     path.write_text(before.replace("Garden watering schedule", "Formatting of tables and bullet lists")
@@ -614,10 +638,7 @@ def test_a_failed_accept_restores_the_node_and_a_retry_adds_the_lesson_once(temp
     run(template_store, led)
     p = proposed(led)[0]["body"]
     assert p["action"] == "update" and p["node_id"] == "mind/formatting"
-    if where == "index":
-        _fail_once(monkeypatch, template_store, "index", OSError("no space left on device"))
-    else:
-        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    _fail(monkeypatch, where, template_store, led, path)
     with pytest.raises(OSError):
         C.proposal_accept(template_store, led, p["proposal_id"])
     assert path.read_text(encoding="utf-8") == before
@@ -626,16 +647,13 @@ def test_a_failed_accept_restores_the_node_and_a_retry_adds_the_lesson_once(temp
     assert path.read_text(encoding="utf-8").count("**Claim.** The principal wants") == 1
 
 
-@pytest.mark.parametrize("where", ["index", "ledger"])
+@pytest.mark.parametrize("where", ["index", "ledger", "write"])
 def test_a_failed_accept_of_a_new_node_leaves_no_file(template_store, led, monkeypatch, where):
     led.append("ruling", {"text": "Never sign external comments with agent names."}, "principal")
     res = run(template_store, led)
     p = C.load_state(led).proposals[res.proposals[0]]
     path = template_store.nodes_dir / f"{p.node_id}.md"
-    if where == "index":
-        _fail_once(monkeypatch, template_store, "index", OSError("no space left on device"))
-    else:
-        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    _fail(monkeypatch, where, template_store, led, path)
     with pytest.raises(OSError):
         C.proposal_accept(template_store, led, p.id)
     assert not path.exists() and p.node_id not in template_store.nodes
