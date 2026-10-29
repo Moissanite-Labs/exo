@@ -35,6 +35,19 @@ export function mount(root) {
     return () => { alive = false; };
   }
 
+  // One picker for the whole visit. A redraw must not throw away a search, an arrow-key position or the
+  // focus, so the section holding it is built once and only its notes are rewritten in place.
+  const defNote = h("div");
+  const defRetry = h("div");
+  const defRes = h("div");
+  const chosen = createModelPicker({ label: "Default model", rows: null, selected: "", applyLabel: "Save default",
+    note: "The route the main role calls first.", onApply: saveDefault });
+  const defSection = h("section", { class: "xc-prov-def", "aria-label": "Default model" },
+    h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
+    chosen.element, defNote, defRetry, defRes);
+  const rowsRegion = h("div", { class: "xc-prov-rows" });
+  body.replaceChildren(rowsRegion, defSection);
+
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
   let data = null, models = null, modelsError = null, err = "", picked = "", savingDefault = false, loadGeneration = 0;
 
@@ -155,38 +168,47 @@ export function mount(root) {
     return results._default.text;
   }
 
-  function picker() {
-    const rows = models ? [...(models.models || []), ...(models.available || [])] : null;
+  // The models object the picker was last given. Handing it the same list again would reset the row the
+  // arrow keys are on, so a redraw that changed nothing leaves the picker alone.
+  let pickerSyncedTo;
+  function syncPicker() {
+    if (models === pickerSyncedTo) return;
+    if (!models && !modelsError) return;   // still loading: the picker already says so
+    pickerSyncedTo = models;
+    if (!models) {
+      // With nothing to pick from, the reason goes where the list would be.
+      chosen.setError(modelsError.text + (modelsError.retryable ? "" : " Reopen this tab after the core restarts."));
+      return;
+    }
     // A searchable list, since routes that share a model name (several providers, one model) are the normal case.
-    const chosen = createModelPicker({ label: "Default model", rows, selected: picked, applyLabel: "Save default",
-      note: "The route the main role calls first.", onApply: saveDefault });
-    // With nothing to pick from, the reason goes where the list would be; otherwise it rides under the list it kept.
-    if (modelsError && !models) chosen.setError(modelsError.text +
-      (modelsError.retryable ? "" : " Reopen this tab after the core restarts."));
-    const retry = modelsError && modelsError.retryable ? h("div", { class: "xc-prov-def-act" },
-      h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again")) : null;
+    chosen.setSelected(picked);
+    chosen.setRows([...(models.models || []), ...(models.available || [])]);
+  }
+
+  // The default-model section is rewritten in place, never replaced: that is what keeps a typed search and
+  // the focus inside it alive across the refresh that follows a save.
+  function syncDefaultSection() {
+    syncPicker();
+    defNote.replaceChildren(...(modelsError && models
+      ? [h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.")] : []));
+    defRetry.replaceChildren(...(modelsError && modelsError.retryable
+      ? [h("div", { class: "xc-prov-def-act" }, h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again"))] : []));
     const res = results._default;
-    return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
-      h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
-      chosen.element,
-      modelsError && models ? h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.") : null,
-      retry,
-      res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
+    defRes.replaceChildren(...(res ? [h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text)] : []));
   }
 
   function draw() {
-    if (err) { body.replaceChildren(errorBox(err)); return; }
-    if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
-    const rows = data.providers || [];
+    syncDefaultSection();
     const active = document.activeElement;
-    const keep = active && active.tagName === "INPUT"
-      && ((active.type === "password" && active.value) || active.classList.contains("xc-model-search")) ? active : null;
-    if (keep) return;   // never redraw while a key is being typed or a model is being chosen
+    if (active && active.tagName === "INPUT" && active.type === "password" && active.value) return;   // never redraw while a key is being typed
+    if (err) { rowsRegion.replaceChildren(errorBox(err)); return; }
+    if (!data) { rowsRegion.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
+    const rows = data.providers || [];
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
     counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
       ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
-    body.replaceChildren(...[
+    rowsRegion.replaceChildren(...[
       h("p", { class: "xc-prov-lead" }, h("span", { class: "xc-led", "data-s": "known", "aria-hidden": "true" }),
         "Keys are stored in " + (STORE_TEXT[data.store] || data.store || "the local store") +
         ". They are sent to this local server once, never shown again, and never kept in the browser."),
@@ -194,8 +216,7 @@ export function mount(root) {
       rows.length ? h("div", { class: "xc-prov-list", role: "list" }, rows.map(row)) : emptyState({ k: "No providers",
         title: "This core knows no model provider yet.",
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
-        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
-      picker()].filter(Boolean));
+        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." })].filter(Boolean));
   }
 
   draw();

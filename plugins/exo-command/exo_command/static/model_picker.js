@@ -6,6 +6,7 @@ const compact = value => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, ""
 export function createModelPicker({ label = "Model", rows, selected = "", applyLabel = "Use model", note = "", onApply, onCancel }) {
   const id = "xc-model-options-" + (++nextId);
   let models = [], visible = [], active = 0, pending = false, loading = rows == null, error = "", notice = "";
+  let current = selected;   // the route the caller holds now; it can move while this picker stays open
   const search = h("input", { class: "xc-field xc-model-search", type: "search", role: "combobox", "aria-label": label + " search",
     "aria-autocomplete": "list", "aria-controls": id, "aria-expanded": "true", autocomplete: "off", spellcheck: "false",
     placeholder: "Type a model or provider name…" });
@@ -26,7 +27,7 @@ export function createModelPicker({ label = "Model", rows, selected = "", applyL
     list.replaceChildren(...visible.map((m, i) => h("button", { class: "xc-model-option" + (i === active ? " active" : ""),
       type: "button", role: "option", id: id + "-" + i, tabindex: "-1", "aria-selected": i === active ? "true" : "false",
       onmousedown: e => e.preventDefault(), onclick: () => { active = i; submit(); } },
-    h("span", { class: "xc-model-name" }, m.name, m.route === selected ? h("span", { class: "xc-model-current" }, "Current") : null), h("span", { class: "xc-model-route" }, m.route))));
+    h("span", { class: "xc-model-name" }, m.name, m.route === current ? h("span", { class: "xc-model-current" }, "Current") : null), h("span", { class: "xc-model-route" }, m.route))));
     search.setAttribute("aria-activedescendant", visible.length ? id + "-" + active : "");
     element.setAttribute("aria-busy", pending || loading ? "true" : "false");
     apply.disabled = pending || loading || !visible.length;
@@ -65,8 +66,12 @@ export function createModelPicker({ label = "Model", rows, selected = "", applyL
       unique.set(m.route, { route: m.route, name, search: text, compact: compact(text) });
     }
     models = [...unique.values()]; loading = false; error = "";
-    active = Math.max(0, models.findIndex(m => m.route === selected)); draw();
+    active = Math.max(0, models.findIndex(m => m.route === current)); draw();
   }
   if (rows != null) setRows(rows); else draw();
-  return { element, focus: () => search.focus(), setRows, setError: message => { loading = false; error = message; models = []; draw(); } };
+  // setSelected moves the "Current" mark without touching the search, the focus or the row the arrow keys are on;
+  // the caller redraws its own frame and must never rebuild this picker to show a new selection.
+  return { element, focus: () => search.focus(), setRows,
+    setSelected: route => { if (typeof route === "string" && route) current = route; },
+    setError: message => { loading = false; error = message; models = []; draw(); } };
 }
