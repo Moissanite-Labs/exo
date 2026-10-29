@@ -1872,7 +1872,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   folder is a store, so the store write leads. #191's pass reads the push part's matrix deny and then lifts it,
   because the anchored rule matches both the line and the part's own text (#394, #464). So the line asks the principal
   alone. With the `rm` first, the rule does not match the line, and the deny stands. This order rule is main's: each
-  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule.
+  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule. The group
+  was wider than `rm` (#547): any send or write of a store file after the push, in any store folder, met the same lift,
+  and `gh gist create`, `aws s3 cp` and `gh issue create -F` tails with a `plugins/` or `policies/` file still asked
+  on main f28934a3 (`store_write ask floor`, or `ask posting`). An `rm` tail and a `curl -T` tail of a `plugins/`,
+  `policies/` or `state/` file, joined by `&&`, `;` or `||`, were already denied there (`store_write deny matrix`),
+  by the delete's or the upload's own cell, and a `keys/` file makes a secret line main denies. The amendment of
+  2026-10-28 for #547 (the last of this entry) ends the lift on a store line.
   With #320 (the amendment of 2026-10-22 for #225, #269, #309 and #341, below), `_run_privileged` adds a costly
   copy of each reversible part that `sudo` or `doas` runs over `ssh` or `mosh`, so the first group's rule on a
   costly `shell` or `local_write` part and its matrix cell deny those lines again, as on main.
@@ -3850,6 +3856,56 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-28 (issue #547):* on a store line, #191's pass lifted a part's deny with a rule written for
+  another command on the line. Under `matrix: {irreversible: {internal: deny, private: deny, public: deny}}` and
+  `{match: {command: '^git push'}, decision: allow}`, `git push --force origin main && gh gist create
+  ~/.exo/plugins/foo/__init__.py`, the same push with `aws s3 cp <file> s3://b/x` and with `gh issue create -R
+  pub/repo -t x -F <file>` asked on main f28934a3 (`store_write ask floor`, `ask floor`, `ask posting`), and so did
+  the same lines with a `policies/` file, while the push beside `/tmp/plain.txt` is `force_push deny matrix`. The
+  store send leads such a line, and its own cell (costly, private) is not denied, so the rule does not lower the line
+  and the rule step never runs the own text test (#394). The #191 pass then read the push part's matrix deny and
+  lifted it, because the anchored rule matches the line and the push's own text. Now that pass, on a line a
+  `store_write` leads, also asks an allow, log or ask rule keyed on `command` to pass the own text test of the whole
+  line (`_line_own_test`, through `_whole_line_test`), as the rule step asks of a rule that would lower a line the
+  store write does not lead: the rule must name the store write's own text, each command that would be stricter alone
+  than the rule's decision, and each command that changes the shell for the rest. A rule that fails is passed over
+  and added to `passed`, so `decide` also decides the line as before and keeps the stricter. A failure while the test
+  is built or run counts as a fail. The answer does not depend on the part, so `_whole_line_test` keeps it per rule
+  and the test runs once per rule on a line, not once per part (each run reads every part): the pass stays linear in
+  the parts of a long line. Run once per part, a line of 3,000 denied pushes before a store send (about 98 KB) took
+  9 to 11 seconds of CPU in `decide` under a rule that names every command or `'.'`; once per rule it takes about a
+  tenth of a second under that one rule, as on main, and a test bounds it with `time.process_time()`. A rule that
+  fails the test is still passed over at each part that a later rule lifts (a memo lookup and its two regex
+  matches), so the pass grows with the parts times the rules ahead of the one that lifts (review 5690862857). On the
+  same 3,000 pushes (`git push --force origin b<i>`) before `gh gist create ~/.exo/plugins/foo/__init__.py`, with 0,
+  19 and 99 allow rules on `'^git push'` ahead of one rule that names every command, `decide` took 0.06, 0.28 and
+  0.96 s of CPU, against 0.05, 0.10 and 0.12 s on main a1dd4fec (the best of three, `time.process_time()`); with the
+  push rules alone the first push's deny ends the pass, about a tenth of a second on both (0.11 to 0.12 s on
+  main, 0.12 to 0.15 s here, where the rule passed over adds one more pass). The change only passes more rules
+  over in that pass, so each part denied before is denied now: nothing decides lower. With the store send first, or
+  with an `rm` or `curl -T` tail (denied by that part's own cell), main already denies, and so do key lines
+  (`~/.exo/keys/k`, a secret line). One rule that names every command on the line (`'^git push|^gh gist
+  create|...'`) lifts the deny as before, and the store floor still asks. Separate rules that each name one command do
+  not combine: each is tested on its own, so under `{match: {command: '^git push'}, decision: allow}` and `{match:
+  {command: '^gh gist create'}, decision: allow}` neither names the whole line and the push-first store line is
+  `store_write deny matrix` where main a1dd4fec asks at the floor; that matches #394 on a line with no store write
+  (the same push beside `/tmp/plain.txt` is `force_push deny matrix` under both rules, on main too). The gate differential against main f28934a3 (main's
+  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants` (12,631 actions under 88
+  policies, 1,111,528 pairs) lowers 0 pairs and tightens 73 pairs on 73 actions, all `store_write ask ->
+  store_write deny`; 284 pairs keep their outcome with another reason (a deny that now names the push rather than a
+  later part). An aimed corpus of 5,034 lines (7 deny-able commands, among them three push forms, `rm -rf
+  build` and `npm publish`, beside 13 sends, writes, deletes and reads of 9 files in `plugins/`, `policies/`,
+  `state/`, `update/`, the ledger, `keys/` and `/tmp`, in both orders with `&&`, `;` and `||`, and three-command
+  lines), run alone (`--only-corpus`, 10,068 actions) under the 88 built-in policies and 100 more (matrices that deny
+  the irreversible or costly cells, anchored, unanchored, log and ask rules on the push, rules that name every
+  command, category lines, deny and reserved entries), lowers 0 of 1,892,784 pairs and tightens 32,334 pairs on
+  4,686 actions, all `store_write ask -> store_write deny`; 7,682 pairs keep their outcome with another reason.
+  Tests: `tests/security/test_gate_store_lift_own_text_547.py`.
+  *Revisit if:* the #191 pass should ask the whole line test on every compound line, not only on one a store write
+  leads. Elsewhere a rule that names a part still lifts that part's deny when the line's lead is not denied by its
+  own cell and the rule does not lower the lead: under a matrix that denies only the costly cells and `{match:
+  {command: '^gh gist'}, decision: allow}`, `gh gist create /tmp/plain.txt && git push --force origin main` asks
+  (`force_push ask matrix`) on main and here, while the push-first order denies; a guard row pins both.
 - *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
   `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
   gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
@@ -3876,6 +3932,75 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
   `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 11 of its tests fail without the change: the six condition rows, the descriptor row and four hook rows).
   *Revisit if:* the same as #479's.
+- *Amendment 2026-10-29 (issue #853, to the #479 amendment's decision):* a compound command behind bash's
+  pipeline prefixes is read as the same compound without them, beside main's reading, which lifts the #479
+  amendment's `time` limit. bash's grammar takes `time`, `time -p`, `time --`, `time -p --` and `!` before a
+  pipeline, together too (`time !`, `! time`, `time time`, `! !`, `time -p ! time --`), where a command starts:
+  the start of a line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`, `do`, `then`, `else`, `elif`, `if`,
+  `while`, `until` or a case pattern's `)`, but not after `|` or `|&` (bash's `time_command_acceptable`); the
+  compound after them (`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f
+  { ..; }` definition, whose body runs when `f` is called) runs as without them. `bash -n` (5.2.21) on probe
+  files whose every command is `:` accepts each of those spellings (`time ! function f { :; }; f`, `time -p !
+  function ..`, `time -- ! function ..`, `! time ! function ..` and `time time ! function ..` too) and rejects
+  `time -p -p for ..`, `time -- -p for ..`, `time -p -- -- for ..`, `!for ..`, `: | time for ..`, `: | ! for ..`,
+  and a simple command or an assignment before a compound (`: for ..`, `nohup for ..`, `command for ..`, `env
+  X=1 while ..`, `sudo -n while ..`, `X=1 time for ..`, `> f time for ..`), so those run nothing. `_parse` reads
+  `time` as a program that takes options (`_PREFIXES`, GNU time's `-o` and `-f`), so the compound after it was
+  that program's argv: on main a1dd4fec `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done`
+  and its `time -p`, `time --`, `time !`, `! time`, `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`
+  and `time coproc for ..` forms asked as `opaque_exec`, `deny: [store_write]` did not deny them, a seat the
+  approvers name could answer them and the hook's bypass auto-allowed them; `time { rm -rf /srv/data; }`, `time
+  -p { git push --force origin main; }` and `time ! { curl -X POST .. }` asked as `opaque_exec` where their
+  twins without the prefix deny under `deny: [delete]`, `[force_push]` or `[web_post]`. (`! for ..` alone was
+  read already: `!` is one of `_OPENERS`.) A `function f { ..; }` definition was read behind `time` or `!`
+  alone, but not behind both: `time ! function f { rm -rf /srv/data; }; f` and its `time -p !`, `time -- !`, `!
+  time !` and `time time !` forms asked as `opaque_exec` where the twin denies under `deny: [delete]` (a #479
+  store loop in such a body was found by the store scan already). Now, while classify reads a call (`_classify_reading`), `_parse_line`
+  marks each unquoted `time` in command position that bash takes as the reserved word (`_time_at`: no `|` or
+  `|&` feeds the command, and only `!` words or one of the reserved words above come before it in the command)
+  and that is followed, through its `-p` and `--` and further `time` and `!` words, by a compound opener
+  (`_time_prefix`). When the call has one, classify reads it a second time with `_opening` on, where
+  `_parse_line` leaves those `time`, `-p` and `--` words out (`_opened_reading`, with budgets and memos of its
+  own), so the compound is opened as without them: its parts, their categories and #479's second pass of a loop
+  that `cd`s into the store. That reading is kept beside main's by `_beside`, as #584's joined reading and #479's
+  second reading are, and each reading's D-074 `ordinary` reading is kept too, each read once (main's reading
+  reads its own without opening it, and the second reading reads its own), so `decide`, `no_grant` (and through
+  it the exo-gate hook's bypass floor) and `call_approvers` read both (`gate.readings`). The issue's rows are a principal-only `store_write`
+  part that `deny: [store_write]` denies, no grant covers and bypass keeps at its floor, while main's
+  `opaque_exec` reading still leads on the tie; `time { rm -rf /srv/data; }` is a delete. Main's reading is the
+  first reading, unchanged, so no line decides lower: `time { ls; }` still asks as `opaque_exec`, and a quoted
+  `'time'` or `\time`, `time -o f ..`, the syntax errors above and a line with no such prefix are read once, as
+  on main. Teaching `_parse` the prefixes directly would have replaced main's reading of every `time` line with
+  a new one; the second reading is smaller (one marker in `_parse_line`, one more reading in classify) and keeps
+  main's reading by construction, as #546 keeps main's reading of a quoted prefix assignment. Cost: such a line
+  costs about main's reading plus its twin's (`time.process_time`, best of five, this tree against main
+  a1dd4fec: 20 prefixed loops on one line 0.074 s against 0.021 s, their twin without `time` 0.042 s; the same
+  loops each followed by `echo x > ~/.exo/config.json`, which adds each reading's D-074 `ordinary` reading,
+  0.284 s against 0.058 s, twin 0.234 s; 300 `time { :; }` groups 0.075 s against 0.043 s; 150 `time !` before
+  one group 0.014 s against 0.009 s). Known limit:
+  main does not open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc
+  for ..`, `{ coproc for ..; }` ask as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or
+  without; that is `coproc`'s own gap, not the prefix's. The differential against main a1dd4fec (main's
+  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
+  under the 88 policies (1,167,760 pairs), lowers 0 pairs and tightens 79 pairs on 9 actions (`opaque_exec allow`
+  to `opaque_exec ask` 40, `opaque_exec ask` to `opaque_exec deny` 16, `opaque_exec log` to `opaque_exec ask`
+  16, and 7 to `delete`); 106 pairs keep their outcome with another detail. An aimed corpus (`--only-corpus
+  --no-variants`) of 10,572 lines puts the 11 prefix spellings above and none before 419 compound lines (the 9
+  loop forms with 8 store-`cd` bodies, 12 group forms, `function f { ..; }; f`, `function f () { ..; }; f` and
+  `f() { ..; }; f` among them, with delete, store, force-push, post, credentials, opaque and plain bodies, nested
+  and chained prefixes), and 21 of them under 22 wrappers each (`&&`, `||`, `;`, a newline, `&`, a subshell, a
+  pipe into one, `bash -c`, `$( )`, `if`, a function, and the guards `true |`, `nohup`, `command`, `X=1`,
+  `'time'`, `\time`, `time -o f`); under the 88 policies and 126 more (deny, reserved, category, category-rule,
+  command, command-rule and target entries, 214 in all, 2,262,408 pairs) it lowers 0 pairs and tightens 28,559
+  pairs on 2,054 actions, mostly `opaque_exec ask` to `opaque_exec deny` (6,130), `opaque_exec allow` to
+  `opaque_exec ask` (6,034), `opaque_exec ask` to `force_push deny` (3,654) and to `delete deny` (2,601); 190,906
+  pairs keep their outcome with another detail. No classify or decide errors. Tests:
+  `tests/security/test_gate_pipeline_prefix_853.py` (521 tests, which also collect alone; 158 fail on main
+  e86af96c and pass here, the other 363 pass on both) and `tests/security/test_gate_loop_cd_store_479.py`, whose known
+  limit row `test_a_loop_behind_time_is_a_known_limit` is now `test_a_loop_behind_time_is_read_as_without_it`
+  (2 rows that fail on main a1dd4fec).
+  *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
+  second reading can go.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -5915,6 +6040,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** a new `error_class` field on `model.call` as the only signal (an older core would leave the tip silent, and the text is already there); a single softer sentence for every error (it is the specificity that makes the line worth showing).
 - **Revisit if:** the core records a structured error category on `model.call`, in which case the classifier should prefer it and keep the text as a fallback.
 - **Docs and user impact:** `docs/ui/WEB.md` guidance paragraph, `docs/DOCS-MAP.md`, `CHANGELOG.md`. No new command or setting; nothing about keys is stored or shown.
+- **Amendment 2026-10-29 (#855):** the classifier reads what a real core records.
+  - A failure before any output is retried, and while the route cools down the router answers "all routes for 'main' failed or are cooling down; next route reopens in 60s". The cause (`ReadError`, `ReadTimeout`, `ConnectError`) is only in `attempts[].error`, so the page classifies the error joined with its attempts' errors (`providerErrorText`). `chat.js` hands the attempts to the guide beside the error.
+  - httpx names its timeouts `ReadTimeout`, `ConnectTimeout` and so on, with no word boundary before `Timeout`, so the transport pattern takes `(read|connect|write|pool)timeout`.
+  - The router words its own refusals: "rejected the key", "refused the login" (a CLI login such as claude-cli's "Not logged in" or an expired OAuth token) and "no credentials for role". Each reads as a refusal and points at the Providers page.
+  - A status counts as a refusal only as `HTTP 401`, `HTTP 403` or an SDK's `Error code: 401`, and "authentication" only as an authentication error or failure. So `HTTP 404: model gpt-403 not found` and a proxy's `HTTP 407: Proxy Authentication Required` read as neither. A spend limit (D-093) reads as neither too, so the line never points at the key for it.
+  - Each kind keeps its own count of two a session, as this decision said: `Guide.pick` counts by a tip's `rule` (`providers:auth`, `providers:transport`, `providers:error`), where it used to count all three as `providers`. Two transport or general lines no longer use up a refusal's.
+  - The transport line fills `/trace` when Tab is pressed, since it names it.
+  - Tests in `plugins/exo-command/tests/test_complete_web.py`:
+    - `test_js_router_failures_get_the_line_their_cause_calls_for` runs a real Loop and Router (httpx `MockTransport`) for a `ReadError`, a `ReadTimeout`, a `ConnectError`, a 401 with a key, a 401 without one, no key, a 402 and a 503. It feeds the recorded `model.call` bodies to the page's guide.
+    - Three more node tests cover the CLI and status strings, the per-kind counts and the fill.
+  - `test_model_command_web.py::test_a_failed_calls_line_reads_the_attempts_chat_hands_over` pins the `chat.js` wiring in the real page.
+  - Results: all six fail on main. With only `chat.js` reverted, the browser test fails.
 
 ## D-093 (2026-10-30) A spend limit names itself, and the money figure says it is a floor
 - **Status:** Accepted. Records after D-092 (#846) and lands on its own branch, `fix/spend-limit-transparency`.
