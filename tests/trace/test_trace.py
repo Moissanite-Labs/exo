@@ -143,7 +143,14 @@ def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
     async def go():
         info = await eng.loop.create_session(title="t")
         await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
-        await asyncio.sleep(0.2)
+        # TurnSend runs the turn in a background task, and the tool.error finding is filed only at its end (the
+        # turn-end rules): wait for that task, not a fixed time, which a loaded machine can outrun
+        turns = set(eng._tasks)
+        assert turns
+        done, pending = await asyncio.wait(turns, timeout=30)
+        assert not pending, "the turn did not end within 30 s"
+        for t in done:
+            t.result()  # asyncio.wait keeps a failed turn's exception; raise it here
         trace.report("direct caller", NotConfigured("off until set up"), info.id)
         return info.id
 
