@@ -284,7 +284,7 @@ class JobManager:
         elif h.reason == "timeout":
             state, detail = "timeout", f"killed after {fmt_elapsed(self.cfg.max_wall_s)} (the job wall limit)"
         else:
-            state, detail = ("done", note) if code == 0 else ("failed", "")
+            state, detail = ("done", "") if code == 0 and not note else ("failed", note)
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
         self._spawn(self._announce(h, state, code, ended, detail))
 
@@ -318,7 +318,7 @@ class JobManager:
 
     def _notice(self, job_id: str, state: str, code: int | None, command: str, started: float, ended: float | None,
                 session: str | None, detail: str = "") -> Ingress:
-        head = {"done": "finished, exit 0", "failed": f"failed, exit {code}", "timeout": "timed out and was killed",
+        head = {"done": "finished, exit 0", "failed": ("failed earlier stage, final exit 0" if code == 0 else f"failed, exit {code}"), "timeout": "timed out and was killed",
                 "killed": "was killed", "lost": "lost"}.get(state, state)
         head += f", {fmt_elapsed(_elapsed(started, ended))}"
         vals = self._known()

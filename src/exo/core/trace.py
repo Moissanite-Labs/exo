@@ -647,7 +647,7 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             add(f"tool.error:{tr.name}:{_norm(tr.error)}", "papercut", f"Tool {tr.name} failed", tr.error)
     for tr in t.tools:
         if tr.masked:
-            add("shell.masked_exit", "papercut", "A pipeline failure was hidden by its last stage", tr.masked)
+            add("shell.masked_exit", "papercut", "An earlier stage failed behind a successful final stage", tr.masked)
     seen: dict[tuple[str, str], int] = {}
     for tr in t.tools:
         k = (tr.name, tr.args_key, tr.epoch)  # the same call after an edit is a retest: not a repeat

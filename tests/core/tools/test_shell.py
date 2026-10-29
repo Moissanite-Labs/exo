@@ -208,11 +208,11 @@ def test_failed_write_shaped_command_does_not_count_as_file_progress(run, tmp_pa
     assert not _changes_files("bash", args, result.is_error)
 
 
-def test_zero_exit_pipeline_note_is_still_a_success(run):
+def test_zero_exit_pipeline_note_marks_the_recorded_failure(run):
     result = run("bash", command="false | cat")
     assert "pipeline stage 1 exited 1" in result.text()
     assert result.text().endswith("[exit 0]")
-    assert not result.is_error
+    assert result.is_error
 
 
 def test_failed_command_keeps_capped_output_and_exit_status(run):
@@ -232,3 +232,14 @@ def test_shell_interruption_sets_error_without_changing_its_text(reg, tmp_path):
                            ToolContext(cwd=str(tmp_path), cancel=cancel))
     assert result.call_id == "cancelled" and result.is_error
     assert "[Command interrupted]" in result.text() and result.text().endswith("[exit 130]")
+
+
+def test_compound_with_failed_pipeline_sets_error_without_changing_final_exit(run):
+    result = run("bash", command="echo prefix; false | cat")
+    assert result.is_error
+    assert "stage 1 exited 1" in result.text() and result.text().endswith("[exit 0]")
+
+
+def test_printed_failure_note_cannot_spoof_structured_error(run):
+    result = run("bash", command="printf 'note: pipeline stage 1 exited 1\\n'")
+    assert not result.is_error
