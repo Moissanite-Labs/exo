@@ -625,3 +625,22 @@ def test_proposal_ids_that_look_like_phone_numbers_do_not_break_lint(template_st
             assert not any(pat.search(text) for pat in LEAKS), text
     assert C.proposal_ref("p-1e0ab9625a43") == "p-1e0ab9625a43"
     assert C.proposal_ref(digits) == "p-3613648960"
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_rule_of_three_active_agreement_survives_stronger_rejected_conflict(template_store, led, accepted):
+    _, rejected = _rejected(template_store, led, "Use bullet lists, not tables.")
+    led.append("ruling", {"text": "Use tables, not bullet prose."}, "principal")
+    (active,) = run(template_store, led).proposals
+    if accepted:
+        C.proposal_accept(template_store, led, active, author="principal")
+    for session in "abc":
+        say(led, "Use tables, not bullet lists.", session)
+
+    result = run(template_store, led)
+
+    assert result.proposals == []
+    assert result.questions == []
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[active].status == ("accepted" if accepted else "proposed")
+    assert views[rejected].status == "rejected"
