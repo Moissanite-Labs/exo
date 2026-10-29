@@ -3492,3 +3492,10 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Mutable tilde names (#571)
+
+`read`, `printf -v`, `unset` and nameref creation ask when an unquoted `~-` or
+`~+` can expand into a variable name the gate cannot know. A preceding assignment
+to OLDPWD/PWD must not hide a PATH change. Quoted tilde text stays literal, and
+classification neither expands a live environment value nor modifies it.
