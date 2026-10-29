@@ -849,21 +849,9 @@
     },
     {
       "path": "src/exo/learn/review.py",
-      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"agent\"",
-      "code": "union-attr",
-      "count": 1
-    },
-    {
-      "path": "src/exo/learn/review.py",
       "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
       "code": "union-attr",
-      "count": 3
-    },
-    {
-      "path": "src/exo/learn/review.py",
-      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"store\"",
-      "code": "union-attr",
-      "count": 3
+      "count": 1
     },
     {
       "path": "src/exo/learn/signals.py",
