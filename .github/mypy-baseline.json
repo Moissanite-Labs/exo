@@ -675,12 +675,6 @@
     },
     {
       "path": "src/exo/gate.py",
-      "message": "Incompatible types in assignment (expression has type \"dict[Never, Never]\", variable has type \"list[Any]\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
       "message": "Item \"None\" of \"Any | list[Any | None] | None\" has no attribute \"__iter__\" (not iterable)",
       "code": "union-attr",
       "count": 1
@@ -714,18 +708,6 @@
       "message": "Item \"None\" of \"_Word | None\" has no attribute \"text\"",
       "code": "union-attr",
       "count": 5
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Need type annotation for \"out\" (hint: \"out: list[<type>] = ...\")",
-      "code": "var-annotated",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "No overload variant of \"__setitem__\" of \"list\" matches argument types \"str\", \"Any\"",
-      "code": "call-overload",
-      "count": 1
     },
     {
       "path": "src/exo/gate.py",

@@ -14,6 +14,7 @@ this map names does not exist. The full rule, with steps, is in `docs/DEVELOPER-
 
 | Layer | Reader | Depth | Where |
 |---|---|---|---|
+| D-038 policy YAML extraction draft (#257) | `src/exo/gate_yaml.py`, `tests/security/test_gate_yaml_seam.py`, `DECISIONS.md` D-038 | n/a (same policy syntax) | n/a (legacy imports retained) | n/a |
 | Whitepaper | A smart person who is not an expert | Why Exo exists and how it works, with no code. | `docs/WHITEPAPER.md`, `site/whitepaper` |
 | User guide | Someone using Exo | Tasks and commands. What to type, what you will see. | `docs/USER-GUIDE.md` |
 | Developer guide | Someone extending Exo | How to add a tool, plugin, seat, skill or command, test it and land it. | `docs/DEVELOPER-GUIDE.md` |
