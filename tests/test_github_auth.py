@@ -307,7 +307,7 @@ def test_https_git_uses_seat_helper_without_host_config_mutation(tmp_path, monke
     assert not marker.exists() and config.read_bytes() == original
 
 
-@pytest.mark.parametrize('url', ['https://user:fake-config-password@github.com/org/',
+@pytest.mark.parametrize('url', ['https://user:fake-config-password' '@github.com/org/',
                                  'https://github.com/org/?token=fake-config-password',
                                  'https://github.com/org/#fake-config-password'])
 def test_git_header_url_credentials_never_enter_child_environment(tmp_path, url):

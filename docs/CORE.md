@@ -233,3 +233,21 @@ The active principal comes from `--principal`, else `$EXO_PRINCIPAL`.
 test in `tests/acceptance/` copies a populated store (`EXO_ACCEPTANCE_STORE`) to a temp dir,
 without `corpus/private`, and checks lint, find and ctx on three queries. It skips when no
 such store is present.
+
+
+### Explicit runtime shutdown
+
+`CoreRuntime.close()` closes turn admission before interrupting its active loop states. It waits for
+runtime-owned turn tasks before closing the session store or releasing the writer. Cooperative turns
+record an interrupted terminal event and retain accepted steers. Accepted sends already waiting for a
+session are saved as `shutdown_pending` context without another model call. A subsequent explicit turn
+can use that context; shutdown does not automatically replay it.
+
+The turn drain allows two seconds for interruption, then cancels remaining tasks and waits one second.
+If an extension still refuses cancellation, close reports failure and leaves the store and writer open
+rather than allowing that task to write through closed resources. Other shutdown cleanup still runs.
+A forced cancellation may skip normal terminal events, but accepted steers are retained once the owned
+tasks stop. Direct callers of `run_turn` remain responsible for their caller task's lifetime.
+
+This is explicit core shutdown (#873). Closing a client connected to an external core remains a separate
+operation and does not stop authorized background work. No suspend or client-disconnect policy is added.
