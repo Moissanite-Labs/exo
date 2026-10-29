@@ -711,6 +711,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   real terminal (the SVG export cannot show the terminal's default colours).
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
+- **Amendment 2026-10-29:** the bash schema rejects unknown arguments before dispatch. A misspelled background option returns an argument error instead of changing execution intent; supported foreground, background and timeout behavior stays the same.
 - **Foreground shell result amendment (2026-10-28, #791):** actual nonzero exit codes, timeout and interruption set
   `ToolResult.is_error`; captured output and `[exit N]` remain unchanged. Code-zero pipelines with a masked-stage
   note remain successful. Failed write-shaped commands do not reset repeat detection as successful file progress.
