@@ -207,7 +207,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
-- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
@@ -244,6 +243,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
   budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
   accepted candidate made 256 calls, 173 before (+48%).
+- **Amendment 2026-10-28 (#770, exo-desktop #54):** agreeing signals reinforce only active beliefs. Evidence
+  agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
+- **Amendment 2026-10-29 (#861):** the 2026-10-28 amendment covers corrections and rulings, and reviewer taste and
+  fact lessons (`propose_typed`). The match that chooses between reinforcing, the conflict rule and a new proposal
+  reads active beliefs only (proposed, held, accepted), so a rejected belief that matches better no longer hides an
+  active one:
+  a ruling that contradicts an accepted belief goes through the conflict rule (a held proposal and a question when
+  that belief is guarded), and one that agrees with an open proposal reinforces it. A reviewer taste or fact lesson
+  whose evidence is all held already by the rejected beliefs it agrees with, alone or together, teaches nothing
+  again: it is not proposed, raises no conflict question and reinforces no other belief, since the principal
+  already ruled on that evidence. A reviewer skill lesson is not checked and is proposed as before. New evidence,
+  alone or beside the rejected evidence, is matched as usual. The rule of three still counts a rejected belief
+  that agrees as known, so repeating an instruction in chat does not re-raise a rejected lesson; a new correction
+  or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
+  ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
+  held (rule 3).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -2016,12 +2031,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
   at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
-  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
-  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
-  2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
-  with a command-running key, read as `git -c` is since #231. A `command:`
-  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
-  still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below were allowed outright on main, not asked, and no entry
+  for the hidden action's category reached them. All have left this list: `${...}` bodies (#143), read since #158
+  (the D-038 amendment of 2026-10-25), and on 2026-10-19 text piped or fed by heredoc to `ssh` with no remote command
+  (#240), read since #303, and `git clone -c` with a command-running key, read as `git -c` is since #231. A `command:`
+  regex reached them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  evaded the regex inside these forms, as it no longer does inside them or inside an array subscript (read since #189), a
   value given to `declare` (read since #194, for #188), a command-valued option (read since #164 and #288) or a git
   config value (read since #231). The
   other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
@@ -2105,8 +2120,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   vetoes keyed on them, and adds the `indirection` and `locale translation` signals, so it asks unless
   opaque_exec is named: with a message catalog and a non-C locale bash runs the translation, and expands
   `$( )` in it. The line is also decided as opaque_exec and the stricter outcome stands, so a veto on
-  opaque_exec holds for it too. `$"..."` inside `${...}` is left to the parameter-expansion work (#143,
-  #158). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
+  opaque_exec holds for it too. `$"..."` inside `${...}` is read by the parameter-word scan since #158, without
+  the locale-translation signal (#143). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
   dash (the shell tool's fallback when bash is missing), so that body is read as commands too. A `deny` or
   `ask` rule keyed on `command:` sees the view in a second pass that only raises; the first-match rule is still
   chosen on the original text. Allow and lower rules and grants match the original text only: the view adds
@@ -2965,6 +2980,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  2026-10-28 (#551): three gaps of the comparator are closed, so "0 lowered" means more. (1) No test line reached the
+  gate's shared fail-closed budgets of one classify call, so a head that failed open once one was spent showed 0
+  lowered. Six budget lines now run with the harvest, also under `--no-variants`: past `_exo_relative`'s 64 store
+  folders, past its join budget `_EXO_PARTS` (many names, the stress tests' `_NEAR_CAP` line, and two `<( )` each
+  under it alone), and past `_BRACE_BUDGET` for a read and a write. Each asks on main only because its budget is
+  spent, which a test checks by lifting the budget. The brace budget's share for a repeated store spelling is left
+  out (past it a repeat counts as the hit it had), and so is its Exo-store share alone (no line found spends it
+  without the secret-store share). (2) An outcome not in `gate.OUTCOMES` (`"Ask"`, `"block"`) ranked as ask, but the
+  hook runs any outcome but ask or deny: it now ranks as allow in the head and as ask in the base, and the summary
+  counts such pairs. (3) At the same outcome below deny a pair is also lower when the head loses one of the hook's
+  checks after `decide` that depend only on the call and the decision: `no_grant`, `body_unseen`, `binds_exact`, or
+  a reserved hit on another part than the line's own (`_grant_for`). A check a tree's gate lacks is not held; one that
+  raises is the hook's error card (a decide error, once-only, so neither a check nor a reserved hit is lost). The
+  script marks the card's pairs in their flags (`error_card`), which no gate decision carries, so a decision whose rule
+  is `"error"` is compared like any other. These are no longer among the
+  hook steps left out; standing grants themselves, who may answer, the risk floor, the required executor, observe
+  and bypass modes, a policy changed mid-session and the decision model still are. Chosen over listing budgets as
+  left out: the linear-time PRs change exactly these paths. Main 7cc2eb14 against itself with the new script, built-in
+  corpus `--no-variants`: 12,666 actions x 88 policies, 1,114,608 pairs, 0 lowered (139.8 s, against 130.4 s for
+  main's script on its 12,660 actions). Against mutants of main on that corpus, main's script reports 0 lowered where
+  this one reports 348 pairs (`_exo_relative`'s "too many to resolve" returns made `""`), 808,963 (`binds_exact`
+  returning False) and 27,985 (`body_unseen` dropped, `decide`'s own reading kept); for `NO_GRANT = ()` 222 against
+  350,322, and for a `decide` that says `"Ask"` 11,530 against 625,921.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
@@ -3431,6 +3469,213 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Relative aliases into non-secret stores still need #340's resolution. Relative
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
+
+  *Amendment 2026-10-25 (issues #143, #553, #554, PR #158):* the lexer ended a `${...}` word at its first `}` and
+  read nothing in it, and counted every parenthesis of a `$((`. So `echo ${X:-$(git push --force origin main)}` was
+  an allowed `read` under every policy, a `'}'` in a word hid the command after it, `echo $((echo '((' ; git push
+  --force origin main) )` was arithmetic (#553), and `${@@P}`, `${*@P}`, `${!@}` and `${!*}` were reads while
+  `${name@P}` already asked when its value was set on the line (#554). `_Lexer` now reads these as bash's parser
+  does in its default mode, on main's lexer: the same `run`, `_NEST` cap, `_nest_end`, token marks, `_own_text`,
+  `_given_stdin`, parse memo and three-value `_parse`. *Words* (`_Lexer._param`): a `}` closes only outside quotes
+  and escapes; a `'` pairs with the next one, in double quotes too; `$'..'` keeps `\'` escaped; a nested `${` is a
+  level on a stack. Each `$( )`, `$((` and backquote in a word, and each `<( )` and `>( )` outside double quotes, is
+  read by a lexer of its own and listed as a source, so a here-document opened in it stays in it (fdn-0's second
+  blocking row, review 5641579458). Single-quoted text bash expands is read within that text alone, so a part opened
+  in it ends at its quote (the first blocking row). `${!name}` and the other indirect forms of a name, a digit, `@`
+  or `*`, and `${name@P}`, `${@@P}`, `${*@P}` and `${@:n@P}`, run a value and ask; the listing forms do not. bash
+  5.3's `${ cmd; }` is read and asks. *`$((`* (`_Lexer._arith`): arithmetic only when bash's parser match
+  (`_group_end`, `_arith_end`) and its second reading at expansion (`_expand_end`) end at the same `)` and the text
+  balances as `chk_arithsub` counts it (it counts the parentheses of a `${...}` in a nested `$( )`, which the parser
+  steps over); a group whose nested `$( )` holds a comment or a here-document is read as a `$( )` (stricter than
+  bash). Else it is a `$( )` holding a subshell, read up to the parser's end (`_group_sub`); one that never closes
+  takes the rest of the text and asks (bash rejects the line). Each group's end is kept for a chain of them.
+  *Depth and budget:* a part only the new reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((`
+  in a word, a `$((` read as a subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels
+  deep, counted alike for each kind: its own `$(`, `<(`, `>(` or backquote is level 1 (in arithmetic, quoted text
+  and `${ cmd; }`, the first `$(` or backquote in it), and each one inside is a level more (`_WORD_NEST`,
+  `_Lexer._part`, `_Lexer._deeper`; a backquote in such a part is a level too). A deeper level is an unread part
+  that asks, as one past `_NEST` does: the reading before costs next to nothing on such a nest, and reading it to
+  `_NEST` cost 10 to 40 times as much as that reading. One classify call opens `_WORD_PARTS` (24) such parts, in
+  classify order, each counted once for each lexer pass that opens it: the line's, each `$( )` level around it, and
+  the passes of `_dollar_brace` and `_unknown_forms` over a `$( )` in a `${..}` word (the lexer of a line's
+  literal-word view, `_policy_command_view`, opens none: a word holding a part is dynamic there either way). Inner
+  levels are opened when their source is classified, after the rest of the line, so later parts can spend the budget
+  first; a part past them is cut the same way. A part's
+  source no longer lists the parts inside it a second time: they are listed when that source is read, a level
+  deeper. So each line costs at most 3 times the reading before, or 15 ms more, on the review's families (CPU, best
+  of 9).
+  *Also:* a `$( )` or `<( )` reads its own here-documents (`_Lexer._nested`), a backslash-newline after `$` is
+  joined by #584's joined reading (this PR's own join in `_parse_line` gave way to it on the merge of main
+  dcab371a), `$'` in double quotes is a `$` and a quote, and `_nest_end` ends a part past the cap where the lexer
+  would, both readings (#334's equality test holds for each). *Two readings.* Where the new reading may differ
+  anywhere in a call (`_Lexer._differ`: a word closed past its first `}`, a source read in a word, a `$((` matched
+  otherwise, an over-deep part the reading before ends elsewhere or one holding a here-document), `classify` reads
+  the call again with the lexer as before (`_flat_words`), with budgets of its own, and puts that reading at the end
+  of the call's `also` chain; `readings` walks the chain, so `decide`, `no_grant`, `call_approvers`, `body_unseen`
+  and the hook read both and the stricter holds. `binds_exact` and `is_outward` read each reading too, and a line
+  whose readings are different acts binds its approval to the exact text, so an "always" on its first reading's
+  category and target covers no line main bound to its text. A part the new reading adds can lead a line and turn
+  a category line or the opaque floor (a push a word hid outranks a visible delete), and dash, the `/bin/sh`
+  fallback, ends a word at its first `}` where it has no `<( )` or pairs no `'` in `"${x:-..}"`: the reading before
+  keeps both at their decision on main. A line that ends inside a quote (`'`, `"` or `$'`), which bash and dash
+  reject, asks (a shell
+  closing the quote elsewhere runs the rest), also under #394's catch-all `log` rule, with the reading before kept;
+  one left inside a `$( )` or a backquote is read as before, so that rule still logs `echo $(`. *Checked:*
+  `scripts/gate_diff.py` of main against this tree lowers nothing: the built-in corpus (9,676 actions x 87
+  policies, no variants, 16,240 pairs tightened on 264 actions), an aimed corpus (27,251 actions: every line of the
+  parameter-expansion, ANSI-C and command-quote tests and of the earlier port's tests, every heredoc, `$((` or `${`
+  literal of `tests/security`, generated words for each operator, nested source and quoting with a push or a delete
+  after, the review's repro lines, over-deep nests, nests in words and in `$((` at each depth up to 20, each kind of
+  part at each level from 1 to 7, lines past the 24-part budget, 1,200 fuzzed lines and the review rounds' corpora,
+  under the 87 policies and 19 deny, category and reserved policies on force_push, vcs_push, delete, web_post and
+  opaque_exec; 660,606 pairs tightened on 15,595 actions), and the built-in corpus with variants (72,373 actions x
+  87 policies, 26,409 pairs tightened on 422 actions). Rejected: keeping main's reading alone and adding
+  bash's sources as parts (a word closed past its first `}` hides the command after it, which no part reaches);
+  re-applying #158's earlier lexer (main's `_nest_end`, marks and memo would be lost). Limits, in `docs/GATE.md`
+  "Shell parameter expansion (D-038)": arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates a value the gate
+  does not see; a command more than three levels deep in a part only the new reading opens, or in a part past a
+  call's 24, is not read: it asks, also under a deny on it, and a rule allowing `opaque_exec` allows it, as main
+  does; dash's other differences and bash 3.2's pairing are not modelled; a word bash never closes asks, and what
+  follows it is read only the way before.
+  *Re-checked 2026-10-26 (review 5652171811, on the merge of main dcab371a):* each mark in this lexer code that makes
+  a line or part fail closed (an odd part: a value that runs, `${ cmd; }`, a word, `$((` or quote left open; an unread
+  part: past `_WORD_NEST`, the `_NEST` cap or `_WORD_PARTS`; a part that takes the rest of the text, in `_Lexer` and
+  in `_nest_end`) was neutralized alone in a copy of the tree, 28 marks, and each copy fails a row of
+  `tests/security/test_gate_parameter_expansion.py` whose line asks for that mark alone or pins where it ends (a plain
+  `echo`; the table is in the PR). With main's #584 and D-074, each of classify's two readings keeps its joined
+  reading and its `ordinary` reading, with budgets of their own (`_classify_read`); `readings` lists the `ordinary`
+  reading of each reading, not only the call's, and `binds_exact` keeps main's rule that a line with an `also` or
+  `ordinary` reading binds. Since the reading before #143 ends the `also` chain, every line read both ways now
+  binds its approval to the exact text, also where both readings are one act (`echo hi > /tmp/f ${x:-$(echo hi)}`):
+  a standing grant on that category and target no longer covers it (main reads such a line one way and does not
+  bind it). This tightens and lowers nothing; a line read one way keeps its grants
+  (`test_a_line_read_two_ways_binds_to_its_text_even_as_one_act`). This PR's own join of a backslash-newline after
+  `$` in `_parse_line` gave way to #584's joined reading, which keeps the line as written beside it and leads with
+  the more severe, so `: # $\<newline>(git push ...)` (bash runs the next line) leads its card with the push, as on
+  main. A command past the depth or the budget still asks under a deny on it, and a rule allowing `opaque_exec`
+  allows it, as main allows the line (main reads none of the word); a deny there is follow-up work.
+  *Re-checked 2026-10-27 (review 5659098661, on the merge of main 15e60ddb):* `classify` reads the call each way
+  in `_classify_read`, which keeps main's #584 joined reading and D-074 `ordinary` reading for each, with budgets
+  of their own; `readings` is main's walk plus the `ordinary` reading of every reading; `binds_exact` keeps each of
+  main's conditions and adds them for every reading; `as_dict` pops what main pops (this PR adds no field). A
+  command in a word keeps the readings it has alone, main's newer ones too: an ssh host target (#493), each store
+  path a write names (#514), a code-load folder (#459), a gh download into the store (#461), a glob in a secret
+  store's folder (#594) and a here-document's exact delimiter line (#328)
+  (`test_a_command_in_a_word_keeps_mains_newer_readings`). `scripts/gate_diff.py` of main 15e60ddb against this
+  tree lowered nothing on the built-in corpus and on an aimed corpus (the counts measured then came from a corpus
+  harvested before the last test edit; the re-check below gives counts measured on its final tree).
+  *Re-checked 2026-10-27 (reviews 5661670054 and 5652171811, on the merge of main 58503282):* the reading before
+  #143 (`_flat_words`) is main's own lexer, whose newer readings it takes whole: #553's `$((` (`_dollar_paren`: a
+  `$((` bash runs as a `$( ( )` is read as one; one never closed stays arithmetic text), #585's backslash-newline
+  after `$`, #588's `$[ ]` and #579's `${..@P}`. bash's reading keeps #588 and #579 as main reads them, and is
+  read beside main's wherever they may differ: a `$((` main's `_dollar_paren` ends elsewhere or reads as the other
+  form, and a `${` a backslash-newline splits, which main reads to its first `}` as text bash runs. A `${..@P}`
+  the word lists is weighed as #579 weighs it (a parameter the line assigns a literal keeps the read); one only
+  bash's reading opens asks. Two rows of this PR change with main: a `$((` main reads as a subshell is read by
+  main every level to the `_NEST` cap, so a push four levels deep there denies, and `echo $(( ${x:-'))`, a push
+  line, `'} ))` reads as main reads it, a read (bash and dash run nothing there, checked with a printf probe);
+  main's own `echo $((echo hi; echo HIDDEN` row asks here, as a `$((` bash never closes does. A command in a word
+  keeps main's newer readings, each pinned by the outcome the main PR added (the PR's first parent decides the
+  command alone lower: #611 under `deny: [target:*/gates.yaml]`, #604 and #609 under a store deny, #328's `EOF `
+  delimiter under a push deny), and by its part targets: also #634, #643, #652, #635, #641 and #633. Rows pin a
+  word with each of the joined reading (#584), the config-store `ordinary` reading (D-074) and the camelCase floor
+  (#515, #602: set only for a generic tool, whose arguments are never read as a shell line, so no call holds both
+  it and the reading before #143), each with its outcome and exact binding. The 28 fail-closed marks were each
+  neutralized alone in a copy of the merged tree, and each copy fails a row whose line is a benign `echo` (the
+  reading before, mark m27, through `test_a_benign_line_only_the_reading_before_asks_about`). `scripts/gate_diff.py`
+  of main 58503282 against this tree lowers nothing: the built-in corpus (12,515 actions x 88 policies, no
+  variants, 17,602 pairs tightened on 296 actions) and an aimed corpus regenerated from this tree's tests and
+  main's new lexer tests, with 239 calls that put each of main's newer readings in, beside and past a word and
+  the composition calls (15,117 actions x 116 policies: the 88 built in, the 19 aimed ones, 5 on `store_write`
+  and `credentials` and 4 on targets and allow rules; 257,162 pairs tightened on 4,766 actions). Its first run
+  found 4 pairs on 2 lines lowered by the merge itself (`echo $[$(`: a `$[` no `]` closes lost its last
+  character, so the `shell` part main reads was gone under a category deny); the port now reads that span to its
+  end as main does (`test_a_legacy_arithmetic_span_left_open_keeps_mains_reading`). The level-4 and budget limit
+  under a rule allowing `opaque_exec` stays a documented limit (`docs/GATE.md` "Known limits"), no lower than main.
+  *Re-checked 2026-10-28 (review 5678114763, on the merges of main 347746ad and f28934a3):* main f28934a3 reads
+  each `env -S` text again as a call of its own (`split_readings`, #591 and #707) and the stdin of a `sudo -s` or
+  `sudo -i` shell, with the line as read before #491 at the end of its floors (#491, #718). `classify` keeps main's
+  loop over the `env -S` readings, and each of them is read both ways (`_classify_reading`: as the lexer reads now
+  and, where the two may differ, as before #143 at the end of that reading's `also` chain), each with its own
+  joined (#584), `ordinary` (D-074) and sudo floor readings, so a word bash reads in an `env -S` text or a sudo
+  shell's stdin is read in every one of main's readings. `readings` lists the `ordinary` and `split_readings` of
+  every reading, not only the call's, and `binds_exact` binds a line with either in any reading; the hook's bypass
+  floor reads main's first split reading as main does, and `no_grant` every reading. Rows in
+  `tests/security/test_gate_parameter_expansion.py` (24 that fail on main f28934a3 and 8 guards) and
+  `plugins/exo-gate/tests/test_approvals.py` (4 rows: principal-only approvers, no standing grant) pin the
+  composition; four `test_unseen_body.py` rows keep both unseen notes there. `scripts/gate_diff.py` of main
+  f28934a3 against this tree lowers nothing: the built-in corpus (13,205 actions x 88 policies, no variants,
+  17,950 pairs tightened on 353 actions) and an aimed corpus that adds a combination corpus harvested from main's
+  #591, #491 and hook tests, with this PR's word forms around them and inside `env -S` texts and sudo stdin
+  (31,670 actions x 151 policies, 4,782,170 pairs, 993,319 tightened on 13,337 actions).
+  *Re-checked 2026-10-28 (on the merge of main 34b5b495, #546 for #471):* main reads a call with a quoted prefix
+  assignment both ways: after the prefix, and as before #471 with the quoted word the program
+  (`Classification.before`, made by `classify` around main's `env -S` loop `_split_reading`), and decide,
+  `readings`, `binds_exact`, `no_grant`, `call_approvers`, the store scan and the hook's bypass floor read both.
+  The layers nest: `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (this PR's two ways)
+  -> `_classify_read` (budgets, the #584 joined reading, the gh and #491 sudo floors, D-074's `ordinary`, #515's
+  camelCase floor). So `before` is main's own reading of the call, `env -S` readings and all, and every reading
+  either side makes, the reading as before #143 of each `env -S` reading of `before` included, is listed by
+  `readings`. `readings` walks the `ordinary`, `before` and `split_readings` of every reading (main walked the
+  call's); `binds_exact` keeps this PR's per-reading test and adds main's `unknown program` signal to it, and since
+  `before`'s readings are listed, a line binds wherever main's recursion into `before` bound it. The reading as
+  before #143 is now named on the reading it ends (`Classification.flat`, popped from `as_dict`), and the exo-gate
+  hook's bypass floor takes main's own reading first: behind a quoted prefix `before`, its first split reading,
+  and that reading's `flat` where its words were read both ways. Taking bash's reading there instead, as the
+  isolated head did, asked at the floor for 60 of 908 hook probe lines main held (a post that breaks the posting
+  rules beside a secret or store write only bash's reading of a word finds); they are held again, and the
+  secret still asks at the floor through `no_grant` once the post is fixed. Rows in
+  `tests/security/test_gate_parameter_expansion_quoted_prefix.py` pin the composition (a word behind, inside and
+  around a quoted prefix, in an `env -S` text and in a sudo shell's stdin; each line at least as with a plain
+  prefix and with the word quoted whole; a word in an arithmetic `$((` too), and
+  `plugins/exo-gate/tests/test_bypass.py` its bypass floor and hold. `scripts/gate_diff.py` of main 34b5b495
+  against this tree lowers nothing: the built-in corpus (1,210,616 pairs, no variants, 20,428 tightened on 433
+  actions) and an aimed corpus of the 4,190 composition lines and 1,200 arithmetic-word lines under 112 policies
+  (603,680 pairs, 29,281 tightened on 3,018 actions); the hook in bypass decides none of the 908 hook probe lines
+  lower than main 34b5b495 (158 stricter).
+  *Re-checked 2026-10-29 (on the merge of main a1dd4fec, #838 for #479):* main reads a call that holds a loop
+  whose body `cd`s into the store a second time, with the loop's commands read in the store (`_loop_reading`,
+  `_loop_again`, `_LOOP_BUDGET`), and keeps that reading beside its own (`_beside`). #838 put that reading in
+  main's per-reading function, which this PR calls `_classify_read`; the merge keeps it there, so the layers are
+  `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (this PR's two ways) ->
+  `_classify_read` (budgets, #584's joined reading, #838's loop reading, the floors). Each of the two ways of
+  reading the words then has its own loop reading and its own budget: bash's reading reads the command in a word
+  of such a loop in the store on the next pass, and the reading as before #143 (`flat`) is main a1dd4fec's own
+  reading, second pass and all, which the hook's bypass floor takes first as before. No code beyond the textual
+  merge was needed (only `CHANGELOG.md` conflicted; `src/exo/gate.py` merged clean, #771's renames and #775's
+  `gc.recentobjectshook` key kept). So `for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd
+  ~/.exo/policies; done`, an allowed read on main a1dd4fec and on this PR before the merge, is a `store_write`,
+  the principal's alone and denied under `deny: [store_write]`, also in an `env -S` text, a sudo shell's stdin, a
+  `$((`, a `{ ..; }` body or a loop inside a word; a `cd` in a word's `$( )` runs in a subshell and leaves the
+  loop where it was. Rows in `tests/security/test_gate_parameter_expansion_loop_cd_store.py` (14 that fail on
+  main a1dd4fec and on this PR before the merge, guards, and each loop line at least as with the word's plain
+  substitution) and `plugins/exo-gate/tests/test_bypass.py` pin it. `scripts/gate_diff.py` of main a1dd4fec
+  against the merge lowers nothing: the built-in corpus (1,227,248 pairs, no variants, 21,852 tightened on 441
+  actions) and an aimed corpus of 4,315 loop lines under 112 policies (483,280 pairs, 38,849 tightened on 1,044
+  actions); a probe of those lines under 24 policies decides 0 pairs lower than main a1dd4fec or this PR before the
+  merge, and the hook in bypass none of 1,440 of them.
+  *Re-checked 2026-10-29 (on the merge of main 69e33d50, #839 for #547, #862 for #853):* main reads a compound
+  behind `time`, `time -p`, `time --`, `!` and their combinations opened as well (#853, `_opened_reading`), reads a
+  while/until condition's `cd` into the store a second time (#857), and on a store line asks a rule that would lift
+  a part's deny in the #191 pass to pass the whole line's own text test as well (#547, `_whole_line_test`). #862
+  gave main's per-reading function, which this PR calls `_classify_read`, a new body; the merge takes that body,
+  `_opened_reading` and `_one_reading` as main has them, under this PR's name (the one conflict, in
+  `src/exo/gate.py`). The layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading`
+  (this PR's two ways) -> `_classify_read` (budgets, #853's opened reading) -> `_one_reading` (#584's joined
+  reading, #838's loop reading) -> `_read_core` (the gh and sudo floors, D-074's `ordinary`). Each of the two ways
+  of reading the words has its own opened reading with its own budgets, and `flat` is main 69e33d50's own reading,
+  opened reading and all. #547's
+  test reads the line as classified, so a store send in a word makes the line a store line there too:
+  `git push --force origin main && echo ${v:-$(gh gist create ~/.exo/plugins/foo/__init__.py)}`, which main
+  69e33d50 allows under the irreversible deny matrix with a `^git push` allow rule (log or ask under a log or ask
+  rule), is denied, and asks without the whole-line test. Rows in
+  `tests/security/test_gate_parameter_expansion.py` pin the composition: 41 rows that each fail on main 69e33d50;
+  29 of them fail on this PR before the merge too (a prefixed compound inside a word, 7 store-entering prefixed or
+  condition-cd loops with a word, and 21 store sends in a word beside a push that fail without the whole-line test
+  as well), and 12 are guards this PR held before the merge. `scripts/gate_diff.py` of main 69e33d50 against this
+  tree lowers nothing: the built-in corpus (1,245,728 pairs, no variants, 23,389 tightened on 487 actions) and an
+  aimed corpus of 12,544 lines (this PR's earlier aimed lines and 3,719 composition lines) under 121 policies
+  (1,517,824 pairs, 251,042 tightened on 5,120 actions).
 
   *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
   command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the
@@ -3997,7 +4242,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   here-string after such a group's closer (`! coproc W { bash; } <<EOF`) did not reach the shell inside it (#161),
   so a fed `rm -rf` was no delete. Main's first pass still read the parts of the coproc's argv, so a delete,
   push or post body denied as without the opener; what was lost is #479's second pass and the fed text. Now,
-  while classify reads a call (`_classify_reading`), `_parse_line` marks a compound opener in command position
+  while classify reads a call (`_classify_read`), `_parse_line` marks a compound opener in command position
   (`_command_word(cur.words, head, pre)`) that main's check leaves unopened (`_late_met`); classify then reads
   the call again with `_late_open` on (`_late_reading`, budgets and memos of its own), where `_parse_line` opens
   it and `_loop_word` also finds the loop word behind leading reserved words, `coproc`/`function`, their NAME
@@ -4008,7 +4253,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   its floor. Teaching `_parse_line` the positions directly would have replaced main's reading of those lines;
   the second reading keeps it by construction. With #853 (PR #862, merged first, main 69e33d50) the opened check
   reads #853's `_opening` too (`late = _late_open.get() or opening` in `_parse_line`, the same `or` in
-  `_loop_word`), so #853's reading without the prefix opens such a compound as well, and `_classify_reading` runs
+  `_loop_word`), so #853's reading without the prefix opens such a compound as well, and `_classify_read` runs
   `_late_reading` after `_opened_reading`, each beside main's reading (a nested classify inside the opened reading,
   the D-074 `ordinary` reading, runs neither second reading, as `_config_off` is set there; the `_opening` check on
   `_late_reading` is a cheap guard only). On a line that sets both marks the opened reading opens every compound
@@ -4050,7 +4295,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
   `tests/security/test_gate_coproc_open_864.py` (675 tests; 203 fail on b3efb5e7, the cost test only because
   main has no `_late_reading` to patch, and the other 472 pass on both) and 6 hook rows in
-  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there).
+  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there). With #158 (main
+  d3cbd874) the layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (#158's two
+  ways: bash's reading of the words, and `flat`, main's reading before #143) -> `_classify_read` (budgets, the
+  first reading with both marks set, #853's `_opened_reading`, then `_late_reading`) -> `_one_reading`. So each of
+  #158's two readings has its own opened and late readings, each with budgets of its own, and a coproc compound
+  that only bash's reading of a `${..}` word finds (`! coproc for ..` in `${v:-$(..)}`) is opened there.
   *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
   and `pre` and this second reading can go.
 
@@ -5696,8 +5946,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
   (`echo ... | xargs -I{} sh -c '{}'`) and the
   wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
-  has gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer does not read
-  (#143; open PR #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
+  had gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer did not read
+  (#143; read since #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
   allowlisted programs are read (#154).
 - **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
   the entry format says "no agent may take" the action.
@@ -6076,6 +6326,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
+- **Amendment 2026-10-29 (#842): `CHANGELOG.md` merges with git's union driver.** Nearly every PR adds a bullet near the top of `[Unreleased]`, so each merge to main conflicts with every open PR that also touched it. Its author has to merge main by hand and push again, which stales the review of the exact head. A one-line `.gitattributes` (`CHANGELOG.md merge=union`) keeps both sides' lines instead. Measured on main `50e2560b` over 98 open PRs: 85 conflicted with main, 46 of them in `CHANGELOG.md` and 19 in `CHANGELOG.md` alone. With the attribute, `CHANGELOG.md` conflicted in none, and 19 more PRs merged cleanly. None of the 46 deletes or edits a changelog line, so union only has to keep two sets of added lines, and it does: every line each side added is in the result.
+  - **Not extended to** `DECISIONS.md` or `docs/DOCS-MAP.md`. Two branches that edit the same row, or both add a `D-NNN` heading, must conflict; union would keep both silently (#648).
+  - **Limit:** git reads the attribute from the checked-out branch, so a branch cut before it lands still conflicts on `git merge main` until its clone adds the line to `$(git rev-parse --git-common-dir)/info/attributes`, the form that also works in a linked worktree (developer guide section 8). A rebase or cherry-pick onto main needs no step. In a bare repository `git merge-tree` reads attributes from HEAD, so GitHub's mergeability check and merge button likely apply union too; a changelog-only PR such as #424 will confirm it once this lands.
+  - **Limit:** after a release cut, an open PR's entry that sits where the new `## [X.Y.Z]` heading goes merges into the released section with no conflict, and nothing repeats, so `tests/test_merge_attributes.py` does not see it. The release steps (developer guide section 8, "Cutting a release") say each open PR checks which heading its entries are under after it merges main.
+  - **Limit:** union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk, and union keeps both sides' copy of that hunk with the lines between. When both sides add under one heading and under the next one just below it, an entry can move to the next heading and the lines between repeat, with no conflict. `tests/test_merge_attributes.py` makes the repeat visible: it fails when a version section of `CHANGELOG.md` holds a bullet twice or a `###` heading with nothing under it. Main has neither today. Where an entry sits stays a reviewer's check.
+  - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
+  - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
