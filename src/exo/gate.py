@@ -3318,6 +3318,15 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     readings = [_gh_read(group, r, [argv[i] for i in o], url, verb=verb)
                 for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
+    if (group, verb) == ("issue", "transfer") and len(ops) >= 2:
+        # gh's second positional operand is its destination repository (#449).
+        # Keep the source as before and decide the destination too, including a raw
+        # other-instance spelling that an owner/name scope must not authorize.
+        destination = argv[ops[1]]
+        dest_repo, on_github = _gh_repo(destination)
+        readings.append((dest_repo, ""))
+        if not on_github:
+            readings.append((destination, ""))
     readings += [r for _, o in parses for r in _gh_elsewhere(group, verb, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
     # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
