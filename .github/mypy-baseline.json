@@ -254,12 +254,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/bus/store.py",
-      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"str\"; expected \"int\"",
-      "code": "arg-type",
-      "count": 2
-    },
-    {
       "path": "src/exo/bus/tools.py",
       "message": "Incompatible default for parameter \"seats\" (default has type \"tuple[()]\", parameter has type \"list[str] | list[dict[Any, Any]]\")",
       "code": "assignment",
