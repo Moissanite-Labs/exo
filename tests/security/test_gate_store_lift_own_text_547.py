@@ -157,13 +157,14 @@ EVERY = {"match": {"command": "^git push|^gh gist create|^aws s3 cp|^gh issue cr
 
 @pytest.mark.parametrize("line, expected", [
     (PUSH_FIRST[0], ("store_write", "ask", "floor")),
-    (PUSH_FIRST[1], ("store_write", "ask", "floor")),
+    # `aws` is an unknown program, which main asks as opaque since #546; the ask is still the principal's alone.
+    (PUSH_FIRST[1], ("store_write", "ask", "opaque")),
     (PUSH_FIRST[2], ("store_write", "ask", "posting")),
     (PUSH_FIRST[3], ("store_write", "ask", "floor")),
 ])
 def test_a_rule_that_names_every_command_lifts_the_deny_as_on_main(line, expected):
     # The rule names the push, the store send and the line's lead, so it passes the test of the whole line and
-    # lifts the push's deny as on main; the store floor still asks the principal.
+    # lifts the push's deny as on main; the store floor (or #546's opaque step) still asks the principal.
     assert result(line, pol(EVERY))[:3] == expected, line
 
 
