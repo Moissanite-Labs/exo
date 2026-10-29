@@ -41,6 +41,23 @@ def test_pathological_pattern_times_out_without_stopping_loop(tmp_path, monkeypa
         (deepest / "a.txt").write_text("ordinary")
         pattern = "**/" * 30 + "absent"
         args = {"pattern": pattern} if name == "glob" else {"pattern": ".", "glob": pattern}
+    registry = default_registry()   # built before the measured call: its first-use setup is not the search
+    # The CPU time each loop callback used on the loop thread. A search on the loop thread is one callback that
+    # works until the limit. The test used to take the largest wall-clock gap between two 10 ms ticks, which also
+    # counts the time a loaded runner leaves this process waiting for a CPU (0.26 s and 0.56 s on macOS runners):
+    # the scheduler's stall, not the loop's. Thread CPU time does not grow while the process waits.
+    held = []
+    run_callback = asyncio.events.Handle._run
+
+    def timed(handle):
+        begin = time.thread_time()
+        try:
+            return run_callback(handle)
+        finally:
+            held.append(time.thread_time() - begin)
+
+    monkeypatch.setattr(asyncio.events.Handle, "_run", timed)
+
     async def run():
         ticks = []
 
@@ -51,12 +68,21 @@ def test_pathological_pattern_times_out_without_stopping_loop(tmp_path, monkeypa
 
         tick = asyncio.create_task(ticker())
         try:
-            start = time.monotonic()
-            result = await _call("grep" if name == "grep-include" else name, tmp_path, **args)
+            await asyncio.sleep(0)
+            held.clear()
+            cpu, start = time.process_time(), time.monotonic()
+            call = ToolCall("c", "grep" if name == "grep-include" else name, args)
+            result = await registry.call(call, ToolContext(cwd=str(tmp_path)))
+            cpu = time.process_time() - cpu
             assert result.is_error and result.text() == "Search stopped after 1 s; narrow the pattern"
             assert time.monotonic() - start < 3
+            # A thread of this process that holds the interpreter lock starves the ticker (2 ticks in a second).
             assert len(ticks) > 5
-            assert max(b - a for a, b in zip(ticks, ticks[1:])) < .1
+            # No callback worked on the loop thread for 0.1 s, so the search never ran on it.
+            assert max(held) < .1, sorted(held)[-3:]
+            # No thread of this process did the search's work, which lasts the whole 1 s limit. CPU time, unlike
+            # wall time, does not grow while a loaded runner keeps the process waiting.
+            assert cpu < search_worker.SEARCH_TIMEOUT / 2, cpu
         finally:
             tick.cancel()
             await asyncio.gather(tick, return_exceptions=True)

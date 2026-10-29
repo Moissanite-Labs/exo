@@ -610,6 +610,28 @@ test files need unique names (`test_<plugin>_...py`) because the plugin test fol
 The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
 The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
+**Timing and browser tests on hosted runners.** The hosted runners, the macOS ones most of all, are slow and
+shared. A test that passes on your machine can fail there for reasons that have nothing to do with the code. Write
+these tests so that only the defect they guard against can fail them:
+
+- Do not assert on wall-clock gaps. A loaded runner can keep a process waiting for a CPU for half a second. Measure
+  what the defect would cost instead: CPU time (of one event-loop callback, with `time.thread_time()`, or of the
+  process, with `time.process_time()`), or a count. `tests/core/tools/test_search_worker.py` measures each callback
+  by patching `asyncio.events.Handle._run`.
+- In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
+  node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
+    changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
+  - `resize(width, height)` returns after the page has handled the new size. Layout that a media query's change
+    event sets comes one frame after the resize.
+  - `settle()` waits until the event stream has caught up and every request the page made is answered. Call it
+    before reading a scroll position, an element or a request count that start-up could still change: each
+    catch-up redraws the transcript.
+- A longer timeout is fine where a test waits for a condition. A bound the test asserts stays as it is unless it was
+  wrong for what the test checks.
+- Reproduce on Linux under load: run the test in a loop beside a few busy-loop processes, both from the plugin
+  folder and with `pytest plugins`, as CI runs them.
+
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
 calls with side effects when removing unused bindings.
