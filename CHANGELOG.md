@@ -8,6 +8,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The web guidance line after a failed model call now reads what the core records (#855, D-092 amendment).
+  - A connection drop or timeout says the model could not be reached. Before, it pointed at `/trace`: the router
+    reports a failure before any output as "all routes failed or are cooling down", and the `ReadError` or
+    `ReadTimeout` behind it is only in the call's attempts.
+  - A CLI login refusal (claude-cli "Not logged in", an expired OAuth token) points at the Providers page again,
+    and so does a first run with no credentials.
+  - `HTTP 404` and a proxy's `HTTP 407` are no longer read as a refused key.
+  - A refusal still gets its line after two other failures, since each kind keeps its own count of two.
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.

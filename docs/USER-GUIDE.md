@@ -214,7 +214,9 @@ your recent threads by title, `/tutorial ` the words `on`, `off` and `reset`, `/
 running a shell command. A mistyped `/comand` is not sent: Exo says "did you mean /compact?" and leaves the fixed
 line in the box. Up arrow brings back earlier lines, and as you type, the rest of an earlier line shows dim; press
 right arrow to take it. With the box empty, a dim line sometimes suggests a next step (`/providers` after a failed
-call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help. Inspired by the
+call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help, except that its
+line after a failed call reads the error: a refused key or login points at the Providers page, a network failure or
+timeout says the model could not be reached, and anything else points at `/trace` (D-092). Inspired by the
 Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance".
 
 ## 4. Memory
