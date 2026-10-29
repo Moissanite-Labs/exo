@@ -2763,7 +2763,26 @@ principal alone when nothing denies it. Under `sudo` or `doas` over `ssh` or `mo
 is the dominant part, and a costly copy of each reversible part the wrapper runs is added beside it
 (#320), so a rule on `shell` or `local_write` with `reversibility: costly`, or a matrix that denies
 that cell, still denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` and `sudo ssh host
-'cp evil.py ~/.exo/plugins/foo/__init__.py'`. `deny: [store_write]` is the reliable way to refuse
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. A command beside the store write keeps its own
+deny too. The store write leads such a line, so a rule keyed on `command` that would lift another
+command's deny there must pass the own text test of the whole line (#547), as it must on a line the
+store write does not lead (#394): it names the command that writes or sends the store file, each
+command that would get a stricter outcome alone than the rule gives, and each command that changes
+the shell for the rest. Under a matrix that denies the irreversible cells, an allow rule
+on `'^git push'` therefore no longer lifts the push's deny in `git push --force origin main && gh gist
+create ~/.exo/plugins/foo/__init__.py`, nor with an `aws s3 cp` or `gh issue create -F` send of the
+file, or of any other store file, after the push; before #547 those lines asked the principal (an
+`rm` or `curl -T` of the file after the push was already denied, by that part's own cell). One
+rule that names both the push and the send lifts the push's deny as before, and the line still asks
+the principal alone. Separate rules do not combine: under one allow rule on `'^git push'` and
+another on `'^gh gist create'`, each is tested on its own, neither names the whole line, and the
+push-first store line is denied (`store_write deny matrix`; before #547 it asked at the floor), as
+#394 already decides the same push beside a plain file. The gate runs the whole line test once per
+rule on a line, not once per part, so a long store line stays linear in its parts. A rule that
+fails the test is still passed over at each part that a later rule lifts, so the pass grows with
+the parts times the rules ahead of the one that lifts: on 3,000 `git push` parts followed by a store
+send, with 0, 19 or 99 push rules ahead of one rule that names every command, `decide` takes 0.06,
+0.28 and 0.96 s of CPU (main a1dd4fec: 0.05, 0.10 and 0.12 s). `deny: [store_write]` is the reliable way to refuse
 every write into the folder. A `target:` entry matches the path only as the call spells it:
 `target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
 absolute path and `~/.exo/../.exo/plugins/...` still only ask.

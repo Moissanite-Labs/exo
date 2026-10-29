@@ -1872,7 +1872,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   folder is a store, so the store write leads. #191's pass reads the push part's matrix deny and then lifts it,
   because the anchored rule matches both the line and the part's own text (#394, #464). So the line asks the principal
   alone. With the `rm` first, the rule does not match the line, and the deny stands. This order rule is main's: each
-  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule.
+  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule. The group
+  was wider than `rm` (#547): any send or write of a store file after the push, in any store folder, met the same lift,
+  and `gh gist create`, `aws s3 cp` and `gh issue create -F` tails with a `plugins/` or `policies/` file still asked
+  on main f28934a3 (`store_write ask floor`, or `ask posting`). An `rm` tail and a `curl -T` tail of a `plugins/`,
+  `policies/` or `state/` file, joined by `&&`, `;` or `||`, were already denied there (`store_write deny matrix`),
+  by the delete's or the upload's own cell, and a `keys/` file makes a secret line main denies. The amendment of
+  2026-10-28 for #547 (the last of this entry) ends the lift on a store line.
   With #320 (the amendment of 2026-10-22 for #225, #269, #309 and #341, below), `_run_privileged` adds a costly
   copy of each reversible part that `sudo` or `doas` runs over `ssh` or `mosh`, so the first group's rule on a
   costly `shell` or `local_write` part and its matrix cell deny those lines again, as on main.
@@ -3827,6 +3833,56 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-28 (issue #547):* on a store line, #191's pass lifted a part's deny with a rule written for
+  another command on the line. Under `matrix: {irreversible: {internal: deny, private: deny, public: deny}}` and
+  `{match: {command: '^git push'}, decision: allow}`, `git push --force origin main && gh gist create
+  ~/.exo/plugins/foo/__init__.py`, the same push with `aws s3 cp <file> s3://b/x` and with `gh issue create -R
+  pub/repo -t x -F <file>` asked on main f28934a3 (`store_write ask floor`, `ask floor`, `ask posting`), and so did
+  the same lines with a `policies/` file, while the push beside `/tmp/plain.txt` is `force_push deny matrix`. The
+  store send leads such a line, and its own cell (costly, private) is not denied, so the rule does not lower the line
+  and the rule step never runs the own text test (#394). The #191 pass then read the push part's matrix deny and
+  lifted it, because the anchored rule matches the line and the push's own text. Now that pass, on a line a
+  `store_write` leads, also asks an allow, log or ask rule keyed on `command` to pass the own text test of the whole
+  line (`_line_own_test`, through `_whole_line_test`), as the rule step asks of a rule that would lower a line the
+  store write does not lead: the rule must name the store write's own text, each command that would be stricter alone
+  than the rule's decision, and each command that changes the shell for the rest. A rule that fails is passed over
+  and added to `passed`, so `decide` also decides the line as before and keeps the stricter. A failure while the test
+  is built or run counts as a fail. The answer does not depend on the part, so `_whole_line_test` keeps it per rule
+  and the test runs once per rule on a line, not once per part (each run reads every part): the pass stays linear in
+  the parts of a long line. Run once per part, a line of 3,000 denied pushes before a store send (about 98 KB) took
+  9 to 11 seconds of CPU in `decide` under a rule that names every command or `'.'`; once per rule it takes about a
+  tenth of a second under that one rule, as on main, and a test bounds it with `time.process_time()`. A rule that
+  fails the test is still passed over at each part that a later rule lifts (a memo lookup and its two regex
+  matches), so the pass grows with the parts times the rules ahead of the one that lifts (review 5690862857). On the
+  same 3,000 pushes (`git push --force origin b<i>`) before `gh gist create ~/.exo/plugins/foo/__init__.py`, with 0,
+  19 and 99 allow rules on `'^git push'` ahead of one rule that names every command, `decide` took 0.06, 0.28 and
+  0.96 s of CPU, against 0.05, 0.10 and 0.12 s on main a1dd4fec (the best of three, `time.process_time()`); with the
+  push rules alone the first push's deny ends the pass, about a tenth of a second on both (0.11 to 0.12 s on
+  main, 0.12 to 0.15 s here, where the rule passed over adds one more pass). The change only passes more rules
+  over in that pass, so each part denied before is denied now: nothing decides lower. With the store send first, or
+  with an `rm` or `curl -T` tail (denied by that part's own cell), main already denies, and so do key lines
+  (`~/.exo/keys/k`, a secret line). One rule that names every command on the line (`'^git push|^gh gist
+  create|...'`) lifts the deny as before, and the store floor still asks. Separate rules that each name one command do
+  not combine: each is tested on its own, so under `{match: {command: '^git push'}, decision: allow}` and `{match:
+  {command: '^gh gist create'}, decision: allow}` neither names the whole line and the push-first store line is
+  `store_write deny matrix` where main a1dd4fec asks at the floor; that matches #394 on a line with no store write
+  (the same push beside `/tmp/plain.txt` is `force_push deny matrix` under both rules, on main too). The gate differential against main f28934a3 (main's
+  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants` (12,631 actions under 88
+  policies, 1,111,528 pairs) lowers 0 pairs and tightens 73 pairs on 73 actions, all `store_write ask ->
+  store_write deny`; 284 pairs keep their outcome with another reason (a deny that now names the push rather than a
+  later part). An aimed corpus of 5,034 lines (7 deny-able commands, among them three push forms, `rm -rf
+  build` and `npm publish`, beside 13 sends, writes, deletes and reads of 9 files in `plugins/`, `policies/`,
+  `state/`, `update/`, the ledger, `keys/` and `/tmp`, in both orders with `&&`, `;` and `||`, and three-command
+  lines), run alone (`--only-corpus`, 10,068 actions) under the 88 built-in policies and 100 more (matrices that deny
+  the irreversible or costly cells, anchored, unanchored, log and ask rules on the push, rules that name every
+  command, category lines, deny and reserved entries), lowers 0 of 1,892,784 pairs and tightens 32,334 pairs on
+  4,686 actions, all `store_write ask -> store_write deny`; 7,682 pairs keep their outcome with another reason.
+  Tests: `tests/security/test_gate_store_lift_own_text_547.py`.
+  *Revisit if:* the #191 pass should ask the whole line test on every compound line, not only on one a store write
+  leads. Elsewhere a rule that names a part still lifts that part's deny when the line's lead is not denied by its
+  own cell and the rule does not lower the lead: under a matrix that denies only the costly cells and `{match:
+  {command: '^gh gist'}, decision: allow}`, `gh gist create /tmp/plain.txt && git push --force origin main` asks
+  (`force_push ask matrix`) on main and here, while the push-first order denies; a guard row pins both.
 - *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
   `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
   gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
