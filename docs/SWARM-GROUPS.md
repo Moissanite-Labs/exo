@@ -41,3 +41,21 @@ an implementation of group message routing.
 
 `tests/test_saved_groups.py` covers validation, restart, owner-scoped metadata,
 fresh private sessions, and rollback when the group insert fails.
+
+## Message delivery foundation (G03, G04)
+
+`GroupMessages` saves explicit sender and audience IDs with each message. In
+conductor mode, workers send only to the conductor. The conductor sends to one
+worker per message. Socratic messages may address multiple members.
+
+Each recipient has separate delivered and consumed receipts for each message.
+Reading pending messages marks them delivered. Consumption acknowledges an exact
+message ID, so acknowledging a later message never skips an earlier one. Pending
+reads replay unconsumed messages after restart with the same IDs. This is
+at-least-once delivery, not exactly-once execution. A runtime must deduplicate
+input IDs and track ambiguous external actions separately before retrying work.
+
+The adapter is internal. Trusted callers supply owner and member identity. It is
+not a public endpoint or an agent tool, and does not authorize impersonation.
+Human observation, runtime execution, shared APIs and client controls remain
+separate work. Delivery receipts do not prove a model processed the input.
