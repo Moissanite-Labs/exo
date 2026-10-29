@@ -16,6 +16,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Failed callbacks show a safe retry message and preserve the previous connection.
 
 ### Added
+- Web chat can hide header controls, show observed current work, group completed tools, preserve the reading position during live output, and show steering receipts. Running tools and failures remain visible.
 - Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
   registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
   do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport

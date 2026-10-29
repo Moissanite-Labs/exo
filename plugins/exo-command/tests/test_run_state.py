@@ -122,7 +122,7 @@ def test_guidance_line_persistent_and_updates_only_on_state_change():
         with Browser() as b:
             b.goto(srv.url())
             b.wait("!!document.querySelector('.xc-guidance')")
-            b.wait("document.querySelector('.xc-guidance').textContent.length > 0")
+            b.wait("document.querySelector('.xc-guidance').textContent === " + json.dumps(IDLE))
             got = b.eval(GUIDANCE)
             assert got["role"] == "status" and got["live"] == "polite"
             assert got["last"] and got["count"] == 1                      # one persistent element, last in the strip
@@ -165,5 +165,61 @@ def test_guidance_is_visible_at_narrow_and_wide_widths(width):
                 assert geometry["right"] <= geometry["parentRight"] + 1
                 assert geometry["bottom"] <= geometry["parentBottom"] + 1
                 assert geometry["contentHeight"] <= geometry["height"]
+    finally:
+        srv.close()
+
+
+@needs_node
+def test_current_work_separates_observation_from_reports(tmp_path):
+    node_guidance(tmp_path, r"""
+import assert from 'node:assert/strict';
+const {currentWork: w} = await import('./run_state.mjs');
+const items = [
+  {kind:'user', text:'Old task'},
+  {kind:'assistant', text:'Old success', complete:true},
+  {kind:'user', text:'New task'},
+  {kind:'tool', name:'bash', status:'running', args:{secret:'never display'}, output:'success'}
+];
+assert.equal(w({items,busy:true}).request, 'New task');
+assert.equal(w({items,busy:true}).activity, 'Tool running: bash');
+assert.match(w({items}).report, /No completed/);
+assert.match(w({items,busy:true,connected:false}).activity, /unknown/);
+assert.match(w({items,busy:true,fresh:false}).activity, /unknown/);
+assert.match(w({items,busy:true,approval:true}).activity, /approval/);
+assert.match(w({items,busy:false}).activity, /Idle/);
+items[3].status = 'done';
+assert.match(w({items,busy:true}).activity, /next observed event/);
+items.push({kind:'assistant', text:'Work succeeded', streaming:true});
+assert.match(w({items,busy:true}).activity, /Receiving/);
+assert.match(w({items}).report, /No completed/);
+items[4].complete = true;
+assert.equal(w({items}).report, 'Work succeeded');
+assert.ok(!JSON.stringify(w({items})).includes('never display'));
+assert.match(w({}).request, /No request/);
+assert.ok(w({items:[{kind:'user',text:'x'.repeat(500)}]}).request.length <= 240);
+""")
+
+
+@needs_chrome
+def test_current_work_tracks_only_selected_thread_without_duplicate_controls():
+    srv = Served(ThreadSrc())
+    try:
+        with Browser() as b:
+            b.goto(srv.url())
+            b.wait("document.querySelector('.xc-guidance')?.textContent === " + json.dumps(IDLE))
+            srv.call(srv.centre.record, {"seq": 101, "type": "turn.started", "session": "s1", "body": {}})
+            srv.call(srv.centre.record, {"seq": 102, "type": "message.completed", "session": "s1", "body": {
+                "message": {"id": "request-new", "role": "user", "content": [{"type": "text", "text": "Check the new panel"}]}}})
+            srv.call(srv.centre.record, {"seq": 103, "type": "tool.started", "session": "s1", "body": {
+                "call": {"id": "call-panel", "name": "bash", "arguments": {"command": "do not show arguments"}}}})
+            b.wait("document.querySelector('.xc-current-work').textContent.includes('Tool running: bash')")
+            assert "Check the new panel" in b.eval("document.querySelector('.xc-current-work').textContent")
+            assert "do not show arguments" not in b.eval("document.querySelector('.xc-current-work').textContent")
+            assert b.eval("document.querySelectorAll('.xc-current-work button').length") == 0
+            srv.call(srv.centre.record, {"seq": 104, "type": "tool.started", "session": "other", "body": {
+                "call": {"id": "foreign", "name": "foreign-tool", "arguments": {}}}})
+            srv.call(srv.centre.record, {"seq": 105, "type": "turn.completed", "session": "s1", "body": {}})
+            b.wait("document.querySelector('.xc-current-work').textContent.includes('Idle.')")
+            assert "foreign-tool" not in b.eval("document.querySelector('.xc-current-work').textContent")
     finally:
         srv.close()

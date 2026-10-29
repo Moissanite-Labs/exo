@@ -13,7 +13,7 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 import { attachPaneLayout } from "./pane_layout.js";
-import { runGuidance } from "./run_state.js";
+import { runGuidance, currentWork } from "./run_state.js";
 
 export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
@@ -26,6 +26,7 @@ export function mount(root) {
   const statusUpdates = new Map();
   let requested = "", ctxTokens = null, lastCallTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // estimates from /context; completed-call instruments from model.call
   const seen = new Set();   // panels already reported as opened
+  const steerReceipts = [];
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
@@ -74,6 +75,21 @@ export function mount(root) {
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const guidanceEl = h("div", { class: "xc-guidance", role: "status", "aria-live": "polite" });
   let guidanceShown = "";
+  const workRequest = h("div", { class: "xc-work-value" });
+  const workActivity = h("div", { class: "xc-work-value", role: "status" });
+  const workReport = h("div", { class: "xc-work-value" });
+  const workEl = h("details", { class: "xc-current-work", "aria-label": "Current work" },
+    h("summary", { class: "xc-work-heading" }, "Current work", workActivity),
+    h("div", { class: "xc-work-details" },
+      h("div", { class: "xc-work-label" }, "Latest request"), workRequest,
+      h("div", { class: "xc-work-label" }, "Latest agent report · not independently verified"), workReport));
+  function drawWork() {
+    const state = currentWork({ items, connected: coreUsable, fresh: activityFresh, busy, approval: waitingForApproval(current) });
+    for (const [el, value] of [[workRequest, state.request], [workActivity, state.activity], [workReport, state.report]]) {
+      if (el.textContent !== value) el.textContent = value;
+    }
+    workEl.hidden = !current;
+  }
   const sideEl = h("aside", { class: "xc-side" });
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
@@ -97,7 +113,12 @@ export function mount(root) {
   const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
   const hero = createHero(heroCanvas);
   let heroOn = false, heroTimer = 0;
-  const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
+  const newActivity = h("button", { class: "xc-new-activity xc-btn", hidden: true,
+    onclick: () => home() }, "New activity");
+  const stage = h("div", { class: "xc-stage" }, heroEl, logEl, newActivity);
+  logEl.addEventListener("scroll", () => {
+    if (nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) newActivity.hidden = true;
+  });
   const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
     h("a", { href: "#providers" }, "Set up providers"));
   const mainEl = h("main", { class: "xc-chat-main" });
@@ -134,7 +155,7 @@ export function mount(root) {
   function isNote(m) { return !!(m && m.meta && m.meta.note); }
 
   function fromMessages(msgs) {
-    for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); delete steers[m.id]; }
+    for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); settleSteer(m.id, "applied"); }
     drawSteers();
     const out = [];
     const byCall = {};
@@ -178,10 +199,10 @@ export function mount(root) {
     const b = ev.body || {};
     if (ev.type === "message.completed" && b.message && b.message.role === "user") {   // a steer that lands is no longer pending
       landed.add(b.message.id);   // the event can beat the reply to the send
-      if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
+      if (steers[b.message.id]) settleSteer(b.message.id, "applied");
     }
     switch (ev.type) {
-      case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
+      case "steer.cancelled": settleSteer(b.message_id, "withdrawn"); return;
       case "session.created": case "session.updated": refreshSessions(); return;
       case "approval.requested": if (gone.has(b.request_id)) return; approvals[b.request_id] = { ...b, session: ev.session, seq: ev.seq }; drawApprovals(); drawSessions(); return;
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
@@ -253,6 +274,7 @@ export function mount(root) {
       case "error": flash(b.message); break;
       default: break;
     }
+    drawWork();
   }
 
   function delta(b) {
@@ -260,8 +282,7 @@ export function mount(root) {
     if (!it) { it = { kind: "assistant", id: b.message_id, text: "", streaming: true }; push(it); }
     if (it.complete) return;
     it.text += b.text;
-    if (it.textEl) it.textEl.textContent = it.text; else redraw(it);
-    stick();
+    if (it.textEl) updateLog(() => { it.textEl.textContent = it.text; }); else redraw(it);
   }
 
   function completed(m) {
@@ -339,14 +360,59 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- drawing
 
-  function home() { logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); }
-  function stick() { if (nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) home(); }
+  function home() {
+    logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight);
+    newActivity.hidden = true;
+  }
+  // Measure before a mutation. Browser scroll anchoring is disabled for this log,
+  // so inverse inserts and streamed Markdown use the same explicit anchor.
+  function updateLog(change) {
+    const follow = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);
+    const top = logEl.getBoundingClientRect().top;
+    const anchor = Array.from(logEl.children).find((el) => el.getBoundingClientRect().bottom > top);
+    const before = anchor ? anchor.getBoundingClientRect().top : 0;
+    const height = logEl.scrollHeight, scroll = logEl.scrollTop;
+    change();
+    if (follow) home();
+    else {
+      if (anchor && anchor.isConnected) logEl.scrollTop += anchor.getBoundingClientRect().top - before;
+      else logEl.scrollTop = scroll + (layout === "inverse" ? logEl.scrollHeight - height : 0);
+      newActivity.hidden = false;
+    }
+  }
+  // Only successful tool calls fold together. Running calls and errors stay out.
+  // Move existing nodes rather than recreating them, preserving expanded output.
+  function groupTools() {
+    const groups = new Map();
+    for (const el of Array.from(logEl.children)) {
+      if (!el.classList.contains("xc-tool-group")) continue;
+      const rows = Array.from(el.children).slice(1);
+      if (rows.length) groups.set(rows[0], el);
+      el.replaceWith(...rows);
+    }
+    let run = [];
+    function flush() {
+      if (run.length < 2) { run = []; return; }
+      const group = groups.get(run[0]) || h("details", { class: "xc-tool-group" }, h("summary"));
+      group.firstElementChild.textContent = run.length + " tool calls completed";
+      run[0].before(group);
+      for (const el of run) group.appendChild(el);
+      run = [];
+    }
+    for (const el of Array.from(logEl.children)) {
+      if (el.classList.contains("xc-ts-done")) run.push(el);
+      else flush();
+    }
+    flush();
+  }
   function push(it) {
     it.fresh = true;
     items.push(it);
     if (items.length === 1) { drawLog(); return; }
-    if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));   // newest first, or last
-    stick();
+    updateLog(() => {
+      if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));
+      groupTools();
+    });
   }
   function drawHero() {
     const want = items.length === 0;
@@ -370,9 +436,20 @@ export function mount(root) {
       heroTimer = setTimeout(() => { heroEl.hidden = true; hero.stop(); }, 600);
     }
   }
-  function redraw(it) { const old = it.el; if (old && old.isConnected) { old.replaceWith(itemEl(it)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
+  function redraw(it) {
+    const old = it.el;
+    if (old && old.isConnected) updateLog(() => {
+      const expanded = old.open;
+      const next = itemEl(it);
+      if (expanded) next.open = true;
+      old.replaceWith(next); groupTools();
+    });
+    else drawLog();
+  }   // keep the old node: itemEl points it.el at the new one
   function drawLog() {
+    drawWork();
     logEl.replaceChildren(...ordered(items, layout).map(itemEl));
+    groupTools();
     drawHero();
     home();
     requestAnimationFrame(home);   // once the new rows have a height: a thread opens on its newest item
@@ -481,8 +558,10 @@ export function mount(root) {
     if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
     out.push(confirmedBusy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
+    drawWork();
+    if (workEl.parentNode !== statusEl) statusEl.appendChild(workEl);
     if (guidanceEl.parentNode !== statusEl) statusEl.appendChild(guidanceEl);
-    for (const child of Array.from(statusEl.childNodes)) if (child !== guidanceEl) child.remove();
+    for (const child of Array.from(statusEl.childNodes)) if (child !== guidanceEl && child !== workEl) child.remove();
     for (const child of out) statusEl.insertBefore(child, guidanceEl);
     // Persistent guidance: the element never leaves the strip; only a real state change changes its
     // text, so repeated drawStatus() calls for token telemetry do not re-announce it.
@@ -821,39 +900,54 @@ export function mount(root) {
       input.value = ""; help.sent(text);
       const steering = busy, sid = current;
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send", ...(!steering && maxRounds !== null ? { max_rounds: maxRounds } : {}) });
-      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
-      flash("");
+      if (steering && d && d.message_id) { steers[d.message_id] = { id: d.message_id, text, session: sid }; if (landed.has(d.message_id)) settleSteer(d.message_id, "applied"); else drawSteers(); }
+      if (sid === current) flash(steering ? "Steer received. It will apply at the next available tool round." : "Message received.");
     } catch (e) { fail(e); }
   }
 
   // Queued steers (D-045): a message sent while a turn runs waits for the next tool round. Until it lands the
   // user can pull it back: the x on its chip, or Up in an empty box, puts the text back to edit.
   function lastSteer() { const mine = Object.values(steers).filter((x) => x.session === current); return mine[mine.length - 1] || null; }
+  function settleSteer(id, state) {
+    const x = steers[id];
+    if (!x) return;
+    delete steers[id];
+    steerReceipts.push({ ...x, state });
+    if (steerReceipts.length > 20) steerReceipts.shift();
+    drawSteers();
+  }
   function drawSteers() {
     const mine = Object.values(steers).filter((x) => x.session === current);
     steerEl.replaceChildren(...mine.map((x) => h("div", { class: "xc-steer-chip", "data-steer": x.id },
       h("span", { class: "xc-i" }, "steer queued"), h("span", { class: "xc-text" }, short(x.text, 140)),
       h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
-        onclick: () => unsteer(x) }, "\u00D7"))));
+        onclick: () => unsteer(x) }, "\u00D7"))),
+      ...steerReceipts.filter((x) => x.session === current).slice(-3).map((x) =>
+        h("div", { class: "xc-steer-receipt", role: "status" }, "Steer " + x.state + ": " + short(x.text, 140))));
   }
   // A chip the core no longer queues (a restart lost the message, D-045) goes when the thread is read again. Only a
   // chip drawn before the read was asked for can be judged by it; a core without the list leaves them all.
   function dropSteers(sid, had, queued) {
     if (!Array.isArray(queued)) return;
-    for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) delete steers[k];
+    for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) settleSteer(k, "no longer queued (delivery unconfirmed)");
     drawSteers();
   }
   async function unsteer(x) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
-      delete steers[x.id]; drawSteers();
+      settleSteer(x.id, (d.cancelled || []).length ? "withdrawn" : "no longer queued (delivery unconfirmed)");
       if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
       else flash("no longer queued");
     } catch (e) { fail(e); }
   }
 
   async function interrupt() {
-    try { await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/interrupt", {}); } catch (e) { fail(e); }
+    const sid = current;
+    if (!sid) return;
+    try {
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/interrupt", {});
+      if (sid === current) flash("Stop requested. Waiting for the run to end.");
+    } catch (e) { if (sid === current) fail(e); }
   }
 
   async function answer(a, decision, note = "") {

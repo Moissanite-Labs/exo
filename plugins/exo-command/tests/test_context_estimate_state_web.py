@@ -19,10 +19,11 @@ def test_context_estimate_and_capacity_have_distinct_owned_states(tmp_path):
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "dom.mjs").write_text('''
 export class El {
-  constructor(tag, attrs={}, children=[]) { this.tagName=tag.toUpperCase(); this.attrs=attrs || {}; this.value=""; this.style={}; this.children=children.flat(Infinity).filter(x=>x!=null); this.listeners={}; this.classList={add(){},remove(){},toggle(){}}; this.scrollHeight=10; this.clientHeight=10; this.scrollTop=0; this.isConnected=false; globalThis.nodes.push(this); }
+  constructor(tag, attrs={}, children=[]) { this.tagName=tag.toUpperCase(); this.attrs=attrs || {}; this.value=""; this.style={}; this.children=children.flat(Infinity).filter(x=>x!=null); this.listeners={}; this.classList={add(){},remove(){},toggle(){},contains:(name)=>(this.attrs.class || "").split(" ").includes(name)}; this.scrollHeight=10; this.clientHeight=10; this.scrollTop=0; this.isConnected=false; globalThis.nodes.push(this); }
   contains(node){return node===this || this.children.some(x=>x instanceof El && x.contains(node));}
   replaceChildren(...xs){this.children=xs.flat(Infinity).filter(x=>x!=null);}
   append(...xs){this.children.push(...xs.flat(Infinity).filter(x=>x!=null));}
+  getBoundingClientRect(){return {top:0,bottom:10};}
   get childNodes(){return this.children;}
   appendChild(x){this.append(x);x.parentNode=this;}
   insertBefore(x,ref){this.children.splice(this.children.indexOf(ref),0,x);x.parentNode=this;} prepend(x){this.children.unshift(x);}

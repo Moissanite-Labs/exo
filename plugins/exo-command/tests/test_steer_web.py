@@ -48,6 +48,7 @@ def test_queued_steer_survives_completion_and_thread_navigation_until_persisted(
             b.eval("document.querySelectorAll('.xc-sess')[0].click()")
             b.wait("document.querySelector('.xc-user')?.textContent.includes('late note')")
             assert not b.eval("!!document.querySelector('[data-steer=queued]')")
+            assert "Steer applied: late note" in b.eval("document.querySelector('.xc-steers').textContent")
     finally:
         srv.close()
 
@@ -71,6 +72,7 @@ def test_steer_chip_goes_when_the_core_no_longer_queues_it():
             b.eval("document.querySelectorAll('.xc-sess')[0].click()")
             b.wait("document.querySelector('.xc-sess.on')?.textContent.includes('s1')")
             b.wait("!document.querySelector('[data-steer=queued]')")
+            assert "delivery unconfirmed" in b.eval("document.querySelector('.xc-steers').textContent")
     finally:
         srv.close()
 
@@ -99,5 +101,25 @@ def test_window_round_override_is_omitted_when_steering():
             b.wait("!!document.querySelector('[data-steer=queued]')")
             assert len(sent) == 1 and sent[0].mode == 'steer'
             assert sent[0].max_rounds is None
+    finally:
+        srv.close()
+
+
+@needs_chrome
+def test_withdrawn_steer_leaves_receipt_only_in_its_thread():
+    srv = Served(SteerSrc())
+    try:
+        with Browser() as b:
+            b.goto(srv.url())
+            b.wait("document.querySelector('.xc-state')?.textContent === 'working'")
+            b.type('.xc-input', 'late note')
+            b.press('Enter', 'Enter', 13)
+            b.wait("!!document.querySelector('[data-steer=queued]')")
+            srv.call(srv.centre.record, {"seq": 1, "type": "steer.cancelled", "session": "s1", "body": {"message_id": "queued"}})
+            b.wait("document.querySelector('.xc-steer-receipt')?.textContent === 'Steer withdrawn: late note'")
+            assert not b.eval("!!document.querySelector('[data-steer=queued]')")
+            b.eval("document.querySelectorAll('.xc-sess')[1].click()")
+            b.wait("document.querySelector('.xc-sess.on')?.textContent.includes('s2')")
+            assert not b.eval("!!document.querySelector('.xc-steer-receipt')")
     finally:
         srv.close()

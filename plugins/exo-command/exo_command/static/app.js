@@ -56,6 +56,16 @@ const where = h("span", { class: "xc-where", id: "xc-where" });
 const led = h("span", { class: "xc-dot" });
 const connText = h("span", null, "");
 const conn = h("span", { class: "xc-conn" }, led, connText);
+let controlsHidden = false;
+const controlsToggle = h("button", {
+  class: "xc-controls-toggle", "aria-expanded": "true",
+  onclick: () => {
+    controlsHidden = !controlsHidden;
+    app.classList.toggle("xc-controls-hidden", controlsHidden);
+    controlsToggle.textContent = controlsHidden ? "Show controls" : "Hide controls";
+    controlsToggle.setAttribute("aria-expanded", String(!controlsHidden));
+  },
+}, "Hide controls");
 let unmount = null, current = null;
 const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -73,7 +83,7 @@ function show(id) {
   dot.classList.remove("on");
   nav.replaceChildren(h("strong", { class: "xc-brand" }, dot, "E X O"), where,
     ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", "aria-selected": x[0] === current ? "true" : "false",
-      onclick: () => show(x[0]) }, x[1])), conn);
+      onclick: () => show(x[0]) }, x[1])), conn, controlsToggle);
   main.replaceChildren();
   unmount = v[2].mount(main) || null;
 }

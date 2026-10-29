@@ -259,3 +259,53 @@ def test_a_new_message_in_classic_lands_at_the_bottom_and_keeps_the_view_there(p
     b.wait("document.querySelector('.xc-log').lastElementChild.textContent.includes('streaming now')")
     g = b.eval(GEOMETRY)
     assert abs(g["top"] - (g["h"] - g["c"])) < 2
+
+@needs_chrome
+def test_hide_controls_is_reversible_and_keeps_composer(page):
+    srv, b = page
+    open_chat(srv, b, "inverse")
+    b.eval("document.querySelector('.xc-controls-toggle').click()")
+    assert b.eval("document.querySelector('.xc-controls-toggle').textContent") == "Show controls"
+    assert b.eval("document.querySelector('.xc-controls-toggle').getAttribute('aria-expanded')") == "false"
+    assert b.eval("Array.from(document.querySelectorAll('.xc-nav > [role=tab], .xc-pane-controls')).every(x => getComputedStyle(x).display === 'none')")
+    assert b.eval("document.querySelector('.xc-input').getBoundingClientRect().height > 0")
+    assert b.eval("document.querySelector('.xc-controls-toggle').getBoundingClientRect().height > 0")
+    b.eval("document.querySelector('.xc-controls-toggle').click()")
+    assert b.eval("document.querySelector('.xc-controls-toggle').textContent") == "Hide controls"
+    assert b.eval("Array.from(document.querySelectorAll('.xc-nav > [role=tab], .xc-pane-controls')).every(x => getComputedStyle(x).display !== 'none')")
+
+@needs_chrome
+@pytest.mark.parametrize("layout", ["inverse", "classic"])
+def test_live_output_preserves_reading_position_and_offers_new_activity(page, layout):
+    srv, b = page
+    open_chat(srv, b, layout)
+    b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop=l.scrollHeight/2;window.reading=Array.from(l.children).find(x=>x.getBoundingClientRect().top>=l.getBoundingClientRect().top);window.readingY=reading.getBoundingClientRect().top})()")
+    srv.call(srv.centre.record, {"seq": 100, "type": "message.delta", "session": "s1", "body": {"message_id": "live", "text": "new output " * 500}})
+    b.wait("document.querySelector('.xc-new-activity').hidden === false")
+    assert b.eval("Math.abs(reading.getBoundingClientRect().top-readingY)") < 2
+    srv.call(srv.centre.record, {"seq": 101, "type": "message.delta", "session": "s1", "body": {"message_id": "live", "text": "streamed output " * 500}})
+    b.wait("document.querySelector('.xc-streaming').textContent.includes('streamed output')")
+    assert b.eval("Math.abs(reading.getBoundingClientRect().top-readingY)") < 2
+    b.eval("document.querySelector('.xc-new-activity').click()")
+    g = b.eval(GEOMETRY)
+    assert abs(g["top"] - (0 if layout == "inverse" else g["h"] - g["c"])) < 2
+    assert b.eval("document.querySelector('.xc-new-activity').hidden")
+
+
+@needs_chrome
+def test_successful_tools_group_but_errors_and_reports_stay_out(page):
+    srv, b = page
+    open_chat(srv, b, "inverse")
+    seq = 100
+    for i in range(3):
+        srv.call(srv.centre.record, {"seq": seq, "type": "tool.started", "session": "s1", "body": {"call": {"id": f"call{i}", "name": "read_file", "arguments": {}}}})
+        seq += 1
+        srv.call(srv.centre.record, {"seq": seq, "type": "tool.completed", "session": "s1", "body": {"result": {"call_id": f"call{i}", "content": parts("result"), "is_error": i == 2}}})
+        seq += 1
+    b.wait("document.querySelector('.xc-ts-error') !== null")
+    assert b.eval("document.querySelector('.xc-tool-group > summary').textContent") == "2 tool calls completed"
+    assert not b.eval("document.querySelector('.xc-tool-group').open")
+    assert b.eval("document.querySelector('.xc-ts-error').closest('.xc-tool-group') === null")
+    assert b.eval("document.querySelector('.xc-asst').closest('.xc-tool-group') === null")
+    b.eval("document.querySelector('.xc-tool-group').open=true")
+    assert b.eval("document.querySelector('.xc-tool-group .xc-tool-item').getBoundingClientRect().height > 0")

@@ -19,10 +19,11 @@ def test_chat_reconnect_refresh_commands_and_structured_memory(tmp_path):
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "dom.mjs").write_text('''
 export class El {
-  constructor(tag, attrs={}, children=[]) { this.tagName=tag.toUpperCase(); this.attrs=attrs || {}; this.value=""; this.style={}; this.children=children.flat(Infinity).filter(x=>x!=null); this.listeners={}; this.classList={add(){},remove(){},toggle(){}}; this.scrollHeight=10; this.clientHeight=10; this.scrollTop=0; this.isConnected=false; globalThis.nodes.push(this); }
+  constructor(tag, attrs={}, children=[]) { this.tagName=tag.toUpperCase(); this.attrs=attrs || {}; this.value=""; this.style={}; this.children=children.flat(Infinity).filter(x=>x!=null); this.listeners={}; this.classList={add(){},remove(){},toggle(){},contains:(name)=>(this.attrs.class || "").split(" ").includes(name)}; this.scrollHeight=10; this.clientHeight=10; this.scrollTop=0; this.isConnected=false; globalThis.nodes.push(this); }
   contains(node){return node===this || this.children.some(x=>x instanceof El && x.contains(node));}
   replaceChildren(...xs){this.children=xs.flat(Infinity).filter(x=>x!=null);}
   append(...xs){this.children.push(...xs.flat(Infinity).filter(x=>x!=null));}
+  getBoundingClientRect(){return {top:0,bottom:10};}
   get childNodes(){return this.children;}
   appendChild(x){this.append(x);x.parentNode=this;}
   insertBefore(x,ref){this.children.splice(this.children.indexOf(ref),0,x);x.parentNode=this;} prepend(x){this.children.unshift(x);}
@@ -334,7 +335,7 @@ location.hash="#token=fresh%2Dtoken&chat";await handlers.hashchange();
 assert.equal(stored["xc-token"],"fresh-token");assert.equal(location.hash,"#chat");assert.equal(restarted,1);assert.equal(mounted,1);assert.equal(permStarted,1);
 assert.deepEqual(Object.keys(stored),["xc-token"]); // no permanent storage or extra credentials
 state({denied:true,connected:false});
-const nav=app.children[0], conn=nav.children.at(-1);assert.match(conn.children[1].textContent,/latest complete link/);
+const nav=app.children[0], conn=nav.children.find(x=>x.attrs?.class==="xc-conn");assert.match(conn.children[1].textContent,/latest complete link/);
 console.log("ok");
 ''')
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)

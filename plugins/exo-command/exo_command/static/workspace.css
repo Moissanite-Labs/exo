@@ -62,3 +62,37 @@
   color: var(--fg);
   white-space: normal;
 }
+
+/* Evidence-led work summary. Plain text only; no tool arguments or outputs. */
+.xc-strip .xc-current-work {
+  flex: 1 0 100%; min-width: 0; box-sizing: border-box;
+  padding: 12px 14px; border-top: 1px solid var(--line);
+  font-family: var(--xc-sans); white-space: normal;
+  text-transform: none; letter-spacing: 0;
+}
+.xc-work-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; }
+.xc-work-label { margin-top: 8px; font-size: 11px; color: var(--muted, #999); }
+.xc-work-value { font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.xc-strip .xc-current-work { display: block; border-left: 0; color: var(--fg); }
+.xc-strip .xc-current-work[hidden] { display: none; }
+.xc-work-details { margin-top: 8px; max-height: 180px; overflow-y: auto; }
+.xc-work-details summary { cursor: pointer; font-size: 12px; color: var(--fg-2); }
+.xc-strip { flex-shrink: 0; }
+/* One compact disclosure, not a second control bar above the composer. */
+.xc-strip .xc-current-work { padding: 4px 14px; }
+.xc-current-work > summary { cursor: pointer; }
+
+/* Display-only focus control. Keep connection and permission mode visible. */
+.xc-root .xc-controls-toggle { margin-left: auto; flex-shrink: 0; }
+.xc-controls-hidden .xc-nav > [role="tab"],
+.xc-controls-hidden .xc-nav > .xc-where,
+.xc-controls-hidden .xc-pane-controls,
+.xc-controls-hidden .xc-perm > :not(strong) { display: none; }
+.xc-controls-hidden .xc-perm { padding: 4px 14px; font-size: 11px; }
+
+.xc-root .xc-log { overflow-anchor: none; }
+.xc-root .xc-tool-group { border: 1px solid var(--line); margin: 6px 0; padding: 6px 10px; }
+.xc-root .xc-tool-group > summary { cursor: pointer; color: var(--fg-3); font-size: 12px; }
+.xc-root .xc-new-activity { position: absolute; z-index: 3; bottom: 12px; right: 16px; background: var(--bg-2); }
+.xc-root .xc-new-activity[hidden] { display: none; }
+.xc-root .xc-steer-receipt { color: var(--fg-3); font-size: 12px; padding: 3px 10px; }
