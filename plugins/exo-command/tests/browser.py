@@ -22,6 +22,26 @@ from typing import Any, Optional
 
 MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+# Runs before the page's own scripts in every document: counts the page's requests until their body is read, so
+# Browser.settle() can tell when the start-up requests are answered and handled.
+COUNT_REQUESTS = """(() => {
+  let open = 0;
+  const fetch0 = window.fetch;
+  Object.defineProperty(window, "__exoRequests", { get: () => open, configurable: true });
+  window.fetch = function (...args) {
+    open++;
+    let done = false;
+    const finish = () => { if (!done) { done = true; open--; } };
+    return fetch0.apply(this, args).then((response) => {
+      for (const read of ["json", "text", "arrayBuffer", "blob"]) {
+        const own = response[read].bind(response);
+        response[read] = () => own().finally(finish);
+      }
+      return response;
+    }, (error) => { finish(); throw error; });
+  };
+})();"""
+
 
 def find_chrome() -> Optional[str]:
     env = os.environ.get("CHROME")
@@ -115,15 +135,21 @@ class Browser:
         self._cm = connect(page["webSocketDebuggerUrl"], max_size=None)
         self.ws = self._cm.__enter__()
         self.n = 0
-        self.call("Page.enable")
-        self.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+        # The first answers can wait for the new tab's renderer to start. On a loaded macOS runner one of them
+        # (Emulation.setDeviceMetricsOverride) once took more than the 30 s an ordinary command gets. This is a wait
+        # for Chrome to start, not a bound any test asserts.
+        start = {"reply_within": 90}
+        self.call("Page.enable", **start)
+        self.call("Page.addScriptToEvaluateOnNewDocument", source=COUNT_REQUESTS, **start)
+        self.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False,
+                  **start)
 
-    def call(self, method: str, **params: Any) -> dict:
+    def call(self, method: str, *, reply_within: float = 30, **params: Any) -> dict:
         self.n += 1
         mid = self.n
         self.ws.send(json.dumps({"id": mid, "method": method, "params": params}))
         while True:
-            msg = json.loads(self.ws.recv(timeout=30))
+            msg = json.loads(self.ws.recv(timeout=reply_within))
             if msg.get("id") == mid:
                 if "error" in msg:
                     raise RuntimeError(f"{method}: {msg['error']}")
@@ -131,6 +157,47 @@ class Browser:
 
     def goto(self, url: str) -> None:
         self.call("Page.navigate", url=url)
+
+    def reload(self) -> None:
+        """Load the page again as a new document, for example after a test wrote localStorage, and return once the old
+        document is gone.
+
+        A second goto() to the page's own link is not a reload: it differs from the current address only after `#`,
+        so the browser keeps the document and the app re-authenticates and mounts the view again later, after a
+        round trip to the server. Until then the old view still answers every query, so a wait() can pass on it and
+        the test goes on against a view that is about to be replaced."""
+        self.eval("window.__exoOldDocument = true")
+        self.call("Page.reload")
+        self.wait("!window.__exoOldDocument && document.readyState !== 'loading'")
+
+    def resize(self, width: int, height: int) -> None:
+        """Change the viewport and return once the page has adapted to it.
+
+        A media query's change event, and so any layout the page sets from it, comes with the next rendered frame,
+        not with the resize: a geometry read in between sees the old layout under the new size (on a slow runner
+        that frame can land between any two later calls)."""
+        self.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+        self.wait(f"innerWidth === {width} && innerHeight === {height}")
+        self.frames()
+
+    def frames(self, n: int = 2) -> None:
+        """Return after the page has rendered `n` more frames (and run what it scheduled for them)."""
+        self.eval("new Promise(done => { const next = (left) => left ? requestAnimationFrame(() => next(left - 1)) : done(true);"
+                  f" next({n}); }})")
+
+    def settle(self, syncs: int = 1, timeout: float = 10.0) -> None:
+        """Wait until the page's start-up work is done: its event stream has caught up `syncs` times, and every
+        request the page made has been answered and handled.
+
+        The page is usable before that. But each catch-up makes the chat view fetch its snapshot again and redraw
+        the transcript, so a test that reads a position, an element or a request count right after the first
+        messages appear can read it from the drawing a moment later replaces."""
+        self.wait("import('/static/bus.js').then(bus => { if (!window.__exoSyncs) { window.__exoSyncs = { n: 0 };"
+                  " bus.onState(state => { window.__exoSyncs.n = state.synced; }); } return true; })", timeout)
+        quiet = f"window.__exoSyncs.n >= {syncs} && window.__exoRequests === 0"
+        self.wait(quiet, timeout)
+        self.frames()
+        self.wait(quiet, timeout)
 
     def eval(self, js: str) -> Any:
         r = self.call("Runtime.evaluate", expression=js, returnByValue=True, awaitPromise=True)
