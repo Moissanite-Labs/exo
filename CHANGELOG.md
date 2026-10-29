@@ -8,6 +8,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
+- Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
+- A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
+- Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The

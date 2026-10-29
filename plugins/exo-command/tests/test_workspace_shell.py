@@ -104,6 +104,7 @@ def test_appearance_controls_persist_choice_and_do_not_change_route_or_draft():
 def test_slow_bootstrap_keeps_route_changes_and_initial_panels_before_mount(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "pet.mjs").write_text('export const createPet=()=>({glyph:{},control:{},start(){},suspend(){}});')
+    (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>"test-token",redeem=async()=>({});
