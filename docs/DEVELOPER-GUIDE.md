@@ -699,6 +699,17 @@ heading, and the map says so.
 6. A reviewer reads the diff, runs the suite, and merges. Merge your own pull request only where you hold merge
    rights.
 
+**Changelog merges (#842).** `.gitattributes` gives `CHANGELOG.md` git's union merge driver. Two branches that each
+add a bullet in the same place merge without a conflict: both bullets stay, the checked-out branch's first.
+`DECISIONS.md` and `docs/DOCS-MAP.md` keep the normal driver, so two branches that take the same `D-NNN` or edit the
+same map row still conflict.
+
+- Git reads the attribute from the branch you have checked out. A branch cut before it landed still conflicts when
+  it merges `main`. Run `echo 'CHANGELOG.md merge=union' >> .git/info/attributes` once in your clone, and every
+  branch there gets it.
+- Union never drops a line. When both sides change the same existing line, both versions stay. Read the merged
+  `[Unreleased]` section before you push.
+
 Private data and secrets never go in the repo. The principal store is separate from this repository.
 
 ### Cutting a release

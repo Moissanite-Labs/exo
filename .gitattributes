@@ -1,0 +1,5 @@
+# Nearly every change adds a CHANGELOG.md bullet near the top of [Unreleased], so two branches collide there on
+# every merge. Git's built-in union driver keeps both sides' lines, ours first (#842, D-089 amendment).
+# DECISIONS.md and docs/DOCS-MAP.md keep the normal driver on purpose: two branches that edit the same map row or
+# add the same D-NNN heading must conflict, not keep both (#648).
+CHANGELOG.md merge=union
