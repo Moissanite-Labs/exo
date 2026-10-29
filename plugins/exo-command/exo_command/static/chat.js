@@ -699,8 +699,14 @@ export function mount(root) {
       throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
     } finally { changingModel = false; }
     if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
-    // The thread or the picker changed while the change was in flight: refresh and leave the newer picker alone.
-    if (sid !== current || generation !== pickerGeneration) { await refreshSessions(); return; }
+    // The thread or the picker changed while the change was in flight: refresh and leave the newer picker alone. A change
+    // that landed on a thread no longer open is still worth one line, so it is not silently swallowed.
+    if (sid !== current || generation !== pickerGeneration) {
+      const moved = sid !== current;
+      await refreshSessions();
+      if (moved) flash((defaults ? "Default model: " : "Main model: ") + ref + " (that thread is no longer open)");
+      return;
+    }
     closePicker();
     await refreshSessions();
     flash((defaults ? "Default model: " : "Main model: ") + ref);
@@ -720,7 +726,9 @@ export function mount(root) {
         onCancel: closePicker,
         onApply: async (ref) => {
           if (sid !== current || generation !== pickerGeneration || changingModel) return;
-          await chooseModel(ref, defaults, sid, generation);
+          // A failed change belongs on the page strip even when the thread moved on: the picker that asked may already be
+          // hidden, and an error box inside it would never be read (review 5692174329).
+          try { await chooseModel(ref, defaults, sid, generation); } catch (e) { fail(e); }
         },
       });
       modelPicker.replaceChildren(picker.element);
@@ -729,7 +737,10 @@ export function mount(root) {
       try {
         const d = await api("GET", "/api/chat/models");
         if (sid !== current || generation !== pickerGeneration) return;
-        picker.setRows([...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])]);
+        picker.setRows([
+          ...(Array.isArray(d.models) ? d.models : []).map(m => ({ ...m, group: "configured" })),
+          ...(Array.isArray(d.available) ? d.available : []).map(m => ({ ...m, group: "available" })),
+        ]);
       } catch (e) {
         if (sid === current && generation === pickerGeneration) {
           picker.setError(e.message || "Models could not be loaded. Cancel and retry.");
@@ -914,7 +925,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; ++pickerGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");

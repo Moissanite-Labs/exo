@@ -122,15 +122,126 @@ def test_providers_keeps_the_search_and_focus_across_the_refresh_after_a_save(pa
     mount_view(page, 'providers')
     page.wait('!!document.querySelector(".xc-prov-def [role=combobox]")')
     page.eval('window.el0 = document.querySelector(".xc-prov-def [role=combobox]")')
+    page.eval('window.read0 = document.querySelector(".xc-phead-read > *")')
+    page.wait('window.read0 !== null')
     search(page, 'beta sonnet')
     key(page, 'Enter')
     page.wait('document.querySelector(".xc-prov-def .xc-prov-res") !== null')
+    # The page itself must still redraw after a save (the picker staying put must not freeze the readout).
+    page.wait('document.querySelector(".xc-phead-read > *") !== window.read0')
     # The refresh that follows a save must not rebuild the picker: same field, same query, same focus.
     assert page.eval('document.querySelector(".xc-prov-def [role=combobox]") === window.el0')
     assert page.eval('document.querySelector(".xc-prov-def [role=combobox]").value') == 'beta sonnet'
     assert page.eval('document.activeElement === window.el0')
     assert page.eval('document.querySelector(".xc-prov-def .xc-prov-res").textContent') == 'Default set to beta:sonnet.'
     assert page.eval('document.querySelectorAll(".xc-prov-def [role=combobox]").length') == 1
+
+
+def test_providers_marks_a_route_no_role_uses_yet_as_available(page):
+    mount_view(page, 'providers')
+    page.wait('document.querySelectorAll(".xc-model-option").length === 2')
+    tags = page.eval('[...document.querySelectorAll(".xc-model-option")].map(o => [o.querySelector(".xc-model-route").textContent, o.querySelector(".xc-model-tag") ? o.querySelector(".xc-model-tag").textContent : ""])')
+    # alpha:sonnet is a configured role; beta:sonnet is only listed as available to the provider.
+    assert sorted(tags) == [['alpha:sonnet', ''], ['beta:sonnet', 'available']]
+    search(page, 'beta')
+    assert page.eval('document.querySelectorAll(".xc-model-option").length') == 1
+    assert page.eval('document.querySelector(".xc-model-tag").textContent') == 'available'
+
+
+def mount_providers(page):
+    """The Providers page against a fake core with two providers, where the model list can be held back, failed
+    or answered out of order. Nothing here reads or writes a key."""
+    page.eval(r'''(async()=>{
+      window.posts=[];
+      window.state={def:'alpha'};
+      window.modelsAnswer=async()=>({models:[{route:'alpha:sonnet',name:'Sonnet',provider:'Alpha'}],
+                                     available:[{route:'beta:sonnet',name:'Sonnet',provider:'Beta'}]});
+      const providers=()=>({providers:[
+        {provider:'alpha',name:'Alpha',default:window.state.def==='alpha',needs:'key',key:'found',source:'keychain',models:1},
+        {provider:'beta',name:'Beta',default:window.state.def==='beta',needs:'key',key:'found',source:'keychain',models:1}],
+        ready:true,store:'keychain'});
+      window.fetch=async (path,opt={})=>{
+        if(opt.method==='POST'){
+          const body=JSON.parse(opt.body||'{}');
+          posts.push({path,body});
+          if(path==='/api/providers/default')window.state.def=String(body.ref||'').split(':')[0];
+          const out=path==='/api/providers/default'?{applied:true}:{ok:true,latency_ms:7};
+          return {ok:true,status:200,json:async()=>out};
+        }
+        let data={};
+        if(path.endsWith('/models'))data=await window.modelsAnswer();
+        else if(path==='/api/providers')data=providers();
+        return {ok:true,status:200,json:async()=>data};
+      };
+      sessionStorage.setItem('xc-token','offline-test');
+      const root=document.createElement('main');document.body.replaceChildren(root);
+      const view=await import('/static/providers.js');
+      window.unmount=view.mount(root);
+    })()''')
+
+
+def press_test(page, index=0):
+    page.eval('[...document.querySelectorAll(".xc-prow")][' + str(index) + '].querySelectorAll(".xc-prow-act button")'
+              '.forEach(b => b.textContent === "Test" && b.click())')
+
+
+def test_providers_default_readout_and_mark_follow_the_save(page):
+    mount_providers(page)
+    page.wait('document.querySelectorAll(".xc-model-option").length === 2')
+    # alpha holds the default, so the picker marks alpha:sonnet as the current route before anything is saved.
+    assert page.eval('document.querySelector(".xc-model-current").closest(".xc-model-option").querySelector(".xc-model-route").textContent') == 'alpha:sonnet'
+    assert page.eval('document.querySelector(".xc-phead-read").textContent').count('alpha') == 1
+    assert page.eval('document.querySelector(".xc-prow .xc-defmark") !== null')
+    search(page, 'beta sonnet')
+    key(page, 'Enter')
+    page.wait('posts.length === 1')
+    page.wait('document.querySelector(".xc-phead-read").textContent.includes("beta")')
+    assert page.eval('document.querySelector(".xc-prow .xc-defmark").closest(".xc-prow").querySelector(".xc-prow-name").textContent') == 'beta'
+    page.wait('document.querySelector(".xc-model-current") !== null')
+    assert page.eval('document.querySelector(".xc-model-current").closest(".xc-model-option").querySelector(".xc-model-route").textContent') == 'beta:sonnet'
+
+
+def test_a_slow_model_list_cannot_overwrite_a_newer_one(page):
+    mount_providers(page)
+    page.wait('document.querySelectorAll(".xc-model-option").length === 2')
+    # The next read is held open until the test lets it go.
+    page.eval(r"""(()=>{window.modelsAnswer=()=>new Promise(r=>{window.releaseSlow=()=>{window.released=true;
+        r({models:[{route:'stale:one',name:'Stale',provider:'Alpha'}],available:[]})}})})()""")
+    press_test(page, 1)
+    page.wait('typeof window.releaseSlow === "function"')
+    # A read that starts later answers at once, so it is the newer answer.
+    page.eval('window.modelsAnswer=async()=>({models:[{route:"fresh:two",name:"Fresh",provider:"Alpha"}],available:[]})')
+    press_test(page, 0)
+    page.wait('document.querySelectorAll(".xc-model-option").length === 1')
+    assert page.eval('document.querySelector(".xc-model-route").textContent') == 'fresh:two'
+    page.eval('window.releaseSlow()')
+    page.eval('new Promise(r=>setTimeout(r,200)).then(()=>true)')
+    # The late answer is not drawn: the page still shows the list that arrived after it.
+    assert page.eval('document.querySelectorAll(".xc-model-option").length') == 1
+    assert page.eval('document.querySelector(".xc-model-route").textContent') == 'fresh:two'
+
+
+def test_a_failed_model_list_keeps_the_last_good_one_and_offers_a_retry(page):
+    mount_providers(page)
+    page.wait('document.querySelectorAll(".xc-model-option").length === 2')
+    page.eval('window.modelsAnswer=async()=>({error:"core unreachable (ConnectError)",error_class:"transport",retryable:true})')
+    press_test(page)
+    page.wait('!!document.querySelector(".xc-prov-def .xc-warn")')
+    # A transport failure is retryable, so it gets a button, and the picker keeps the list it already had.
+    assert page.eval('document.querySelector(".xc-prov-def .xc-warn").textContent.includes("core unreachable")')
+    assert page.eval('[...document.querySelectorAll(".xc-prov-def-act button")].map(b => b.textContent).join()') == 'Try again'
+    assert page.eval('document.querySelectorAll(".xc-model-option").length') == 2
+    page.eval('window.modelsAnswer=async()=>({models:[{route:"fresh:two",name:"Fresh",provider:"Alpha"}],available:[]})')
+    page.eval('document.querySelector(".xc-prov-def-act button").click()')
+    page.wait('document.querySelectorAll(".xc-model-option").length === 1')
+    assert page.eval('document.querySelector(".xc-model-route").textContent') == 'fresh:two'
+    # A refusal is not retryable: no button, and the last good list stays where it is.
+    page.eval('window.modelsAnswer=async()=>({error:"the core refused the page token",error_class:"unauthorized",retryable:false})')
+    press_test(page)
+    page.wait('document.querySelectorAll(".xc-prov-def-act button").length === 0')
+    note = page.eval('document.querySelector(".xc-prov-def .xc-warn").textContent')
+    assert "This list is from the last good read." in note and "Reopen this tab after the core restarts." in note
+    assert page.eval('document.querySelectorAll(".xc-model-option").length') == 1
 
 
 def command(page, text):

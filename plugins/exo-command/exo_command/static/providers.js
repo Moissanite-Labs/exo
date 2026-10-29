@@ -168,29 +168,50 @@ export function mount(root) {
     return results._default.text;
   }
 
+  // The route the "Current" mark names: the one this visit saved, else the route of the provider holding the
+  // default. Without the second half the mark never appears here, because nothing on this page has picked yet.
+  function currentRoute() {
+    if (picked) return picked;
+    const def = data && (data.providers || []).find((r) => r.default);
+    if (!def) return "";
+    // A row names the provider by id, an entry in the model list names it the way its config shows it:
+    // "anthropic" against "Anthropic". Compare the words, not the spelling.
+    const words = [def.provider, def.name, def.id].filter(Boolean).map((x) => String(x).toLowerCase());
+    const hit = (models.models || []).find((m) => m.route && m.provider && words.includes(String(m.provider).toLowerCase()));
+    return hit ? hit.route : "";
+  }
+
   // The models object the picker was last given. Handing it the same list again would reset the row the
-  // arrow keys are on, so a redraw that changed nothing leaves the picker alone.
-  let pickerSyncedTo;
+  // arrow keys are on, so a redraw that changed nothing leaves the picker alone. The selection is part of
+  // "nothing changed": a save can move the mark while the list stays the same.
+  let pickerSyncedToList, pickerSyncedToRoute;
   function syncPicker() {
-    if (models === pickerSyncedTo) return;
+    const cur = currentRoute();
+    if (models === pickerSyncedToList && cur === pickerSyncedToRoute) return;
     if (!models && !modelsError) return;   // still loading: the picker already says so
-    pickerSyncedTo = models;
+    pickerSyncedToList = models; pickerSyncedToRoute = cur;
     if (!models) {
       // With nothing to pick from, the reason goes where the list would be.
       chosen.setError(modelsError.text + (modelsError.retryable ? "" : " Reopen this tab after the core restarts."));
       return;
     }
     // A searchable list, since routes that share a model name (several providers, one model) are the normal case.
-    chosen.setSelected(picked);
-    chosen.setRows([...(models.models || []), ...(models.available || [])]);
+    chosen.setSelected(cur);
+    chosen.setRows([
+      ...(models.models || []).map(m => ({ ...m, group: "configured" })),
+      ...(models.available || []).map(m => ({ ...m, group: "available" })),
+    ]);
   }
 
   // The default-model section is rewritten in place, never replaced: that is what keeps a typed search and
   // the focus inside it alive across the refresh that follows a save.
   function syncDefaultSection() {
     syncPicker();
+    // The list stays usable, so the failure is a note above it. A refusal cannot be retried, so it says what can
+    // be done instead: the core has to come back before this page can read a list again.
     defNote.replaceChildren(...(modelsError && models
-      ? [h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.")] : []));
+      ? [h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read." +
+          (modelsError.retryable ? "" : " Reopen this tab after the core restarts."))] : []));
     defRetry.replaceChildren(...(modelsError && modelsError.retryable
       ? [h("div", { class: "xc-prov-def-act" }, h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again"))] : []));
     const res = results._default;
