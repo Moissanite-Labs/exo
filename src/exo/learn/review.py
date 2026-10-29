@@ -116,6 +116,8 @@ def is_unattended(lr: Learner, session: str) -> bool:
 
 def new_signals(lr: Learner) -> list[dict]:
     rt = lr.runtime
+    if rt is None:
+        return []
     mark = watermark(rt.ledger)
     who = provenance.principal_names(rt.store)  # D-040: only the principal's own events are signals
     return [e for e in rt.ledger.iter(kind=SIGNAL_KINDS, since=mark) if e["author"] != rt.agent and e["author"] in who]
@@ -157,12 +159,13 @@ def _touched(lr: Learner, events: list[dict]) -> str:
     rt = lr.runtime
     query = " ".join(str((e["body"] or {}).get(k) or "") for e in events for k in ("chosen", "text", "edit"))
     lines = []
-    try:
-        for nid, _ in rt.store.find(query, n=3):
-            n = rt.store.nodes[nid]
-            lines.append(f"- node {nid}: {clip(str(n.get('summary') or ''), 160)}")
-    except Exception:
-        pass
+    if rt is not None:
+        try:
+            for nid, _ in rt.store.find(query, n=3):
+                n = rt.store.nodes[nid]
+                lines.append(f"- node {nid}: {clip(str(n.get('summary') or ''), 160)}")
+        except Exception:
+            pass
     skills = getattr(lr.engine, "skills", None)
     try:
         for sk in (skills.listing() if skills is not None else [])[:12]:
