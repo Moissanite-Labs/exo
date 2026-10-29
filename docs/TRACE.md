@@ -3,6 +3,21 @@
 Exo watches itself, so a fix can be measured and an agent can judge its environment from data (D-025).
 The loop: record, read, report, verify.
 
+## Warnings during a turn
+
+The primary core loop checks completed tool calls incrementally. After three calls with the same normalized
+arguments in one file-change epoch, it files a `tool.repeat:<tool>` finding and sends a warning Notice to Chat.
+Each tool warns at most once per turn. Completion still runs the existing trace observer without counting that
+same finding twice. Shorter repetitions can still appear in the existing retrospective report.
+
+This is an argument heuristic, not a measure of progress. Legitimate polling can repeat. Successful file-changing
+tools start a new epoch, using the same normalization and change rules as the retrospective detector. Changes
+outside those tools may be invisible. The warning does not stop a turn, change its round limit, retry or switch models.
+
+The live check retains at most 256 recent call keys per active turn and does not reread historical events after
+each call. Turn completion clears its state. Disabling trace observation disables these warnings too. Finding-store
+failures are reported as diagnostic errors without stopping tool execution.
+
 ## What is recorded
 - `model.call` (event): per model call, the role and route asked for, the route that served it, every attempt
   (`route`, `outcome` ok, timeout, error or fallback, short `error`, `ms`), time to first token, total time,
