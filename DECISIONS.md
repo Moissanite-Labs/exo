@@ -207,7 +207,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
-- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
@@ -244,6 +243,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
   budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
   accepted candidate made 256 calls, 173 before (+48%).
+- **Amendment 2026-10-28 (#770, exo-desktop #54):** agreeing signals reinforce only active beliefs. Evidence
+  agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
+- **Amendment 2026-10-29 (#861):** the 2026-10-28 amendment covers corrections and rulings, and reviewer taste and
+  fact lessons (`propose_typed`). The match that chooses between reinforcing, the conflict rule and a new proposal
+  reads active beliefs only (proposed, held, accepted), so a rejected belief that matches better no longer hides an
+  active one:
+  a ruling that contradicts an accepted belief goes through the conflict rule (a held proposal and a question when
+  that belief is guarded), and one that agrees with an open proposal reinforces it. A reviewer taste or fact lesson
+  whose evidence is all held already by the rejected beliefs it agrees with, alone or together, teaches nothing
+  again: it is not proposed, raises no conflict question and reinforces no other belief, since the principal
+  already ruled on that evidence. A reviewer skill lesson is not checked and is proposed as before. New evidence,
+  alone or beside the rejected evidence, is matched as usual. The rule of three still counts a rejected belief
+  that agrees as known, so repeating an instruction in chat does not re-raise a rejected lesson; a new correction
+  or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
+  ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
+  held (rule 3).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
