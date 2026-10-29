@@ -64,8 +64,7 @@ KNOWN_GAPS = {
     "sort_read_only_store", "uniq_read_only_store", "xxd_read_only_store", "rsync_dry_run_store",
     "cat_output_outside_store", "grep_output_outside_store", "recursive_home_landing", "copy_home_itself",
     "copy_dot_contents", "copy_policy_folder", "copy_update_folder", "tar_into_home",
-    "tar_into_home_parent", "unzip_into_home", "ssh_log_with_read_remote",
-    "ssh_log_with_compound_read_remote", "ssh_known_hosts_with_read_remote", "ssh_socket_with_read_remote",
+    "tar_into_home_parent", "unzip_into_home", "ssh_known_hosts_with_read_remote", "ssh_socket_with_read_remote",
 }
 
 

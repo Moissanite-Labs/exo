@@ -6083,10 +6083,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
-    if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
-        return hits
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
+    if prog == "ssh":
+        # #484: -E writes a local log even when every remote part is a read. Other local options remain separate.
+        hits += [p for p in _option_values(argv, ("-E",), takes=_SSH_VALUE_OPTS, operands=1)
+                 if _store_word(p)]
+    if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
+        return list(dict.fromkeys(hits))
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li

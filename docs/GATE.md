@@ -3507,3 +3507,9 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### SSH local debug log writes (#484)
+
+The local ssh -E log destination is checked before the remote-read shortcut. Literal separate, attached and clustered -E forms keep their local store-write part even when the remote command only reads. Remote targets remain alongside it. Other local options, mosh, and unpinned dynamic/brace destination forms remain open.
+
+The aimed 11-action by 88-policy differential has zero lowered pairs and zero classification/decision errors; ordinary reads, remote credentials, force pushes, descriptors and sudo wrappers are included.
