@@ -159,6 +159,8 @@ async def chat(client: Any, read_line: Callable[[str], Awaitable[str | None]],
                write: Callable[[str], None], session: str | None = None,
                resume: bool = False, title: str = "") -> int:
     """Line chat loop. ``read_line(prompt)`` returns None on EOF."""
+    from exo.chat_queue import PromptQueue
+
     hello = await client.call(s.Hello(client="exo-chat"))
     if resume and not session:
         rows = (await client.call(s.SessionList(limit=1)))["sessions"]
@@ -167,13 +169,18 @@ async def chat(client: Any, read_line: Callable[[str], Awaitable[str | None]],
         got = await client.call(s.SessionResume(session=session))
         write(f"resumed {session} ({got['session'].get('message_count', 0)} messages)\n")
     else:
-        session = (await client.call(s.SessionCreate(title=title)))["session"]["id"]
+        got = await client.call(s.SessionCreate(title=title))
+        session = got["session"]["id"]
         write(f"session {session}\n")
 
+    queue, draining = PromptQueue(), False
+    queue_allowed = got["session"].get("kind") in ("thread", "private")
+    last_stop = ""
     turn_done = asyncio.Event()
     approvals: asyncio.Queue[s.ApprovalRequested] = asyncio.Queue()
 
     async def follow() -> None:
+        nonlocal last_stop
         async for ev in client.events(since=hello["seq"], session=session, reconnect=True):
             if ev.session not in (None, session):
                 continue
@@ -181,28 +188,68 @@ async def chat(client: Any, read_line: Callable[[str], Awaitable[str | None]],
             if isinstance(ev.body, s.ApprovalRequested):
                 approvals.put_nowait(ev.body)
             elif isinstance(ev.body, s.TurnCompleted):
+                last_stop = ev.body.stop_reason
                 turn_done.set()
 
     feed = asyncio.create_task(follow())
     try:
-        while (line := await read_line("> ")) is not None:
+        while True:
+            queued = draining and bool(queue)
+            if queued:
+                line = queue.first()
+            else:
+                draining = False
+                if (line := await read_line("> ")) is None:
+                    break
             line = line.strip()
             if not line:
                 continue
-            if line in ("/quit", "/exit"):
+            if not queued and line in ("/quit", "/exit"):
                 break
-            if line.startswith("/"):
+            if not queued and line.startswith("/"):
                 name, _, args = line[1:].partition(" ")
+                if name == "queue":
+                    action, _, text = args.strip().partition(" ")
+                    if action in ("", "list"):
+                        write(queue.render() + "\n")
+                    elif action == "clear" and not text:
+                        queue.clear()
+                        write("queue cleared\n")
+                    elif not queue_allowed:
+                        write("queue requires a normal conversation with thread-kind metadata\n")
+                    elif action == "add":
+                        try:
+                            queue.add(text)
+                            write(f"queued {len(queue)} prompt(s); /queue run starts them\n")
+                        except ValueError as error:
+                            write(f"error: {error}\n")
+                    elif action == "run" and not text:
+                        draining = bool(queue)
+                        if not draining:
+                            write("queue is empty\n")
+                    else:
+                        write("usage: /queue [list|add <prompt>|clear|run]\n")
+                    continue
                 resp = await client.send(s.CommandRun(name=name, args=args, session=session))
                 write(f"{resp.result}\n" if resp.ok else f"error: {resp.error.code}: {resp.error.message}\n")
                 continue
             turn_done.clear()
-            resp = await client.send(s.TurnSend(session=session, text=line))
+            last_stop = ""
+            resp = await client.send(s.TurnSend(session=session, text=line, mode="queue" if queued else "send"))
             if not resp.ok:
+                draining = False  # a rejected queued prompt stays first; never retry automatically
                 write(f"error: {resp.error.code}: {resp.error.message}\n")
                 continue
+            if queued:
+                queue.accepted()
+                if resp.result.get("steered"):
+                    draining = False
+                    write("core reported steering instead of a new turn; queue paused, inspect the conversation\n")
             if not await _wait_turn(client, turn_done, approvals, read_line):
                 break
+            if draining and last_stop not in ("end", "tool_use"):
+                draining = False
+                write(f"queue paused after {last_stop or 'unknown completion'}; /queue lists remaining prompts\n")
     finally:
         feed.cancel()
     return 0
