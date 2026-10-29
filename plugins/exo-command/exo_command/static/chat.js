@@ -267,7 +267,8 @@ export function mount(root) {
       }
       case "model.call":
         if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
-        help.note({ providerError: b.error || "" });   // the text, so the tip can tell a refusal from a transport failure (#756)
+        // The error and its attempts, so the tip can tell a refusal from a transport failure (#756, #855).
+        help.note({ providerError: b.error || "", providerAttempts: b.error && Array.isArray(b.attempts) ? b.attempts : [] });
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);

@@ -151,6 +151,24 @@ def test_a_part_read_later_behind_a_quoted_prefix_is_reached_too(prefix, form, b
     assert d.outcome == "ask" and (cat, "host") in d.reserved, d
 
 
+@pytest.mark.parametrize("line", [
+    "X='a b' ssh host 'echo hi > /tmp/f'; echo \"${A:-'}'}\"",
+    "X='a b' Z=\"${A#'}'}\" ssh host 'echo hi > /tmp/f'",
+    "X=ab Z=\"${A#'}'}\" ssh host 'echo hi > /tmp/f'",
+])
+def test_both_of_158s_readings_have_the_copy(line):
+    # #158 (main 080e87ba): a ${..} word bash and the lexer before #143 may read apart is read both ways, and the
+    # call read the old way is c.flat; the command behind the quoted word gets its copy on the host in each reading
+    c = classify(sh(line))
+    assert c.flat is not None, line
+    pols = host_policies("local_write")
+    for r in (c, c.flat):
+        assert decide(r, pols["deny"]).outcome == "deny", r          # main d3cbd874: ask (opaque)
+        assert decide(r, pols["rule"]).outcome == "deny", r
+        d = decide(r, pols["reserved"])
+        assert d.outcome == "ask" and ("local_write", "host") in d.reserved, d
+
+
 @pytest.mark.parametrize("body, cat", FIX_BODIES + LEAD_BODIES)
 @pytest.mark.parametrize("hop", ["ssh host", "ssh -p 22 host", "mosh host"])
 def test_a_reason_that_names_the_copy_names_the_host(hop, body, cat):
