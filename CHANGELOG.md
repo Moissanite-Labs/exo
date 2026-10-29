@@ -1207,7 +1207,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   exists, is not a subagent and is not finished. A crafted `to_session` used to reach a locked child, a running
   subagent or an id that does not exist: the message was queued or held there, or it started a turn. Any other
   name now gets a denied receipt before the policy runs. A held message whose session finished before you
-  allowed it is denied too. Tests: `tests/peers/test_explicit_session.py`. **Docs:** `docs/PEERS.md`,
+  allowed it is denied too. The warning for such a message that tries to approve something now shows in a live
+  session, not in the one it named. Tests: `tests/peers/test_explicit_session.py`. **Docs:** `docs/PEERS.md`,
   `DECISIONS.md`, `docs/DOCS-MAP.md`.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word

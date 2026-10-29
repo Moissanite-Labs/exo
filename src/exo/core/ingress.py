@@ -175,8 +175,9 @@ class IngressPath:
 
     async def submit(self, ing: Ingress) -> Receipt:
         refusal = self._consent(ing)
-        if refusal:
-            await _call(self.target.notice, ing.session, f"{ing.sender} sent a message that tried to approve or "
+        if refusal:  # warn where the principal looks: a session the message could not reach shows it to no one
+            where = named(ing) if await self._reachable(ing) else None
+            await _call(self.target.notice, where, f"{ing.sender} sent a message that tried to approve or "
                         f"grant something ({refusal}). It was refused; a peer cannot do that. Message id {ing.id}.")
             return await self._close(ing, "denied", f"refused: a peer cannot approve gates or change permissions ({refusal})")
         if not await self._reachable(ing):
