@@ -8521,11 +8521,11 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
-    chain of floors (readings), so decide never goes below it. ``cwd`` is the folder the tool runs in, when the
-    caller knows it: relative paths are resolved from there too (_in_tool_folder sets it). A line with a compound
-    command behind a pipeline prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853,
-    _opened_reading). The ``ordinary`` reading (D-074) of a call is not opened there: the opened reading reads its
-    own."""
+    chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
+    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading); the
+    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. ``cwd`` is
+    the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
+    (_in_tool_folder sets it)."""
     timed = [False]
     met = _timed.set(timed)
     try:
