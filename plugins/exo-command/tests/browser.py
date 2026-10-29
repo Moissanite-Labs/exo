@@ -120,7 +120,10 @@ class Browser:
             raise RuntimeError("no Chrome found")
         self.profile = tempfile.mkdtemp(prefix="exo-chrome-")
         self.proc = subprocess.Popen(
+            # #907: keep a headless page's timers and frames running at full rate, whatever the runner's window state
             [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+             "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+             "--disable-renderer-backgrounding",
              f"--window-size={width},{height}", "--remote-debugging-port=0", f"--user-data-dir={self.profile}",
              "--use-mock-keychain", "--password-store=basic", "--no-first-run", "--no-default-browser-check", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

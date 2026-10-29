@@ -60,7 +60,10 @@ def test_pathological_pattern_times_out_without_stopping_loop(tmp_path, monkeypa
             assert result.is_error and result.text() == "Search stopped after 1 s; narrow the pattern"
             assert time.monotonic() - start < 3
             assert len(ticks) > 5
-            assert max(b - a for a, b in zip(ticks, ticks[1:])) < .1
+            # The search runs in a worker process, so the loop keeps ticking. A search that held the loop would
+            # stall it for the whole 1 s timeout; half that leaves room for a busy runner's process start
+            # (0.26 s seen on a macOS CI runner, #907).
+            assert max(b - a for a, b in zip(ticks, ticks[1:])) < .5
         finally:
             tick.cancel()
             await asyncio.gather(tick, return_exceptions=True)
