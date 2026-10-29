@@ -71,6 +71,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
 - `exo findings fix ID` reads `ID` as text. The id went into a SQL `LIKE` as a pattern, so `%` or `_` matched
   other ids: `exo findings fix % --in SHA` marked the only finding fixed (exo-desktop #52).
+- A finished subagent stays locked when a context note or `/compact` writes its session's meta at the same time.
+  Each writer read the whole meta and wrote it back, so the lock, or another writer's key, could be lost. Meta
+  writes now keep the keys they do not set, in one transaction (exo-desktop #52, D-041 amendment).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting

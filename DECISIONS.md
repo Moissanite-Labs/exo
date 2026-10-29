@@ -4743,7 +4743,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   fresh manager or a test does. Rejected: a module name that can never clash, such as an escaped or hashed one,
   since it would rename every plugin's loggers and modules. `docs/DEVELOPER-GUIDE.md` §4. `Findings.get` put an
   id or prefix into SQL `LIKE` as a pattern, so `%` and `_` matched other ids. It now escapes them, and an empty
-  id names no finding. `docs/TRACE.md` "Commands".
+  id names no finding. `docs/TRACE.md` "Commands". Each writer of a session's meta (`lock`, a context note's
+  `seen_pos`, `/compact`'s `compact_seq`) read the whole object and wrote it back in two store calls, so a key
+  another writer set in between was lost. A note written while a child finished could unlock it. They now go
+  through `SessionStore.update_meta`, which sets only its keys and keeps the rest in one write transaction.
+  `docs/AGENT-WIRE.md` "Done in wave 3".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
