@@ -3616,6 +3616,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   actions) and an aimed corpus of 4,315 loop lines under 112 policies (483,280 pairs, 38,849 tightened on 1,044
   actions); a probe of those lines under 24 policies decides 0 pairs lower than main a1dd4fec or this PR before the
   merge, and the hook in bypass none of 1,440 of them.
+  *Re-checked 2026-10-29 (on the merge of main 69e33d50, #839 for #547, #862 for #853):* main reads a compound
+  behind `time`, `time -p`, `time --`, `!` and their combinations opened as well (#853, `_opened_reading`), reads a
+  while/until condition's `cd` into the store a second time (#857), and on a store line asks a rule that would lift
+  a part's deny in the #191 pass to pass the whole line's own text test as well (#547, `_whole_line_test`). #862
+  gave main's per-reading function, which this PR calls `_classify_read`, a new body; the merge takes that body,
+  `_opened_reading` and `_one_reading` as main has them, under this PR's name (the one conflict, in
+  `src/exo/gate.py`). The layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading`
+  (this PR's two ways) -> `_classify_read` (budgets, #853's opened reading) -> `_one_reading` (#584's joined
+  reading, #838's loop reading) -> `_read_core` (the gh and sudo floors, D-074's `ordinary`). Each of the two ways
+  of reading the words has its own opened reading with its own budgets, and `flat` is main 69e33d50's own reading,
+  opened reading and all. #547's
+  test reads the line as classified, so a store send in a word makes the line a store line there too:
+  `git push --force origin main && echo ${v:-$(gh gist create ~/.exo/plugins/foo/__init__.py)}`, which main
+  69e33d50 allows under the irreversible deny matrix with a `^git push` allow rule (log or ask under a log or ask
+  rule), is denied, and asks without the whole-line test. Rows in
+  `tests/security/test_gate_parameter_expansion.py` pin the composition: 41 rows that each fail on main 69e33d50;
+  29 of them fail on this PR before the merge too (a prefixed compound inside a word, 7 store-entering prefixed or
+  condition-cd loops with a word, and 21 store sends in a word beside a push that fail without the whole-line test
+  as well), and 12 are guards this PR held before the merge. `scripts/gate_diff.py` of main 69e33d50 against this
+  tree lowers nothing: the built-in corpus (1,245,728 pairs, no variants, 23,389 tightened on 487 actions) and an
+  aimed corpus of 12,544 lines (this PR's earlier aimed lines and 3,719 composition lines) under 121 policies
+  (1,517,824 pairs, 251,042 tightened on 5,120 actions).
 
   *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
   command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the
