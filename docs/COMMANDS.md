@@ -281,6 +281,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
+| `exo findings backlog` | Unresolved findings (open, reopened, and fixed awaiting re-verification) counted by severity and by age, with the oldest listed. The backlog read uses one snapshot without a write lock; opening the store still takes a write lock for its schema check. | `--limit N` (oldest rows, 0..100, default 20), `--json` | same |
 | `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too, and so does one whose ledger file is a symlink. A ledger whose two anchors are more than one event apart passes with a warning. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 
