@@ -2710,3 +2710,7 @@ The public site at exo.askaconsult.com. Versions are `site-vMAJOR.MINOR` (docs/V
 - **v2.0** (2026-10-13, live): the lattice redesign. The living lattice egg on the home page, the roadmap page with linked nodes, the brand page, credits limited to open source and genuine innovators.
 - **v2.0-rc.1** (2026-10-13, staging): the approved redesign candidate, commit `6b8800f`.
 - **v1.0** (2026-10-12, live): the first public site, commit `8d54b55`. Archive: tag `site-live-2026-10-13`.
+
+### 2026-10-29 — unread-span deny candidates (#477)
+
+- Recognized destructive words in an unread deep nesting span retain delete/force-push category denies. The existing unknown/ask part stays. This is a conservative candidate scan, not a replacement shell parser; other categories and wrappers remain outside the slice.

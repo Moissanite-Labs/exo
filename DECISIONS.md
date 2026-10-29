@@ -6258,3 +6258,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 unread-span deny candidates amendment — 2026-10-29 (#477)
+
+One linear scan of a nesting-cut span adds at most one conservative candidate each for direct/plain-sudo delete and forced git push, beside the original unread part. Internal typed markers cannot be forged or deduplicated by equal-looking raw text. Candidates can overmatch quoted data and never make unread text trusted. Other commands, wrappers, target semantics and cut surfaces remain open.
