@@ -1,4 +1,4 @@
-# Retained tool-output views (D-084)
+# Retained tool-output views (D-085)
 
 **Status: In progress.** Stage 1 of issue #501 is implemented for review.
 
@@ -133,7 +133,7 @@ Measurements are engineering evidence, not evidence of better task success.
 The [gate comparison](evidence/tool-output-gate-2026-10-23.json) saves all 62 focused cases,
 the compared commits and reproduction commands. Across 87 policies it reports nine intentional
 `unknown` to `read` lowerings for three supported argument shapes. Unsupported calls retain
-generic protections. The comparison exits 1 for the intentional changes, as recorded in D-084.
+generic protections. The comparison exits 1 for the intentional changes, as recorded in D-085.
 
 Measured on 2026-10-23 with Python 3.11.17 on Linux in a shared container. Each fixture
 was rendered 100 times with default settings. Times below are process CPU medians.

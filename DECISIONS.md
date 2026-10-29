@@ -6412,7 +6412,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   - *Count.* The counted core is 16,370 lines (main `080e87ba`: 15,945), which D-083 reports and does not
     assert. Product imports and private-state reads stay at 39 and 8.
 
-## D-084 (2026-10-23) Retained tool-output views with exact bounded expansion
+## D-085 (2026-10-23) Retained tool-output views with exact bounded expansion
 - **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.
 - **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
   transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
@@ -6453,8 +6453,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. No core line-budget increase.
 
 - **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
-  combinations after D-083, D-085 and D-086 are present. The recorded local integration and
-  source fingerprints live in `docs/evidence/optional-features-smoke-2026-10-23.json`.
+  combinations once skill discovery (#509), the operations inbox (#511) and working notes (D-086) are
+  present. The recorded local integration and source fingerprints live in
+  `docs/evidence/optional-features-smoke-2026-10-23.json`.
   Tool-output CPU/startup samples were refreshed after the current-main and metadata changes.
   These offline fixtures do not establish task quality or replace the principal canary.
 - **Amendment 2026-10-27 (#510 review):** Expansion serves only results that rendering could excerpt.
@@ -6473,3 +6474,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `categories_deny`, `categories_ask` and `categories_log`. These are the intended lowerings named above.
   No reserved hit or violation was lost, no pair tightened, and neither tree had an error. A limit of 24,001
   stays `unknown`. The gate imports no other Exo module, so its `tool_output` rule is the only change.
+- **Amendment 2026-10-29 (renumbered from D-084):** On 2026-10-28 #742 merged another D-084 into main,
+  "An internal gate error asks once". #510 had merged into #508's branch, so its change now comes to #500
+  in a new PR, and it takes D-085. Main does not use D-085, and no open PR outside this stack does. #511
+  used D-085 too, and it takes a new number when it is rebased onto this change.

@@ -9302,7 +9302,7 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             operation = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
-    # A tool_output page is a read (D-084). The gate cannot see the configured page_chars, so its limit ceiling is
+    # A tool_output page is a read (D-085). The gate cannot see the configured page_chars, so its limit ceiling is
     # the top of tool_evidence.PAGE_CHARS; the tool refuses a limit above the configured value.
     elif (tool == "tool_output" and set(args) <= {"reference", "offset", "limit"}
           and isinstance(args.get("reference"), str)

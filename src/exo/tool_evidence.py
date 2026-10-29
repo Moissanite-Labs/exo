@@ -1,4 +1,4 @@
-"""Optional retained tool-output views over the existing session transcript (D-084).
+"""Optional retained tool-output views over the existing session transcript (D-085).
 
 The transcript and emitted results remain authoritative. No output archive, worker,
 database or cache is created. Only session ownership/boundary metadata is added.

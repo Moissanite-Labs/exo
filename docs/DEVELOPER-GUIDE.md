@@ -109,7 +109,7 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
-**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+**Retained tool output (D-085).** `exo.tool_evidence` decorates `TurnContext.build` when
 `tool_output.enabled` is true. It renders copies and expands retained sanitized text through
 the normal registry/executor path. `for_child(context, tools=names)` is an optional context
 method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
