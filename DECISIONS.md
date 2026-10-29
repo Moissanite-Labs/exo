@@ -207,6 +207,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
+- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
