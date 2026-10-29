@@ -4327,12 +4327,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     words, sudo, split = _strip_prefix_words(words, sudos=sudos)
     parts: list[Classification] = []
     if blind is not None:
-        # #853 review: main read this line as one program name it cannot see into, and asked. That ask is kept beside
-        # the parts read below as a signal, not an opaque part, so a deny on another part of the line still wins (as
-        # #188's reread signal does above): what the fix now reads as a store write can deny, and every line it reads
-        # as a plain read keeps main's ask rather than lowering it.
-        parts.append(_make("read", summary=f"{blind.text} behind time reads as one program name"[:120],
-                           command=cmd, signals=["indirection"]))
+        # #853 review: main read this line as one program name it cannot see into, so it read it as opaque_exec. That
+        # reading is kept as a part, beside the parts read below, so the line never decides looser than main under any
+        # rule that names the category (a `categories` level, or a deny on opaque_exec). A deny on a part read below
+        # still outranks it, so a loop body that writes the store denies as it should.
+        parts.append(_opaque(f"{blind.text} behind time reads as one program name", cmd))
         blind = None
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
