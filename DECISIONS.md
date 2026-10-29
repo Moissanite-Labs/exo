@@ -3835,6 +3835,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
   (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
   `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
+  condition's `cd` into a descriptor folder names it as a body's does, so `while cd /dev/fd < <(cp /tmp/evil 3); do
+  :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies (review of #858). A
   condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
   `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 1401ff81 against
   this change): the built-in corpus with variants lowers 0 of 7,882,688 pairs and tightens 1,505 pairs on 18

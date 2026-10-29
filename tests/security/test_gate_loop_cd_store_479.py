@@ -210,6 +210,7 @@ def test_the_issue_rows_lead_with_the_store_write_and_keep_mains_reading(line):
     "for i in 1 2; do cp /tmp/evil 3; cd /dev; cd fd; done",
     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; cp /tmp/evil 3; cd /dev/fd; done",
     "for i in 1 2; { cp /tmp/evil 3; cd /dev/fd; }",
+    "while cd /dev/fd < <(cp /tmp/evil 3); do :; done",            # #857: a condition's own `cd` names it too
 ])
 def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     c = _bash(line)
