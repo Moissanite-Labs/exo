@@ -251,3 +251,5 @@ fields under its signature, which no receipt has: `receipt` refuses it, and the 
 to a #523 build still completes. That matters because the first reply is checked after the text has gone: when a send
 fails on its reply, the peer may already have the message, and only the outcome is refused (D-026 amendment, #603
 review).
+
+Human Bus CLI reads verify the claimed seat signature before showing plaintext. Unverifiable or relay-only plaintext is replaced with `<unverifiable plaintext body>`; raw `--json` remains forensic envelope evidence, not a verified-message claim. Encrypted checks are unchanged. Other desktop audit #53 findings remain open.
