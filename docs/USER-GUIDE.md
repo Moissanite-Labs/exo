@@ -80,7 +80,8 @@ each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5
 ## 2. The two clients
 
 The web chat status strip wraps to fit the conversation width in either layout. Model names and values remain
-readable as the window narrows; notices appear on their own wrapped row.
+readable as the window narrows; notices appear on their own wrapped row. In a short window, scroll the chat column
+to reach the status, message box and thread.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
@@ -308,7 +309,8 @@ The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
 - **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
 
 Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
-appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+appears on the Tasks page) and remove it. Remove cannot be undone, so it asks for a second click on Confirm remove.
+Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
@@ -493,7 +495,8 @@ Details: `docs/GATE.md`.
 
 Peers are other live sessions on the machine: Exo sessions, Hermes agents and bus seats.
 
-- `/peers` lists them. `/send <peer> <text>` sends a message from you.
+- `/peers` lists them. `/send <peer> <text>` sends a message from you. Malformed discovery records
+  are ignored and removed during normal discovery so other live peers remain available.
 - An agent can message a peer with its `peer_send` tool.
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
@@ -545,6 +548,7 @@ folder is not inside a git repo.
 - `/trace` shows one row per turn: time, model that served, calls, fallbacks, tools, tokens and cost.
 - `exo trace [SESSION] [--last N] [--calls] [--json]` shows the same from a shell.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
+- `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
 
 Details and the cost rules: `docs/TRACE.md`.
 

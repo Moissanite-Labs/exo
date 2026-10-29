@@ -482,6 +482,7 @@ class _Cmd:
                                  # closer's redirections), which bash expands before the compound runs (#465)
     stdin_unknown: bool = False  # a stdin the gate cannot read reaches it: a compound's feed or its wrapper's (#316)
     stdin_apart: bool = False    # a wrapper runs it with the wrapper's stdin, which is not its line's (#316)
+    arith_for: int = -1          # on a `{` right after a `for ((..))` header: the command that holds that `for` (#479)
 
 
 class _OutSub(str):
@@ -991,10 +992,10 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
             return k + 1
-        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
-        if m:
-            j = k + len(m.group(0))
-            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        parameter = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if parameter:
+            j = k + len(parameter.group(0))
+            w.add("$" + parameter.group(0), 0, 1 + len(parameter.group(0)))
         else:
             j = i + 1
             w.add(s, i, j)
@@ -1262,6 +1263,24 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+# Set while classify reads a call (#479): [again, met]. A loop body runs again after its own `cd` into a store folder,
+# so the commands before that `cd` run there on a later pass. On the call's first reading (`again` off) a line with
+# such a loop sets `met`, and classify then reads the call again with `again` on, where each such loop's second pass
+# adds its parts (_loop_again) and sets `met` when it adds any. A third item counts the lines classify_shell reads
+# afresh (#479 verify): up on the first reading, down from the second reading's budget (_LOOP_BUDGET) on the second,
+# which a line past it ends (_LoopBudget). None outside classify.
+_loop_pass: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_loop_pass", default=None)
+# The second reading's budget (#479 verify), in lines classify_shell reads afresh: this many more than the first
+# reading read. A nest of loops in $( ) (`while :; do echo $(while ..; done); cp ..; cd ~/.exo/policies; done`)
+# reads each body in two folders on every level, and the memo (_shell_seen) keys a line by the budgets left too, so
+# such a nest cost that reading several times what the first one did (about 6 times main's time from 5 levels deep).
+# Past the budget the call fails closed (_loop_reading), so the second reading reads afresh about as many lines as
+# main's reading does, plus this many.
+_LOOP_BUDGET = 64
+
+
+class _LoopBudget(Exception):
+    pass
 
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
@@ -1380,6 +1399,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
     o_tok = -1                      # the index of cur's last token
     p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
+    parens = 0                      # `(` tokens open here, counted apart from the compounds (#479 verify)
+    ariths: list = []               # per `for ((` still open: (parens before its `((`, the command holding the `for`)
+    arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -1415,9 +1437,21 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
 
     while i < len(toks):
         kind, v = toks[i]
+        if arith >= 0 and (kind, v) != ("op", ";"):
+            # #479 verify: a `{` after `for ((..))` (a `;` or newline between) is the loop's body, whatever words
+            # the arithmetic holds; _parse reads its pieces as commands, which may start with a reserved word.
+            if kind == "w" and not v.quoted and v.text == "{" and not cur.words:
+                cur.arith_for = arith
+            arith = -1
         if kind in ("redir", "hd") and cur.words:
             cur.words[-1].redir_after = True
         if kind == "op":
+            if v == "(":
+                parens += 1
+            elif v == ")" and parens:
+                parens -= 1
+                if ariths and ariths[-1][0] == parens:
+                    arith = ariths.pop()[1]
             last = cur.words[-1] if cur.words else None
             # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
             opens = (after if after is not None else cur) if last and not last.quoted and last.text.endswith("=") else None
@@ -1454,6 +1488,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                 end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
             cw = not v.quoted and _command_word(cur.words, head, pre)
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
+            if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
+                ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
             if not v.quoted and _command_word(cur.words, lead, 0):
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
@@ -1988,7 +2024,7 @@ symbolic-ref update-ref ls-remote ls-tree show-ref version help range-diff whatc
 maintenance count-objects verify-commit verify-tag merge-base name-rev check-ignore check-attr var
 """.split())
 _GIT_EXEC_KEY = re.compile(r"^(alias\..+|core\.(pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|"
-                           r"sequence\.editor|diff\.external|interactive\.difffilter|.+\.[\w-]*(command|cmd)|"
+                           r"sequence\.editor|diff\.external|interactive\.difffilter|gc\.recentobjectshook|.+\.[\w-]*(command|cmd)|"
                            r".+\.(textconv|clean|smudge|process|driver|program|helper)|credential\..*|pager\..+|"
                            r"filter\..+|uploadpack\..+|remote\..+\.(uploadpack|receivepack)|"
                            r"(difftool|mergetool|man|browser)\..+\.path)$", re.I)
@@ -4428,8 +4464,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
-            if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
+            fd = bool(_fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")))
+            if fd:
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+            ctx.setdefault("cd_dirs", []).append(into if fd else "")   # each one, for a loop's second pass (#479)
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4509,9 +4547,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
             elif top is not None and _fold_made(top.target) and \
-                    (old := _most_severe([p for p in c.parts
+                    (prior_action := _most_severe([p for p in c.parts
                                           if p.category not in ("credentials", "store_write")])) is not None and \
-                    old.target != dest:
+                    prior_action.target != dest:
                 # #601: the fold made the part that took the line's category, so the decision on the alt target
                 # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
                 # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
@@ -4519,8 +4557,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
                 # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
                 # with no parts and no post, as #320's.
-                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
-                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
+                c.parts = [*c.parts, replace(prior_action, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (prior_action.signals if prior_action.own_signals is None else prior_action.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
@@ -6257,6 +6295,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
     key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed)
     if key not in seen:
+        if (loops := _loop_pass.get()) is not None:      # #479 verify: the second reading's budget
+            loops[2] += -1 if loops[0] else 1
+            if loops[2] < 0:
+                raise _LoopBudget
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
             seen[key] = _classify_shell(cmd, depth, fed)
@@ -6341,6 +6383,164 @@ def _classify_sub(sub: str, depth: int, fed: bool, line: bool = False) -> Classi
     return c
 
 
+def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot: list) -> list[Classification]:
+    """The parts of one simple command k of line ``cmd``, read in the line's order: ``prev`` is the command before it,
+    ``ctx`` what the line has set so far, ``slot`` the line's own text slot (#394). _classify_shell reads each command
+    so, and so does a loop's second pass (#479)."""
+    piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
+    # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
+    ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+    slot[0] = k.own
+    own = _literal_assigns(k, ctx["literals"])
+    late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
+    if not late:
+        ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
+    got = _classify_simple(k, cmd, depth, ctx, piped)
+    if late:
+        ctx["literals"].update(own)
+    if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
+        got = _given_stdin(got, _stdin_own(k), ctx)
+    return got
+
+
+_LOOP_WORDS = frozenset({"while", "until", "for", "select"})
+
+
+def _loop_word(k: _Cmd) -> int:
+    """Where the `while`, `until`, `for` or `select` is among the reserved words k starts with (`do for x in ..`), or
+    after a `coproc [NAME]` or `function NAME` that starts k, where _parse opens a compound too; or -1."""
+    for i, w in enumerate(k.words):
+        if w.quoted or not (w.text in _OPENERS or w.text in _LOOP_WORDS):
+            break
+        if w.text in _LOOP_WORDS:
+            return i
+    first = k.words[0] if k.words else None
+    if first is not None and not first.quoted and first.text in ("coproc", "function"):
+        return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
+                     and k.words[i].text in _LOOP_WORDS), -1)
+    return -1
+
+
+def _brace_head(cmds: list[_Cmd], b: int) -> int:
+    """#479 verify: the header of the `for` or `select` loop whose body is the `{ ..; }` group that cmds[b] starts, or
+    -1. bash takes such a group as the body (`for i in 1 2; { ..; }`, `select x in a b; { ..; }`, `for ((..)) { ..; }`)
+    and runs it once per pass in the same shell, as a `do ..; done` body. _parse opens no loop there. For `for ((..))`
+    _parse marks the `{` that follows the header's closing `))` (_Cmd.arith_for: the command holding the `for`, however
+    many commands it reads the arithmetic as and whatever words they start with, `do` or `while` as a variable too).
+    Else the header is the command just before the group (`for x [in ..]`, after `do` or a `coproc` too), with no
+    `do` after its name."""
+    first = cmds[b].words[0] if cmds[b].words else None
+    if first is None or first.quoted or first.text != "{":
+        return -1
+    if cmds[b].arith_for >= 0:
+        return cmds[b].arith_for
+    if b == 0 or (w := _loop_word(cmds[b - 1])) < 0:
+        return -1
+    words = cmds[b - 1].words
+    return b - 1 if words[w].text in ("for", "select") and not any(
+        not x.quoted and x.text == "do" for x in words[w + 1:]) else -1
+
+
+def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int, int]]:
+    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder
+    (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A `for` or `select`
+    loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify). The first command counts
+    too: for `while` and `until` it is the condition's, which runs again on every pass, so a substitution in a
+    `while cd ~/.exo/policies$(..)` runs in the store from the second pass (#857); a `for` header holds no `cd`."""
+    spans: list[tuple[int, int]] = []
+    for e, k in enumerate(cmds):
+        if k.opens is None:
+            continue
+        lead = [w.text for w in itertools.takewhile(lambda w: not w.quoted and w.text in _OPENERS, k.words)]
+        if not lead:
+            continue
+        if lead[-1] == "done" and _loop_word(cmds[k.opens[0]]) >= 0:
+            s = k.opens[0]
+        elif lead[-1] == "}" and (s := _brace_head(cmds, k.opens[0])) >= 0:
+            pass
+        else:
+            continue
+        while spans and spans[-1][0] >= s:      # an inner loop, closed before the one around it
+            spans.pop()
+        spans.append((s, e))
+    at = [n for n, _ in went]
+    return [(s, e) for s, e in spans if (i := bisect.bisect_left(at, s)) < len(at) and at[i] <= e]
+
+
+def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple[int, str]], cmd: str, depth: int,
+                line: tuple, into: tuple | None, seed_of: Callable[[int], tuple | None]) -> list[Classification]:
+    """#479: the parts of the second pass of each loop in ``spans`` (_loop_spans). bash runs a loop body again after
+    its own `cd` into a store folder, so on a later pass every command in it runs there, those before the `cd` too.
+    The line is read again in its order, with the store folder entered where each such loop starts, named by the
+    loop's first `cd` into a descriptor folder when it has one (fd_cwd, #217), and the loop's commands and the
+    substitutions in them are taken from that reading. bash expands a `for` or `select` word list and the
+    redirections of the loop's closer once, before the first pass, so those are left out. A substitution the line
+    already read in that folder is not read again (``seed_of``: the folder _classify_shell read each one in). As on
+    the line, a `cd` out of the store later in the body is not followed: fails closed. ``line`` is the line's
+    (subs, stdin_unknown, inherits, given) as _classify_shell has them, and ``into`` the folder it was entered in."""
+    subs, stdin_unknown, inherits, given = line
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits, "literals": {}}
+    if into:
+        ctx["store_cwd"] = True
+        if into[1]:
+            ctx["fd_cwd"] = into[1]
+    starts, at = dict(spans), [n for n, _ in went]
+    out: list[Classification] = []
+    again: list[tuple[range, list[range], tuple]] = []    # per loop: its substitutions, those bash expands once, folder
+    slot = _own_text.get() or [None]
+    prev: _Cmd | None = None
+    end, once = -1, False
+    token = _cd_into.set(None) if into else None
+    try:
+        for n, k in enumerate(cmds[:spans[-1][1] + 1]):
+            if n in starts:
+                end, lo = starts[n], cmds[n - 1].subs_met if n else 0
+                ctx["store_cwd"] = True
+                i = bisect.bisect_right(at, n)
+                while i < len(at) and at[i] <= end and not went[i][1]:
+                    i += 1
+                if i < len(at) and at[i] <= end:
+                    ctx.setdefault("fd_cwd", went[i][1])
+                elif (i := bisect.bisect_left(at, n)) < len(at) and at[i] == n and went[i][1] and \
+                        not (i + 1 < len(at) and at[i + 1] <= end):
+                    # #857: a `while`/`until` condition's own descriptor `cd` names the folder when the loop holds no
+                    # other store `cd`; a body's `cd` keeps naming it, as the second pass starts where the last `cd` left
+                    ctx.setdefault("fd_cwd", went[i][1])
+                w = _loop_word(k)
+                once = k.words[w].text in ("for", "select") and \
+                    any(not x.quoted and x.text == "in" for x in k.words[w + 2:w + 3])
+                closer = cmds[end]
+                shut = closer.opens[1] if closer.opens else closer.subs_met     # _loop_spans: a closer has opens
+                skip = ([range(lo, k.subs_met)] if once else []) + [range(shut, closer.subs_met)]
+                again.append((range(lo, closer.subs_met), skip, (True, ctx.get("fd_cwd") or "")))
+            late = len(ctx.get("late", ()))
+            got = _read_cmd(k, prev, cmd, depth, ctx, slot)
+            if n < end and not (once and n in starts):
+                out += got + ctx.get("late", [])[late:]
+            prev = k
+    finally:
+        if token is not None:
+            _cd_into.reset(token)
+    slot[0] = None
+    for span, skip, seed in again:
+        for j in span:
+            if any(j in r for r in skip) or seed_of(j) == seed:
+                continue
+            token = _cd_into.set(seed)
+            try:
+                got = [_classify_sub(subs[j], depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
+            finally:
+                _cd_into.reset(token)
+            out += _given_stdin(got, lambda: None, ctx) if given or isinstance(subs[j], _OutSub) else got
+    return out
+
+
+def _part_key(p: Classification) -> tuple:
+    """What a policy reads of one part, so a loop's second pass (#479) adds only the parts the line does not have."""
+    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, p.own, p.text,
+            p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
+
+
 def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
     # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
@@ -6367,26 +6567,15 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run
     # there. They are the first subs_met of the line's subs, which the lexer lists in the order of the line.
     upto, at = (0, -1) if into else (-1, -1)
+    went: list[tuple[int, str]] = []     # #479: (command, folder) of each `cd` or `pushd` into a store folder
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
     try:
         for n, k in enumerate(cmds):
-            piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
-            # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-            ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
-            slot[0] = k.own
-            own = _literal_assigns(k, ctx["literals"])
-            late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
-            if not late:
-                ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
-            got = _classify_simple(k, cmd, depth, ctx, piped)
-            if late:
-                ctx["literals"].update(own)
-            if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
-                got = _given_stdin(got, _stdin_own(k), ctx)
-            parts += got
+            parts += _read_cmd(k, prev, cmd, depth, ctx, slot)
             prev = k
             if upto < 0 and ctx.get("store_cwd"):
                 upto, at = k.subs_met, n
+            went += [(n, d) for d in ctx.get("cd_dirs", ())[len(went):]]
     finally:
         if token is not None:
             _cd_into.reset(token)
@@ -6400,8 +6589,11 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # own commands, a subshell or a later `cd` out is not followed: fails closed.
     there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
     early = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at] if there else []
+
+    def seed_of(j: int) -> tuple | None:
+        return there if there and j >= upto and not any(j in r for r in early) else None
     for j, sub in enumerate(subs):
-        seed = there if there and j >= upto and not any(j in r for r in early) else None
+        seed = seed_of(j)
         token = _cd_into.set(seed) if seed else None
         try:
             got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
@@ -6409,6 +6601,19 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             if token is not None:
                 _cd_into.reset(token)
         parts += _given_stdin(got, lambda: None, ctx) if given or isinstance(sub, _OutSub) else got
+    # #479: a loop that holds a `cd` into a store folder runs its commands before that `cd` there on a later pass.
+    # The call's first reading only notes such a loop; its second reading (classify) adds that pass's parts.
+    # A line read in a store folder already (a $( ) after the `cd`, into) read each command and $( ) there, so a second
+    # pass reads nothing new unless a loop names a descriptor folder the line was not read in: it is not read again.
+    if went and (again := _loop_pass.get()) is not None and (spans := _loop_spans(cmds, went)):
+        if not again[0]:
+            again[1] = True
+        elif not into or not into[1] and any(d and any(s <= n <= e for s, e in spans) for n, d in went):
+            pass2 = _loop_again(cmds, spans, went, cmd, depth, (subs, stdin_unknown, inherits, given), into, seed_of)
+            keys = {_part_key(p) for q in parts for p in _each_part(q)}
+            pass2 = [m for m in pass2 if any(_part_key(p) not in keys for p in _each_part(m))]   # only what is new
+            parts += pass2
+            again[1] = again[1] or bool(pass2)
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
@@ -8253,24 +8458,73 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
     caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
-    token = _joining.set(seen)
+    loops: list[int] = [False, False, 0]                            # (#479) a loop with a `cd` into the store
+    token, noted = _joining.set(seen), _loop_pass.set(loops)
     try:
         c = _read_core(action, cwd)
     finally:
+        _loop_pass.reset(noted)
         _joining.reset(token)
     if seen[1] and call is not None:
         left, memo, token = _brace_left.set(None), _shell_seen.set(None), _joining.set([True, False])
+        noted = _loop_pass.set(loops)
         try:
             j = _brace_budget(_read_core)(call, cwd)                # joined reading of the same call (#584)
         finally:
+            _loop_pass.reset(noted)
             _joining.reset(token)
             _shell_seen.reset(memo)
             _brace_left.reset(left)
-        first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
-        x = first
-        while x.also is not None:
-            x = x.also
-        x.also, c = last, first
+        c = _beside(c, j)
+    if loops[1]:
+        c = _loop_reading(c, [action] + ([call] if seen[1] and call is not None else []), cwd,
+                          _LOOP_BUDGET + loops[2])
+    return c
+
+
+def _beside(c: Classification, j: Classification) -> Classification:
+    """Readings c and j of one call: the more severe leads (on a tie, c), and the other ends its ``also`` readings,
+    so decide keeps the stricter (#584)."""
+    first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+    x = first
+    while x.also is not None:
+        x = x.also
+    x.also = last
+    return first
+
+
+def _loop_reading(c: Classification, calls: list, cwd: str | None, budget: int) -> Classification:
+    """#479: the call read as before (c), with a second reading of each of ``calls`` (the call, and its joined form
+    when classify read one, #584) beside it, in which each loop that holds a `cd` into a store folder also has the
+    parts of its second pass (_loop_again). Each reading has budgets and memos of its own. A reading that adds no
+    part is left out. The reading as before stays as it is: decide keeps the strictest, so a line never decides
+    lower. When the second reading leads, it keeps the D-074 ``ordinary`` reading the reading as before had.
+    A second reading that reads afresh more lines than ``budget`` (_LOOP_BUDGET, #479 verify) fails closed: in its
+    place is one store write that stands for the passes it did not read, which asks the principal alone and denies
+    under `deny: [store_write]`."""
+    for n, call in enumerate(calls):
+        added: list[int] = [True, False, budget]
+        left, memo = _brace_left.set(None), _shell_seen.set(None)
+        token, again = _joining.set([n > 0, False]), _loop_pass.set(added)
+        try:
+            x = _brace_budget(_read_core)(call, cwd)
+        except _LoopBudget:
+            x = _make("store_write", tool=c.tool, command=c.command, own=None,
+                      target="a path inside the store (after cd)",
+                      summary="a loop that enters the Exo store runs again there; past the gate's budget, not read")
+            x.signals += ["exo store", "unread loop pass"]
+            added[1], added[2] = True, -1
+        finally:
+            _loop_pass.reset(again)
+            _joining.reset(token)
+            _shell_seen.reset(memo)
+            _brace_left.reset(left)
+        if added[1]:
+            if x.ordinary is None:
+                x.ordinary = c.ordinary
+            c = _beside(c, x)
+        if added[2] < 0:
+            break                                  # its joined form has the same loops: one such reading is enough
     return c
 
 

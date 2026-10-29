@@ -523,6 +523,33 @@ Reply with one JSON object and nothing else:
  "domain": "one of the allowed domains", "type": "preference or rule", "title": "short title"}}"""
 
 
+_JSON_STARTS = 64   # brace positions tried before the reply counts as having no object
+
+
+def _decode_model_json(raw: str) -> Any:
+    """Decode the first JSON object in model output, skipping the prose around it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the object dropped valid output. Decoding is tried
+    from each `{` in turn, so a bracketed note, an array or an object wrapped
+    in an array before or around the answer does not hide it either. The first
+    start that decodes to an object wins.
+    """
+    decoder, start = json.JSONDecoder(), raw.find("{")
+    for _ in range(_JSON_STARTS):
+        if start < 0:
+            break
+        try:
+            value = decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+        start = raw.find("{", start + 1)
+    raise ValueError("no JSON object in the model output")
+
+
 class ModelReflector:
     """Adapter seam for a model call. `complete(prompt) -> str` is any function the host supplies
     (Hermes auxiliary model, a local model, a test double). Bad output falls back to the rules."""
@@ -537,8 +564,7 @@ class ModelReflector:
         try:
             raw = self.complete(MODEL_PROMPT.format(text=obs.text, rejected=obs.rejected or "",
                                                     reason=obs.reason or "", domains=", ".join(ctx.domains)))
-            m = re.search(r"\{.*\}", raw, re.S)
-            data = json.loads(m.group(0) if m else raw)
+            data = _decode_model_json(raw)
             wants = _tidy(str(data["wants"]))
             if not wants or re.match(r"^(not|no|don'?t|never)\b", wants, re.I):
                 raise ValueError("wants must be positive")
@@ -966,7 +992,7 @@ class _Run:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
         b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
-        if b is not None and rel == "agree":
+        if b is not None and rel == "agree" and b.active:
             self.reinforce(b, obs)
             return
         if b is not None and rel == "conflict" and b.active:

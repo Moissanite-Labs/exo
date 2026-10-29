@@ -158,6 +158,8 @@ class Directory:
 
     @staticmethod
     def _presence(d: dict[str, Any]) -> Presence:
+        if not isinstance(d, dict) or type(d.get("pid")) is not int:
+            raise TypeError("presence must be an object with an integer pid")
         return Presence(**{k: v for k, v in d.items() if k in Presence.__dataclass_fields__})
 
     @staticmethod

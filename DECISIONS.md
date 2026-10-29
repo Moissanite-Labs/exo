@@ -207,6 +207,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
+- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
@@ -457,6 +458,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   provider time to first token is measured at the loop, not inside each provider.
 
 ## D-026 (2026-10-12) Peers and one ingress path
+- **Amendment 2026-10-28 (#638):** peer presence must be a JSON object with an integer pid; boolean,
+  floating-point and string pids are invalid. Invalid records are skipped and normal discovery prunes
+  them without blocking other peers. Unknown signed fields remain in the original verification document.
 - **Why:** A watched two Claude Code sessions avoid a file collision by messaging each other and asked for it in
   Exo, and for Hermes agents too (docs/PEERS.md).
 - **Decision:** anything outside the principal's keyboard goes through one path, `Ingress(source, sender, trust,
@@ -1307,6 +1311,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
   globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`
@@ -1888,9 +1893,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   expands them first (`while read f; do cd ~/.exo/state; done < <(sort list)` stays a read). As for the line's own
   commands, a subshell `cd`, a later `cd` out of the store and a `cd` in a function body are not followed, so those
   fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its earlier commands there
-  on its next pass, which is not followed either (#480). A line nested in the substitution
-  keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
-  itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
+  on its next pass, which was not followed either (#480) until the #479 amendment of 2026-10-28. A line nested in
+  the substitution keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the
+  substitution is itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
   (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still
   classified once per depth in a call (#334), now once for each folder as well, so the same `$( )` read outside
   the store and in it on one line is read in both. This needs the D-075 amendment for #464: without it, a command
@@ -3753,6 +3758,124 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
   still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
   and stay so), which is the `${..}` default word's own gap, not this one.
+- *Amendment 2026-10-28 (issue #479, also #480):* a loop body that `cd`s into the store runs its earlier commands
+  there on its next pass, and the gate reads them so now. The gate read a line's commands once, in order, and a
+  command counted as in the store only after the `cd` that entered it (#465 seeds substitutions the same way), so
+  `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` and its `while :` and `until false` forms,
+  where the `cp` rewrites the policy file on the second pass, were allowed reads on main cd371aed, also under
+  `deny: [store_write]`; the `select` row and `while :; do echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies;
+  done` asked there, but did not deny; so it still was on main f28934a3. Now, when a `for`, `select`, `while` or
+  `until` body (a `coproc` one too) holds a `cd` or `pushd` into the store or a descriptor folder after the loop's
+  first command (nested loops, the loop's condition, a nested line and the forms the `cd` check reads included:
+  `"$HOME/.exo/policies"`, `$EXO_HOME/policies`, `${X:-~/.exo/policies}`, `~/.exo/pol*`, `/dev`, `/dev/fd`),
+  `classify` reads the call a second time. A `for` or `select` loop whose body is a `{ ..; }` group (`for i in 1 2;
+  { ..; }`, `for i; { ..; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++)) { ..; }`, also after `;` or a
+  newline) counts as one with a `do ..; done` body (verify of #479): bash runs the group once per pass in the same
+  shell, but `_parse` opens no loop there, so `_brace_head` finds the header just before the group, and a group
+  that is no loop's body (one after a `done`, a plain `{ ..; }`, an arithmetic command's `(( i++ )); { ..; }`)
+  runs once and is not read again. For `for ((..))`, `_parse` itself marks the `{` that follows the header's
+  closing `))`, a `;` or newline between (`_Cmd.arith_for`, second verify of #479): it counts the `(` and `)`
+  tokens apart from the compounds, so whatever the arithmetic holds is skipped. The first verify's search back
+  from the group stopped at a piece that starts with a reserved word and looked back 16 commands, but in `(( ))`
+  a reserved word is a plain variable name (`for ((do=0; do<2; do++)) { ..; }`, `while`, `done`, `if`) and each
+  `|` or `&&` there is a command of its own to `_parse`, so those headers and one of more than 15 pieces were
+  missed (asked as `opaque_exec`, auto-allowed under bypass, as on main) and now deny under `deny:
+  [store_write]` as the do/done form does. On main f28934a3 `for i in 1 2; { cp /tmp/evil gates.yaml; cd
+  ~/.exo/policies; }` was an allowed read under every policy, auto-allowed by the hook in every mode, and the
+  `select` and `for ((..))` forms asked as `opaque_exec` without a `deny: [store_write]` deny. On the second
+  reading `_classify_shell` reads the line again in its order (`_loop_again`), with the folder entered where the
+  outermost such loop starts, named by that loop's first descriptor `cd` (fd_cwd, #217), and adds the parts of the
+  loop's commands and substitutions that the line does not already have. A line already read in a store folder
+  (a `$( )` after the `cd`) read every command there, so it is not read again unless a loop names a descriptor
+  folder the line was not read in. bash expands a `for` or `select` word list and the redirections of the loop's
+  `done` (or `}`) once, before the first pass, so those keep their folder, and so does a command before the loop.
+  A later `cd` out in the body (`cd -`, `cd /tmp`) is not followed: fails closed, as a subshell `cd` does; a `cd -`
+  that goes back into the store on a later pass is covered by the same reading. The second reading is kept beside
+  the first as #584's joined reading is (`_beside`): the more severe leads, the other ends its `also` readings, and
+  `decide`, `no_grant`,
+  `call_approvers` and the exo-gate hook read each (`gate.readings`), so the issue's rows are `store_write`, ask
+  the principal alone, are never granted, keep the D-065 bypass floor and deny under `deny: [store_write]`. The
+  first reading is main's reading of the call, unchanged, so no line decides lower; a line with no such loop is
+  read once, as before, and when the second reading adds no part it is dropped. When the second reading leads it
+  takes the first's D-074 `ordinary` reading if it has none of its own. `classify_shell` alone still reads a line
+  once. The second reading has a budget (`_LOOP_BUDGET`, verify of #479): it may read afresh (each line, `$( )`
+  body and nested line `classify_shell` has not read in the same state) 64 lines more than the first reading did.
+  A nest of loops in `$( )`, each with a `cd` into the store, reads each body in two folders on every level, and
+  the memo keys a line by the budgets left too, so the verifier measured it at about 6 times main's time from 5 to
+  13 levels deep (main 7.6 s, branch 48.5 s at 12 levels, under load). Past the budget the second reading stops
+  (`_LoopBudget`) and one `store_write` part with no own text stands for the passes it did not read: it asks the
+  principal alone, no grant covers it, the bypass floor holds and `deny: [store_write]` denies it, beside main's
+  reading, which stays as it was. Measured CPU time (`time.process_time`, the best of three runs, main f28934a3 vs
+  this branch, load average 10 to 29 on 4 CPUs): the issue's row 5 ms to 19 ms; that nest 5 levels deep 0.09 s to
+  0.30 s, 8 levels 0.39 s to 1.05 s, 12 levels 2.97 s to 6.25 s (past the budget from 5 levels); the brace form 8
+  levels deep 0.53 s to 1.23 s; 200 nested `for` loops 0.09 s to 0.24 s; 1,500 such loops side by side on one line
+  2.24 s to 6.55 s (each loop's commands are read once more, linear in the line; the second reading adds no part
+  there and is dropped, since the first loop's `cd` already puts the rest in the store); a `for ((..)) { ..; }`
+  header with 200 `|` pieces 0.02 s to 0.07 s. The budget bounds each classify, and a call whose Exo-home
+  `config.json` counts as the store has a D-074 `ordinary` reading that is a classify of its own, with its own
+  second reading and budget, so both readings pay the multiplier: the nest six levels deep with a `cp` into
+  `~/.exo/config.json` took 1.10 s against 0.29 s on main (about 4 times, second verify; letting that reading share
+  the outer budget was left out, as it is bounded). Known limits: a `cd` through a variable set earlier or through
+  the loop variable (`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`, `for d in /tmp
+  ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop, since the `cd` check reads no
+  variable's value where it is set (the verifier's low finding, kept as a limit); a function the loop calls is not
+  followed into, though its call is then a command in the store and asks; a loop behind `time` (`time for ..`) is
+  not a compound to `_parse`, as on main, so it has no second reading: it asks as `opaque_exec` without a `deny:
+  [store_write]` deny, a seat the approvers name may answer it, and under permissions bypass the exo-gate hook
+  auto-allows it, all as on main f28934a3. The #479 differential against main f28934a3 (main's
+  `scripts/gate_diff.py`, each tree in its own process, `--jobs 2 --timeout 0`): the built-in corpus with
+  `--no-variants`, 12,763 actions under the 88 policies (1,123,144 pairs), lowers 0 pairs and tightens 7,129 pairs
+  on 122 actions, mostly `read allow` to `store_write ask` (6,120), `local_write allow` to `store_write ask` (302),
+  `read allow` to `store_write deny` (160), `shell allow` to `store_write ask` (157) and `opaque_exec allow` to
+  `opaque_exec ask` (130); 377 pairs keep their outcome with another detail. An aimed corpus of 11,424 loop lines
+  (`--only-corpus`, 22,848 actions with their shell-tool forms: 9 bodies, a write before or after the `cd`, 11
+  folders (the store spelt six ways, `/dev`, `/dev/fd`, two plain folders and `$d`), `cd`, `pushd` and a `cd` then
+  `cd -`, 16 loop forms (`do ..; done` and `{ ..; }` bodies, `for x;`, `for ((..))` with and without `;`,
+  `select`, `while`, `until`, `coproc`, nested, behind `time`, a word list's `$( )`) and 6 wrappers (`bash -c`,
+  `$( )`, a pipe, `if`, a write before, a closer's redirection)) under the 88 policies and 105 more (deny,
+  reserved, category, rule, command-rule, target and matrix entries on ten categories; 193 in all, 4,409,664 pairs)
+  lowered 0 pairs and tightened 606,376 pairs on 7,792 actions before the second verify, mostly `read allow`
+  (300,979), `local_write allow` (183,467) and `shell allow` (24,636) to `store_write ask`. The second verify's
+  `_parse` change can only touch a line with a `for ((`, so the aimed run was repeated on every line of that corpus
+  and of 4,950 new ones that holds a `((` (7,092 lines, 14,184 actions: the earlier `for ((..))` forms, a reserved
+  word as the variable, a `!`, 20 `|`, `&&` or `||` pieces, a newline or comment before the body, a subshell, a
+  nested `do` loop, and the guards `(( i++ )); { ..; }`, a group after a `for ((;;)) { :; }` and after a `do ..;
+  done`) under the same 193 policies (2,737,512 pairs): 0 lowered, 135,509 tightened on 4,752 actions, mostly
+  `read allow` to `store_write ask` (32,301), `opaque_exec allow` to `opaque_exec ask` (23,940) and `opaque_exec
+  ask` to `opaque_exec deny` (21,402); 19,783 pairs keep their outcome with another detail. Every line of the new
+  corpus (16,374) with no `cd` into a store folder (4,806 lines: the plain folders `/tmp/proj` and `../src` and the
+  variable `$d`, and the guards) keeps main's number of readings, category and decisions (default and `deny:
+  [store_write]`) exactly. No classify or decide errors. Tests: `tests/security/test_gate_loop_cd_store_479.py`
+  (97 of its 157 tests fail on main f28934a3; one of them, the cost test, only because main has no
+  `_loop_reading` to patch).
+  *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
+  no other change.
+- *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
+  `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
+  gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
+  second (bash 5.2 writes the policy file; the same with `until ! cd`, backticks, `pushd`, a `< <(..)` on the `cd`
+  and a `cd` inside an `if` in the condition). `_loop_spans` took a loop only when its `cd` sat after the loop's
+  first command (`bisect_right`), so these six lines were allowed reads on main 1401ff81 under every policy, and
+  the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
+  (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
+  `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
+  condition's `cd` into a descriptor folder names that folder when the loop holds no other store `cd`, so `while cd
+  /dev/fd < <(cp /tmp/evil 3); do :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies; when
+  the body holds a `cd` of its own, the body's names the second pass, as on main, since that pass starts where the
+  last `cd` left it (reviews of #858: taking the condition's folder first dropped main's reading of `while cd
+  /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done`, deny to ask under `deny: [target:/proc*]`). A
+  condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
+  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 938b027a
+  against this change): the built-in corpus with variants, the 4,804 condition lines below and 6,240 lines that
+  mix a condition `cd` and a body `cd` into the store, `/dev/fd`, `/proc/self/fd` or `/dev/fd/3` (`while`, `until`,
+  `while !`, `{ }` and `for`; `cd`, `builtin cd`, `cd -P`, `pushd`; `< <(..)`, `<<< "$(..)"` and `$( )`; `cp`,
+  `rm -rf` and `git push` bodies), under the 88 built-in policies and seven more that keep `/dev*`, `/proc*` and
+  `*store*` target rules apart, lower 0 of 10,616,630 pairs and tighten 282,981 on 3,337 actions. The first draft
+  of the descriptor rule, which took the condition's folder before the body's, lowered 4,992 pairs on 2,048 of the
+  mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
+  and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
+  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 11 of its tests fail without the change: the six condition rows, the descriptor row and four hook rows).
+  *Revisit if:* the same as #479's.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -3797,6 +3920,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
   limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
   keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (exo-desktop #55):* `GET /api/chat/sessions` takes a `limit` from 1 to 500, 100 when none
+  is given. A larger limit is cut to 500, as before. A limit below 1 gets a 400 JSON error and sends no
+  `session.list` to the core, as a limit that is not a number already did. Before, only the top was cut, and
+  SQLite reads a negative `LIMIT` as no limit, so `limit=-1` returned every session. A 400, not a cut to 0,
+  names the caller's mistake. `docs/ui/WEB.md` "What is where".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
@@ -3912,6 +4040,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
+- *Amendment 2026-10-28 (desktop audit #53):* the bus channel skips encrypted envelopes sealed to another seat and unreadable encrypted bodies before session allocation or core ingress. The inbox cursor still advances; reader tools retain their placeholders. A core-call failure still retries the envelope.
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
   consolidation and `principal_said` checked the kind, not the author, so an agent-written "always force push to
   main" became a belief proposal that promotion rule 1 would accept. (b) Per-turn capture got bare role and content,
@@ -3937,6 +4066,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   validation, as malformed integers already did. This prevents SQLite overflow errors from answering 500 and
   negative limits from lifting the page cap. Rejected: clamping invalid values, which silently changes the
   requested range, or catching database overflow after dispatch, which leaves negative limits unbounded.
+  *Amendment 2026-10-28 (aska-digital/exo-desktop #70 by sparky-118, ported in #835):* `Store.verify`, which
+  answers `/v1/verify` and the `verify_ledger` MCP tool, answers ok false with checked 0 when the range it
+  would check is empty: an inverted range, a `from` past the head, or an explicit range on an empty log. It
+  answered ok true, so a caller that read only `ok` took a check of nothing for a clean log. `to` is clamped
+  to the head, so the answer names the range it checked. One case stays ok true: no `to`, and `from` at its
+  default of 1, on an empty log. That call asks about the whole log, which holds nothing, so it answers
+  `empty: true`, as `exo bus verify` (the client's own walk of the log) already did. An empty-range answer's
+  `head` is the log head, not the chain hash at `from - 1`. Rejected: ok true plus an `empty` flag for every
+  empty range, which leaves a caller that reads only `ok` with the old answer.
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
@@ -4407,7 +4545,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
-  the busy wire remains visible. This changes no command, telemetry, activity state or permission.
+  the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
+  and the log retains space to scroll independently. Narrow screens retain their responsive log height, and the
+  slash-command menu remains readable. This changes no command, telemetry, activity state or permission.
 - **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
   prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
   that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
@@ -4884,6 +5024,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   grid and cards; Command and Providers like an instrument panel. The lattice egg (`site/brand/egg.js`, copied
   byte for byte to `static/egg.js`) appears once, in the Tasks empty state. Presentation only: no route, protocol,
   token (D-039), approval (D-045), layout (D-046) or completion (D-037) behaviour changes; element ids stay.
+- **Amendment 2026-10-27 (exo-desktop #55):** Schedule's remove has no undo, so it waits for a separate Confirm
+  remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
+  `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
+  Cancel and remove would never run there.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
@@ -5755,3 +5899,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
+
+## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
+- **Status:** Accepted, effective for the next release.
+- **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
+- **Why:** the route answered `"core unreachable (<ExceptionName>)"` for every failure, including a core that answered and refused the caller. That reads as a broken connection, so the page could only offer a retry that changes nothing, and an exception class name was the whole diagnosis. Issue #756 is the same defect on the chat side: guidance must follow the failure class, not the fact of a failure.
+- **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
+- **Rejected:** a 503 or 502 status for the models route. The page calls it on every load and treats a non-200 as "no models", which hides the reason; a 200 with an error field lets the caller decide. Also rejected: retrying inside the route. The route runs on the request, and a retry decision belongs to the person reading the sentence.
+- **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/COMMANDS.md` unchanged, `CHANGELOG.md`. No settings change, no new key handling.
+## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
+- **Status:** Accepted for implementation in this PR. Records after D-091 (#845).
+- **Decision:** the one dim guidance line reads the recorded model error text. An authentication or permission failure ("HTTP 401", "Incorrect API key", "invalid x-api-key", "authentication", "permission denied") may send the reader to the Providers page. A transport failure (`ReadError`, `ReadTimeout`, `ConnectError`, "stream ended without a response", network and unreachable wording) says the model could not be reached and offers no key advice. Text that reads as neither gets a general line pointing at `/trace`. No text at all (an older core, or a boolean flag) gets the general line too.
+- **Why:** issue #756. The line fired on any `model.call` with an error, so a dropped connection told the person to check keys. A wrong suggestion costs a reader real time and hides the actual failure. The page already receives the error string in the `model.call` body; it only threw it away.
+- **How:** `providerErrorKind()` in `static/complete.js` classifies the text (auth wins over transport when both match); `Guide.rules()` turns the kind into one of three keys (`providers:auth`, `providers:transport`, `providers:error`) so each keeps its own twice-a-session count. `static/chat.js` passes the error text instead of a boolean. Classification is local: no core change, no request at tip time, no new event field.
+- **Rejected:** a new `error_class` field on `model.call` as the only signal (an older core would leave the tip silent, and the text is already there); a single softer sentence for every error (it is the specificity that makes the line worth showing).
+- **Revisit if:** the core records a structured error category on `model.call`, in which case the classifier should prefer it and keep the text as a fallback.
+- **Docs and user impact:** `docs/ui/WEB.md` guidance paragraph, `docs/DOCS-MAP.md`, `CHANGELOG.md`. No new command or setting; nothing about keys is stored or shown.
