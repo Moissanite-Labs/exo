@@ -4182,10 +4182,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   behind its own prefix, so only the opened reading sees them: `time for i in 1 2; do cp /tmp/evil 3; cd /dev/fd;
   done; time for i in 1 2; do cp /tmp/evil 3; cd /proc/self/fd; done`, the same with `!` before the
   `/proc/self/fd` loop and `time -p` before the `/dev/fd` one, and a store loop behind its own `time` after the
-  `/dev/fd` one, name both folders, where main 69e33d50 named the first only.
-  Differential (main's `scripts/gate_diff.py` from a 69e33d50 worktree, main 69e33d50 against this change, as
-  merged; against d742d1bb, before the merge, it lowered and tightened the same counts): the built-in
-  corpus without variants lowers 0 of 1,182,808 pairs (13,441 actions, 88 policies; the built-in
+  `/dev/fd` one, name both folders, where main 69e33d50 named the first only. On main d3cbd874 (#158) a call
+  whose `${..}` words or `$((` bash may read otherwise than the reading before #143 is read both ways
+  (`_classify_reading` around `_classify_read`, the second reading `flat`); each of the two reaches `_one_reading`,
+  so each makes its own #867 reading with its own budget, and so does each one's opened reading (the budget test
+  checks the sequence of readings in each of them). A write in a `${v:-$( )}` word of the second loop's body (also
+  in a `$((`, a nested word, a loop inside the word, the pair inside a word, a quoted-prefix command, a condition
+  `<( )`, behind `time`, in `bash -c`, a `sudo -i` shell's stdin and an `env -S` text) names `/proc/self/fd`,
+  where main d3cbd874 named `/dev/fd` only and `deny: [target:/proc*]` asked; a `cd` to a `${v:-..}` word in the
+  second loop names the store, as for that loop alone, where main named it `/dev/fd` and `deny:
+  [target:*store*]` asked. A `cd` in a word's `$( )` runs in a subshell and adds no second pass (a guard row).
+  Differential (main's `scripts/gate_diff.py` from a d3cbd874 worktree, main d3cbd874 against this change, as
+  merged; against 69e33d50 and d742d1bb, before the later merges, the aimed corpora lowered and tightened the same
+  counts): the built-in corpus without variants lowers 0 of 1,258,576 pairs (14,302 actions, 88 policies; the built-in
   `deny_target_dev_proc` denies both folders at once, so it tightens none), and an aimed corpus of 21,000 loop
   lines (two loops in both orders into `/dev/fd`, `/proc/self/fd`, `/dev/fd/3` and `~/.exo/policies`; `for`,
   `while`, `until`, `select` and `{ }` bodies; `cd`, `pushd`, `builtin cd`; body and condition `cd`s; `cp`, `rm
@@ -4195,14 +4204,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   straight command after the loops; one loop alone and two loops into one folder) under the 88 built-in policies
   and 15 that keep `/dev*`, `/proc*` and `*store*` target rules apart (deny and reserved) lowers 0 of 2,163,000
   pairs and tightens 34,612 on 10,352 actions (`store_write` ask to deny). #853's aimed corpus (10,572 lines
-  behind `time` and `!` prefixes, under 214 policies, 2,262,408 pairs) decides every pair as main 69e33d50 does.
-  Cost (`time.process_time`, best of 5, two rounds, on a shared machine under load 3.5 to 7, so noisy): 100
+  behind `time` and `!` prefixes, under 214 policies, 2,262,408 pairs) decides every pair as main d3cbd874 does.
+  An aimed corpus of 1,140 #158 lines (a `${v:-$( )}`, `${v:+$( )}`, `${v:=$( )}`, quoted, nested or `$((` word,
+  behind a quoted prefix too, in one loop or both, for `cp`, `rm -rf` and `git push` writes and five folder
+  pairs, also inside an outer loop, behind `time`, inside a word, after a `cd`, in a condition `<( )`, and a `cd`
+  to a `${v:-..}` word) under the same 103 policies lowers 0 of 117,420 pairs and tightens 3,776 on 936 actions
+  (`store_write` ask to deny).
+  Cost (`time.process_time`, best of 5, two rounds, on a shared machine under load 12 to 14, so noisy): 100
   loops alternating `/dev/fd` and `/proc/self/fd` on one line (5,398 characters), 100 alternating `/dev/fd` and
-  the store, and 25 outer loops each holding the pair cost about 1.2 to 2.0 times what they cost on main 69e33d50
-  over two measures (the last: 0.27, 0.33 and 0.15 s against 0.13, 0.18 and 0.09 s); 100 loops into `/dev/fd`
-  alone cost about the same (0.17 against 0.16 s; no reading is added). Tests:
-  `tests/security/test_gate_loop_fd_per_loop_867.py` (86 of its 97 tests fail on d742d1bb and on main 69e33d50;
-  the other 11, the 9 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass on both).
+  the store, 25 outer loops each holding the pair, and 100 alternating loops whose `/proc/self/fd` ones write in a
+  `${v:-$( )}` word cost about 1.2 to 2.2 times what they cost on main d3cbd874 (the last round: 0.24, 0.33,
+  0.15 and 0.45 s against 0.17, 0.21, 0.13 and 0.25 s); 100 loops into `/dev/fd` alone cost about the same
+  (0.13 to 0.20 against 0.14 to 0.18 s; no reading is added). Tests:
+  `tests/security/test_gate_loop_fd_per_loop_867.py` (114 of its 127 tests fail on main d3cbd874; the other 13,
+  the 11 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too).
   Known limit, as on main: a command that runs once, outside any loop's second pass, after a second descriptor
   `cd` is still named by the first descriptor folder of the line, since the line's first reading keeps one folder
   (`fd_cwd`) for the whole line. That holds on a straight line (`cd /dev/fd; cd /proc/self/fd; cp /tmp/evil 3`)

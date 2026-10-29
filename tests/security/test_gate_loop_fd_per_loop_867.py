@@ -111,17 +111,54 @@ NEST_ROWS = [w.format(f"{x}; {y}") for w in _WRAPS for x, y in _PAIRS] + [
     "cd /proc/self/fd; done; done",
     f"cd /dev/fd; echo $(for j in 1 2; do {_A}; {_B}; done)",
 ]
+_W = "echo ${v:-$(cp /tmp/evil 3)}"
+# #158 (main d3cbd874) reads a `${..}` word as bash's parser does, and the call both ways where that may differ from
+# the reading before (``flat``): the write in a `${v:-$( )}` word of a loop body runs on the loop's second pass in its
+# own folder too. In the second loop, the first, both, a loop inside the word, the pair inside a word, after a
+# `cd /dev/fd`, in a `$((`, a nested word, a `'}'` word, a joined `$\<newline>` word (#584), a condition `<( )`, a
+# `{ ..; }` body, behind a quoted prefix (#546, and without a word) and `time` (#853), inside an outer loop, `bash -c`,
+# a sudo -i shell's stdin (#491) and an `env -S` text (#591). On main d3cbd874 each names /dev/fd only, so `deny:
+# [target:/proc*]` asks.
+WORD_ROWS = [
+    f"{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done",
+    f"for i in 1 2; do {_W}; cd /dev/fd; done; {_B}",
+    f"for i in 1 2; do {_W}; cd /dev/fd; done; for i in 1 2; do {_W}; cd /proc/self/fd; done",
+    f"{_A}; for i in 1 2; do echo ${{v:-$(for k in 1; do cp /tmp/evil 3; done)}}; cd /proc/self/fd; done",
+    f"echo ${{v:-$({_A}; {_B})}}",
+    f"{_A}; echo ${{v:-$({_B})}}",
+    f"cd /dev/fd; echo ${{v:-$({_B})}}",
+    f"{_A}; for i in 1 2; do echo $(( ${{v:-$(cp /tmp/evil 3)}} )); cd /proc/self/fd; done",
+    f"{_A}; for i in 1 2; do echo ${{v:-${{w:-$(cp /tmp/evil 3)}}}}; cd /proc/self/fd; done",
+    f"{_A}; for i in 1 2; do echo ${{v:-'}}'}}; cp /tmp/evil 3; cd /proc/self/fd; done",
+    f"{_A}; for i in 1 2; do echo $\\\n{{v:-$(cp /tmp/evil 3)}}; cd /proc/self/fd; done",
+    f"{_A}; while cd /proc/self/fd < <(echo ${{v:-$(cp /tmp/evil 3)}}); do :; done",
+    f"{_A}; for i in 1 2; {{ {_W}; cd /proc/self/fd; }}",
+    f"{_A}; for i in 1 2; do X='a b' {_W}; cd /proc/self/fd; done",
+    f"{_A}; for i in 1 2; do X='a b' cp /tmp/evil 3; cd /proc/self/fd; done",
+    f"time {_A}; time for i in 1 2; do {_W}; cd /proc/self/fd; done",
+    f"for j in 1 2; do {_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done; done",
+    f"bash -c '{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done'",
+    f"sudo -i <<< '{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done'",
+    f"env -S 'bash -c \"{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done\"'",
+]
 # A store `cd` in one loop and a descriptor `cd` in the other: the store loop's second pass starts in the store, so it
 # is named as one, where main named it by the first loop's descriptor folder (`target:*store*` asked on d742d1bb).
+_CDW = "for i in 1 2; do cp /tmp/evil 3; cd ${v:-/proc/self/fd}; done"
 STORE_ROWS = [
     f"{_A}; for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
     "cd /dev/fd; echo $(for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done)",
     # each loop behind its own `time` (#853): named in the opened reading only
     f"time {_A}; time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+    # the store write in a `${v:-$( )}` word (#158)
+    f"{_A}; for i in 1 2; do echo ${{v:-$(cp /tmp/evil gates.yaml)}}; cd ~/.exo/policies; done",
+    # a `cd` to a `${..}` word, a folder the gate does not know: named as the store, as for that loop alone (main
+    # d3cbd874 names it so alone, and by the first loop's /dev/fd after it)
+    f"{_A}; {_CDW}",
+    f'{_A}; for i in 1 2; do cp /tmp/evil 3; cd "${{v:-/proc/self/fd}}"; done',
 ]
 
 
-@pytest.mark.parametrize("line", ISSUE_ROWS + TWO_ROWS + NEST_ROWS)
+@pytest.mark.parametrize("line", ISSUE_ROWS + TWO_ROWS + NEST_ROWS + WORD_ROWS)
 def test_each_loop_names_its_own_descriptor_folder(line):
     c = _bash(line)
     got = _targets(c)
@@ -175,6 +212,11 @@ GUARD_ROWS = [
     # descriptor `cd`, though bash starts its second pass where the last one left
     ("while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done", [{"/dev/fd"}, set()]),
     (f"while :; do {_B}; cd /dev/fd; done", [{"/proc/self/fd"}, set()]),
+    # #158: a `cd` in a word's `$( )` runs in a subshell and leaves the loop where it was, so the second loop has no
+    # second pass of its own; two loops into one folder, one with a `${v:-$( )}` word (main d3cbd874's readings: the
+    # call, its #479 second reading, and the reading as before #143, ``flat``)
+    (f"{_A}; for i in 1 2; do cp /tmp/evil 3; echo ${{v:-$(cd /proc/self/fd)}}; done", [{"/dev/fd"}, {"/dev/fd"}]),
+    (f"{_A}; for i in 1 2; do {_W}; cd /dev/fd; done", [{"/dev/fd"}, {"/dev/fd"}, {"/dev/fd"}, set()]),
 ]
 
 
@@ -214,6 +256,8 @@ TWINS = [
     (STORE_ROWS[0], [_A, "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"]),
     (NEST_ROWS[0], [_A, _B]),
     (NEST_ROWS[2], [_A, _BC]),
+    (WORD_ROWS[0], [_A, f"for i in 1 2; do {_W}; cd /proc/self/fd; done"]),
+    (STORE_ROWS[4], [_A, _CDW]),
 ]
 
 
@@ -258,27 +302,70 @@ def _nest(d):
     return f"while :; do echo $({_nest(d - 1)}); cp /tmp/evil 3; cd {('/dev/fd', '~/.exo/policies')[d % 2]}; done"
 
 
-def test_the_joined_form_keeps_its_second_reading_when_only_the_867_reading_runs_past_the_budget(monkeypatch):
-    # A joined `$\<newline>` form (#584) beside a deep nest of loops into /dev/fd and the store, after a `cd /dev/fd`:
-    # at some depth the second reading of the call stays within the budget and the #867 reading runs past it. The
-    # joined call is then still read a second time, as on main d742d1bb, before its own #867 reading.
+def _phase_readings(monkeypatch):
+    """Instrument _read_core: each call is recorded with the reading it belongs to, ((#158's reading: True for the
+    reading as before #143, ``flat``), (#853's opened reading), (the joined form, #584)), and the call's _loop_pass
+    note when it is a #479 or #867 reading (None otherwise)."""
     seen, real = [], gate._read_core
 
     def read(call, cwd=None):
+        phase = (gate._flat_words.get(), gate._opening.get(), bool((gate._joining.get() or [False])[0]))
         try:
             return real(call, cwd)
         finally:
             note = gate._loop_pass.get()
-            seen.append(list(note) if note is not None and len(note) == 4 else None)
+            seen.append((phase, list(note) if note is not None else None))
     monkeypatch.setattr(gate, "_read_core", read)
+    return seen
+
+
+@pytest.mark.parametrize("before,phases", [
+    # #158 reads the line two ways (its `${Y}` word, joined): bash's reading of the words, then `flat`
+    ("", [(False, False), (True, False)]),
+    # behind `time` (#853) each of the two also has its opened reading, in which the loops are read as without it
+    ("time ", [(False, False), (False, True), (True, False), (True, True)]),
+])
+def test_the_joined_form_keeps_its_second_reading_when_only_the_867_reading_runs_past_the_budget(
+        monkeypatch, before, phases):
+    # A joined `$\<newline>` form (#584) beside a deep nest of loops into /dev/fd and the store, after a `cd /dev/fd`:
+    # at some depth the second reading of the call stays within the budget and the #867 reading runs past it. The
+    # joined call is then still read a second time, as on main d742d1bb, before its own #867 reading. Since #158 the
+    # call is read twice (its words as bash reads them, and ``flat``), and behind `time` each of those has its #853
+    # opened reading: each such reading makes its own readings, with budgets of its own, so the sequence is checked
+    # in each, not as a count over the call.
+    seen = _phase_readings(monkeypatch)
     hit = 0
     for d in range(6, 11):
         seen.clear()
-        c = _bash("X=$\\\n{Y}; cd /dev/fd; " + _nest(d))
-        mine = [x for x in seen if x is not None]
-        if len(mine) >= 2 and mine[0][2] >= 0 and mine[1][3] == 2 and mine[1][2] < 0:
+        c = _bash("X=$\\\n{Y}; cd /dev/fd; " + before + _nest(d))
+        order = []                       # the readings' phases (#158 reading, opened), in the order they were made
+        for (flat, opened, _), _note in seen:
+            if not order or order[-1] != (flat, opened):
+                order.append((flat, opened))
+        assert order == phases, (d, order)               # each phase is read once, in one run of readings
+        past = []
+        for phase in phases:
+            mine = [(j, n) for (f, o, j), n in seen if (f, o) == phase]
+            first = [(j, n) for j, n in mine if n is not None and not n[0]]
+            # main's first reading of the call and of its joined form (#479 notes the loops), in that order
+            assert [j for j, _ in first] == [False, True] and all(n[1] for _, n in first), (d, phase, mine)
+            loop = [(j, n) for j, n in mine if n is not None and n[0]]
+            # each second reading carries the #867 note (main d3cbd874 has none: its readings name one folder)
+            assert loop and all(len(n) == 4 for _, n in loop), (d, phase, loop)
+            # the #479 second reading (fourth item 0, or 1 where it met a loop named by another folder) and the
+            # #867 reading (2) of the call
+            assert loop[0][0] is False and loop[0][1][3] == 1 and loop[0][1][2] >= 0, (d, phase, loop)
+            assert loop[1][0] is False and loop[1][1][3] == 2, (d, phase, loop)
+            if loop[1][1][2] < 0:
+                past.append(phase)       # only the #867 reading ran past the budget: the joined form is read still
+            # the joined form's second reading, within the budget, and its own #867 reading, in each phase
+            assert len(loop) == 4, (d, phase, loop)
+            assert loop[2][0] is True and loop[2][1][3] in (0, 1) and loop[2][1][2] >= 0, (d, phase, loop)
+            assert loop[3][0] is True and loop[3][1][3] == 2, (d, phase, loop)
+        if past:
             hit += 1
-            assert len(mine) == 4 and mine[2][3] in (0, 1) and mine[2][2] >= 0, (d, mine)   # the joined call's own
+            # with no `time`, both of #158's readings ran past at this depth; behind it, at least the opened one did
+            assert past == phases if not before else any(o for _, o in past), (d, past)
             assert gate.decide(c).outcome == "ask" and gate.no_grant(c), d
             break
     assert hit, "no depth ran past the budget in the #867 reading only"
@@ -325,7 +412,7 @@ def _run(ctx, line):
 
 
 @pytest.mark.parametrize("bypass", [False, True])
-@pytest.mark.parametrize("line,rule", [(ISSUE_ROWS[0], PROC), (ISSUE_ROWS[1], DEV)])
+@pytest.mark.parametrize("line,rule", [(ISSUE_ROWS[0], PROC), (ISSUE_ROWS[1], DEV), (WORD_ROWS[0], PROC)])
 def test_the_hook_blocks_the_issue_rows_under_their_target_rule(tmp_path, bypass, line, rule):
     r = _run(_gate(tmp_path, bypass, f'deny: ["{rule}"]\n'), line)
     assert r is not None and r["action"] == "block", (line, r)

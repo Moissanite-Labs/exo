@@ -3206,7 +3206,9 @@ of two loops into `/dev/fd` and `/proc/self/fd` on one line (`for i in 1; do cd 
 When a loop's own folder (the store, for a loop with no descriptor `cd`) is not the one that reading gives it, the
 call is read once more with each loop's second pass in its own folder, beside the other readings, so both folders
 are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when
-each loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). A loop inside another that
+each loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`), and in each of the two
+readings of a line whose `${..}` words are read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}`
+in the second loop's body names `/proc/self/fd` too. A loop inside another that
 holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). A command that runs once,
 outside any loop's second pass, after a second descriptor `cd` is still named by the line's first descriptor
 folder (`cd /dev/fd; for i in 1; do cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only): a known
