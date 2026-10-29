@@ -310,6 +310,8 @@ def remove_key(provider: str, *, router: Router | None = None, home: str | os.Pa
 
 def probe(base_url: str, timeout: float = PROBE_TIMEOUT) -> bool:
     """Is something listening at ``base_url``'s host and port? One TCP connect, nothing sent."""
+    if not isinstance(base_url, str):
+        return False  # a number or a list in the config names no address
     try:
         u = urlsplit(base_url)
         port = u.port or (443 if u.scheme == "https" else 80)  # a port that is not a number raises ValueError

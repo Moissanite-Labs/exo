@@ -334,9 +334,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   "Protocol".
 
 - A local provider whose base URL has a bad port reads as not running (found in the exo-desktop #14 review).
-  `http://127.0.0.1:notaport/v1`, a port above 65535 or a broken IPv6 host made the provider probe raise
-  ValueError, so the provider check failed. With no main role set, every start runs that check, so every command
-  failed, retry or not. The probe now reads such a URL as nothing listening. Tests:
+  `http://127.0.0.1:notaport/v1`, a port above 65535, a broken IPv6 host or a host name part over 63 letters made
+  the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
+  provider check failed. With no main role set, every start runs that check, so every command failed, retry or
+  not. The probe now reads such a URL as nothing listening. Tests:
   `tests/core/test_providers_setup.py`.
 
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).

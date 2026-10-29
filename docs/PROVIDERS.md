@@ -371,7 +371,8 @@ A passing test in `/providers` (`t`) or in the web Providers tab tells the runni
 Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
 saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
 terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
-started, and a CLI must be installed and logged in.
+started, and a CLI must be installed and logged in. Exo checks a local server with one connect to the host and
+port of its base URL. A base URL it cannot read, such as a port that is not a number, counts as not running.
 
 ## See what is set
 
