@@ -6209,6 +6209,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
 
+- **Amendment 2026-10-29 (#265):** CI keeps a 14-day JUnit artifact per OS/Python cell and prints its 25 slowest tests. This supplies observations before changing test selection, extras or job topology; duplicate plugin execution remains pending measured comparison.
+
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
 - **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
