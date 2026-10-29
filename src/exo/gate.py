@@ -4312,6 +4312,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
                 # the gate read that compound as one program name it cannot see into, so the line asked. That
                 # reading is kept beside the parts read below, so the line never decides looser than main.
                 blind = blind or rest[0]
+            elif rest and not rest[0].quoted and rest[0].text == "!":
+                # #853 review: main stopped at `!` after `time` and read the `!` itself as the program name, so it
+                # read the whole line as one program it cannot see into (`time ! for i in 1 2; do ..; done` asked
+                # where the parts read below allowed). Keep that reading beside the parts read below.
+                blind = blind or rest[0]
             words = words[n:]
         else:
             break
@@ -4331,7 +4336,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # reading is kept as a part, beside the parts read below, so the line never decides looser than main under any
         # rule that names the category (a `categories` level, or a deny on opaque_exec). A deny on a part read below
         # still outranks it, so a loop body that writes the store denies as it should.
-        parts.append(_opaque(f"{blind.text} behind time reads as one program name", cmd))
+        part_blind = _opaque(f"{blind.text} behind time reads as one program name", cmd,
+                             signal="unknown program")
+        part_blind.signals.append("indirection")   # main's reading signed it both ways on some lines
+        parts.append(part_blind)
         blind = None
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
