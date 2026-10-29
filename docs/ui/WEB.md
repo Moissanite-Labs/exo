@@ -211,6 +211,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   loaded scope; this is not full-history or message search. The status selector shows all conversations,
   working conversations or those with an approval waiting. Search and filtering do not switch the active
   conversation or touch its draft. Clear or Show all conversations resets the search.
+  The list comes from `GET /api/chat/sessions`, which takes a `limit` from 1 to 500 (100 when none is given).
+  A larger limit is cut to 500. A limit below 1, or one that is not a number, gets a 400 and sends nothing to
+  the core: SQLite reads a negative `LIMIT` as no limit, so `limit=-1` used to return every session (exo-desktop #55).
   Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
   search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
   does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
@@ -218,6 +221,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
   current composer draft. A refused save keeps the title draft and shows the error.
+  The page asks for the thread list again after each change, and two such requests can answer in either
+  order. Only an answer to a later request replaces the list on screen, so a list asked for before a new
+  thread existed cannot hide that thread once a newer list shows it (#859).
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
   readers already at the newest item continue following it. The transcript is keyboard focusable.
@@ -356,6 +362,10 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
+  Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
+  drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
+  Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
+  and run now act at once.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
