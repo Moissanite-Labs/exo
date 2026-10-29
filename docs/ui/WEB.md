@@ -25,7 +25,8 @@ Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scrol
 hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
 No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
 Open request takes priority over the restored view/thread. A saved thread absent from the loaded list leaves
-the chooser open. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+the chooser open. A failed list or transcript read preserves the saved thread and fraction; a successful
+reconnect can finish the initial restore. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
 saved-thread response from changing a newer selection, and unmount cancels restoration.
 
 ## Conversation drafts and unconfirmed sends (D-045)

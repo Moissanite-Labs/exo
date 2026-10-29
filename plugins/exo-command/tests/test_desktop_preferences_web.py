@@ -190,3 +190,41 @@ def test_failed_saved_thread_read_does_not_erase_last_good_position():
             b.wait("(()=>{const l=document.querySelector('.xc-log');return l && Math.abs(l.scrollTop/(l.scrollHeight-l.clientHeight)-.6)<.02;})()")
     finally:
         srv.close()
+
+
+@pytest.mark.parametrize('recovery', ['reload', 'reconnect'])
+def test_failed_initial_list_preserves_saved_thread_until_authoritative_read(recovery):
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            inject(b, {'view': 'chat', 'thread': 's1', 'layout': 'classic', 'scroll': .6})
+            failing_script = b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.failedLists=0;window.listUnavailable=true;window.fetch=(url,...args)=>new URL(url,location.href).pathname==='/api/chat/sessions'&&listUnavailable?(failedLists++,Promise.resolve(new Response(JSON.stringify({error:'Synthetic list unavailable'}),{status:503,headers:{'Content-Type':'application/json'}}))):realFetch(url,...args);")
+            b.goto(srv.url())
+            b.wait("failedLists>0 && document.querySelector('.xc-strip').textContent.includes('Synthetic list unavailable')")
+            assert not b.eval("savedPrefs.some(p=>Object.hasOwn(p,'thread') || Object.hasOwn(p,'scroll'))")
+            if recovery == 'reload':
+                b.eval("document.querySelector('a[href=\"#tasks\"]').click()")
+                b.wait("document.querySelector('.xc-nav-link[aria-current]')?.textContent==='Tasks'")
+                assert not b.eval("savedPrefs.some(p=>Object.hasOwn(p,'thread') || Object.hasOwn(p,'scroll'))")
+                b.call('Page.removeScriptToEvaluateOnNewDocument', identifier=failing_script['identifier'])
+                b.goto(srv.url('chat').replace('boot=0', 'boot=list-retry'))
+            else:
+                b.eval("listUnavailable=false;import('/static/bus.js').then(bus=>bus.restart())")
+            b.wait("(()=>{const l=document.querySelector('.xc-log');return l && Math.abs(l.scrollTop/(l.scrollHeight-l.clientHeight)-.6)<.02;})()")
+            assert b.eval("!!document.querySelector('.xc-sess.on')")
+    finally:
+        srv.close()
+
+
+def test_explicit_tasks_open_survives_initial_list_failure():
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            inject(b, {'view': 'chat', 'thread': 's1', 'layout': 'classic', 'scroll': .6})
+            b.call('Page.addScriptToEvaluateOnNewDocument', source="sessionStorage.setItem('xc-open','s2');const realFetch=window.fetch;window.fetch=(url,...args)=>new URL(url,location.href).pathname==='/api/chat/sessions'?Promise.resolve(new Response(JSON.stringify({error:'Synthetic list unavailable'}),{status:503,headers:{'Content-Type':'application/json'}})):realFetch(url,...args);")
+            b.goto(srv.url())
+            b.wait("document.querySelectorAll('.xc-msg').length>100")
+            assert b.eval("savedPrefs.some(p=>p.thread==='s2' && p.scroll===null)")
+            assert not b.eval("savedPrefs.some(p=>p.thread===null)")
+    finally:
+        srv.close()
