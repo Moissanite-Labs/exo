@@ -220,6 +220,20 @@ def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     assert gate.decide(c).outcome == "ask", line
 
 
+# #858 review: when the body holds a `cd` of its own, the body's folder keeps naming the second pass, as on main, and
+# the condition's descriptor `cd` adds nothing over it. Each row denies under its one target rule on main.
+@pytest.mark.parametrize("line,target", [
+    ("while cd /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done", "target:/proc*"),
+    ("while cd /proc/self/fd; do cp /tmp/evil 3; cd /dev/fd; done", "target:/dev*"),
+    ("while cd /dev/fd < <(cp /tmp/evil 3); do cd /proc/self/fd; done", "target:/proc*"),
+    ("while cd /dev/fd < <(cp /tmp/evil 3); do cd ~/.exo/policies; done", "target:*store*"),
+])
+def test_a_body_cd_keeps_naming_the_second_pass_beside_a_condition_cd(line, target):
+    c = _bash(line)
+    assert gate.decide(c, _pol(deny=[target])).outcome == "deny", (line, [
+        (p.category, p.target) for r in gate.readings(c) for p in gate._each_part(r)])
+
+
 # Guards: lines whose reading this change must leave as it was on main (cd371aed, f28934a3 and 3570be0e).
 @pytest.mark.parametrize("line,category,outcome", [
     ("for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "allow"),               # no cd in the loop
@@ -325,12 +339,17 @@ def test_a_nest_past_the_budget_fails_closed_and_keeps_mains_reading():
     assert gate.call_approvers(c, approvals) == ["principal"] and gate.no_grant(c)
 
 
-def test_the_second_reading_of_a_loop_nest_costs_about_what_the_first_does(monkeypatch):
+@pytest.mark.parametrize("body", [
+    "while :; do echo {x}; cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+    "while cd ~/.exo/policies; do echo {x}; cp /tmp/evil gates.yaml; done",          # #857: a condition's `cd`
+    "while cd ~/.exo/policies{x}; do cp /tmp/evil gates.yaml; done",
+])
+def test_the_second_reading_of_a_loop_nest_costs_about_what_the_first_does(monkeypatch, body):
     # The verifier measured the second reading of such nests at about 6 times main's time, at every depth from 5 to
     # 13. With the budget a call reads afresh at most _LOOP_BUDGET more lines than twice main's reading does. CPU time
     # of this process (time.process_time), the better of two runs, against the call read without its second reading.
     # It guards the new code: on main it fails only because main has no _loop_reading to patch.
-    action = {"tool": "bash", "args": {"command": _nest(8)}}
+    action = {"tool": "bash", "args": {"command": _nest(8, body)}}
 
     def cpu():
         best = None

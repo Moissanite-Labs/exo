@@ -6496,10 +6496,15 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
             if n in starts:
                 end, lo = starts[n], cmds[n - 1].subs_met if n else 0
                 ctx["store_cwd"] = True
-                i = bisect.bisect_left(at, n)   # a `while`/`until` condition's own `cd` names it too (#857)
+                i = bisect.bisect_right(at, n)
                 while i < len(at) and at[i] <= end and not went[i][1]:
                     i += 1
                 if i < len(at) and at[i] <= end:
+                    ctx.setdefault("fd_cwd", went[i][1])
+                elif (i := bisect.bisect_left(at, n)) < len(at) and at[i] == n and went[i][1] and \
+                        not (i + 1 < len(at) and at[i + 1] <= end):
+                    # #857: a `while`/`until` condition's own descriptor `cd` names the folder when the loop holds no
+                    # other store `cd`; a body's `cd` keeps naming it, as the second pass starts where the last `cd` left
                     ctx.setdefault("fd_cwd", went[i][1])
                 w = _loop_word(k)
                 once = k.words[w].text in ("for", "select") and \
