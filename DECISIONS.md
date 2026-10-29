@@ -4731,6 +4731,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
   can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
   the ruling as written until the next compaction.
+  *Amendment 2026-10-29 (exo-desktop #52, seats, plugins, findings, session meta and routing):* an audit of the
+  core found more bugs no test caught. Each got a failing test first. A seat's `toolsets`, `[tools] env_deny` and
+  `[skills] load` are lists, and no list means more: every toolset, nothing more hidden, every skill. A value of
+  another type, such as `toolsets = "fs"`, read as no list, so the seat got more than its file asked for. The
+  loader now refuses it and the seat does not load. `docs/SEATS.md`.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
