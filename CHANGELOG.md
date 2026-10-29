@@ -326,6 +326,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
 
+- The next command also retries a start that failed after its only command was cancelled (exo-desktop #2). No
+  command got that error, but the next command got it once more, and only the command after that started again.
+  The next command now drops a finished start that raised or was cancelled before it waits on it. A start still
+  running stays, so a cancelled command never causes a second start. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).
 
 - Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
