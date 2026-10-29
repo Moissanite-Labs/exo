@@ -28,11 +28,10 @@
   line-height: 1.55;
 }
 
-/* Restrained measure on prose only (~78ch). Tool items, system lines and
-   gate/peer panels keep the full column width. */
+/* Conversation prose uses the available transcript width. */
 .xc-log .xc-msg.xc-user,
 .xc-log .xc-asst .xc-text {
-  max-width: 78ch;
+  max-width: none;
 }
 
 /* Composer: comfortable sans input. The completion ghost (.xc-ghost) overlays
@@ -96,3 +95,15 @@
 .xc-root .xc-new-activity { position: absolute; z-index: 3; bottom: 12px; right: 16px; background: var(--bg-2); }
 .xc-root .xc-new-activity[hidden] { display: none; }
 .xc-root .xc-steer-receipt { color: var(--fg-3); font-size: 12px; padding: 3px 10px; }
+
+/* Size from the actual header, not a guessed viewport subtraction. Only the
+   active view scrolls; chat delegates scrolling to its individual panes. */
+html, body { height: 100%; overflow: hidden; }
+.xc-root { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; padding: 0; }
+.xc-root > .xc-nav, .xc-root > .xc-perm { flex-shrink: 0; }
+.xc-root > .xc-main { min-height: 0; overflow: auto; }
+.xc-root > .xc-main:has(.xc-pane-workspace) { padding: 0; overflow: hidden; }
+.xc-root .xc-pane-workspace { height: auto; min-height: 0; flex: 1; overflow: hidden; }
+@media (max-width: 720px) {
+  .xc-root .xc-pane-layout { overflow-y: auto; }
+}

@@ -309,3 +309,38 @@ def test_successful_tools_group_but_errors_and_reports_stay_out(page):
     assert b.eval("document.querySelector('.xc-asst').closest('.xc-tool-group') === null")
     b.eval("document.querySelector('.xc-tool-group').open=true")
     assert b.eval("document.querySelector('.xc-tool-group .xc-tool-item').getBoundingClientRect().height > 0")
+
+
+@needs_chrome
+@pytest.mark.parametrize("layout", ["inverse", "classic"])
+def test_workspace_fills_viewport_without_outer_scroll(page, layout):
+    srv, b = page
+    open_chat(srv, b, layout)
+    for hidden in (False, True):
+        if hidden:
+            b.eval("document.querySelector('.xc-controls-toggle').click()")
+        g = b.eval("""(()=>{const r=document.querySelector('.xc-pane-workspace').getBoundingClientRect();
+        const d=document.documentElement;return {bottom:r.bottom,left:r.left,right:r.right,
+        h:innerHeight,w:innerWidth,scroll:d.scrollHeight,client:d.clientHeight}})()""")
+        assert abs(g["bottom"] - g["h"]) < 2
+        assert g["left"] == 0 and abs(g["right"] - g["w"]) < 2
+        assert g["scroll"] == g["client"]
+
+
+@needs_chrome
+def test_assistant_prose_uses_available_transcript_width(page):
+    srv, b = page
+    open_chat(srv, b, "classic")
+    g = b.eval("""(()=>{
+        const log=document.querySelector('.xc-log');
+        const msg=document.createElement('div'); msg.className='xc-asst';
+        const body=document.createElement('div'); body.className='xc-text';
+        body.textContent='A long reply that should use the available width. '.repeat(100);
+        msg.appendChild(body); log.appendChild(msg);
+        const r=body.getBoundingClientRect(), parent=msg.getBoundingClientRect();
+        const style=getComputedStyle(msg);
+        return {width:r.width,available:parent.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),
+                max:getComputedStyle(body).maxWidth};
+    })()""")
+    assert g["max"] == "none"
+    assert abs(g["width"] - g["available"]) < 2
