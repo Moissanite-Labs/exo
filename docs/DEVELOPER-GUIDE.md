@@ -629,6 +629,8 @@ hook, so a change to any of these needs its own tests and a line in its decision
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+A newer push to a pull request cancels the pull request's older `ci` and `gate preflight` runs (a `concurrency`
+group per pull request, #907); each push to main keeps its own run.
 The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
 The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
