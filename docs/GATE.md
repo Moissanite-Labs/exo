@@ -3507,3 +3507,16 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Backtick escape decoding (#469, #518)
+
+The recursive lexer and iterative nested reader use Bash's backtick escape rules.
+An escaped newline disappears, so split command words still classify together.
+Escapes before ordinary characters such as `#`, single quote and a space remain
+for the inner command reader. Surrounding double quotes additionally unescape a
+double quote. Deny entries therefore reach hidden commands and escaped-space
+prefix assignments rather than reducing them to an allowed unknown program.
+
+When corrected backtick escaping differs from the old decoder, the complete old
+reading is retained as well. This may preserve a conservative false positive, but
+old opaque-exec deny/reserved policies and unknown-code asks cannot disappear.

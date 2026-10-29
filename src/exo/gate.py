@@ -518,6 +518,24 @@ class _OutSub(str):
     is told apart by its type: only _classify_sub reads it as fed."""
 
 
+_backtick_before = contextvars.ContextVar("backtick_before", default=False)
+_backtick_seen: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("backtick_seen", default=None)
+
+def _backtick_text(text: str, double: bool = False) -> str:
+    """Bash removes a backslash only before $, `, backslash/newline (and double-quote in double quotes)."""
+    old = re.sub(r"\\(.)", r"\1", text, flags=re.S)
+    if _backtick_before.get():
+        return old
+
+    def replace(match: re.Match) -> str:
+        ch = match.group(1)
+        return "" if ch == "\n" else ch if ch in "$`\\" or (double and ch == '\"') else match.group(0)
+    current = re.sub(r"\\(.)", replace, text, flags=re.S)
+    if current != old and (seen := _backtick_seen.get()) is not None:
+        seen[0] = True
+    return current
+
+
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
@@ -825,7 +843,7 @@ class _Lexer:
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
             if s[j] == "\\" and j + 1 < len(s):
-                out.append(s[j + 1])
+                out.append(_backtick_text(s[j:j + 2], double))
                 j += 2
                 continue
             out.append(s[j])
@@ -1340,12 +1358,12 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.add(s, i, j)
         return j
 
-    def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
+    def backtick(w: _Open, i: int, double: bool = False) -> int:       # as _Lexer._backtick
         j = _match_end(_BT_BODY, s, i + 1)
         j = n if j < n and s[j] == "\\" else j
         w.started, w.digits = True, False
         if w.text is not None:
-            text = "`" + re.sub(r"\\(.)", r"\1", s[i + 1:j], flags=re.S) + "`"
+            text = "`" + _backtick_text(s[i + 1:j], double) + "`"
             w.add(text, 0, len(text))
         return j + 1
 
@@ -1366,7 +1384,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             elif (ch == "'" or s.startswith("$'", i)) and not f.inq:
                 i = _skip(s, i + 1 if ch == "'" else i + 2, "'", ch != "'")
             elif ch == "`":
-                i = backtick(f, i)
+                i = backtick(f, i, double=f.dq or f.inq)
             elif s.startswith("$((", i):
                 i = arith(i)                     # with bash on, as here, it ends where the parser ends it
             elif s.startswith("$(", i) or (ch in "<>" and nxt == "(" and not (f.dq or f.inq)):
@@ -1391,7 +1409,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             elif ch == "$":
                 i = dollar(f.owner, i, True)
             elif ch == "`":
-                i = backtick(f.owner, i)
+                i = backtick(f.owner, i, double=True)
             else:
                 j = max(_match_end(_DQ_RUN, s, i), i + 1)
                 f.owner.add(s, i, j)
@@ -9002,6 +9020,24 @@ def _joined_call(action: Any) -> tuple[str, dict] | None:
 
 
 def classify(action: Any, cwd: str | None = None) -> Classification:
+    """Read corrected backticks beside the complete legacy reading; retain the stricter policy result."""
+    seen = [False]
+    mark = _backtick_seen.set(seen)
+    try:
+        c = _classify_backtick_reading(action, cwd)
+    finally:
+        _backtick_seen.reset(mark)
+    if seen[0] and not _backtick_before.get():
+        token = _backtick_before.set(True)
+        try:
+            legacy = _classify_backtick_reading(action, cwd)
+        finally:
+            _backtick_before.reset(token)
+        c.split_readings = [*c.split_readings, legacy]
+    return c
+
+
+def _classify_backtick_reading(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments (_split_reading, _classify_reading). Pure; never raises on
     odd args. #471: a call that reads a quoted prefix assignment as one (`X='a b' cmd`) is also read as before, with
     the word as the program, in a call of its own (``before``): what that reading changes for the commands after it
