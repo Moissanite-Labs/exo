@@ -1530,6 +1530,9 @@ _PREFIXES = {"sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"
              "caffeinate": {"-t", "-w"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
              "stdbuf": {"-i", "-o", "-e"}}
 _OPENERS = {"if", "then", "elif", "else", "do", "while", "until", "{", "}", "!", "fi", "done", "esac"}
+# Reserved words that open a compound the parser reads as several commands; after a `time` keyword one of these is
+# not a command word, so #853's strip leaves that line to the reading it had before (#869 review).
+_COMPOUND_HEADS = frozenset({"if", "case", "for", "while", "until", "select", "function", "coproc"})
 
 
 def _time_prefix(words: list) -> int:
@@ -4298,10 +4301,17 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     # #853: `time` is a reserved word, so a loop header may follow it (`time while ..; do ..; done`); read the line
     # as the command time runs, once its own options are off, so the header and the opener strip below see it. It
     # comes after openers too, since `! time while ..` and `!` keep every word after it in command position.
+    blind = None                     # the head of a compound behind `time`: main read it as one unseen program
     while words:
         if not words[0].quoted and words[0].text in _OPENERS:
             words = words[1:]
         elif n := _time_prefix(words):
+            rest = words[n:]
+            if rest and not rest[0].quoted and (rest[0].text in _COMPOUND_HEADS or rest[0].text in ("{", "(")):
+                # #853 review: bash runs a compound after `time` (`time for x in a; do :; done`), and before #853
+                # the gate read that compound as one program name it cannot see into, so the line asked. That
+                # reading is kept beside the parts read below, so the line never decides looser than main.
+                blind = blind or rest[0]
             words = words[n:]
         else:
             break
@@ -4316,6 +4326,14 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     sudos: list = []                            # each sudo or doas on the way (#491)
     words, sudo, split = _strip_prefix_words(words, sudos=sudos)
     parts: list[Classification] = []
+    if blind is not None:
+        # #853 review: main read this line as one program name it cannot see into, and asked. That ask is kept beside
+        # the parts read below as a signal, not an opaque part, so a deny on another part of the line still wins (as
+        # #188's reread signal does above): what the fix now reads as a store write can deny, and every line it reads
+        # as a plain read keeps main's ask rather than lowering it.
+        parts.append(_make("read", summary=f"{blind.text} behind time reads as one program name"[:120],
+                           command=cmd, signals=["indirection"]))
+        blind = None
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
         # one is gone from here on (#579)

@@ -2101,7 +2101,9 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   what is inside them, and `time -o FILE while read l; do ...; done` likewise. `time -o FILE` still
   takes its value before the command word. The prefix does not hide a command: `time cat
   ~/.exo/state/credentials/x.json` asks as credentials, and `time cd ~/.exo/policies` reads as a
-  `cd`. Before #853 these lines read as `opaque_exec` and asked.
+  `cd`. Before #853 these lines read as `opaque_exec` and asked. Where the fix reads a line as a plain
+  read that main read as one unread program, the line keeps main's ask as an `indirection` signal, so
+  no row decides looser than before; a store write found inside the loop still denies.
 - **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
   action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
