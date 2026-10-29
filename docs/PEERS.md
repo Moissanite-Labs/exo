@@ -123,7 +123,11 @@ or denied where they were delivered before. Each has a fix:
 The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000
 (defaults: 0 and 200). Public `/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1;
 omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
-`to=0` remains valid for an empty log. These bounds match SQLite's integer range and keep read pages bounded.
+`to=0` remains accepted for an empty log, but an empty or inverted range answers ok false with
+checked 0: it verifies nothing, so it must not read as a clean log. The exception is a verify with no
+`to`, and `from` at its default of 1, on an empty log, which answers ok true with an empty marker: the
+whole log was checked and there is nothing in it. `to` is clamped to the current
+head, so the returned range matches what was checked. These bounds match SQLite's integer range and keep read pages bounded.
 
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
@@ -148,8 +152,9 @@ answered"). Any other caller, a tool subprocess on the socket or the principal's
    steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
    typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
 
-A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
-as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
+The channel skips encrypted envelopes sealed to another seat, even when their audience is a shared group.
+It also skips bodies that cannot be opened or verified. These envelopes advance the inbox cursor without
+creating a session, approval or placeholder turn. The bus reader still displays an unreadable-body placeholder.
 
 ## What a peer cannot do
 
@@ -160,7 +165,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
 ## How it works
 
 - Each exod writes a presence file in `$EXO_PEERS_DIR`, else `$XDG_RUNTIME_DIR/exo/peers`, else
-  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). `exo serve` with no running
+  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). Malformed records,
+  including a non-object JSON body or a pid that is not an integer, are skipped and pruned; one bad
+  record does not hide other live peers. Internal `scan(prune=False)` skips them without deletion. `exo serve` with no running
   daemon in the TUI starts a small socket of its own so the TUI is also reachable. A Unix socket path must stay
   under 104 bytes: when a long `HOME` would push `exo-<pid>.sock` past that, the core uses
   `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default
