@@ -233,6 +233,81 @@ def test_a_secret_or_store_write_behind_a_quoted_prefix_asks_at_the_floor(keyed_
     assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
 
 
+@pytest.mark.parametrize("line", [
+    "X='a b' env -S \"echo \\${v:-\\$(gh auth token)}\"",
+    "X='a b' env -S \"echo \\${a:-\\${b:-\\$(gh auth token)}}\"",
+    "X='a b' sudo -s <<'END'\necho ${v:-$(gh auth token)}\nEND",
+    "X='a b' sudo -s <<'END'\necho ${v:-`cp /tmp/x ~/.exo/policies/gates.yaml`}\nEND",
+])
+def test_a_secret_or_store_write_in_a_word_behind_a_quoted_prefix_asks_at_the_floor(keyed_store, as_caller, line):
+    """#158 after main 34b5b495 (#546): main reads no command in a ${..} word, and the isolated head of #158 read the
+    quoted word as the program, so neither read the `env -S` text or the sudo shell's stdin, and bypass allowed
+    these. Here the word's secret or store write is read behind the quoted prefix and asks at the floor, once."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r.get("once") is True, r
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and row["bypass"]["floor"] in perm.FLOOR
+    assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
+
+
+@pytest.mark.parametrize("line", [
+    "echo ${v:-$(gh auth token)}; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "X='a b' echo ${v:-$(gh auth token)}; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "echo ${v:-$(X='a b' cp /tmp/x ~/.exo/config.json)}; gh pr comment 5 --repo octo/demo --body \"hello\"",
+    "echo ${x:-'}'} ; gh auth token; gh pr comment 5 --repo octo/demo --body \"hello\"",
+])
+def test_a_secret_only_bash_reads_in_a_word_beside_a_post_is_held_as_on_main(keyed_store, as_caller, line):
+    """#158 after main 34b5b495: main's own reading of these lines (the word read as before #143, ``flat``, and
+    behind a quoted prefix the line as read before #471) has no floor category, so the post that breaks the posting
+    rules is held, as on main; the secret or store write only bash's reading finds keeps its floor for the line the
+    agent sends back. The isolated head of #158 took bash's reading for main's and asked at the floor instead; main
+    allowed the last line (it read the rest of the line as quoted text)."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "block" and "Fix:" in r["message"], r
+    [row] = rows(store)
+    assert row["decided_by"] == "bypass" and row["decision"]["rule"] == "bypass_hold"
+    assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
+
+
+@pytest.mark.parametrize("line", [
+    # main a1dd4fec reads no command in the word, and #158 without #838 reads the loop body once: bypass allowed these
+    "for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd $EXO_HOME/policies; done",
+    "while :; do echo ${v:-`cp /tmp/evil gates.yaml`}; cd $EXO_HOME/policies; done",
+    "for i in 1 2; { echo ${x:-'}'} ; cp /tmp/evil gates.yaml; cd $EXO_HOME/policies; }",
+    "echo ${v:-$(for i in 1 2; do cp /tmp/evil gates.yaml; cd $EXO_HOME/policies; done)}",
+    # guards: main a1dd4fec's own reading (its second pass, #479) already asks at the floor for these
+    "for i in 1 2; do cp ${v:-/tmp/evil} gates.yaml; cd $EXO_HOME/policies; done",
+    "for i in 1 2; do X='a b' cp /tmp/evil ${n:-gates.yaml}; cd ${d:-$EXO_HOME/policies}; done",
+    "for i in 1 2; do echo $(( ${v:-$(X='a b' cp /tmp/evil gates.yaml)} )); cd $EXO_HOME/policies; done",
+    # a post after the loop runs in the store: main's reading asks at the floor first, as here
+    "for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd $EXO_HOME/policies; done; "
+    "gh pr comment 5 --repo octo/demo --body \"hello\"",
+])
+def test_a_word_in_a_loop_that_enters_the_store_asks_at_the_floor(keyed_store, as_caller, line):
+    """#158 after main a1dd4fec (#838, #479): a loop body runs again after its own `cd` into the store, so the command
+    in a ${..} word or a $(( in it writes the store on the next pass. The floor holds in bypass: the line asks, once."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r.get("once") is True, r
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and row["bypass"]["floor"] in perm.FLOOR
+    assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
+
+
+def test_a_word_in_a_loop_that_enters_the_store_beside_a_post_is_held_as_on_main(keyed_store, as_caller):
+    """Main's own reading of the line (the word read as before #143, ``flat``, with its own second pass) has no
+    floor category, so the post that breaks the posting rules is held, as main holds it; the store write keeps its
+    floor for the line the agent sends back."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    line = ("gh pr comment 5 --repo octo/demo --body \"hello\"; "
+            "for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd $EXO_HOME/policies; done")
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "block" and "Fix:" in r["message"], r
+    assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
+
+
 def test_secrets_in_an_auto_approved_call_are_redacted_in_the_ledger(keyed_store, as_caller):
     _, ctx, store = bypassed(keyed_store, as_caller)
     tok = "ghp_" + "a1B2c3D4e5" * 4
