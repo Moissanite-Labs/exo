@@ -707,8 +707,13 @@ same map row still conflict.
 - Git reads the attribute from the branch you have checked out. A branch cut before it landed still conflicts when
   it merges `main`. Run `echo 'CHANGELOG.md merge=union' >> .git/info/attributes` once in your clone, and every
   branch there gets it.
-- Union never drops a line. When both sides change the same existing line, both versions stay. Read the merged
-  `[Unreleased]` section before you push.
+- Union only decides the lines both sides changed: it keeps both versions, ours first, where git would stop with a
+  conflict. A change that only one side made, a deletion included, applies as in any merge.
+- Union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk. So when
+  both sides add under `### Fixed` and under the `### Added` just below it, one side's fix can land under `### Added`,
+  and the lines between the two changes appear twice. `tests/test_merge_attributes.py` fails when a version section
+  holds a bullet twice or a `###` heading with nothing under it. Where each entry sits is yours to check: read the
+  merged `[Unreleased]` section before you push.
 
 Private data and secrets never go in the repo. The principal store is separate from this repository.
 

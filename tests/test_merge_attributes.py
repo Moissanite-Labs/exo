@@ -66,6 +66,45 @@ def test_two_changelog_bullets_in_the_same_place_both_land(tmp_path):
     assert "<<<<<<<" not in text
 
 
+def _repeats(text: str) -> list:
+    """What a fused union merge leaves behind: a bullet that a version section holds twice, or a `###` heading
+    with no bullet under it."""
+    found, seen, lines = [], set(), text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            seen = set()
+        elif line.startswith("- "):
+            if line in seen:
+                found.append(line)
+            seen.add(line)
+        elif line.startswith("### "):
+            rest = [x for x in lines[i + 1:] if x.strip()]
+            if not rest or rest[0].startswith("#"):
+                found.append(line)
+    return found
+
+
+def test_the_changelog_holds_no_repeated_bullet_or_empty_section():
+    """A union merge that fused two nearby changes copies the lines between them; this makes that visible."""
+    assert _repeats((ROOT / "CHANGELOG.md").read_text(encoding="utf-8")) == []
+
+
+def test_changes_beside_two_adjacent_headings_are_fused_and_the_repeat_is_caught(tmp_path):
+    """Union does not keep an entry under its heading. Each side adds under `### Fixed` and under `### Added`, a few
+    lines apart. Git takes the two changes as one hunk, and union keeps both sides' copy of it, with the lines
+    between. Every new bullet survives, but `- Existing.` repeats, so the test above fails on the merged file."""
+    base = "## [Unreleased]\n\n### Fixed\n- Existing.\n\n### Added\n- Older.\n"
+    ours = "## [Unreleased]\n\n### Fixed\n- Main fix.\n- Existing.\n\n### Added\n- Main addition.\n- Older.\n"
+    theirs = "## [Unreleased]\n\n### Fixed\n- Branch fix.\n- Existing.\n\n### Added\n- Branch addition.\n- Older.\n"
+    repo = _two_branches(tmp_path, "CHANGELOG.md", base, ours, theirs)
+    merged = _git(repo, "merge", "--no-edit", "pr")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    text = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    for bullet in ("- Main fix.", "- Branch fix.", "- Main addition.", "- Branch addition."):
+        assert bullet in text.splitlines()
+    assert "- Existing." in _repeats(text)
+
+
 @pytest.mark.parametrize("name", ["DECISIONS.md", "docs/DOCS-MAP.md"])
 def test_a_clash_in_decisions_or_the_map_still_conflicts(tmp_path, name):
     base = "# Top\n\n## D-093 (2026-10-30) Last\n"
