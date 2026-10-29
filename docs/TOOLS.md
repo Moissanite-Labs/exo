@@ -58,6 +58,9 @@ meant. So copy `old_string` from a fresh read of the file, with every line exact
 When the result names `context_aware` or `block_anchor`, the file did not hold `old_string` as written. Read the
 lines it replaced before you go on.
 
+`bash` accepts only `command`, `cwd`, `timeout` and `background`. Unknown arguments fail before
+execution. Use `background: true` for a background job; `run_in_background` is rejected.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
