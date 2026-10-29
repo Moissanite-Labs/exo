@@ -180,6 +180,37 @@ def test_typed_lesson_with_new_evidence_after_a_rejection_is_proposed(template_s
     assert st.beliefs[p1].status == "rejected" and [e.id for e in st.beliefs[p1].evidence] == [r["id"]]
 
 
+def test_typed_lesson_from_evidence_split_across_rejected_rulings_is_skipped(template_store, led):
+    # Since #770 a second agreeing ruling R2 after p1's rejection is its own proposal p2. With p1 and p2 both
+    # rejected, a lesson citing R1 and R2 cites nothing the principal has not ruled on: no proposal (#868 review).
+    r1, p1 = _rejected_ruling(template_store, led)
+    r2 = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    (p2,) = C.consolidate_run(template_store, led, author="exo-consolidate").proposals
+    C.proposal_reject(template_store, led, p2, "Still not a standing preference", author="principal")
+
+    out = C.propose_typed(template_store, led, [item(r2, evidence=[r1["id"], r2["id"]])], author=AUTHOR)
+
+    assert out == [{"type": "taste", "id": None, "status": "skipped"}]
+    assert [e["body"]["proposal_id"] for e in led.iter(kind="belief_proposed")] == [p1, p2]
+    assert list(led.iter(kind="question")) == []
+    st = C.load_state(led)
+    assert [st.beliefs[p].status for p in (p1, p2)] == ["rejected", "rejected"]
+    assert [e.id for e in st.beliefs[p2].evidence] == [r2["id"]]
+
+
+def test_typed_skill_lesson_from_a_rejected_ruling_is_still_proposed(template_store, led):
+    # Pins the documented scope of the #861 guard: it covers taste and fact lessons (handle_signal) only. A skill
+    # lesson goes to _propose_skill, which does not check rejected beliefs, so it is proposed for review as before.
+    r, p1 = _rejected_ruling(template_store, led)
+    (out,) = C.propose_typed(template_store, led, [{
+        "type": "skill", "skill": "tables", "patch": "Use tables.", "wants": "tables", "avoid": "bullet lists",
+        "evidence": [r["id"]]}], author=AUTHOR)
+    assert out["type"] == "skill" and out["status"] == "proposed" and out["id"] != p1
+    body = next(e["body"] for e in led.iter(kind="belief_proposed") if e["body"]["proposal_id"] == out["id"])
+    assert body["ptype"] == "skill" and body["target"] == "tables"
+    assert C.load_state(led).beliefs[p1].status == "rejected"
+
+
 def test_skill_proposal_has_a_diff_and_accepting_writes_the_skill(template_store, led):
     e = edit(led, "write status plain")
     (res,) = C.propose_typed(template_store, led, [{
