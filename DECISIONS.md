@@ -4735,7 +4735,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   core found more bugs no test caught. Each got a failing test first. A seat's `toolsets`, `[tools] env_deny` and
   `[skills] load` are lists, and no list means more: every toolset, nothing more hidden, every skill. A value of
   another type, such as `toolsets = "fs"`, read as no list, so the seat got more than its file asked for. The
-  loader now refuses it and the seat does not load. `docs/SEATS.md`.
+  loader now refuses it and the seat does not load. `docs/SEATS.md`. A folder plugin imports as
+  `exo_plugins.<name>` with each character that is not a word character made `_`, so `a-b` and `a_b` shared one
+  module. Loading the second replaced the first's package, and a later relative import in the first plugin ran
+  the second's file. The module now records the plugin that owns it, and another plugin that maps to the same
+  name is refused with an error that names both. The same plugin can still load again, from any folder, as a
+  fresh manager or a test does. Rejected: a module name that can never clash, such as an escaped or hashed one,
+  since it would rename every plugin's loggers and modules. `docs/DEVELOPER-GUIDE.md` §4.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
