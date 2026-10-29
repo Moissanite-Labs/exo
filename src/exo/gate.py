@@ -2597,7 +2597,7 @@ def _literal_assigns(k: "_Cmd", line: dict) -> dict[str, str | None]:
 def _unreadable_name(w: "_Word") -> bool:
     """The variable name in this word is one the gate cannot resolve: a glob the shell expands before the
     builtin sees it (`PAT?=.`, `read HOM[E]`), or a name spliced from an expansion (`export $X=...`)."""
-    if w.glob:
+    if w.glob or w.raw.replace("\\\n", "").startswith(("~-", "~+")):
         return True
     name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
     return w.dynamic and bool(re.search(r"[$`]", name))
@@ -5564,7 +5564,7 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                 if not sep:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
                 else:
-                    targets.append(_Word(text=ref, dynamic=w.dynamic))
+                    targets.append(_Word(text=ref, dynamic=w.dynamic, raw=w.raw.partition("=")[2]))
     else:
         targets = _filled_words(prog, args)
     for w in targets:
