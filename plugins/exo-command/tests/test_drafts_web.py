@@ -181,3 +181,82 @@ def test_first_submission_recovery_belongs_to_created_thread_after_remount():
             assert b.eval("window.sends.length") == 1
     finally:
         srv.close()
+
+
+def test_a_session_list_asked_before_the_thread_existed_cannot_replace_a_newer_one():
+    """#859: session lists can answer out of order. The remounted page asks for the list before the first send's
+    thread exists; when those answers come back after the list that shows the new thread, the thread stays shown."""
+    srv = Served(EmptySrc())
+    try:
+        with Browser() as b:
+            b.goto(srv.url()); b.wait("!!document.querySelector('.xc-input')")
+            b.eval("""(()=>{const fetch0=window.fetch;window.sends=[];window.created=false;window.held=[];window.staleRead=0;
+              window.fetch=(url,options)=>{
+                if(String(url)==='/api/chat/sessions' && options?.method==='POST') {
+                  return new Promise(resolve=>window.releaseCreate=()=>{window.created=true;resolve(new Response(JSON.stringify({session:{id:'s3'}})));});
+                }
+                if(String(url)==='/api/chat/sessions' && window.created) return Promise.resolve(new Response(JSON.stringify({sessions:[{id:'s3',title:'s3',model:'m',status:'idle'}]})));
+                if(String(url)==='/api/chat/sessions' && window.holdLists) return new Promise(resolve=>window.held.push(()=>{
+                  const r=new Response(JSON.stringify({sessions:[]})), json=r.json.bind(r);
+                  r.json=()=>json().finally(()=>{window.staleRead++;});
+                  resolve(r);
+                }));
+                if(String(url).endsWith('/send')) return new Promise((resolve,reject)=>window.sends.push({resolve,reject}));
+                return fetch0(url,options);
+              };})()""")
+            put(b, "first instruction")
+            b.eval("document.querySelector('.xc-composer .xc-btnrow button').click()")
+            b.wait("!!window.releaseCreate")
+            b.eval("window.holdLists=true; location.hash='#tasks'"); b.wait("!document.querySelector('.xc-composer')")
+            b.eval("location.hash='#chat'"); b.wait("!!document.querySelector('.xc-input')")
+            b.wait("window.held.length >= 2")  # recover() and the startup refresh, both asked before s3 exists
+            b.eval("window.releaseCreate()")
+            b.wait("document.querySelector('.xc-sess.on')?.textContent.includes('s3')")
+            held = b.eval("window.held.length")
+            b.eval("window.held.forEach(release=>release())")
+            b.wait(f"window.staleRead === {held}")
+            b.eval("new Promise(resolve=>setTimeout(resolve, 0))")  # the page has applied what it read
+            assert b.eval("document.querySelector('.xc-sess.on')?.textContent.includes('s3')"), \
+                b.eval("document.querySelector('.xc-sessions')?.textContent")
+    finally:
+        srv.close()
+
+
+def test_a_list_recover_asked_first_cannot_replace_a_newer_one():
+    """#859: recover() writes the list too. An unsent draft keeps the startup refresh from opening a thread, so
+    recover() reaches its own write; its older answer, read after the startup refresh's, leaves s3 listed."""
+    srv = Served(EmptySrc())
+    listed = "[...document.querySelectorAll('.xc-sess')].some(x=>x.textContent.includes('s3'))"
+    try:
+        with Browser() as b:
+            b.goto(srv.url()); b.wait("!!document.querySelector('.xc-input')")
+            # Once the event stream has synced, a remount's recover() asks before its startup refresh does.
+            b.eval("import('/static/bus.js').then(bus=>bus.onState(st=>{window.synced=st.synced;}))")
+            b.wait("window.synced >= 1")
+            put(b, "unsent draft")
+            b.eval("""(()=>{const fetch0=window.fetch;window.held=[];window.read=0;
+              window.fetch=(url,options)=>{
+                if(String(url)==='/api/chat/sessions' && (options?.method || 'GET')==='GET' && window.holdLists) {
+                  const recover=/\\brecover\\b/.test(new Error().stack);
+                  return new Promise(resolve=>window.held.push({recover, release:sessions=>{
+                    const r=new Response(JSON.stringify({sessions})), json=r.json.bind(r);
+                    r.json=()=>json().finally(()=>{window.read++;});
+                    resolve(r);
+                  }}));
+                }
+                return fetch0(url,options);
+              };})()""")
+            b.eval("window.holdLists=true; location.hash='#tasks'"); b.wait("!document.querySelector('.xc-composer')")
+            b.eval("location.hash='#chat'"); b.wait("!!document.querySelector('.xc-input')")
+            b.wait("window.held.length >= 2")
+            assert b.eval("window.held[0].recover && !window.held[1].recover")  # recover() asked first
+            n = b.eval("window.held.length")
+            b.eval(f"window.held.slice(1, {n}).forEach(x=>x.release([{{id:'s3',title:'s3',model:'m',status:'idle'}}]))")
+            b.wait(listed)
+            b.eval("window.held[0].release([])")
+            b.wait(f"window.read >= {n}")
+            b.eval("new Promise(resolve=>setTimeout(resolve, 0))")  # the page has applied what it read
+            assert b.eval(listed), b.eval("document.querySelector('.xc-sessions')?.textContent")
+            assert b.eval("document.querySelector('.xc-input').value") == "unsent draft"
+    finally:
+        srv.close()
