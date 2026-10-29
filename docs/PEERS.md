@@ -8,6 +8,10 @@ the other changes course at its next step. In Exo this works between Exo session
 - `/peers` (TUI) or the `peers` tool lists live sessions on the machine: name, running or idle, folder.
   A seat with one session is just its name (`razi`); with several it is `razi/3fa91c2b`.
   Subagents and scheduled runs are not listed, and a message to a bare seat name never lands in one.
+  A message that names a session lands only in one that exists here, is not a subagent and is not finished
+  (locked). A scheduled run can still be named by its id. Any other name gets a denied receipt that names the
+  session, before the policy runs, so nothing is held for you. The bus channel's session for a chat follows the
+  same rule (exo-desktop #52).
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
