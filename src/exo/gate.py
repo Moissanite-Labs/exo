@@ -6496,7 +6496,7 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
             if n in starts:
                 end, lo = starts[n], cmds[n - 1].subs_met if n else 0
                 ctx["store_cwd"] = True
-                i = bisect.bisect_right(at, n)
+                i = bisect.bisect_left(at, n)   # a `while`/`until` condition's own `cd` names it too (#857)
                 while i < len(at) and at[i] <= end and not went[i][1]:
                     i += 1
                 if i < len(at) and at[i] <= end:
@@ -6603,7 +6603,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     if went and (again := _loop_pass.get()) is not None and (spans := _loop_spans(cmds, went)):
         if not again[0]:
             again[1] = True
-        elif not into or not into[1] and any(d and any(s < n <= e for s, e in spans) for n, d in went):
+        elif not into or not into[1] and any(d and any(s <= n <= e for s, e in spans) for n, d in went):
             pass2 = _loop_again(cmds, spans, went, cmd, depth, (subs, stdin_unknown, inherits, given), into, seed_of)
             keys = {_part_key(p) for q in parts for p in _each_part(q)}
             pass2 = [m for m in pass2 if any(_part_key(p) not in keys for p in _each_part(m))]   # only what is new
