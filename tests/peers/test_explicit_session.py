@@ -6,10 +6,13 @@ session never lands in one. The path now asks its target whether the named sessi
 denied receipt when it does not. A job notice is the harness's own, so it still reaches its job's session.
 """
 import asyncio
+import time
+import types
 
 import pytest
 from nacl.signing import SigningKey
 
+from exo import principal as pr
 from exo.bus import wire
 from exo.bus.ingress import bus_ingress
 from exo.core.engine import CoreEngine
@@ -88,6 +91,48 @@ def test_a_held_message_whose_session_is_locked_before_release_is_denied(tmp_pat
     held = asyncio.run(run())
     assert held.state == "held"
     assert eng.store.messages(ids["thread"]) == []
+
+
+async def _until(fn, secs=5.0):
+    end = time.monotonic() + secs
+    while not fn():
+        assert time.monotonic() < end, "timed out"
+        await asyncio.sleep(0.01)
+
+
+def test_allowing_a_held_message_whose_named_session_finished_opens_no_new_thread(tmp_path):
+    """The principal allows the card after the named session finished. The message is denied and named, and no
+    new thread opens for it: that thread is only for a message that named no session."""
+    eng = _engine(tmp_path, {"wake": False, "active_hours": 1e-9})  # nothing counts as live
+
+    async def run():
+        try:
+            thread = (await eng.loop.create_session(title="t")).id
+            target, sent = eng._peer_target, []
+            path = IngressPath(target, lambda ing: ("hold", "test policy"), hold_seconds=600)
+
+            async def notify(ing, receipt):
+                sent.append(receipt)
+            target.node = types.SimpleNamespace(path=path, notify_sender=notify)
+            assert (await path.submit(_peer(thread))).state == "held"
+            await _until(lambda: eng.approvals.listing())
+            eng.store.lock(thread, "done")
+            (card,) = eng.approvals.listing()
+            tok = pr.CALLER.set(pr.Caller("principal:web"))
+            try:
+                await eng.handle(s.Command.of(s.ApprovalRespond(request_id=card["request_id"], decision="allow",
+                                                                client="web")), eng.hub)
+            finally:
+                pr.CALLER.reset(tok)
+            await _until(lambda: sent)
+            (receipt,) = sent
+            assert receipt.state == "denied" and thread in receipt.detail, receipt
+            assert [i.id for i in eng.store.list_sessions(10)] == [thread]  # no new thread
+            assert eng.store.messages(thread) == []
+        finally:
+            await eng.close()
+
+    asyncio.run(run())
 
 
 def test_a_job_notice_still_reaches_its_subagent_session(tmp_path):
