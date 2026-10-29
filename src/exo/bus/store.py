@@ -109,7 +109,8 @@ class Store:
 
     def messages(self, since: int = 0, to: str | None = None, thread: str | None = None,
                  limit: int = 200) -> list[dict]:
-        where, params = "seq > ?", [since]
+        where = "seq > ?"
+        params: list[str | int] = [since]
         if to:
             where += " AND seq IN (SELECT seq FROM log_recipients WHERE recipient = ? AND seq > ?)"
             params.extend((to, since))
