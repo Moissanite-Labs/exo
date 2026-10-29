@@ -2029,7 +2029,7 @@ Since #551 the check also covers three things it missed. Six long budget lines r
 the join budget of the Exo-store check, also across two nested lines, and past the brace budget for a read and a
 write). Each asks on main only because its budget is spent, so a change that lets such a line through once a budget
 is spent shows as lowered. An outcome `decide` returns that is not `allow`, `log`, `ask` or `deny` (a misspelt
-`"Ask"`, a `"block"`) is one the hook runs (with a decision model on, it errs to its ask card instead), so the check
+`"Ask"`, a `"block"`) is one the hook runs (when the decision model gives a verdict, it errs to its ask card instead), so the check
 ranks it as `allow` in the changed tree. And at the same outcome below `deny` it compares four checks the hook makes
 after `decide`: the once rule (`no_grant`), a post body the gate did not see (`body_unseen`), an approval bound to the
 exact call (`binds_exact`), and a reserved hit on a part other than the line's own (which keeps a standing grant from
