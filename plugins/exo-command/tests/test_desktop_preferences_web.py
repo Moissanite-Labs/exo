@@ -5,6 +5,7 @@ import json
 import pytest
 from browser import Browser, Served, find_chrome
 from test_layout_web import ThreadSrc
+from exo_command.source import SourceError
 
 pytestmark = pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'), reason='Chrome/websockets missing')
 
@@ -32,7 +33,12 @@ def test_native_values_override_browser_storage_and_explicit_view_wins():
 
 
 def test_missing_native_thread_does_not_silently_open_latest():
-    srv = Served(ThreadSrc(pairs=3))
+    class MissingThread(ThreadSrc):
+        async def call(self, body):
+            if type(body).TYPE == 'session.get' and body.session == 'missing':
+                raise SourceError('not_found', 'Synthetic missing conversation')
+            return await super().call(body)
+    srv = Served(MissingThread(pairs=3))
     try:
         with Browser() as b:
             inject(b, {'view': 'chat', 'thread': 'missing', 'scroll': .6})
@@ -226,5 +232,68 @@ def test_explicit_tasks_open_survives_initial_list_failure():
             b.wait("document.querySelectorAll('.xc-msg').length>100")
             assert b.eval("savedPrefs.some(p=>p.thread==='s2' && p.scroll===null)")
             assert not b.eval("savedPrefs.some(p=>p.thread===null)")
+    finally:
+        srv.close()
+
+
+def test_early_pet_mode_change_is_forwarded_during_held_bootstrap():
+    srv = Served(ThreadSrc(pairs=0))
+    try:
+        with Browser() as b:
+            inject(b, {'petMode': 'mini'})
+            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releasePanels=null;window.fetch=(url,...args)=>String(url).endsWith('/api/chat/panels')?new Promise(resolve=>releasePanels=()=>realFetch(url,...args).then(resolve)):realFetch(url,...args);")
+            b.goto(srv.url())
+            b.wait("!!releasePanels && !!document.querySelector('.xc-nav')")
+            # The companion module owns its control. A bubbling change must reach the bridge before startup finishes.
+            b.eval("(()=>{const p=document.createElement('select');p.className='xc-pet-mode';for(const v of ['mini','full','off'])p.add(new Option(v,v));p.onchange=()=>localStorage.setItem('xc-pet-mode',p.value);document.querySelector('.xc-nav').append(p);p.value='off';p.dispatchEvent(new Event('change',{bubbles:true}));})()")
+            assert b.eval("localStorage.getItem('xc-pet-mode')") == 'off'
+            assert b.eval("savedPrefs.some(p=>p.petMode==='off')")
+            b.eval('releasePanels()')
+            b.wait("!!document.querySelector('.xc-composer')")
+            assert b.eval("savedPrefs.some(p=>p.petMode==='off')")
+    finally:
+        srv.close()
+
+
+def test_saved_thread_outside_bounded_list_restores_metadata_activity_and_reading():
+    class OlderThread(ThreadSrc):
+        list_reads = 0
+        async def call(self, body):
+            result = await super().call(body)
+            if type(body).TYPE == 'session.list':
+                self.list_reads += 1
+                result['sessions'][0]['title'] = f'Bounded list {self.list_reads}'
+            if type(body).TYPE == 'session.get' and body.session == 's2':
+                result['session'] = {'id': 's2', 'title': 'Older saved conversation', 'agent': 'atlas', 'model': 'm', 'status': 'live'}
+            return result
+    srv = Served(OlderThread(pairs=60))
+    try:
+        with Browser() as b:
+            inject(b, {'thread': 's2', 'layout': 'classic', 'scroll': .37})
+            b.goto(srv.url())
+            b.wait("document.querySelector('.xc-sess.on')?.textContent.includes('Older saved conversation')")
+            b.wait("(()=>{const l=document.querySelector('.xc-log');return Math.abs(l.scrollTop/(l.scrollHeight-l.clientHeight)-.37)<.02;})()")
+            assert b.eval("document.querySelector('.xc-state').textContent.includes('working')")
+            assert not b.eval("savedPrefs.some(p=>p.thread===null)")
+            # A later bounded list refresh must retain the exact session that was restored successfully.
+            before = b.eval("document.querySelector('.xc-sess:not(.on) .xc-sess-title').textContent")
+            srv.call(srv.centre.record, {'seq': 1, 'type': 'session.updated', 'session': 's1', 'body': {}})
+            b.wait("document.querySelector('.xc-sess:not(.on) .xc-sess-title').textContent!==" + json.dumps(before))
+            assert b.eval("document.querySelector('.xc-sess.on').textContent.includes('Older saved conversation')")
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize('status', [403, 503])
+def test_omitted_saved_thread_preserves_pointer_when_exact_read_fails(status):
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            inject(b, {'thread': 's2', 'layout': 'classic', 'scroll': .37})
+            b.call('Page.addScriptToEvaluateOnNewDocument', source=f"const realFetch=window.fetch;window.savedReads=0;window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s2')?(savedReads++,Promise.resolve(new Response(JSON.stringify({{error:'Synthetic saved conversation unavailable'}}),{{status:{status},headers:{{'Content-Type':'application/json'}}}}))):realFetch(url,...args);")
+            b.goto(srv.url())
+            b.wait("savedReads>0 && document.querySelector('.xc-strip').textContent.includes('Synthetic saved conversation unavailable')")
+            assert not b.eval("savedPrefs.some(p=>Object.hasOwn(p,'thread') || Object.hasOwn(p,'scroll'))")
+            assert not b.eval("!!document.querySelector('.xc-sess.on')")
     finally:
         srv.close()

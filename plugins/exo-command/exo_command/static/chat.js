@@ -25,7 +25,7 @@ function draft(id) {
 export function mount(root) {
   let mounted = true, navigation = 0, homeRevision = 0;
   const savedThread = desktopPreference("thread"), savedScroll = desktopPreference("scroll");
-  let pendingReading = null, transcriptLoaded = false, initialSelectionPending = true;
+  let pendingReading = null, transcriptLoaded = false, initialSelectionPending = true, initialReadingAllowed = true;
   function saveReading() {
     if (mounted && current && !loading && transcriptLoaded) saveDesktopPreferences({ thread: current, scroll: logEl.scrollHeight > logEl.clientHeight ? Math.min(1, Math.max(0, logEl.scrollTop / (logEl.scrollHeight - logEl.clientHeight))) : 0 });
   }
@@ -90,7 +90,7 @@ export function mount(root) {
   const logEl = h("div", { class: "xc-log", id: "xc-transcript", role: "log", "aria-label": "Conversation messages", "aria-live": "polite", tabindex: "0" });
   const latestBtn = h("button", { class: "xc-btn xc-latest", type: "button", hidden: true, "aria-controls": "xc-transcript",
     onclick: () => { home(); logEl.focus(); } }, "Show latest messages");
-  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) logEl.addEventListener(kind, () => { pendingReading = null; }, { passive: true });
+  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) logEl.addEventListener(kind, () => { pendingReading = null; initialReadingAllowed = false; }, { passive: true });
   logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); saveReading(); });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
@@ -165,7 +165,7 @@ export function mount(root) {
   }
   function switchLayout(v) {
     if (!LAYOUTS.includes(v)) return;
-    pendingReading = null;
+    pendingReading = null; initialReadingAllowed = false;
     layout = v; setLayout(v); saveDesktopPreferences({ layout: v, scroll: null }); arrange(); drawLog();
   }
   arrange();
@@ -589,12 +589,21 @@ export function mount(root) {
 
   // Session lists can answer out of order: one asked before a thread was created must not replace one asked after it.
   let listAsked = 0, listShown = 0;
+  function keepSelectedSession(fresh) {
+    const selected = sessions.find(s => s.id === current);
+    return selected && !fresh.some(s => s.id === current) ? [selected, ...fresh] : fresh;
+  }
+  function rememberSession(info, id) {
+    const previous = sessions.find(s => s.id === id);
+    const row = { ...previous, ...info, id, title: info?.title || previous?.title || id };
+    sessions = previous ? sessions.map(s => s.id === id ? row : s) : [row, ...sessions];
+  }
   async function refreshSessions() {
     const asked = ++listAsked;
     try {
       const fresh = (await api("GET", "/api/chat/sessions")).sessions;
       if (!Array.isArray(fresh)) throw Error("The conversation list could not be read.");
-      if (asked > listShown) { listShown = asked; sessions = fresh; drawSessions(); }
+      if (asked > listShown) { listShown = asked; sessions = keepSelectedSession(fresh); drawSessions(); }
       return true;
     } catch (e) { fail(e); return false; }
   }
@@ -608,7 +617,7 @@ export function mount(root) {
     return opened;
   }
 
-  async function open(id, restoreScroll = null) {
+  async function open(id, restoreScroll = null, restoredSnapshot = null) {
     saveReading();
     if (typeof restoreScroll !== "number") saveDesktopPreferences({ thread: id, scroll: null });
     transcriptLoaded = false;
@@ -622,8 +631,9 @@ export function mount(root) {
     restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
-      const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
+      const d = restoredSnapshot || await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
+      rememberSession(d.session, id);
       items = fromMessages(d.messages || []);
       transcriptLoaded = true;
       dropSteers(id, had, d.steers);
@@ -661,9 +671,10 @@ export function mount(root) {
       if (!Array.isArray(freshSessions)) throw Error("The conversation list could not be read.");
       const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
       if (id !== current || generation !== snapshotGeneration) return;
-      if (asked > listShown) { listShown = asked; sessions = freshSessions; }
+      if (asked > listShown) { listShown = asked; sessions = keepSelectedSession(freshSessions); }
       listReady = true;
       if (d) {
+        rememberSession(d.session, id);
         items = mergeTranscript(fromMessages(d.messages || []), items);
         transcriptLoaded = true;
         dropSteers(id, had, d.steers);
@@ -945,17 +956,27 @@ export function mount(root) {
   restoreDraft();
   if (hasDesktopPreferences()) window.addEventListener("pagehide", saveReading);
   const startingNavigation = navigation;
-  function finishInitialSelection(listReady) {
+  async function finishInitialSelection(listReady) {
     // A failed read is not evidence that the saved conversation disappeared. A later reconnect may retry.
     if (!initialSelectionPending || !mounted || current || navigation !== startingNavigation) return;
     if (asked) { initialSelectionPending = false; open(asked); return; }
     if (!listReady) return;
     initialSelectionPending = false;
     if (draft(null).text || draft(null).pending) return;
-    if (hasDesktopPreferences()) {
-      if (savedThread && sessions.some(s => s.id === savedThread)) open(savedThread, savedScroll);
-      else saveDesktopPreferences({ thread: null, scroll: null });
-    } else if (sessions.length) open(sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id);
+    if (hasDesktopPreferences() && savedThread) {
+      const owner = navigation;
+      try {
+        // The list is bounded. Only the exact session endpoint can establish that a saved thread disappeared.
+        const snapshot = await api("GET", "/api/chat/sessions/" + encodeURIComponent(savedThread));
+        if (!mounted || current || navigation !== owner || draft(null).text || draft(null).pending) return;
+        rememberSession(snapshot.session, savedThread);
+        open(savedThread, initialReadingAllowed ? savedScroll : null, snapshot);
+      } catch (error) {
+        if (!mounted || current || navigation !== owner) return;
+        if (error.status === 404) saveDesktopPreferences({ thread: null, scroll: null });
+        else { initialSelectionPending = true; fail(error); } // a later reconnect can retry without losing intent
+      }
+    } else if (!hasDesktopPreferences() && sessions.length) open(sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id);
   }
   refreshSessions().then(finishInitialSelection);
   return off;

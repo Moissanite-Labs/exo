@@ -127,6 +127,9 @@ window.addEventListener("hashchange", async () => {
   if (fresh || launchRefused || id !== current) show(id);
 });
 
+// The pet control is supplied by the optional companion module; retain its display choice when present.
+window.addEventListener("change", (event) => { if (event.target?.matches?.(".xc-pet-mode")) saveDesktopPreferences({ petMode: event.target.value }); });
+
 if (token()) {
   const initialAuth = authGeneration;
   connecting = bus.start();   // loads open panels before Chat reads them, then follows the event stream
@@ -137,6 +140,3 @@ if (token()) {
     show((location.hash || "").slice(1));
   }
 }
-
-// The pet control is supplied by the optional companion module; retain its display choice when present.
-window.addEventListener("change", (event) => { if (event.target?.matches?.(".xc-pet-mode")) saveDesktopPreferences({ petMode: event.target.value }); });
