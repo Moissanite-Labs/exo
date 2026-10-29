@@ -6314,3 +6314,10 @@ limit: a prefix assignment inside a backtick no longer hides its following push.
 The built-in harvested differential against main 080e87ba covers 14,155 actions
 and 88 policies (1,245,640 pairs), with zero lowered outcomes, lost reserved hits,
 lost violations or errors. The changed decisions tighten hidden commands.
+
+#### D-038 conservative backtick reading — 2026-10-29 (#469/#518)
+
+The corrected escape reading now retains the complete legacy call reading too,
+only when escape decoding differs. Decide keeps their strictest outcome, reserved
+hits and flags. Correct Bash parsing must not silently remove a principal's old
+opaque-exec denial/reservation or turn its unknown-code ask into an authorization.
