@@ -5915,3 +5915,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** a new `error_class` field on `model.call` as the only signal (an older core would leave the tip silent, and the text is already there); a single softer sentence for every error (it is the specificity that makes the line worth showing).
 - **Revisit if:** the core records a structured error category on `model.call`, in which case the classifier should prefer it and keep the text as a fallback.
 - **Docs and user impact:** `docs/ui/WEB.md` guidance paragraph, `docs/DOCS-MAP.md`, `CHANGELOG.md`. No new command or setting; nothing about keys is stored or shown.
+
+## D-093 (2026-10-30) A spend limit names itself, and the money figure says it is a floor
+- **Status:** Accepted. Records after D-092 (#846) and lands on its own branch, `fix/spend-limit-transparency`.
+- **Problem:** HTTP 402 (`key_spend_limit_reached`) sat in the same set as 401 and 403, so the turn ended with "anthropic rejected the key (HTTP 402: ...): fix ANTHROPIC_API_KEY or add a key in /providers". A new key fixes nothing there, and the router falls back to a free route, so the turn's cost read `$0.0000` while the paid route had already done work nobody would bill.
+- **Decision:** 402 has its own sentence and its own outcome.
+  - The error reads `{provider} is over its provider spend limit ({err}): raise the limit or top up the account, then test it in /providers`. It never points at the key field. Still terminal and non-retryable, still benched for the provider's reset (or the long cooldown).
+  - The fallback notice says it once: `{route} is over its provider spend limit; trying {next} (this turn's cost is a floor)`.
+  - The attempt outcome is `spend_limit`, so the cause survives the fallback and reaches the trace. `ModelCall` documents it.
+  - `trace` keeps the billed figure for that call and marks it with the existing `+`. `TurnTrace.undercounted()` counts calls where a route in the call stopped on its spend limit; `summary()` adds them to the `+` count and reports `undercounted_calls` separately, so `unpriced_calls` keeps meaning "no price known".
+- **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
+- **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
+- **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
