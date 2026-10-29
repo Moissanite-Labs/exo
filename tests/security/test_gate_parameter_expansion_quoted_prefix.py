@@ -255,11 +255,7 @@ def test_a_quoted_prefix_inside_a_word_decides_at_least_as_a_plain_one(prefix, p
 
 
 @pytest.mark.parametrize("line", [f"echo `X=a\\ b {PUSH}`", f"echo ${{v:-`X=a\\ b {PUSH}`}}"])
-def test_an_escaped_blank_in_a_backquote_asks(line):
-    """A known limit of main 34b5b495: in a backquote the gate reads `X=a\\ b cmd` as the program `b`, where bash
-    keeps the backslash and runs cmd. The plain backquote asks there (an unknown program), also under a deny on
-    cmd's category, and a rule allowing `opaque_exec` allows it; in a word it asks the same here (main reads none
-    of the word and allows the line)."""
+def test_an_escaped_blank_in_a_backquote_keeps_the_command_deny(line):
+    """Bash preserves the escaped blank: the prefix assignment must not hide the push."""
     c = sh(line)
-    assert decide(c, NORM["deny4"]).outcome == "ask"
-    assert binds_exact(c)
+    assert decide(c, NORM["deny4"]).outcome == "deny"
