@@ -1282,6 +1282,63 @@ _LOOP_BUDGET = 64
 class _LoopBudget(Exception):
     pass
 
+
+# #853: bash reads `time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline as prefixes of it, so a
+# compound command after them (`time for ..; done`, `! time { ..; }`) runs as it does without them. _parse reads
+# `time` as a program that takes options (_PREFIXES), so the compound after it is that program's argv. Set while
+# classify reads a call (_classify_reading): [seen], which _parse_line sets when a line holds such a `time` before a
+# compound opener (_time_prefix). classify then reads the call again with _opening on, where _parse_line leaves out
+# those `time`, `-p` and `--` words and opens the compound after them, as without them. Main's reading stays beside.
+_timed: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_timed", default=None)
+_opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_opening", default=False)
+# The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
+# `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
+# and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
+_TIMED = frozenset({"for", "while", "until", "select", "if", "case", "{", "coproc", "function"})
+# The reserved words after which bash takes `time` as the reserved word (time_command_acceptable), beside `!` and
+# the start of a command that no `|` or `|&` feeds; `(`, `)`, `;`, `&`, `&&`, `||` and a newline end a command here.
+_TIME_AFTER = frozenset({"{", "do", "then", "else", "elif", "if", "while", "until"})
+
+
+def _time_prefix(toks: list, i: int) -> list[int]:
+    """#853: the indexes of the `time`, `-p` and `--` words of the pipeline prefixes that start at toks[i], a `time`
+    bash takes as the reserved word (_time_at), when a compound opener (_TIMED) follows them; else []. bash takes
+    `-p` right after `time` and `--` right after either, once each (`time -p -p for` and `time -- -p for` are syntax
+    errors), and after them another `time` or a `!`. A quoted word is never one of them."""
+    drop: list[int] = []
+    n = len(toks)
+    while i < n and toks[i][0] == "w" and not toks[i][1].quoted:
+        if toks[i][1].text == "time":
+            drop.append(i)
+            i += 1
+            for opt in ("-p", "--"):
+                if i < n and toks[i][0] == "w" and not toks[i][1].quoted and toks[i][1].text == opt:
+                    drop.append(i)
+                    i += 1
+        elif toks[i][1].text == "!":
+            i += 1
+        else:
+            break
+    return drop if i < n and toks[i][0] == "w" and not toks[i][1].quoted and toks[i][1].text in _TIMED else []
+
+
+def _time_at(cur: "_Cmd", toks: list, i: int) -> bool:
+    """#853: whether bash takes the unquoted `time` at toks[i], a word in command position, as the reserved word:
+    after the `!` words that start the command or follow one of _TIME_AFTER, at the start of a command no `|` or `|&`
+    feeds (a newline after `|` is a `;` to the lexer, and bash still takes the command after it as fed)."""
+    if cur.redirs or cur.heredocs or cur.herestrings:
+        return False
+    j = len(cur.words)
+    while j and not cur.words[j - 1].quoted and cur.words[j - 1].text == "!":
+        j -= 1
+    if j:
+        return not cur.words[j - 1].quoted and cur.words[j - 1].text in _TIME_AFTER
+    k = i - len(cur.words) - 1
+    while k >= 0 and toks[k] == ("op", ";"):
+        k -= 1
+    return not cur.piped_in and not (k >= 0 and toks[k][0] == "op" and toks[k][1] in ("|", "|&"))
+
+
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
 # classify_shell argument: classify_shell is a seam other code wraps with a callable of (cmd, depth), so its
@@ -1402,6 +1459,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     parens = 0                      # `(` tokens open here, counted apart from the compounds (#479 verify)
     ariths: list = []               # per `for ((` still open: (parens before its `((`, the command holding the `for`)
     arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
+    timed, opening = _timed.get(), _opening.get()
+    prefix: set[int] = set()        # #853: the `time`, `-p` and `--` words of pipeline prefixes before a compound
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -1484,6 +1543,14 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             (a, o_end), o_tok = marks[i], i
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
+            if i not in prefix and not v.quoted and v.text == "time" and _command_word(cur.words, head, pre) \
+                    and _time_at(cur, toks, i):
+                prefix.update(_time_prefix(toks, i))
+                if timed is not None and i in prefix:
+                    timed[0] = True
+            if opening and i in prefix:
+                i += 1              # #853: read as without the prefix, the compound after it opened (_opening)
+                continue
             if not v.quoted and v.text == "do" and len(cur.words) > 1 and cur.words[-2] is loop:
                 end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
             cw = not v.quoted and _command_word(cur.words, head, pre)
@@ -8454,8 +8521,46 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
-    chain of floors (readings), so decide never goes below it. ``cwd`` is the folder the tool runs in, when the
-    caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
+    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading); the
+    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. ``cwd`` is
+    the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
+    (_in_tool_folder sets it)."""
+    timed = [False]
+    met = _timed.set(timed)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _timed.reset(met)
+    return _opened_reading(c, action, cwd) if timed[0] and not _opening.get() and not _config_off.get() else c
+
+
+def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#853: the call as read before (c), with a second reading of it beside it in which each compound command
+    behind bash's pipeline prefixes (`time`, `time -p`, `time --`, `time -p --`, `!` and their combinations, _parse_line)
+    is read as the same compound without them: its parts, their categories, and #479's second pass of a loop that
+    `cd`s into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before
+    stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once (the reading
+    as before reads its own without opening it, _classify_reading): decide keeps the strictest, and no_grant (and
+    through it the hook's bypass floor) counts each reading, so a line never decides lower than before."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _opening.set(True), _timed.set(None)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _timed.reset(met)
+        _opening.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo)
+    return c
+
+
+def _one_reading(action: Any, cwd: str | None = None) -> Classification:
+    """_classify_reading's reading of the call, in its budgets and folders: the call, its joined reading (#584) and
+    its loops' second passes (#479)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
     loops: list[int] = [False, False, 0]                            # (#479) a loop with a `cd` into the store

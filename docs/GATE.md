@@ -3010,10 +3010,32 @@ bash expands a `for` or `select` word list and the redirections of the loop's `d
 first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd ~/.exo/policies; done` is
 read as before). A command before the loop runs once and keeps its folder too. A function the loop calls is not
 followed into, but its call is a command in the store on that reading, which asks and is denied by `deny:
-[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). Known limit: a loop
-behind `time` (`time for ..`) is not read as a compound, as on main, so it has no second reading. Such a line asks
-(`opaque_exec`), but `deny: [store_write]` does not deny it, a seat the approvers name may answer it, and under
-permissions bypass the exo-gate hook auto-allows it, all as on main f28934a3. The second reading is classify's:
+[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A compound behind
+bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading. bash takes
+`time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`, `time
+time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
+`do`, `then`, `else`, `elif`, `if`, `while`, `until` or a case pattern's `)`, never after `|` or `|&`), and runs
+the compound after them
+(`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f { ..; }` definition,
+whose body runs when `f` is called) as without them. `_parse` reads `time` as a program with options, so that
+compound was the program's argv: `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` asked
+as `opaque_exec`, `deny: [store_write]` did not deny it and bypass auto-allowed it, on main a1dd4fec too, and
+`time { rm -rf /srv/data; }` was no delete; main read a `function` definition behind `time` or `!` alone, but
+`time ! function f { rm -rf /srv/data; }; f` was no delete. When a line holds such a `time` before a compound,
+classify reads the call again with those `time`, `-p` and `--` words left out (`_opened_reading`, with
+budgets and memos of its own) and keeps that reading beside main's, as the second reading above is kept: the
+loop is a `store_write` that `deny: [store_write]` denies and bypass keeps at its floor, the group a delete, and
+`time { ls; }` still asks as `opaque_exec`, since `decide` keeps the strictest. Lines bash rejects (`bash -n`)
+run nothing and decide as on main: a simple command or an assignment before a compound (`nohup for ..`, `command
+for ..`, `env X=1 while ..`, `sudo -n while ..`, `X=1 time for ..`), `time -p -p for ..`, `time -- -p for ..`,
+`!for ..` and `time` or `!` after `|`. A quoted `'time'` or `\time`, and `time -o f` (GNU time's options), are a
+program, as before. Such a line costs about main's reading plus the reading without the prefixes (a line of 20
+prefixed loops: 0.074 s against 0.021 s on main; the same loops without `time` take 0.042 s). Each of the two
+readings reads its own D-074 `ordinary` reading once, so a line that also writes the home's config.json costs
+about the same sum (20 such loops each with `echo x > ~/.exo/config.json`: 0.284 s against 0.058 s on main and
+0.234 s without `time`). Known limit: main does not open a `coproc` compound right after `!`, `then` or `{` (`!
+coproc for ..`, `if ..; then coproc for ..`, `{ coproc for ..; }`), so those loops have no second reading, with a
+prefix or without. The second reading is classify's:
 `classify_shell` alone reads the line once, as before. It has a budget: it may read afresh 64 lines more than the
 first reading did (each line, `$( )` body and nested line classify reads that it has not read in the same state).
 A nest of loops in `$( )`, each with a `cd` into the store (`while :; do echo $(while :; do ..; done); cp ..; cd

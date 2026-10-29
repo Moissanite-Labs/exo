@@ -3909,6 +3909,75 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
   `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 11 of its tests fail without the change: the six condition rows, the descriptor row and four hook rows).
   *Revisit if:* the same as #479's.
+- *Amendment 2026-10-29 (issue #853, to the #479 amendment's decision):* a compound command behind bash's
+  pipeline prefixes is read as the same compound without them, beside main's reading, which lifts the #479
+  amendment's `time` limit. bash's grammar takes `time`, `time -p`, `time --`, `time -p --` and `!` before a
+  pipeline, together too (`time !`, `! time`, `time time`, `! !`, `time -p ! time --`), where a command starts:
+  the start of a line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`, `do`, `then`, `else`, `elif`, `if`,
+  `while`, `until` or a case pattern's `)`, but not after `|` or `|&` (bash's `time_command_acceptable`); the
+  compound after them (`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f
+  { ..; }` definition, whose body runs when `f` is called) runs as without them. `bash -n` (5.2.21) on probe
+  files whose every command is `:` accepts each of those spellings (`time ! function f { :; }; f`, `time -p !
+  function ..`, `time -- ! function ..`, `! time ! function ..` and `time time ! function ..` too) and rejects
+  `time -p -p for ..`, `time -- -p for ..`, `time -p -- -- for ..`, `!for ..`, `: | time for ..`, `: | ! for ..`,
+  and a simple command or an assignment before a compound (`: for ..`, `nohup for ..`, `command for ..`, `env
+  X=1 while ..`, `sudo -n while ..`, `X=1 time for ..`, `> f time for ..`), so those run nothing. `_parse` reads
+  `time` as a program that takes options (`_PREFIXES`, GNU time's `-o` and `-f`), so the compound after it was
+  that program's argv: on main a1dd4fec `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done`
+  and its `time -p`, `time --`, `time !`, `! time`, `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`
+  and `time coproc for ..` forms asked as `opaque_exec`, `deny: [store_write]` did not deny them, a seat the
+  approvers name could answer them and the hook's bypass auto-allowed them; `time { rm -rf /srv/data; }`, `time
+  -p { git push --force origin main; }` and `time ! { curl -X POST .. }` asked as `opaque_exec` where their
+  twins without the prefix deny under `deny: [delete]`, `[force_push]` or `[web_post]`. (`! for ..` alone was
+  read already: `!` is one of `_OPENERS`.) A `function f { ..; }` definition was read behind `time` or `!`
+  alone, but not behind both: `time ! function f { rm -rf /srv/data; }; f` and its `time -p !`, `time -- !`, `!
+  time !` and `time time !` forms asked as `opaque_exec` where the twin denies under `deny: [delete]` (a #479
+  store loop in such a body was found by the store scan already). Now, while classify reads a call (`_classify_reading`), `_parse_line`
+  marks each unquoted `time` in command position that bash takes as the reserved word (`_time_at`: no `|` or
+  `|&` feeds the command, and only `!` words or one of the reserved words above come before it in the command)
+  and that is followed, through its `-p` and `--` and further `time` and `!` words, by a compound opener
+  (`_time_prefix`). When the call has one, classify reads it a second time with `_opening` on, where
+  `_parse_line` leaves those `time`, `-p` and `--` words out (`_opened_reading`, with budgets and memos of its
+  own), so the compound is opened as without them: its parts, their categories and #479's second pass of a loop
+  that `cd`s into the store. That reading is kept beside main's by `_beside`, as #584's joined reading and #479's
+  second reading are, and each reading's D-074 `ordinary` reading is kept too, each read once (main's reading
+  reads its own without opening it, and the second reading reads its own), so `decide`, `no_grant` (and through
+  it the exo-gate hook's bypass floor) and `call_approvers` read both (`gate.readings`). The issue's rows are a principal-only `store_write`
+  part that `deny: [store_write]` denies, no grant covers and bypass keeps at its floor, while main's
+  `opaque_exec` reading still leads on the tie; `time { rm -rf /srv/data; }` is a delete. Main's reading is the
+  first reading, unchanged, so no line decides lower: `time { ls; }` still asks as `opaque_exec`, and a quoted
+  `'time'` or `\time`, `time -o f ..`, the syntax errors above and a line with no such prefix are read once, as
+  on main. Teaching `_parse` the prefixes directly would have replaced main's reading of every `time` line with
+  a new one; the second reading is smaller (one marker in `_parse_line`, one more reading in classify) and keeps
+  main's reading by construction, as #546 keeps main's reading of a quoted prefix assignment. Cost: such a line
+  costs about main's reading plus its twin's (`time.process_time`, best of five, this tree against main
+  a1dd4fec: 20 prefixed loops on one line 0.074 s against 0.021 s, their twin without `time` 0.042 s; the same
+  loops each followed by `echo x > ~/.exo/config.json`, which adds each reading's D-074 `ordinary` reading,
+  0.284 s against 0.058 s, twin 0.234 s; 300 `time { :; }` groups 0.075 s against 0.043 s; 150 `time !` before
+  one group 0.014 s against 0.009 s). Known limit:
+  main does not open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc
+  for ..`, `{ coproc for ..; }` ask as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or
+  without; that is `coproc`'s own gap, not the prefix's. The differential against main a1dd4fec (main's
+  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
+  under the 88 policies (1,167,760 pairs), lowers 0 pairs and tightens 79 pairs on 9 actions (`opaque_exec allow`
+  to `opaque_exec ask` 40, `opaque_exec ask` to `opaque_exec deny` 16, `opaque_exec log` to `opaque_exec ask`
+  16, and 7 to `delete`); 106 pairs keep their outcome with another detail. An aimed corpus (`--only-corpus
+  --no-variants`) of 10,572 lines puts the 11 prefix spellings above and none before 419 compound lines (the 9
+  loop forms with 8 store-`cd` bodies, 12 group forms, `function f { ..; }; f`, `function f () { ..; }; f` and
+  `f() { ..; }; f` among them, with delete, store, force-push, post, credentials, opaque and plain bodies, nested
+  and chained prefixes), and 21 of them under 22 wrappers each (`&&`, `||`, `;`, a newline, `&`, a subshell, a
+  pipe into one, `bash -c`, `$( )`, `if`, a function, and the guards `true |`, `nohup`, `command`, `X=1`,
+  `'time'`, `\time`, `time -o f`); under the 88 policies and 126 more (deny, reserved, category, category-rule,
+  command, command-rule and target entries, 214 in all, 2,262,408 pairs) it lowers 0 pairs and tightens 28,559
+  pairs on 2,054 actions, mostly `opaque_exec ask` to `opaque_exec deny` (6,130), `opaque_exec allow` to
+  `opaque_exec ask` (6,034), `opaque_exec ask` to `force_push deny` (3,654) and to `delete deny` (2,601); 190,906
+  pairs keep their outcome with another detail. No classify or decide errors. Tests:
+  `tests/security/test_gate_pipeline_prefix_853.py` (521 tests, which also collect alone; 158 fail on main
+  e86af96c and pass here, the other 363 pass on both) and `tests/security/test_gate_loop_cd_store_479.py`, whose known
+  limit row `test_a_loop_behind_time_is_a_known_limit` is now `test_a_loop_behind_time_is_read_as_without_it`
+  (2 rows that fail on main a1dd4fec).
+  *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
+  second reading can go.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
