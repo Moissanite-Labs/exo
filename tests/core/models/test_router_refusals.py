@@ -114,6 +114,23 @@ def test_a_spend_limit_is_not_a_bad_key():
     assert ev.error.startswith("p is over its provider spend limit (HTTP 402: key_spend_limit_reached)")
 
 
+def test_a_spend_limit_fallback_says_so_and_keeps_the_cause_in_the_attempts():
+    """The reported behaviour: 402 on the top route with a free route behind it. The notice names the spend limit in
+    those words and says the figure under it is a floor, and the attempt reads `spend_limit` afterwards, not
+    `fallback`, so /trace can tell this call was short (D-093)."""
+    r = Router(roles={"main": ["paid:m", "free:m"]},
+               providers={"paid": {"key_env": "PAID_KEY"}, "free": {"key_env": "FREE_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"paid": FakeProvider([refused(402, "key_spend_limit_reached")], name="paid"),
+                          "free": FakeProvider(["ok"], name="free")}, env={}, clock=Clock())
+    events = run(r)
+    notes = [e.text for e in events if e.kind == "notice"]
+    assert "paid:m is over its provider spend limit; trying free:m (this turn's cost is a floor)" in notes
+    done = events[-1]
+    assert done.kind == "done" and done.route == "free:m"
+    assert [(a["route"], a["outcome"]) for a in done.attempts] == [("paid:m", "spend_limit"), ("free:m", "ok")]
+
+
 def test_sibling_keys_are_all_named():
     r = Router(roles={"main": ["p:m"]}, providers={"p": {"key_env": ["P_KEY_1", "P_KEY_2"]}},
                catalog={"providers": {}, "models": {}, "roles": {}},
