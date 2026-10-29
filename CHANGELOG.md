@@ -52,6 +52,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
+
+- Repeated matching inspection can now send a bounded progress-check advisory to the model, without forcing tools, changing permissions or stopping uncapped turns (refs #792).
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store

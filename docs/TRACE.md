@@ -30,6 +30,16 @@ The loop: record, read, report, verify.
   raises it is still a tool error, with its `tool.error` finding.
 - Keys, auth headers and token-like strings are removed before any of this is written.
 
+
+## Progress-check notices
+
+After three matching successful inspection calls, the loop can send a bounded harness progress check to the
+model's next request and record a warning notice. It asks for a distinct next step or a blocker; it never
+changes permissions, forces a write/post or stops an uncapped turn. Failed edits do not clear repeated reads.
+The transient model note is not principal text and is never saved in message history. At most four notices
+are recorded per turn. Recognition, polling exclusions and evaluation limits are in
+`docs/REPEAT-FEEDBACK-ACCEPTANCE.md` (D-025 amendment, #792).
+
 ## Read
 `exo trace [SESSION] [--last N] [--calls] [--json]` shows one row per turn: when, wall time, model served,
 calls, fallbacks, tools, tool errors, tokens, cost, flag count, then the calls of the last turn (`--calls`: of
