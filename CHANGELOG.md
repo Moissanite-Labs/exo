@@ -8,6 +8,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The Providers page says why the model list failed instead of showing only a bare exception name, and
+  offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
+  reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
+  (D-091).
 
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
@@ -26,6 +30,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
+- `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
+  re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
+  write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
+  still takes the write lock briefly for its schema check (#797, refs #684).
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
@@ -179,6 +187,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
   **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
 
+- Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command (#473).
+
 - The core retries its start after a failed or cancelled start instead of failing every later command
   (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
   raise once and leave every later command with the same `internal` error until exod restarted. A start cut
@@ -186,6 +196,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   always closes MCP. Tests:
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
+
+- Malformed peer presence records no longer break discovery or hide other live peers (#638).
+
+- Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
+
+- The pinned type baseline matches again after separating reused gate locals and typing terminal
+  restart environments as read-only mappings; nine resolved diagnostics are removed (#710).
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
