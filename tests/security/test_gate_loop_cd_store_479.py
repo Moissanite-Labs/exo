@@ -165,9 +165,20 @@ HEADER_ROWS = [
 ARITH_ROWS += HEADER_ROWS
 BRACE_ROWS += ARITH_ROWS
 CONTROL = "cd ~/.exo/policies; cp /tmp/evil gates.yaml"
+# #857: a `while` or `until` condition runs again on every pass, so when its first command is the `cd` into the
+# store, a substitution in that command runs there from the second pass. bash 5.2 confirms the write lands on pass 2
+# for each row. On main 1401ff81 all six are allowed reads, also under `deny: [store_write]`.
+COND_ROWS = [
+    "while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "until ! cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while cd ~/.exo/policies`cp /tmp/evil gates.yaml`; do sleep 1; done",
+    "while pushd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while cd ~/.exo/policies < <(cp /tmp/evil gates.yaml); do sleep 1; done",
+    "while if cd ~/.exo/policies$(cp /tmp/evil gates.yaml); then :; fi; do sleep 1; done",
+]
 
 
-@pytest.mark.parametrize("line", ISSUE_ROWS + MORE_ROWS + BRACE_ROWS + [CONTROL])
+@pytest.mark.parametrize("line", ISSUE_ROWS + MORE_ROWS + BRACE_ROWS + COND_ROWS + [CONTROL])
 def test_a_write_before_the_loops_cd_into_the_store_is_a_store_write(line):
     c = _bash(line)
     assert _store_write_part(c), (line, [r.category for r in gate.readings(c)])
@@ -199,6 +210,7 @@ def test_the_issue_rows_lead_with_the_store_write_and_keep_mains_reading(line):
     "for i in 1 2; do cp /tmp/evil 3; cd /dev; cd fd; done",
     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; cp /tmp/evil 3; cd /dev/fd; done",
     "for i in 1 2; { cp /tmp/evil 3; cd /dev/fd; }",
+    "while cd /dev/fd < <(cp /tmp/evil 3); do :; done",            # #857: a condition's own `cd` names it too
 ])
 def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     c = _bash(line)
@@ -208,11 +220,30 @@ def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     assert gate.decide(c).outcome == "ask", line
 
 
+# #858 review: when the body holds a `cd` of its own, the body's folder keeps naming the second pass, as on main, and
+# the condition's descriptor `cd` adds nothing over it. Each row denies under its one target rule on main.
+@pytest.mark.parametrize("line,target", [
+    ("while cd /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done", "target:/proc*"),
+    ("while cd /proc/self/fd; do cp /tmp/evil 3; cd /dev/fd; done", "target:/dev*"),
+    ("while cd /dev/fd < <(cp /tmp/evil 3); do cd /proc/self/fd; done", "target:/proc*"),
+    ("while cd /dev/fd < <(cp /tmp/evil 3); do cd ~/.exo/policies; done", "target:*store*"),
+])
+def test_a_body_cd_keeps_naming_the_second_pass_beside_a_condition_cd(line, target):
+    c = _bash(line)
+    assert gate.decide(c, _pol(deny=[target])).outcome == "deny", (line, [
+        (p.category, p.target) for r in gate.readings(c) for p in gate._each_part(r)])
+
+
 # Guards: lines whose reading this change must leave as it was on main (cd371aed, f28934a3 and 3570be0e).
 @pytest.mark.parametrize("line,category,outcome", [
     ("for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "allow"),               # no cd in the loop
     ("for i in 1 2; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "allow"),  # a cd into a plain folder
     ("while :; do cp a b; cd ../src; done", "read", "allow"),
+    # #857: a condition's `cd` into the store with nothing written, a closer's redirection (run once, before the
+    # first pass) and a condition's `cd` into a plain folder keep their reading
+    ("while cd ~/.exo/policies; do sleep 1; done", "read", "allow"),
+    ("while cd ~/.exo/policies; do :; done < <(cp /tmp/evil gates.yaml)", "read", "allow"),
+    ("while cd /tmp/proj$(cp /tmp/evil gates.yaml); do sleep 1; done", "read", "allow"),
     # only the loop runs again: a write before the loop runs once, where the line started
     ("cp /tmp/evil gates.yaml; for i in 1 2; do cd ~/.exo/policies; done", "shell", "allow"),
     # bash expands a `for` word list once, before the first pass, so its $( ) runs where the line started
@@ -308,12 +339,17 @@ def test_a_nest_past_the_budget_fails_closed_and_keeps_mains_reading():
     assert gate.call_approvers(c, approvals) == ["principal"] and gate.no_grant(c)
 
 
-def test_the_second_reading_of_a_loop_nest_costs_about_what_the_first_does(monkeypatch):
+@pytest.mark.parametrize("body", [
+    "while :; do echo {x}; cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
+    "while cd ~/.exo/policies; do echo {x}; cp /tmp/evil gates.yaml; done",          # #857: a condition's `cd`
+    "while cd ~/.exo/policies{x}; do cp /tmp/evil gates.yaml; done",
+])
+def test_the_second_reading_of_a_loop_nest_costs_about_what_the_first_does(monkeypatch, body):
     # The verifier measured the second reading of such nests at about 6 times main's time, at every depth from 5 to
     # 13. With the budget a call reads afresh at most _LOOP_BUDGET more lines than twice main's reading does. CPU time
     # of this process (time.process_time), the better of two runs, against the call read without its second reading.
     # It guards the new code: on main it fails only because main has no _loop_reading to patch.
-    action = {"tool": "bash", "args": {"command": _nest(8)}}
+    action = {"tool": "bash", "args": {"command": _nest(8, body)}}
 
     def cpu():
         best = None
@@ -404,7 +440,7 @@ def _run(ctx, line):
 
 
 @pytest.mark.parametrize("bypass", [False, True])
-@pytest.mark.parametrize("line", ISSUE_ROWS[:3] + BRACE_ROWS[:1] + ARITH_ROWS[:3] + ARITH_ROWS[6:8])
+@pytest.mark.parametrize("line", ISSUE_ROWS[:3] + BRACE_ROWS[:1] + ARITH_ROWS[:3] + ARITH_ROWS[6:8] + COND_ROWS[:2])
 def test_the_hook_asks_the_principal_and_bypass_keeps_the_floor(tmp_path, bypass, line):
     g, ctx, root = _gate(tmp_path, bypass)
     r = _run(ctx, line)
