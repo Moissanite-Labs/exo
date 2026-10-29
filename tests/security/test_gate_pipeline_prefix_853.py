@@ -154,6 +154,22 @@ def test_the_479_loop_behind_a_prefix_is_a_store_write_no_grant_covers(prefix):
     assert gate.call_approvers(c, approvals) == ["principal"], line
 
 
+# Guards with #857 (main 75d72a7f): a while/until condition whose first command is the cd into the store is a store
+# write behind a prefix too, as on main (its substitution is read there with the prefix left on); the opened reading
+# keeps it
+COND_LOOPS = ["while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+              "until ! cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1; done",
+              "while pushd ~/.exo/policies`cp /tmp/evil gates.yaml`; do sleep 1; done"]
+
+
+@pytest.mark.parametrize("prefix", ["time ", "time -p ", "! ", "time ! "])
+@pytest.mark.parametrize("loop", COND_LOOPS)
+def test_a_condition_cd_loop_behind_a_prefix_stays_a_store_write(prefix, loop):
+    c = _bash(prefix + loop)
+    assert _store_write(c) and gate.no_grant(c), prefix + loop
+    assert gate.decide(c, _pol(deny=["store_write"])).outcome == "deny", prefix + loop
+
+
 # Guards: these decide as on main a1dd4fec (category, outcome and rule under each policy), and those with no compound
 # behind a prefix bash reads get no second reading. `time` before a simple command or a subshell was read already;
 # GNU time's options (`-o`, `-f`) are a program's, not the reserved word's; a quoted `time` is a program; and the
