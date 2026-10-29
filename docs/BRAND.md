@@ -121,3 +121,9 @@ Keep the stage meaning (more cells, more structure, a dimension, more light) so 
 `tui-mark.txt` (12 × 6 braille cells) and `tui-egg.txt` (14 × 7) render the mark and the stage-0 egg for the terminal
 header, in the same braille style as the current start motif (`clients/tui/exo_tui/hero.py`). The brand page shows
 them with the V cells in orange. The terminal client is unchanged.
+
+## Gallery image loading (#258)
+
+The below-fold images inside the brand page's main gallery use browser lazy loading and asynchronous decoding. Width and height hints reserve their boxes before image bytes arrive; missing hints come from the SVG viewport, rounded to whole CSS pixels. Existing deliberate display sizes and the eager navigation logo remain unchanged.
+
+Local browser tests block gallery image requests, measure the reserved boxes, then decode every image and compare geometry at desktop and narrow widths. This is source-level gallery work, not a transfer-byte, Lighthouse, staging or production claim. WebP/AVIF variants, srcset, deduplication, deployment copying, cache headers, unused assets, robots/sitemap/manifest and the rest of #258 remain open.
