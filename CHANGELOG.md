@@ -55,6 +55,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
   array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
   `parse_json` takes the first brace or bracket that decodes.
+- `test_a_setup_state_is_not_a_harness_error` failed on a loaded machine: it slept a fixed 0.2 s after `TurnSend`,
+  but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
+  was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
+  bound). Test-only.
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
