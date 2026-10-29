@@ -8,6 +8,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
+  pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
+  start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
+  web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
+  names the Chrome binary and version it drove.
 - Web chat keeps a reader's place when the event stream catches up. On load and after a reconnect, the page reads the
   conversation again and redraws it. That redraw moved a reader who had scrolled back to the newest message. It now
   keeps their place, as new output does, and a reader at the newest message stays there.
@@ -16,7 +21,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) built the tool registry
     inside its timed call. The first build imports the built-in tools, and beside 8 to 10 busy loops that took the
     call past its 3 s wall-clock bound. The registry is now built before the clock starts. The 3 s bound is
-    unchanged, and so is the bound on the event loop's largest gap between ticks (#907 has its own entry).
+    unchanged, and so is the 0.5 s bound on the event loop's largest gap between ticks (#907, the entry above).
   - The chat tests that set a layout loaded the page a second time with `goto()`. That only changed the part after
     `#`, so the old view answered until the app replaced it, and a test could run against a view about to vanish
     (`test_show_latest_...`, `test_appending_inside_a_tall_stream_...`, `test_pending_home_frame_...`). They now
@@ -105,6 +110,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
+  run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
 - `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
   each add a bullet here no longer conflict. For a branch cut before this, run
   `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"` once per clone.

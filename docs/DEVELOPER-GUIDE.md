@@ -629,6 +629,8 @@ hook, so a change to any of these needs its own tests and a line in its decision
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+A newer push to a pull request cancels the pull request's older `ci` and `gate preflight` runs (a `concurrency`
+group per pull request, #907); each push to main keeps its own run.
 The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
 The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
 
@@ -638,9 +640,10 @@ these tests so that only the defect they guard against can fail them:
 
 - A loaded runner can keep a process waiting for a CPU for half a second. Keep a wall-clock bound well above what
   the code needs, and keep the test's own setup out of the timed part. `tests/core/tools/test_search_worker.py`
-  bounds the whole call at 3 s for a 1 s search limit, and builds the tool registry before it starts the clock: the
-  first build imports the built-in tools, and inside the timed part it took the call past 3 s beside 8 to 10 busy
-  loops. A count or CPU time cannot be inflated by a slow runner, but check that it still catches the defect: a
+  bounds the whole call at 3 s for a 1 s search limit, and the event loop's largest gap between 10 ms ticks at
+  0.5 s, half what a search holding the loop would cost (#907). It builds the tool registry before it starts the
+  clock: the first build imports the built-in tools, and inside the timed part it took the call past 3 s beside 8
+  to 10 busy loops. A count or CPU time cannot be inflated by a slow runner, but check that it still catches the defect: a
   stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:

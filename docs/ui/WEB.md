@@ -312,7 +312,9 @@ the "Layout" button under the thread list or `/layout inverse|classic`; the choi
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
+DevTools (`tests/browser.py`, skipped when Chrome is missing). The driver turns off Chrome's throttling of background
+timers and frames, and the suite's summary line names the Chrome binary and version it drove, so a CI log shows which
+build a layout failure came from (#907). When a wrapped status and composer exceed the available
 height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
 pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
 its bounded height when the chat column scrolls.
