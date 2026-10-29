@@ -6450,7 +6450,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Runtime boundary:** The tool schema requires `reference` and accepts only `reference`, `offset` and `limit`.
   It rejects extra path arguments before execution. The caller's session supplies the lookup scope.
   A real-gate regression verifies that an explicit read-deny policy blocks valid expansion requests.
-- **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. No core line-budget increase.
+- **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. The counted core rises by
+  16 lines, which D-083 reports and does not assert. Product imports and private-state reads stay at 39 and 8.
 
 - **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
   combinations once skill discovery (#509), the operations inbox (#511) and working notes (D-086) are
