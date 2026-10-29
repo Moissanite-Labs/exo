@@ -79,7 +79,8 @@ class Client:
         """One JSON round trip. Returns (status, parsed body)."""
         headers = {"Content-Type": "application/json", "User-Agent": f"exo-bus-client/1 ({self.seat or 'anon'})"}
         if auth:
-            headers.update(wire.request_headers(self.seat, self.key, method, path.split("?")[0]))
+            p, _, q = path.partition("?")
+            headers.update(wire.request_headers(self.seat, self.key, method, p, query=q))
         req = urllib.request.Request(self.url + path, method=method, headers=headers,
                                      data=wire.canonical(body) if body is not None else None)
         try:
@@ -212,11 +213,12 @@ class Client:
     def tail(self):
         """Yield envelopes addressed to me as they arrive. Minimal RFC 6455 client, stdlib only."""
         u = urlsplit(self.url)
-        path = f"/v1/stream?seat={quote(self.seat or '')}"
+        query = f"seat={quote(self.seat or '')}"
+        path = f"/v1/stream?{query}"
         sock = socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)))
         if u.scheme == "https":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=u.hostname)
-        hdrs = wire.request_headers(self.seat, self.key, "GET", "/v1/stream")
+        hdrs = wire.request_headers(self.seat, self.key, "GET", "/v1/stream", query=query)
         req = (f"GET {path} HTTP/1.1\r\nHost: {u.netloc}\r\nUser-Agent: exo-bus-client/1\r\nUpgrade: websocket\r\n"
                f"Connection: Upgrade\r\nSec-WebSocket-Key: {wire.b64(os.urandom(16))}\r\nSec-WebSocket-Version: 13\r\n"
                + "".join(f"{k}: {v}\r\n" for k, v in hdrs.items()) + "\r\n")

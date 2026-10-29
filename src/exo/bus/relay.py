@@ -49,9 +49,9 @@ class Relay:
         relay = self.relay_pubkey if env is not None and wire.relay_composed(env) else None
         return [k for k in (self.registry.pubkey(seat), relay) if k]
 
-    def authed_seat(self, headers, method: str, path: str) -> str:
+    def authed_seat(self, headers, method: str, path: str, query: str = "") -> str:
         try:
-            return wire.verify_request(headers, method, path, self.registry.pubkey, self.replay)
+            return wire.verify_request(headers, method, path, self.registry.pubkey, self.replay, query=query)
         except ValueError as e:
             raise HTTPException(401, str(e)) from None
 
@@ -173,7 +173,8 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         return JSONResponse(body, status_code=exc.status_code)
 
     def auth(request: Request) -> str:
-        return relay.authed_seat(request.headers, request.method, request.url.path)
+        return relay.authed_seat(request.headers, request.method, request.url.path,
+                                 query=wire.raw_query(request.scope))
 
     @app.post("/v1/messages", status_code=201)
     async def post_message(request: Request):
@@ -213,7 +214,7 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
     @app.websocket("/v1/stream")
     async def stream(ws: WebSocket, seat: str):
         try:
-            who = relay.authed_seat(ws.headers, "GET", ws.url.path)
+            who = relay.authed_seat(ws.headers, "GET", ws.url.path, query=wire.raw_query(ws.scope))
         except HTTPException as e:
             await ws.close(code=4401, reason=str(e.detail))
             return

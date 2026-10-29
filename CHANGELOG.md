@@ -263,6 +263,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - Restore the reviewed relative-import coupling counter and its regressions on main. `from .. import envscrub` counts like its absolute form. Existing exclusions, duplicate handling and caps are unchanged (refs #741).
 
+- The bus signs a request's query string with its method, path and timestamp, so a signed read cannot be replayed with other parameters (`since`, `to`). The live stream signs its `seat` query the same way.
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
