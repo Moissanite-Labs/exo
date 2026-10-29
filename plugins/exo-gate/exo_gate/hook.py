@@ -99,18 +99,27 @@ def _floor(c: gate.Classification, main: bool = False) -> str:
     return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
-def _body_path(f: str) -> Optional[Path]:
-    """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
-    /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
-    not what gh will read, so they stay unseen (#208)."""
+def _body_path(f: str, reasons: Optional[dict[str, str]] = None) -> Optional[Path]:
+    """Eligible absolute regular body file, recording a safe skip reason when requested."""
+    why: Optional[str] = None
     try:
         p = Path(f)
         if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
                for y in (p, Path(os.path.realpath(p)))):
-            return None
-        return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
-    except (OSError, ValueError):                       # ValueError: a NUL in the path, which gh never opens
-        return None
+            why = "the gate cannot read the body: the file names process or descriptor state; pass the text inline"
+        elif not p.is_absolute():
+            why = None
+        elif not p.is_file():
+            why = None
+        elif p.stat().st_size > _MAX_BODY_FILE:
+            why = "the gate cannot read the body: the file is over 256 KiB; use a smaller regular file or pass the text inline"
+        else:
+            return p
+    except (OSError, ValueError):
+        pass
+    if reasons is not None and why is not None:
+        reasons[f] = why
+    return None
 
 
 @dataclass
@@ -492,7 +501,7 @@ class Gate:
 
     # --- hooks ------------------------------------------------------------------------
 
-    def _load_body_file(self, c: gate.Classification) -> list[str]:
+    def _load_body_file(self, c: gate.Classification, reasons: Optional[dict[str, str]] = None) -> list[str]:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
         an absolute path to a regular file of at most 256 KiB, on a line where the gate finds no other part. A
         relative or `~` path names a file in the command's folder or home, which the hook does not know. Anything not
@@ -514,7 +523,7 @@ class Gate:
         alone = all(p.alt_copy for x in gate.readings(c) for p in x.parts)
         held: list[str] = []
         for x in gate.readings(c) if alone else _every_part(c):
-            if not x.text_file or x.text or (p := _body_path(x.text_file)) is None:
+            if not x.text_file or x.text or (p := _body_path(x.text_file, reasons)) is None:
                 continue
             if not alone:
                 held.append(x.text_file)
@@ -644,12 +653,13 @@ class Gate:
         counts as held (#343), since a held file leaves its post unseen and such a line never gets that far
         (``_pre_tool_call``)."""
         held: list[str] = []
+        skipped: dict[str, str] = {}
         if c is None:
             action = {"tool": tool, "args": args}
             c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-            held = self._load_body_file(c)
+            held = self._load_body_file(c, skipped)
         today = _dt.date.today().isoformat()
-        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
+        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held, "unseen_body_reasons": skipped}
         pol, changed = self.policies(), self.changed_policies()
         floor, changed_floor = self._floor, self._changed_floor
         if only is not None:
