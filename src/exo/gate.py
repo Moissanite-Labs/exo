@@ -10131,7 +10131,8 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             # A body file left unread for the line gets its own note (#343). The plain one stays when the post is
             # also unseen otherwise (a title from a variable, a repeated option), which the post alone still is.
             on_line = p.text_file in held_files and not p.text
-            found += [UNSEEN_ON_LINE] * on_line + [UNSEEN_BODY] * (not on_line or post_unseen(p, file=False))
+            skip_reason = (ctx.get("unseen_body_reasons") or {}).get(p.text_file, UNSEEN_BODY)
+            found += [UNSEEN_ON_LINE] * on_line + [skip_reason] * (not on_line or post_unseen(p, file=False))
             post_unseen_seen = True
         found_on[id(p)] = found
         if p.alt_copy:

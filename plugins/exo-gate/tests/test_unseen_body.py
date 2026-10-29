@@ -85,7 +85,8 @@ R = "-R myorg/app"
 def test_a_body_the_hook_did_not_read_asks_once(store, work, line):
     _, ctx = make_gate(store)
     r = call(ctx, line.format(work=work))
-    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"], r
+    note = "over 256 KiB" if "{work}/big.md" in line else gate.UNSEEN_BODY
+    assert r["action"] == "approve" and note in r["message"], r
     assert r.get("once") is True                            # the core offers no "always"
 
 
@@ -439,7 +440,7 @@ def test_a_body_file_under_dev_or_proc_is_never_read(store, work, monkeypatch):
     link.symlink_to("/dev/stdin")
     _, ctx = make_gate(store)
     r = call(ctx, f"gh pr comment 5 {R} --body-file {str(link)}")
-    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"] and r.get("once") is True, r
+    assert r["action"] == "approve" and "process or descriptor state" in r["message"] and r.get("once") is True, r
     # Written out, /dev/stdin is also a descriptor path the gate cannot resolve (#217): a store write, which only the
     # principal answers, never granted, the stricter ask. The card says the path is unresolved, not that gh writes it.
     r = call(ctx, f"gh pr comment 5 {R} --body-file /dev/stdin")

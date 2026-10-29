@@ -3507,3 +3507,10 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Body files the hook deliberately skips (#567)
+
+An over-256-KiB file or a path into process/descriptor state remains unseen and
+asks once. Its message now names the size limit or process-state reason instead
+of recommending the absolute path already supplied. Symlinks into /dev or /proc
+are treated the same way. Other unreadable-file cases retain the generic hint.

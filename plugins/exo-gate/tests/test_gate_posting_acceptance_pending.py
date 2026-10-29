@@ -125,7 +125,7 @@ class Context:
         self.hooks.setdefault(name, []).append(callback)
 
 
-def skipped_file_card(tmp_path, kind):
+def skipped_file_card(tmp_path, kind, prefix=""):
     store = tmp_path / "store"
     (store / "policies").mkdir(parents=True)
     (store / "policies" / "gates.yaml").write_text("categories: {github_post: allow}\n")
@@ -140,10 +140,9 @@ def skipped_file_card(tmp_path, kind):
         path = str(body)
     [pre] = context.hooks["pre_tool_call"]
     return asyncio.run(pre(tool_name="terminal", args={"command":
-        f"gh pr comment 5 -R myorg/app --body-file {path}"}, session_id="s1", tool_call_id="c1", turn_id="t1"))
+        prefix + f"gh pr comment 5 -R myorg/app --body-file {path}"}, session_id="s1", tool_call_id="c1", turn_id="t1"))
 
 
-@pytest.mark.xfail(strict=True, reason="Open #567: skipped absolute files still get the generic absolute-path hint")
 @pytest.mark.parametrize("kind,reason_words", [("large", ("256", "too large", "size limit")),
                                                ("process", ("process", "descriptor"))])
 def test_skipped_absolute_body_file_explains_its_actual_limit(tmp_path, kind, reason_words):
@@ -168,3 +167,11 @@ def test_437_all_internal_compound_stays_log():
                                    "gh issue close 9 -R other/repo"])
 def test_437_standalone_public_operations_stay_ask(line):
     assert inspect(shell(line), POLICY).outcome == "ask"
+
+
+@pytest.mark.parametrize("kind", ["large", "process"])
+def test_skipped_file_reason_survives_compound_line(tmp_path, kind):
+    card = skipped_file_card(tmp_path, kind, prefix="cd /tmp && ")
+    assert card["action"] == "approve" and card["once"] is True
+    assert "absolute --body-file path" not in card["message"]
+    assert ("over 256 KiB" if kind == "large" else "process or descriptor state") in card["message"]
