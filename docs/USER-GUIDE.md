@@ -80,7 +80,8 @@ each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5
 ## 2. The two clients
 
 The web chat status strip wraps to fit the conversation width in either layout. Model names and values remain
-readable as the window narrows; notices appear on their own wrapped row.
+readable as the window narrows; notices appear on their own wrapped row. In a short window, scroll the chat column
+to reach the status, message box and thread.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
