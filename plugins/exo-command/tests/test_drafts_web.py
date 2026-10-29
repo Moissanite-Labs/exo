@@ -181,3 +181,42 @@ def test_first_submission_recovery_belongs_to_created_thread_after_remount():
             assert b.eval("window.sends.length") == 1
     finally:
         srv.close()
+
+
+def test_a_session_list_asked_before_the_thread_existed_cannot_replace_a_newer_one():
+    """#859: session lists can answer out of order. The remounted page asks for the list before the first send's
+    thread exists; when those answers come back after the list that shows the new thread, the thread stays shown."""
+    srv = Served(EmptySrc())
+    try:
+        with Browser() as b:
+            b.goto(srv.url()); b.wait("!!document.querySelector('.xc-input')")
+            b.eval("""(()=>{const fetch0=window.fetch;window.sends=[];window.created=false;window.held=[];window.staleRead=0;
+              window.fetch=(url,options)=>{
+                if(String(url)==='/api/chat/sessions' && options?.method==='POST') {
+                  return new Promise(resolve=>window.releaseCreate=()=>{window.created=true;resolve(new Response(JSON.stringify({session:{id:'s3'}})));});
+                }
+                if(String(url)==='/api/chat/sessions' && window.created) return Promise.resolve(new Response(JSON.stringify({sessions:[{id:'s3',title:'s3',model:'m',status:'idle'}]})));
+                if(String(url)==='/api/chat/sessions' && window.holdLists) return new Promise(resolve=>window.held.push(()=>{
+                  const r=new Response(JSON.stringify({sessions:[]})), json=r.json.bind(r);
+                  r.json=()=>json().finally(()=>{window.staleRead++;});
+                  resolve(r);
+                }));
+                if(String(url).endsWith('/send')) return new Promise((resolve,reject)=>window.sends.push({resolve,reject}));
+                return fetch0(url,options);
+              };})()""")
+            put(b, "first instruction")
+            b.eval("document.querySelector('.xc-composer .xc-btnrow button').click()")
+            b.wait("!!window.releaseCreate")
+            b.eval("window.holdLists=true; location.hash='#tasks'"); b.wait("!document.querySelector('.xc-composer')")
+            b.eval("location.hash='#chat'"); b.wait("!!document.querySelector('.xc-input')")
+            b.wait("window.held.length >= 2")  # recover() and the startup refresh, both asked before s3 exists
+            b.eval("window.releaseCreate()")
+            b.wait("document.querySelector('.xc-sess.on')?.textContent.includes('s3')")
+            held = b.eval("window.held.length")
+            b.eval("window.held.forEach(release=>release())")
+            b.wait(f"window.staleRead === {held}")
+            b.eval("new Promise(resolve=>setTimeout(resolve, 0))")  # the page has applied what it read
+            assert b.eval("document.querySelector('.xc-sess.on')?.textContent.includes('s3')"), \
+                b.eval("document.querySelector('.xc-sessions')?.textContent")
+    finally:
+        srv.close()
