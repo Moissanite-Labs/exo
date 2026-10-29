@@ -91,7 +91,7 @@ def test_key_is_tried_again_after_the_auth_cooldown_or_a_reload():
     assert run(r)[-1].kind == "done" and len(rec.requests) == 3
 
 
-@pytest.mark.parametrize("status", [401, 402, 403])
+@pytest.mark.parametrize("status", [401, 403])
 def test_every_refusal_status_stops_the_retry(status):
     r = Router(roles={"main": ["p:m"]}, providers={"p": {"key_env": "P_API_KEY"}},
                catalog={"providers": {}, "models": {}, "roles": {}},
@@ -99,6 +99,36 @@ def test_every_refusal_status_stops_the_retry(status):
     ev = run(r)[-1]
     assert not ev.retryable and ev.status == status
     assert ev.error == f"p rejected the key (HTTP {status}: no): fix P_API_KEY or add a key in /providers"
+
+
+def test_a_spend_limit_is_not_a_bad_key():
+    """402 means the provider stopped billing this key, not that the key is wrong: say so, and do not send the user to
+    the key field for a fix that cannot work."""
+    r = Router(roles={"main": ["p:m"]}, providers={"p": {"key_env": "P_API_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"p": FakeProvider([refused(402, "key_spend_limit_reached")], name="p")},
+               env={}, clock=Clock())
+    ev = run(r)[-1]
+    assert not ev.retryable and ev.status == 402
+    assert "key" not in ev.error.split(":")[0]
+    assert ev.error.startswith("p is over its provider spend limit (HTTP 402: key_spend_limit_reached)")
+
+
+def test_a_spend_limit_fallback_says_so_and_keeps_the_cause_in_the_attempts():
+    """The reported behaviour: 402 on the top route with a free route behind it. The notice names the spend limit in
+    those words and says the figure under it is a floor, and the attempt reads `spend_limit` afterwards, not
+    `fallback`, so /trace can tell this call was short (D-093)."""
+    r = Router(roles={"main": ["paid:m", "free:m"]},
+               providers={"paid": {"key_env": "PAID_KEY"}, "free": {"key_env": "FREE_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"paid": FakeProvider([refused(402, "key_spend_limit_reached")], name="paid"),
+                          "free": FakeProvider(["ok"], name="free")}, env={}, clock=Clock())
+    events = run(r)
+    notes = [e.text for e in events if e.kind == "notice"]
+    assert "paid:m is over its provider spend limit; trying free:m (this turn's cost is a floor)" in notes
+    done = events[-1]
+    assert done.kind == "done" and done.route == "free:m"
+    assert [(a["route"], a["outcome"]) for a in done.attempts] == [("paid:m", "spend_limit"), ("free:m", "ok")]
 
 
 def test_sibling_keys_are_all_named():

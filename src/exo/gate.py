@@ -9058,8 +9058,29 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
     return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
 
 
-def _override_deny(c: Classification, gates: Mapping,
-                   passed: list[Mapping] | None = None) -> tuple[Classification, str, str] | None:
+def _whole_line_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[Mapping], bool]:
+    """Whether a rule passes the own text test of the whole line (_line_own_test), for the #191 pass on a store line
+    (#547). A failure while the test is built or run counts as a fail, so the part's deny stands: the pass only ever
+    passes more rules over than main does. The answer does not depend on the part, so each rule is tested once per
+    line, and the pass stays linear in the parts of a long line."""
+    try:
+        test = _line_own_test(c, pol, ctx)
+    except Exception:
+        return lambda r: False
+    memo: dict[int, bool] = {}
+
+    def passes(r: Mapping) -> bool:
+        if id(r) not in memo:
+            try:
+                memo[id(r)] = bool(test(r["decision"], [str(x) for x in _as_list(r["match"]["command"])]))
+            except Exception:
+                memo[id(r)] = False
+        return memo[id(r)]
+    return passes
+
+
+def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | None = None,
+                   whole: Callable[[Mapping], bool] | None = None) -> tuple[Classification, str, str] | None:
     """The first part of the line, below the combined result, that its matrix cell, a category line or a rule denies
     as it would deny that command alone (#191): its matrix cell (#464), then its category's line, then the first rule
     that matches it; or a deny rule whose `command` regex matches only a decoded view of the line (#136).
@@ -9068,7 +9089,12 @@ def _override_deny(c: Classification, gates: Mapping,
     less severe cell than the dominant part's.
     With ``passed`` (#394), an allow, log or ask rule keyed on `command` that matches must also match the part's own
     text, or it is passed over and added to ``passed``: a rule written for another command on the line does not lift
-    the part's deny. Deny rules match as before, so every part denied without this test is denied with it."""
+    the part's deny. Deny rules match as before, so every part denied without this test is denied with it.
+    With ``whole`` as well, the own text test of the whole line (_whole_line_test, given only on a store line, #547),
+    such a rule that passes the part's test must also pass this one, as it must at the rule step of a line that a
+    store write does not lead: an allow rule for the push in `git push --force origin main && gh gist create
+    ~/.exo/plugins/foo/__init__.py` names neither the store send nor the line's lead, so the push's matrix deny stands.
+    It only passes more rules over, so every part denied without it is denied with it."""
     cats, rules, matrix = gates.get("categories") or {}, gates.get("rules") or [], gates["matrix"]
     if not (cats or rules or any(v == "deny" for row in matrix.values() for v in row.values())):
         return None
@@ -9088,6 +9114,10 @@ def _override_deny(c: Classification, gates: Mapping,
                 continue
             if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
                     p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):
+                passed.append(r)
+                continue
+            if passed is not None and whole is not None and r["decision"] != "deny" and "command" in r["match"] and \
+                    not whole(r):
                 passed.append(r)
                 continue
             first = r
@@ -9196,8 +9226,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     for the rest (#394, _line_own_test). A rule that fails is passed over, and the rule step keeps the stricter of
     the first match, as before, and the rule found after it. A rule passed over never names opaque_exec for the
     floor. The #191 pass asks the same of a rule that would lift a part's deny, so it denies each part it denied
-    before. So that pass is never looser than deciding as before. When it passes a rule over, the line is also
-    decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
+    before, and on a store line it also asks that rule to pass the test of the whole line (#547). So that pass is
+    never looser than deciding as before. When it passes a rule over, the line is also decided as before, and that
+    decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
     command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
@@ -9458,8 +9489,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
     # #191: a matrix cell (#464), category line or rule that would deny a part alone denies the line, as a deny entry
-    # does (D-075).
-    if outcome != "deny" and (part := _override_deny(eff, gates, passed)):
+    # does (D-075). On a store line, a rule that would lift a part's deny must also pass the own text test of the
+    # whole line (#547), as the rule step asks of a rule on a line a store write does not lead (#394).
+    whole = _whole_line_test(eff, pol, ctx) if outcome != "deny" and passed is not None and \
+        eff.category == "store_write" and eff.parts else None
+    if outcome != "deny" and (part := _override_deny(eff, gates, passed, whole)):
         p, why, step = part
         outcome, reason, rule = "deny", f"denied by policy ({why}: {redact_userinfo(p.summary or p.category)})", step
     if (denied := _part_hits(gates.get("deny") or [], eff)):
