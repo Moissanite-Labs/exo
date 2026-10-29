@@ -1113,7 +1113,13 @@ class _Run:
         return c
 
     def encoded(self, sig: Iterable[str]) -> bool:
-        b, rel = taste.best_match(sig, self.beliefs(), self.thr, include_inactive=True)
+        sig = frozenset(sig)
+        beliefs = self.beliefs()
+        # An inactive conflict must not conceal an active agreement (#882).
+        b, rel = taste.best_match(sig, beliefs, self.thr)
+        if b is not None and rel == "agree":
+            return True
+        b, rel = taste.best_match(sig, beliefs, self.thr, include_inactive=True)
         if b is not None and rel == "agree":
             return True
         for n in self.store.nodes.values():
