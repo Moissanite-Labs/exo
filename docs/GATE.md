@@ -375,12 +375,19 @@ its own, so it leads the line, and the hop's command was read on its own target 
 `X='a b' ssh buildhost 'echo hi > /tmp/f'` asked as code the gate cannot see, and a reserved
 `{category: local_write, target: buildhost}` entry lost its hit, where `X=ab` denied and listed it.
 Each part read behind the quoted word now has a copy on each of its other targets among its parts
-(#852), so a deny entry, a reserved entry or a rule that denies that category on the host meets the
-copy as it meets any part (D-075, #191), and the unknown program stays beside it. A
+(#852), also a part a value read later adds (`X='a b' declare -n r="x[\$(ssh buildhost ..)]"; echo
+$r`), so a deny entry, a reserved entry or a rule that denies that category on the host meets the
+copy as it meets any part (D-075, #191), and the unknown program stays beside it. The copy's
+summary names the host it lands on, so a reason that names the copy names the host too. A
 rule that only asks reaches a part only when that part leads. So with `opaque_exec` allowed by a
 category line or a rule, an `ask` rule on the category and the host, or on the host alone, still
 lets that line through where `X=ab` asks, as for any part the unknown program outranks
 (`X='a b' echo hi > /tmp/f` under `{category: local_write}: ask`), and as main does (#884).
+A hop whose part does not lead its own command still keeps the host among that part's other
+targets only, as on main: a `$( )` in an argument (`X='a b' echo "$(ssh buildhost 'echo hi >
+/tmp/f')"`, `X='a b' read -t "$(ssh buildhost ..)"`), whose part is read with the line rather than
+behind the quoted word, and a hop after a part that outranks it (`rm -rf /srv/x; ssh buildhost
+'echo hi > /tmp/f'`) ask under that deny entry, where `X=ab` and the plain ssh line deny.
 
 A line with other targets binds its approval to the exact command, as an outward act does. Its
 rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of

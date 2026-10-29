@@ -3141,15 +3141,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   decided only as a part: `{category: local_write, target: host*}: deny` asked as code the gate cannot see, and a
   reserved `{category: local_write, target: host*}` entry lost its `(local_write, host)` hit, where the `X=ab`
   twin, whose remote command leads and is decided on each other target (#399), denied and listed it. Main asks
-  the line too, so nothing was lower than main. Each part read behind the quoted word (`_signed`) now has a copy
-  on each of its other targets among its own parts (`_on_other_targets`, a `_bare_copy` with no text, no parts
-  and no other targets), where no part with that category and target is there yet. So a deny or reserved entry
+  the line too, so nothing was lower than main. Each part read behind the quoted word (`_signed`), the late parts
+  a deferred value adds among them (`X='a b' declare -n r="x[\$(ssh host ..)]"; echo $r`, review 5697130727),
+  now has a copy on each of its other targets among its own parts (`_on_other_targets`, a `_bare_copy` with no
+  text, no parts and no other targets, whose summary names the host it lands on, so a reason that names it names
+  the host), where no part with that category and target is there yet. So a deny or reserved entry
   on the category and the host, and a rule on the two that denies (#191), meet it as they
   meet any part (D-075). The change only adds parts to the reading after the quoted word: main's reading, the
   line read as before #471 and every other reading stay as they were, so no decision is lower and `no_grant` is
-  unchanged. Limit, as for any part main's unknown program outranks: a rule that only asks reaches a part only
-  when it leads, so with `opaque_exec` allowed an `ask` rule on the category and the host, or on the host alone,
-  lets the line through where the `X=ab` twin asks, as main does (#884).
+  unchanged. Limits: a rule that only asks reaches a part only when it leads, as for any part main's unknown
+  program outranks, so with `opaque_exec` allowed an `ask` rule on the category and the host, or on the host
+  alone, lets the line through where the `X=ab` twin asks, as main does (#884). And a hop whose part does not lead
+  keeps the host among its other targets only, as on main: a `$( )` in an argument, which the line reads rather
+  than the command behind the quoted word (`X='a b' echo "$(ssh host 'echo hi > /tmp/f')"`, `X='a b' read -t
+  "$(ssh host ..)"`), and a hop after a part that outranks it (`rm -rf /srv/x; ssh host 'echo hi > /tmp/f'`) ask
+  under the deny entry, where the `X=ab` twin and the plain ssh line deny.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

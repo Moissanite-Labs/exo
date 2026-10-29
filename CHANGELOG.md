@@ -40,9 +40,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate: a rule or entry keyed on a category and an ssh or mosh host reaches the remote command behind a quoted
   prefix assignment. `X='a b' ssh host 'echo hi > /tmp/f'` asked as an unknown program under
   `{category: local_write, target: host*}: deny`, and a reserved entry on the two lost its `(local_write, host)`
-  hit, where `X=ab ssh host ..` denied and listed it. Each part read behind the quoted word now has a copy on the
-  hop's host among its parts, beside main's reading, so the line denies and lists the hit as its `X=ab` twin
-  does (#852, docs/GATE.md "Where a gh command lands", D-038 amendment).
+  hit, where `X=ab ssh host ..` denied and listed it. Each part read behind the quoted word, a part a deferred
+  value adds (`declare -n`) included, now has a copy on the hop's host among its parts, beside main's reading,
+  so the line denies and lists the hit as its `X=ab` twin does, and a reason that names the copy names the host
+  (#852, docs/GATE.md "Where a gh command lands", D-038 amendment). A hop part that does not lead, such as a
+  `$( )` in an argument or a hop after a delete, still keeps the host among its other targets only, as on main.
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting

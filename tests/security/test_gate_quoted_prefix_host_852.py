@@ -125,6 +125,40 @@ def test_the_user_and_host_as_written_are_reached_too(prefix, body, cat):
     assert d.outcome == "ask" and (cat, "user@host") in d.reserved, d
 
 
+# #887 review: a nameref whose subscript runs a hop is read when the name is used, after the command behind the
+# quoted word (ctx["late"]); that part is signed there too, and gets its copy on the host as the others do.
+DEFERRED = ['declare -n r="x[\\$(ssh host {body})]"; echo $r', 'typeset -n r="x[\\$(ssh host {body})]"; echo $r',
+            'declare -n r="x[\\$(ssh host {body})]"; r=1', 'declare -n r="x[\\$(ssh host {body})]"; echo "${{r}}"',
+            'declare -n r="x[\\$(ssh host {body})]"; : $((r))']
+
+
+def test_the_review_rows():
+    for prefix in ("X=ab", "X='a b'"):
+        c = classify(sh(f"{prefix} declare -n r=\"x[\\$(ssh host 'echo hi > /tmp/f')]\"; echo $r"))
+        d = decide(c, gates(deny=[{"category": "local_write", "target": "host*"}]))
+        assert (d.outcome, d.rule) == ("deny", "deny"), (prefix, d)      # edf9b2fb: X='a b' asked (opaque)
+
+
+@pytest.mark.parametrize("body, cat", FIX_BODIES)
+@pytest.mark.parametrize("form", DEFERRED)
+@pytest.mark.parametrize("prefix", ["X='a b'", "X='a b' Y='c d'", 'X="$Y"'])
+def test_a_part_read_later_behind_a_quoted_prefix_is_reached_too(prefix, form, body, cat):
+    c = classify(sh(f"{prefix} {form.format(body=body)}"))
+    pols = host_policies(cat)
+    assert decide(c, pols["rule"]).outcome == "deny", c
+    assert decide(c, pols["deny"]).outcome == "deny", c
+    d = decide(c, pols["reserved"])
+    assert d.outcome == "ask" and (cat, "host") in d.reserved, d
+
+
+@pytest.mark.parametrize("body, cat", FIX_BODIES + LEAD_BODIES)
+@pytest.mark.parametrize("hop", ["ssh host", "ssh -p 22 host", "mosh host"])
+def test_a_reason_that_names_the_copy_names_the_host(hop, body, cat):
+    # #887 review: the copy's summary says where it lands, as decide's reason does for a part that leads there
+    d = decide(classify(sh(f"X='a b' {hop} {body}")), host_policies(cat)["rule"])
+    assert d.outcome == "deny" and "host" in d.reason, d
+
+
 # --- (b) guard rows: main decides these as here ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("line", ["ssh host 'echo hi > /tmp/f'", "X=ab ssh host 'echo hi > /tmp/f'"])
@@ -170,16 +204,14 @@ def test_a_remote_command_that_leads_is_reached_as_on_main(prefix, hop, body, ca
     assert d.outcome == "ask" and (cat, "host") in d.reserved, d
 
 
-# --- (c) twin rows: a quoted prefix decides at least as strictly as its X=ab twin and as main's reading -------------
+# --- (c) twin rows: a quoted prefix decides at least as strictly as its X=ab twin -----------------------------------
 
 def _twin_check(line, twin_line, pols):
+    # decide() already folds the line read as before #471 (c.before) into d, so only the X=ab twin is compared here
     c, twin = classify(sh(line)), classify(sh(twin_line))
     assert no_grant(c) or not no_grant(twin), c
     for pol in pols:
-        d = decide(c, pol)
-        at_least(d, decide(twin, pol))
-        if c.before is not None:
-            at_least(d, decide(c.before, pol))         # main's reading: the quoted word the program
+        at_least(decide(c, pol), decide(twin, pol))
 
 
 @pytest.mark.parametrize("body, cat", FIX_BODIES + LEAD_BODIES)
@@ -194,3 +226,11 @@ def test_a_quoted_prefix_decides_at_least_as_its_plain_twin(prefix, hop, body, c
 @pytest.mark.parametrize("prefix", ["X='a b'", "X='a b' Y='c d'", 'X="$Y"'])
 def test_a_quoted_prefix_decides_at_least_as_its_plain_twin_under_the_built_in_policies(prefix, hop, body, cat):
     _twin_check(f"{prefix} {hop} {body}", f"X=ab {hop} {body}", BUILTIN.values())
+
+
+@pytest.mark.parametrize("body, cat", FIX_BODIES + LEAD_BODIES)
+@pytest.mark.parametrize("form", DEFERRED)
+@pytest.mark.parametrize("prefix", ["X='a b'", "X='a b' Y='c d'", 'X="$Y"'])
+def test_a_part_read_later_decides_at_least_as_its_plain_twin(prefix, form, body, cat):
+    line = form.format(body=body)
+    _twin_check(f"{prefix} {line}", f"X=ab {line}", twin_policies(cat).values())
