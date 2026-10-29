@@ -283,18 +283,33 @@ def test_guard_rows_decide_as_on_main(line, category, outcome, denied):
         assert c.also is None or line.startswith("coproc"), line
 
 
-# A known limit, not of the prefix: main a1dd4fec does not open a `coproc` compound right after `!`, `then` or `{`
-# (`! coproc for ..`, `if ..; then coproc for ..` ask as opaque_exec there and `deny: [store_write]` does not deny
-# them), so the reading without the prefix finds no loop here either. These decide as on main.
-@pytest.mark.parametrize("line", [
-    "! time coproc for i in 1 2; do " + LOOP + "; done",
-    "if true; then time coproc for i in 1 2; do " + LOOP + "; done; fi",
+# Once a known limit, not of the prefix: main a1dd4fec did not open a `coproc` compound right after `!`, `then` or
+# `{`, so the reading without the prefix found no loop behind `! time coproc` either (both rows asked as opaque_exec,
+# and `deny: [store_write]` did not deny them). #864 opens such a compound in a reading of its own, and the reading
+# without the prefix opens it too (`! time coproc for ..` is read there as `! coproc for ..`), so these are the #479
+# store loop, as their twin without the prefix is. Main's opaque_exec reading still leads on the tie.
+_CO = "coproc for i in 1 2; do " + LOOP + "; done"
+_CO_W = "coproc W { for i in 1 2; do " + LOOP + "; done; }"
+
+
+@pytest.mark.parametrize("line,twin", [
+    ("! time " + _CO, "! " + _CO),
+    ("if true; then time " + _CO + "; fi", "if true; then " + _CO + "; fi"),
+    ("time ! " + _CO, "! " + _CO),
+    ("! time ! " + _CO, "! ! " + _CO),
+    ("{ time " + _CO_W + "; }", "{ " + _CO_W + "; }"),
+    ("time -p ! " + _CO_W, "! " + _CO_W),
 ])
-def test_a_coproc_after_bang_or_then_is_a_known_limit(line):
+def test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened(line, twin):
     c = _bash(line)
     got = [(gate.decide(c, p).outcome, gate.decide(c, p).rule) for p in GUARD_POLICIES.values()]
-    assert (c.category, got) == ("opaque_exec", _OPAQUE), (line, c.category, got)
-    assert not _store_write(c), line
+    assert (c.category, got) == ("opaque_exec", _OPAQUE[:1] + [("deny", "deny"), ("deny", "rule"), ("deny", "rule"),
+                                                               ("ask", "opaque")]), (line, c.category, got)
+    assert _store_write(c) and gate.no_grant(c), line
+    assert "opaque_exec" in [r.category for r in gate.readings(c)], line        # main's reading stays
+    approvals = gate.normalize_approvals({"approvers": {"default": ["principal", "seat:lead"]}})
+    assert gate.call_approvers(c, approvals) == ["principal"], line
+    _check(line, twin, "store_write")
 
 
 # The hook: the store loop behind a prefix asks the principal, as its twin does, and permissions bypass keeps the

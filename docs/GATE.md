@@ -2007,7 +2007,9 @@ gate does not read:
   read, but a loop in it got no second reading (#479) and a text fed after its closer did not reach
   the commands inside it (#864). classify now also reads such a line with the compound opened,
   beside main's reading (`_late_reading`): decide keeps the strictest, and main's `opaque_exec`
-  reading still leads on the tie, as for `coproc for ..` after `;`.
+  reading still leads on the tie, as for `coproc for ..` after `;`. Behind a pipeline prefix
+  (`! time coproc for ..`, `if ..; then time coproc for ..`, `time ! coproc for ..`, `{ time coproc
+  W { for ..; }; }`), the reading without the prefix (#853, `_opened_reading`) opens it too.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
@@ -3046,9 +3048,12 @@ program, as before. Such a line costs about main's reading plus the reading with
 prefixed loops: 0.074 s against 0.021 s on main; the same loops without `time` take 0.042 s). Each of the two
 readings reads its own D-074 `ordinary` reading once, so a line that also writes the home's config.json costs
 about the same sum (20 such loops each with `echo x > ~/.exo/config.json`: 0.284 s against 0.058 s on main and
-0.234 s without `time`). Known limit: main does not open a `coproc` compound right after `!`, `then` or `{` (`!
-coproc for ..`, `if ..; then coproc for ..`, `{ coproc for ..; }`), so those loops have no second reading, with a
-prefix or without. The second reading is classify's:
+0.234 s without `time`). A `coproc` compound right after `!`, `then` or `{` behind such a prefix (`! time coproc
+for ..`, `if ..; then time coproc for ..`, `time ! coproc for ..`, `{ time coproc W { for ..; }; }`) is opened in
+the reading without the prefix as #864 opens it without one (see the `coproc` sentence above), so its store loop
+gets the second reading too and `deny: [store_write]` denies it; main 69e33d50 left those loops without a second
+reading. Main's reading, the reading without the prefix and #864's reading are kept side by side. The second
+reading is classify's:
 `classify_shell` alone reads the line once, as before. It has a budget: it may read afresh 64 lines more than the
 first reading did (each line, `$( )` body and nested line classify reads that it has not read in the same state).
 A nest of loops in `$( )`, each with a `cd` into the store (`while :; do echo $(while :; do ..; done); cp ..; cd

@@ -58,8 +58,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reading still leads on the tie. Main's reading stays, so nothing decides lower: main's `scripts/gate_diff.py`
   against b3efb5e7 lowers 0 of 1,165,736 built-in pairs (150 tightened on 18 actions) and 0 of 1,120,320 pairs
   on an aimed corpus of 9,336 coproc and function lines under 120 policies (9,398 tightened on 609 actions). Such
-  a line costs about two readings (200 `! coproc { :; }` parts 0.085 s, main 0.042 s). Tests:
-  `tests/security/test_gate_coproc_open_864.py`, `plugins/exo-gate/tests/test_bypass.py`. **Docs:**
+  a line costs about two readings (200 `! coproc { :; }` parts 0.085 s, main 0.042 s). With #853's reading
+  without the prefix, the same compound behind `time` opens too (`! time coproc for ..`, `if ..; then time
+  coproc for ..`, `time ! coproc for ..`, `{ time coproc W { for ..; }; }`), so its store loop is denied by
+  `deny: [store_write]` as well; #853's known-limit test for those rows is now a fix test. Tests:
+  `tests/security/test_gate_coproc_open_864.py`, `tests/security/test_gate_pipeline_prefix_853.py`,
+  `plugins/exo-gate/tests/test_bypass.py`. **Docs:**
   `docs/GATE.md` ("Shell commands: an allowlist", "The store is credentials (D-038)"), `DECISIONS.md` (D-038
   amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 

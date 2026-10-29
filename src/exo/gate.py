@@ -6513,8 +6513,9 @@ _late_open: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_late
 def _late_loop_word(k: _Cmd) -> int:
     """#864: where the loop word is in k behind reserved words, a `coproc` or `function`, its NAME and the reserved
     words after it (`! coproc for`, `then coproc N { while`, `function f { for`), as _parse_line opens it with
-    _late_open on (`coproc { coproc { for` too); or -1. A quoted word ends the search; a NAME is one word that is not a
-    reserved word."""
+    _late_open on (`coproc { coproc { for` too); or -1. A quoted word ends the search, except as the NAME: a NAME is
+    one word that is not a reserved word, quoted or not (`! coproc 'W' for` finds the loop, as _parse_line opens it;
+    reading on is the stricter side)."""
     words, i = k.words, 0
     while i < len(words) and not words[i].quoted:
         text = words[i].text
@@ -8578,7 +8579,9 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
         _timed.reset(t_timed)
     if timed[0] and not _opening.get() and not _config_off.get():
         c = _opened_reading(c, action, cwd)
-    # Inside #853's opened reading the compounds behind a coproc are open already (_parse_line), so no third reading.
+    # On a line that sets both marks the opened reading above opens every compound this one does (_parse_line's
+    # `late`); this reading stays as defence in depth (test_a_line_with_both_marks_reads_the_coproc_loop_either_way).
+    # The only nested classify, D-074's ordinary reading, runs under _config_off, so `_opening` is a cheap guard only.
     if met[0] and not _late_open.get() and not _opening.get() and not _config_off.get():
         c = _late_reading(c, action, cwd)
     return c

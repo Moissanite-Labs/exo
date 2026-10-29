@@ -245,6 +245,36 @@ def test_a_line_main_opens_is_read_once():
         assert _bash(line).also is None, line
 
 
+# A line that sets #853's prefix mark (`time {`) and #864's mark (`! coproc for`) in separate parts. The prefixed
+# group comes first: main's reading of the loop followed by `time { :; }` already holds a store_write part.
+BOTH = "time { :; }; ! coproc for i in 1 2; do " + LOOP + "; done"
+
+
+def test_a_line_with_both_marks_reads_the_coproc_loop_either_way(monkeypatch):
+    # classify reads it three times: main's reading, #853's opened reading and #864's late reading, in that order.
+    # The opened reading opens the coproc compound too (_parse_line's `late`), so either second reading alone finds
+    # the store loop: the late reading is defence in depth on such a line, and main's reading alone asks.
+    calls = []
+    real = {name: getattr(gate, name) for name in ("_opened_reading", "_late_reading")}
+
+    def counted(name):
+        def reading(c, *a):
+            calls.append(name)
+            return real[name](c, *a)
+        return reading
+    for name in real:
+        monkeypatch.setattr(gate, name, counted(name))
+    c = _bash(BOTH)
+    assert calls == ["_opened_reading", "_late_reading"], calls
+    assert _store_write(c) and gate.no_grant(c) and gate.decide(c, DENY).outcome == "deny"
+    for off in [("_late_reading",), ("_opened_reading",), ("_opened_reading", "_late_reading")]:
+        for name in real:
+            monkeypatch.setattr(gate, name, (lambda c, *a: c) if name in off else real[name])
+        c = _bash(BOTH)
+        got = (_store_write(c), gate.decide(c, DENY).outcome)
+        assert got == ((False, "ask") if len(off) == 2 else (True, "deny")), (off, got)
+
+
 def _nested(n):
     line = ":"
     for _ in range(n):
