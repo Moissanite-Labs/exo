@@ -825,3 +825,20 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-rename-editor label { display: flex; flex-direction: column; gap: 4px; }
 .xc-rename-editor input { min-width: 0; width: 100%; box-sizing: border-box; }
 .xc-rename-error { color: var(--fg-2); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Searchable model routes: full route remains visible even when names overlap. */
+.xc-search-model-picker { width: 100%; min-width: 0; display: grid; gap: 8px; }
+.xc-search-model-picker label { display: grid; gap: 6px; }
+.xc-model-options { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); }
+.xc-model-options:empty { display: none; }
+.xc-model-option { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.xc-model-option.active { background: var(--bg-3); outline: 1px solid currentColor; outline-offset: -1px; }
+/* A lighter cue for the hovered row: Enter applies the highlighted one, so the two must not look alike (review 5692174329). */
+.xc-model-option:hover:not(.active) { background: var(--bg-2); }
+.xc-model-name { font-weight: 600; }
+.xc-model-route { font: 12px var(--xc-mono); opacity: .8; overflow-wrap: anywhere; }
+.xc-model-status, .xc-model-note { margin: 0; font-size: 12px; opacity: .8; }
+.xc-prov-def > .xc-search-model-picker { flex: 1; }
+
+.xc-model-current { margin-left: 8px; font-size: 10px; font-weight: 400; text-transform: uppercase; opacity: .7; }
+.xc-model-tag { margin-left: 8px; font-size: 10px; text-transform: uppercase; opacity: .55; }

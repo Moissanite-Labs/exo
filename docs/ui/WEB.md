@@ -257,7 +257,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   core's principal-only `models.set` for that thread). `/default <ref>` and `/model default <ref>` save the default
   through `POST /api/providers/default`, which answers a loopback page only (D-034): on a page opened at another
   address the note says so, and `/model` still works. Without a reference either one opens a picker under the box,
-  filled from `GET /api/chat/models` (`models.list`); a later `/model` or `/default` replaces a list still loading,
+  filled from `GET /api/chat/models` (`models.list`); it is a search box, not a list you scroll (D-094). Typing
+  narrows the rows and never changes the model; only Enter, a row click or "Use model" applies the exact route of
+  the highlighted row. Search terms match the route and the model name, and an exact route match sorts first. A
+  later `/model` or `/default` replaces a list still loading, and a superseded load is dropped rather than drawn.
   Esc or Cancel closes it, and choosing returns focus to the box. While a change is in flight the box sends nothing.
   A failed change keeps the line in the box. A `bad_model` or `bad_request` core error is a 400, not a 502, on every
   route of `api.py`'s table (chat, tasks, schedule, feedback), so a bad model reference is the caller's mistake (#146).
@@ -325,7 +328,10 @@ The Providers tab (`providers.js`) shows where keys are stored, one row per prov
 installed), the source of the key (never a value), the model count and a default mark. A provider that needs a
 key has a password field with Save, Test and Remove. After Save the field is cleared at once, also on error;
 the key is read once to build the request body and is never logged, shown again, put in a URL or kept in
-browser storage. A select lists the configured routes, then the available ones, with Save default. The routes
+browser storage. A search box lists the configured routes first, then the routes no role uses yet behind an
+`available` tag, with Save default. Typing only narrows the rows; Enter, a row click or Save default applies the
+exact route of the highlighted row (D-094). The whole section is built once per visit and updated in place, so a
+save, a provider Test reply or a background refresh never clears what is typed or moves the cursor. The routes
 need the page token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this
 tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
 routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider

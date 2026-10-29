@@ -3,6 +3,7 @@
 // A key value only ever lives in the password field. It is read once to build the request body, the field is
 // cleared at once (also on error), and it is never logged, stored, put in a URL, or shown again.
 import { h, api, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
+import { createModelPicker } from "./model_picker.js";
 
 const STORE_TEXT = {
   keychain: "the macOS Keychain",
@@ -34,35 +35,56 @@ export function mount(root) {
     return () => { alive = false; };
   }
 
+  // One picker for the whole visit. A redraw must not throw away a search, an arrow-key position or the
+  // focus, so the section holding it is built once and only its notes are rewritten in place.
+  const defNote = h("div");
+  const defRetry = h("div");
+  const defRes = h("div");
+  const chosen = createModelPicker({ label: "Default model", rows: null, selected: "", applyLabel: "Save default",
+    note: "The route the main role calls first.", onApply: saveDefault });
+  const defSection = h("section", { class: "xc-prov-def", "aria-label": "Default model" },
+    h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
+    chosen.element, defNote, defRetry, defRes);
+  const rowsRegion = h("div", { class: "xc-prov-rows" });
+  body.replaceChildren(rowsRegion, defSection);
+
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
-  let data = null, models = null, modelsError = null, err = "", picked = "";
+  let data = null, models = null, modelsError = null, err = "", picked = "", savingDefault = false, loadGeneration = 0;
 
   // D-091: a failed model list says which failure it was. A transport failure can be retried; an authority
   // refusal cannot, so it gets no button. A failed retry keeps the last good list, so the picker stays usable.
-  async function loadModels() {
+  // A load that a newer one superseded is dropped, so a slow first answer cannot overwrite a newer list.
+  async function loadModels(generation) {
+    let nextModels = models, nextError = null;
     try {
       const d = await api("GET", "/api/providers/models");
-      if (d && d.error) modelsError = { text: d.error, cls: d.error_class || "other", retryable: d.retryable !== false };
-      else { models = d; modelsError = null; }
+      if (d && d.error) nextError = { text: d.error, cls: d.error_class || "other", retryable: d.retryable !== false };
+      else { nextModels = d; nextError = null; }
     } catch (e) {
-      modelsError = { text: e.message || "The model list could not be read.", cls: "other", retryable: true };
+      nextError = { text: e.message || "The model list could not be read.", cls: "other", retryable: true };
     }
+    if (!alive || generation !== loadGeneration) return;
+    models = nextModels; modelsError = nextError;
   }
 
   async function load() {
+    const generation = ++loadGeneration;
     try {
-      data = await api("GET", "/api/providers");
+      const next = await api("GET", "/api/providers");
+      if (!alive || generation !== loadGeneration) return;
+      data = next;
       err = "";
-    } catch (e) { err = e.message; }
-    await loadModels();
-    if (alive) draw();
+      await loadModels(generation);
+    } catch (e) { if (generation === loadGeneration) err = e.message; }
+    if (alive && generation === loadGeneration) draw();
   }
 
   async function retryModels() {
-    modelsError = null;
+    const generation = ++loadGeneration;
+    modelsError = null;   // the list stays while the retry runs, so the picker does not empty out
     if (alive) draw();
-    await loadModels();
-    if (alive) draw();
+    await loadModels(generation);
+    if (alive && generation === loadGeneration) draw();
   }
 
   function show(name, text, cls) { results[name] = { text, cls }; if (alive) draw(); }
@@ -126,53 +148,88 @@ export function mount(root) {
     return h("div", { class: "xc-prow" + (r.default ? " def" : ""), role: "listitem" }, kids);
   }
 
-  async function saveDefault() {
+  // One default change at a time: the picker waits for the answer, so a second Enter is not a second POST.
+  async function saveDefault(ref) {
+    if (!alive || savingDefault) return "";
+    savingDefault = true;
     try {
-      const d = await api("POST", "/api/providers/default", { ref: picked, role: "main" });
-      show("_default", "Default set to " + picked + (d.applied ? "." : ". Saved; the core will use it on next start."), "ok");
-    } catch (e) { show("_default", e.message, "bad"); }
-    if (alive) load();
+      const d = await api("POST", "/api/providers/default", { ref, role: "main" });
+      if (!alive) return "";
+      picked = ref;
+      // "next start" is a real answer, not a falsy one: the core took the change but still runs the old route.
+      results._default = { text: "Default set to " + ref + ((d.applied === true || d.applied === "now") ? "." : ". Saved; the core will use it on next start."), cls: "ok" };
+    } catch (e) {
+      if (!alive) return "";
+      results._default = { text: e.message, cls: "bad" };
+      throw e;   // the picker shows it beside the field it came from
+    } finally { savingDefault = false; }
+    // Let the picker finish and restore focus before a background refresh.
+    setTimeout(() => { if (alive) load(); }, 0);
+    return results._default.text;
   }
 
-  function picker() {
-    const routes = [];
-    for (const m of (models && models.models) || []) if (m.route && !routes.includes(m.route)) routes.push(m.route);
-    const more = [];
-    for (const m of (models && models.available) || []) if (m.route && !routes.includes(m.route) && !more.includes(m.route)) more.push(m.route);
-    if (!routes.length && !more.length) {
-      if (!modelsError) return null;
-      return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
-        h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"),
-          h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
-        h("div", { class: "xc-warn", role: "status" }, modelsError.text),
-        modelsError.retryable ? h("div", { class: "xc-prov-def-act" },
-          h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again")) : null);
+  // The route the "Current" mark names: the one this visit saved, else the route of the provider holding the
+  // default. Without the second half the mark never appears here, because nothing on this page has picked yet.
+  function currentRoute() {
+    if (picked) return picked;
+    const def = data && (data.providers || []).find((r) => r.default);
+    if (!def) return "";
+    // A row names the provider by id, an entry in the model list names it the way its config shows it:
+    // "anthropic" against "Anthropic". Compare the words, not the spelling.
+    const words = [def.provider, def.name, def.id].filter(Boolean).map((x) => String(x).toLowerCase());
+    const hit = (models.models || []).find((m) => m.route && m.provider && words.includes(String(m.provider).toLowerCase()));
+    return hit ? hit.route : "";
+  }
+
+  // The models object the picker was last given. Handing it the same list again would reset the row the
+  // arrow keys are on, so a redraw that changed nothing leaves the picker alone. The selection is part of
+  // "nothing changed": a save can move the mark while the list stays the same.
+  let pickerSyncedToList, pickerSyncedToRoute;
+  function syncPicker() {
+    const cur = currentRoute();
+    if (models === pickerSyncedToList && cur === pickerSyncedToRoute) return;
+    if (!models && !modelsError) return;   // still loading: the picker already says so
+    pickerSyncedToList = models; pickerSyncedToRoute = cur;
+    if (!models) {
+      // With nothing to pick from, the reason goes where the list would be.
+      chosen.setError(modelsError.text + (modelsError.retryable ? "" : " Reopen this tab after the core restarts."));
+      return;
     }
-    if (!picked) picked = routes[0] || more[0];
-    const opt = (v) => h("option", { value: v, selected: v === picked }, v);
-    const sel = h("select", { class: "xc-field", "aria-label": "Default model", onchange: (e) => { picked = e.target.value; } },
-      routes.length ? h("optgroup", { label: "configured" }, routes.map(opt)) : null,
-      more.length ? h("optgroup", { label: "available" }, more.map(opt)) : null);
+    // A searchable list, since routes that share a model name (several providers, one model) are the normal case.
+    chosen.setSelected(cur);
+    chosen.setRows([
+      ...(models.models || []).map(m => ({ ...m, group: "configured" })),
+      ...(models.available || []).map(m => ({ ...m, group: "available" })),
+    ]);
+  }
+
+  // The default-model section is rewritten in place, never replaced: that is what keeps a typed search and
+  // the focus inside it alive across the refresh that follows a save.
+  function syncDefaultSection() {
+    syncPicker();
+    // The list stays usable, so the failure is a note above it. A refusal cannot be retried, so it says what can
+    // be done instead: the core has to come back before this page can read a list again.
+    defNote.replaceChildren(...(modelsError && models
+      ? [h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read." +
+          (modelsError.retryable ? "" : " Reopen this tab after the core restarts."))] : []));
+    defRetry.replaceChildren(...(modelsError && modelsError.retryable
+      ? [h("div", { class: "xc-prov-def-act" }, h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again"))] : []));
     const res = results._default;
-    return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
-      h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
-      h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
-      modelsError ? h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.") : null,
-      res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
+    defRes.replaceChildren(...(res ? [h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text)] : []));
   }
 
   function draw() {
-    if (err) { body.replaceChildren(errorBox(err)); return; }
-    if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
-    const rows = data.providers || [];
+    syncDefaultSection();
     const active = document.activeElement;
-    const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
-    if (keep) return;   // never redraw while a key is being typed
+    if (active && active.tagName === "INPUT" && active.type === "password" && active.value) return;   // never redraw while a key is being typed
+    if (err) { rowsRegion.replaceChildren(errorBox(err)); return; }
+    if (!data) { rowsRegion.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
+    const rows = data.providers || [];
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
     counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
       ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
-    body.replaceChildren(...[
+    rowsRegion.replaceChildren(...[
       h("p", { class: "xc-prov-lead" }, h("span", { class: "xc-led", "data-s": "known", "aria-hidden": "true" }),
         "Keys are stored in " + (STORE_TEXT[data.store] || data.store || "the local store") +
         ". They are sent to this local server once, never shown again, and never kept in the browser."),
@@ -180,8 +237,7 @@ export function mount(root) {
       rows.length ? h("div", { class: "xc-prov-list", role: "list" }, rows.map(row)) : emptyState({ k: "No providers",
         title: "This core knows no model provider yet.",
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
-        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
-      picker()].filter(Boolean));
+        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." })].filter(Boolean));
   }
 
   draw();
