@@ -2955,7 +2955,26 @@ principal alone when nothing denies it. Under `sudo` or `doas` over `ssh` or `mo
 is the dominant part, and a costly copy of each reversible part the wrapper runs is added beside it
 (#320), so a rule on `shell` or `local_write` with `reversibility: costly`, or a matrix that denies
 that cell, still denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` and `sudo ssh host
-'cp evil.py ~/.exo/plugins/foo/__init__.py'`. `deny: [store_write]` is the reliable way to refuse
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. A command beside the store write keeps its own
+deny too. The store write leads such a line, so a rule keyed on `command` that would lift another
+command's deny there must pass the own text test of the whole line (#547), as it must on a line the
+store write does not lead (#394): it names the command that writes or sends the store file, each
+command that would get a stricter outcome alone than the rule gives, and each command that changes
+the shell for the rest. Under a matrix that denies the irreversible cells, an allow rule
+on `'^git push'` therefore no longer lifts the push's deny in `git push --force origin main && gh gist
+create ~/.exo/plugins/foo/__init__.py`, nor with an `aws s3 cp` or `gh issue create -F` send of the
+file, or of any other store file, after the push; before #547 those lines asked the principal (an
+`rm` or `curl -T` of the file after the push was already denied, by that part's own cell). One
+rule that names both the push and the send lifts the push's deny as before, and the line still asks
+the principal alone. Separate rules do not combine: under one allow rule on `'^git push'` and
+another on `'^gh gist create'`, each is tested on its own, neither names the whole line, and the
+push-first store line is denied (`store_write deny matrix`; before #547 it asked at the floor), as
+#394 already decides the same push beside a plain file. The gate runs the whole line test once per
+rule on a line, not once per part, so a long store line stays linear in its parts. A rule that
+fails the test is still passed over at each part that a later rule lifts, so the pass grows with
+the parts times the rules ahead of the one that lifts: on 3,000 `git push` parts followed by a store
+send, with 0, 19 or 99 push rules ahead of one rule that names every command, `decide` takes 0.06,
+0.28 and 0.96 s of CPU (main a1dd4fec: 0.05, 0.10 and 0.12 s). `deny: [store_write]` is the reliable way to refuse
 every write into the folder. A `target:` entry matches the path only as the call spells it:
 `target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
 absolute path and `~/.exo/../.exo/plugins/...` still only ask.
@@ -3157,12 +3176,15 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 A loop body runs again after its own `cd` (#479, #480): in `for i in 1 2; do cp /tmp/evil gates.yaml;
 cd ~/.exo/policies; done` the `cp` rewrites the policy file on the second pass. When a `for`, `select`, `while`
 or `until` body (a `coproc` one too), nested loops and the loop's condition included, holds a `cd` or `pushd`
-into the store or a descriptor folder after its first command, the call is read a second time with that folder
-entered where the outermost such loop starts (named by the loop's first descriptor `cd`, if any), and the
+into the store or a descriptor folder, the call is read a second time with that folder
+entered where the outermost such loop starts (named by the loop's first descriptor `cd` after its first command,
+or by a leading condition `cd` when the loop holds no other store `cd`), and the
 commands and substitutions of the loop on that reading are parts of a second reading beside the first
 (`gate.readings`). That reading leads when it is more severe, so the issue's rows are `store_write`: they ask,
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no
-line decides lower than it did. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
+line decides lower than it did. The loop's first command counts too (#857): for `while` and `until` it is the
+condition's, which runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1;
+done` the `cp` runs in the store from the second pass and the line is a `store_write`. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
 in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++))
 { ..; }`) and runs it once per pass in the same shell, so such a loop is read again as a `do ..; done` one is; a
 `{ ..; }` group that is no loop's body runs once and is not. A `for ((..))` header is found from its own `((..))`
@@ -3180,10 +3202,32 @@ bash expands a `for` or `select` word list and the redirections of the loop's `d
 first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd ~/.exo/policies; done` is
 read as before). A command before the loop runs once and keeps its folder too. A function the loop calls is not
 followed into, but its call is a command in the store on that reading, which asks and is denied by `deny:
-[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). Known limit: a loop
-behind `time` (`time for ..`) is not read as a compound, as on main, so it has no second reading. Such a line asks
-(`opaque_exec`), but `deny: [store_write]` does not deny it, a seat the approvers name may answer it, and under
-permissions bypass the exo-gate hook auto-allows it, all as on main f28934a3. The second reading is classify's:
+[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A compound behind
+bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading. bash takes
+`time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`, `time
+time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
+`do`, `then`, `else`, `elif`, `if`, `while`, `until` or a case pattern's `)`, never after `|` or `|&`), and runs
+the compound after them
+(`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f { ..; }` definition,
+whose body runs when `f` is called) as without them. `_parse` reads `time` as a program with options, so that
+compound was the program's argv: `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` asked
+as `opaque_exec`, `deny: [store_write]` did not deny it and bypass auto-allowed it, on main a1dd4fec too, and
+`time { rm -rf /srv/data; }` was no delete; main read a `function` definition behind `time` or `!` alone, but
+`time ! function f { rm -rf /srv/data; }; f` was no delete. When a line holds such a `time` before a compound,
+classify reads the call again with those `time`, `-p` and `--` words left out (`_opened_reading`, with
+budgets and memos of its own) and keeps that reading beside main's, as the second reading above is kept: the
+loop is a `store_write` that `deny: [store_write]` denies and bypass keeps at its floor, the group a delete, and
+`time { ls; }` still asks as `opaque_exec`, since `decide` keeps the strictest. Lines bash rejects (`bash -n`)
+run nothing and decide as on main: a simple command or an assignment before a compound (`nohup for ..`, `command
+for ..`, `env X=1 while ..`, `sudo -n while ..`, `X=1 time for ..`), `time -p -p for ..`, `time -- -p for ..`,
+`!for ..` and `time` or `!` after `|`. A quoted `'time'` or `\time`, and `time -o f` (GNU time's options), are a
+program, as before. Such a line costs about main's reading plus the reading without the prefixes (a line of 20
+prefixed loops: 0.074 s against 0.021 s on main; the same loops without `time` take 0.042 s). Each of the two
+readings reads its own D-074 `ordinary` reading once, so a line that also writes the home's config.json costs
+about the same sum (20 such loops each with `echo x > ~/.exo/config.json`: 0.284 s against 0.058 s on main and
+0.234 s without `time`). Known limit: main does not open a `coproc` compound right after `!`, `then` or `{` (`!
+coproc for ..`, `if ..; then coproc for ..`, `{ coproc for ..; }`), so those loops have no second reading, with a
+prefix or without. The second reading is classify's:
 `classify_shell` alone reads the line once, as before. It has a budget: it may read afresh 64 lines more than the
 first reading did (each line, `$( )` body and nested line classify reads that it has not read in the same state).
 A nest of loops in `$( )`, each with a `cd` into the store (`while :; do echo $(while :; do ..; done); cp ..; cd
