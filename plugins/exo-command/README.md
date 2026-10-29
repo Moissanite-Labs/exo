@@ -94,7 +94,8 @@ pending. No requests go to the project site. See [the implementation notes](../.
   keeps its line breaks. A panel whose data is missing or odd shows its `text`. The page sends `ui.respond`
   for opened, dismissed and acted (a choice or a taste verdict).
 - **Tasks:** `tasks.list`, kept current by `task.updated`.
-- **Schedule:** `schedule.edit` list, add, pause, resume, run now, remove.
+- **Schedule:** `schedule.edit` list, add, pause, resume, run now, remove. Remove has no undo, so it waits for a
+  separate Confirm remove click.
 
 The server relays the protocol, it adds no state of its own beyond a ring of the last 3000 events and the
 list of open panels. When a resume cursor falls outside that ring, SSE signals the gap, replays the

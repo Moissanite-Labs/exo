@@ -6,6 +6,7 @@ This checks a signed prefix. It cannot establish that a supplied checkpoint is c
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import sqlite3
 from pathlib import Path
@@ -45,8 +46,8 @@ def verify_copy(ledger_path, identity, checkpoints):
         db.close()
 
 
-def _verify_authority_once(ledger_path, authority, reader=None):
-    """Inspect a copy against a captured authenticated service head, without repair.
+def capture_authority(authority):
+    """Capture an immutable authenticated checkpoint chain before opening a local snapshot.
 
     The live signer is queried, but this is not an independently fresh witness
     receipt. The prefix result intentionally retains ``fresh: false``.
@@ -69,15 +70,56 @@ def _verify_authority_once(ledger_path, authority, reader=None):
             checkpoints.append(previous)
     if canonical(previous) != canonical(latest):
         raise AuthorityError("checkpoint replay differs from captured authority head")
-    result = verify_projection(reader, identity, checkpoints) if reader is not None else verify_copy(ledger_path, identity, checkpoints)
-    return result, latest
+    if canonical(authority.identity) != canonical(identity):
+        raise AuthorityUnavailable("authority identity changed during capture")
+    return CapturedAuthority(canonical(identity), tuple(canonical(cp) for cp in checkpoints))
 
 
-def verify_authority(ledger_path, authority, *, reader=None):
+@dataclass(frozen=True)
+class CapturedAuthority:
+    """Immutable authenticated evidence, captured BEFORE opening the local snapshot.
+
+    A later local snapshot may contain a newer tail. It is excluded from both verification
+    and scoring until a subsequent capture confirms it; this is a prefix, never freshness.
+    """
+    identity: bytes
+    checkpoints: tuple[bytes, ...]
+
+    @property
+    def seq(self):
+        return json.loads(self.checkpoints[-1])["seq"]
+
+    def events(self, reader):
+        limit = self.seq
+        for event in reader.iter():
+            if event["seq"] > limit:
+                break
+            yield event
+
+    def verify(self, reader):
+        if self.seq == 0 and reader.head().seq > 0:
+            # No nonempty authenticated prefix binds this local copy yet. A first
+            # append may have raced capture, or this may be an unrelated projection.
+            return {"ok": False, "state": "unconfirmed_tail", "local_seq": reader.head().seq,
+                    "authority_seq": 0, "fresh": False}
+        captured = self
+        class Prefix:
+            def iter(self):
+                return captured.events(reader)
+        return verify_projection(Prefix(), json.loads(self.identity), [json.loads(cp) for cp in self.checkpoints])
+
+
+def _verify_authority_once(ledger_path, authority):
+    captured = capture_authority(authority)
+    checkpoints = [json.loads(cp) for cp in captured.checkpoints]
+    return verify_copy(ledger_path, json.loads(captured.identity), checkpoints), checkpoints[-1]
+
+
+def verify_authority(ledger_path, authority):
     # If another append commits while replay/copy inspection is in progress, a
     # newer local copy must not be called divergent from the older captured head.
     for _ in range(3):
-        result, captured = _verify_authority_once(ledger_path, authority, reader)
+        result, captured = _verify_authority_once(ledger_path, authority)
         after = authority.head()
         verify_checkpoint(authority.identity, after)
         if canonical(after) == canonical(captured):

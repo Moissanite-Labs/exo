@@ -425,3 +425,12 @@ ledger (see "Private threads").
   threads hidden), `/new private` starts a private thread. Context notes are not shown in the
   transcript.
 - `/context` and `/compact` (above); both also report principal capture (D-032). Commands stay at 30.
+
+
+### Fork-copy lookup index (#450)
+
+A fork copy keeps its original log position in a derived SQLite `copy_pos` column and index. Context lookup
+compares those integers instead of parsing every copied message JSON on each model call. Existing databases
+backfill the derived column once when it is added. Signed message data and log hashes stay byte-for-byte intact.
+Only copies tagged `meta.local = fork` receive the derived position; visibility, private-thread and undo rules
+remain the same.

@@ -325,7 +325,8 @@ def test_authority_verifies_exact_snapshot_and_cache_binds_its_identity(store_ri
     other = authority_fixture(root.parent / 'other-authority.sqlite', 'authority-b')
     monkeypatch.setattr(module, 'open_authority', lambda path: other)
     result = asyncio.run(service.read())
-    assert result['state'] == 'unverified' and result['personal']['xp'] is None and not result['stale']
+    assert result['state'] == 'unavailable' and result['verification']['reason'] == 'ledger_busy'
+    assert result['personal']['xp'] is None and not result['stale']
     # A configured backend that cannot authenticate its identity never falls back to legacy keys or old XP.
     def unavailable(path):
         raise RuntimeError('a backend failure must not leak this text or a path')
@@ -388,3 +389,162 @@ def test_configuration_change_while_reading_never_returns_old_principal_growth(s
         result = await first
         assert result['personal']['xp'] is None
     asyncio.run(asyncio.wait_for(scenario(), 10))
+
+
+def test_legacy_append_after_snapshot_is_not_false_tamper(store_rig, monkeypatch):
+    """An independent writer process commits after the reader has pinned its snapshot."""
+    import subprocess
+    import sys
+    engine, root, signer, _ = store_rig
+    signed_turn(root, signer)
+    key = root / "writer.key"
+    crypto.save_key(signer.key, key)
+    original = Ledger.read_only
+    def interleave(path):
+        reader = original(path)
+        try:
+            subprocess.run([sys.executable, "-c", "from exo.ledger import Ledger; from exo.crypto import Signer; import sys; "
+                            "l=Ledger(sys.argv[1],Signer.from_file('agent',sys.argv[2])); "
+                            "l.append('answer',{'text':'synthetic'},'principal'); l.close()", str(path), str(key)], check=True)
+        except BaseException:
+            reader.close(); raise
+        return reader
+    monkeypatch.setattr(Ledger, "read_only", interleave)
+    service = PetStatus(engine)
+    result = asyncio.run(service.read())
+    assert result["state"] == "ready" and result["personal"]["xp"] == 10
+    monkeypatch.setattr(Ledger, "read_only", original)
+    assert asyncio.run(service.read())["personal"]["xp"] == 16
+
+
+def test_legacy_capture_before_snapshot_accepts_newer_intact_rows(store_rig, monkeypatch):
+    engine, root, signer, _ = store_rig
+    signed_turn(root, signer)
+    original = Ledger._read_anchor
+    once = []
+    def interleave(path):
+        anchor = original(path)
+        if not once:
+            once.append(True)
+            with Ledger(root / "ledger.sqlite", signer) as writer:
+                writer.append("answer", {"text": "synthetic"}, "principal")
+        return anchor
+    monkeypatch.setattr(Ledger, "_read_anchor", staticmethod(interleave))
+    result = asyncio.run(PetStatus(engine).read())
+    assert result["state"] == "ready" and result["personal"]["xp"] == 16
+
+
+def test_authority_capture_excludes_newer_tail_then_next_read_confirms_it(store_rig, monkeypatch):
+    import exo.pet.status as module
+    engine, root, _, _ = store_rig
+    authority = authority_fixture(root.parent / "authority.sqlite", "authority-a")
+    with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as writer:
+        writer.append("answer", {"text": "synthetic"}, "principal")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(module, "open_authority", lambda path: authority)
+    original = module.capture_authority
+    once = []
+    def interleave(a):
+        captured = original(a)
+        if not once:
+            once.append(True)
+            with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as other:
+                other.append("answer", {"text": "newer"}, "principal")
+        return captured
+    monkeypatch.setattr(module, "capture_authority", interleave)
+    service = PetStatus(engine)
+    first = asyncio.run(service.read())
+    assert first["state"] == "ready" and first["personal"]["xp"] == 6
+    assert first["verification"]["checked"] == 1 and first["verification"]["fresh"] is False
+    second = asyncio.run(service.read())
+    assert second["personal"]["xp"] == 12 and second["verification"]["checked"] == 2
+
+
+def test_authority_append_after_local_snapshot_preserves_verified_prefix(store_rig, monkeypatch):
+    import exo.pet.status as module
+    engine, root, _, _ = store_rig
+    authority = authority_fixture(root.parent / "authority.sqlite", "authority-a")
+    with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as writer:
+        writer.append("answer", {"text": "synthetic"}, "principal")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(module, "open_authority", lambda path: authority)
+    original = Ledger.read_only
+    def interleave(path):
+        reader = original(path)
+        try:
+            with Ledger(path, authority=authority, authority_author="memory") as other:
+                other.append("answer", {"text": "newer"}, "principal")
+        except BaseException:
+            reader.close(); raise
+        return reader
+    monkeypatch.setattr(Ledger, "read_only", interleave)
+    result = asyncio.run(PetStatus(engine).read())
+    assert result["state"] == "ready" and result["personal"]["xp"] == 6
+
+
+def test_authority_real_missing_tail_still_rejected(store_rig, monkeypatch):
+    import exo.pet.status as module
+    engine, root, _, _ = store_rig
+    authority = authority_fixture(root.parent / "authority.sqlite", "authority-a")
+    with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as writer:
+        writer.append("answer", {"text": "synthetic"}, "principal")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(module, "open_authority", lambda path: authority)
+    service = PetStatus(engine)
+    assert asyncio.run(service.read())["personal"]["xp"] == 6
+    db = sqlite3.connect(root / "ledger.sqlite")
+    trigger = db.execute("SELECT sql FROM sqlite_master WHERE name='events_no_delete'").fetchone()[0]
+    db.execute("DROP TRIGGER events_no_delete"); db.execute("DELETE FROM events")
+    db.execute(trigger); db.commit(); db.close()
+    result = asyncio.run(service.read())
+    assert result["state"] == "unverified" and result["stale"] and result["personal"]["xp"] == 6
+    assert asyncio.run(PetStatus(engine).read())["personal"]["xp"] is None
+
+
+def test_authority_advances_during_capture_without_false_integrity(store_rig, monkeypatch):
+    import exo.pet.status as module
+    engine, root, _, _ = store_rig
+    authority = authority_fixture(root.parent / "authority.sqlite", "authority-a")
+    with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as writer:
+        writer.append("answer", {"text": "original"}, "principal")
+    original = authority.read_since
+    once = []
+    def read_and_append(seq, limit):
+        records = original(seq, limit)
+        if not once:
+            once.append(True)
+            with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as other:
+                other.append("answer", {"text": "newer"}, "principal")
+        return records
+    monkeypatch.setattr(authority, "read_since", read_and_append)
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(module, "open_authority", lambda path: authority)
+    result = asyncio.run(PetStatus(engine).read())
+    assert result["state"] == "ready" and result["verification"]["checked"] == 1
+    assert result["personal"]["xp"] == 6
+
+
+def test_authority_first_append_after_genesis_capture_is_busy_not_empty_or_tampered(store_rig, monkeypatch):
+    import exo.pet.status as module
+    engine, root, _, _ = store_rig
+    authority = authority_fixture(root.parent / "authority.sqlite", "authority-a")
+    with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory"):
+        pass
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(module, "open_authority", lambda path: authority)
+    original = module.capture_authority
+    once = []
+    def interleave(a):
+        captured = original(a)
+        if not once:
+            once.append(True)
+            with Ledger(root / "ledger.sqlite", authority=authority, authority_author="memory") as other:
+                other.append("answer", {"text": "first"}, "principal")
+        return captured
+    monkeypatch.setattr(module, "capture_authority", interleave)
+    service = PetStatus(engine)
+    first = asyncio.run(service.read())
+    assert first["state"] == "unavailable" and first["verification"]["reason"] == "ledger_busy"
+    assert first["personal"]["xp"] is None and not first["stale"]
+    second = asyncio.run(service.read())
+    assert second["state"] == "ready" and second["personal"]["xp"] == 6

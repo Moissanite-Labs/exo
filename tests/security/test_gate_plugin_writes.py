@@ -39,10 +39,10 @@ def _sh(cmd):
     return {"tool": "bash", "args": {"command": cmd}}
 
 
-def _assert_store_write(action, policy=None):
+def _assert_store_write(action, policy=None, rules=("floor",)):
     c = gate.classify(action)
     d = gate.decide(c, policy)
-    assert (c.category, d.outcome, d.rule) == ("store_write", "ask", "floor"), action
+    assert (c.category, d.outcome) == ("store_write", "ask") and d.rule in rules, action
     # principal-only, whatever approvals.yaml delegates
     assert gate.approvers_for(c.category, {"default": ["seat:lead"], "categories": {"store_write": ["seat:lead"]}}) \
         == ["principal"]
@@ -407,5 +407,6 @@ def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch
 ])
 def test_known_friction_a_command_that_is_not_a_read_asks(cmd, exo_home):
     """Known friction (docs/GATE.md): these only read the folder, but the gate reads them as `shell`, `opaque_exec`
-    or a write elsewhere, not `read`, so naming a store path makes them a store write, as for policies/ on main."""
-    _assert_store_write(_sh(cmd.format(h=exo_home)))
+    or a write elsewhere, not `read`, so naming a store path makes them a store write, as for policies/ on main.
+    `bat` is a program the gate does not know, so the opaque floor asks first (#471)."""
+    _assert_store_write(_sh(cmd.format(h=exo_home)), rules=("opaque",) if cmd.startswith("bat ") else ("floor",))

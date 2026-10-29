@@ -6,10 +6,16 @@ path or a secret, `unknown` for a name it did not know) is the call's ``floor`` 
 reading, but the hook kept the D-065 bypass floor only when the lead category was a floor one, and asked a tool the
 registry calls high risk only when the lead category was `unknown`. So in bypass a camelCase tool ran a seat or policy
 file write and a secret read, and a high-risk camelCase MCP tool ran in every mode. Both checks now count each
-reading (`gate.no_grant`, `gate.readings`). Snake names keep their decisions, a post whose only floor is in a reading
-is still held for its posting fixes, and a camelCase tool with no floor reading is still auto-approved. Temp stores,
+reading (`gate.no_grant`, `gate.readings`). A post whose only floor is in a reading is still held for its posting
+fixes, and a call with no floor reading is still auto-approved, camelCase or not.
+
+Review 5675164403 of #703: the floor reads each part too, so a snake shell call whose own folder argument is a secret
+folder (#311) also asks once in bypass. Its line keeps its own category (`read` for `cat` and `ls`), and the store
+read is a part, so bypass ran it before #703. Its plain spelling (`cat ~/.kube/config`) asked already. Temp stores,
 a temp HOME and a mock context; nothing is executed.
 """
+import os
+
 import pytest
 
 from exo import crypto
@@ -35,17 +41,45 @@ CAMEL_FLOOR = [
     ("mcp__github__mergePullRequest", {"path": "~/.ssh/id_rsa"}, "credentials"),
     ("mcp__slack__postMessage", {"file": "~/.aws/credentials", "text": HI, "channel": "#general"}, "credentials"),
 ]
+# Review 5675164403 of #703: more spellings of a camelCase read of a policy file. A capital first hump, a dotted or
+# dashed server prefix, an MCP name with its hash tail, and a relative path read from the session folder ~/.exo
+# (the `cwd` the core passes, last in each row). Each ran in bypass before #703.
+CAMEL_SPELLINGS = [
+    ("mcp__fs__ReadFile", {"path": GATES}, ""),
+    ("fs.readFile", {"path": GATES}, ""),
+    ("exo-fs.readFile", {"path": GATES}, ""),
+    ("mcp__my_server__readFile_1a2b3c4d", {"path": GATES}, ""),
+    ("mcp__fs__readFile", {"path": "policies/gates.yaml"}, "~/.exo"),
+]
+# Review 5675164403 of #703: a snake shell call whose own folder argument is a secret folder (#311). The store read
+# is a part of the line, not its lead category, so it ran in bypass before #703. The gate reads `cwd` and `workdir`
+# alike for every shell tool (review 5681915526 asked for the other spellings), so the last four rows swap them.
+SECRET_FOLDER = [
+    ("terminal", {"command": "cat config", "workdir": "~/.kube"}),
+    ("bash", {"command": "cat config", "workdir": "~/.kube"}),
+    ("exec_command", {"cmd": "cat config", "workdir": "~/.kube"}),
+    ("bash", {"command": "ls", "cwd": "~/.exo/keys"}),
+    ("bash", {"command": "ls", "cwd": "~/.aws"}),
+    ("bash", {"command": "ls", "cwd": "~/.claude"}),
+    ("bash", {"command": "cat config", "cwd": "~/.kube"}),
+    ("terminal", {"command": "ls", "cwd": "~/.aws"}),
+    ("terminal", {"command": "ls", "workdir": "~/.exo/keys"}),
+    ("exec_command", {"cmd": "ls", "workdir": "~/.claude"}),
+]
 # Controls that lead with their floor category: they asked in bypass on main too.
 LEAD_FLOOR = [
     ("write_file", {"path": SEAT, "content": "x"}),
     ("mcp__fs__writeFile", {"path": SEAT, "content": "x"}),
     ("terminal", {"command": "cat ~/.exo/keys/exo-gate.key"}),
+    ("terminal", {"command": "cat ~/.kube/config"}),   # the first SECRET_FOLDER row, spelled with its folder
 ]
-# Controls with no floor reading: bypass still auto-approves them, camelCase or not.
+# Controls with no floor reading: bypass still auto-approves them, camelCase or not, and in an ordinary folder.
 NO_FLOOR = [
     ("mcp__slack__postMessage", {"channel": "#general", "text": HI}),
     ("mcp__slack__post_message", {"channel": "#general", "text": HI}),
     ("terminal", {"command": "rm -rf build"}),
+    ("terminal", {"command": "rm -rf build", "workdir": "~/projects/app"}),
+    ("bash", {"command": "rm -rf build", "cwd": "~/projects/app"}),
 ]
 # High-risk camelCase MCP tools: `unknown` before #602, now only in their floor reading.
 CAMEL_HIGH = [
@@ -112,6 +146,44 @@ def test_bypass_keeps_the_floor_a_camelcase_tool_has_in_its_floor_reading(gate_i
 def test_without_bypass_the_same_calls_ask(gate_in, mode, tool, args, floor):
     _, ctx, _ = gate_in(mode, False)
     assert call(ctx, tool, args)["action"] == "approve"
+
+
+def _session(folder):
+    """The `cwd` keyword the core passes with a call: the session's folder, or none."""
+    return {"cwd": os.path.expanduser(folder)} if folder else {}
+
+
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+@pytest.mark.parametrize("tool,args,folder", CAMEL_SPELLINGS)
+def test_bypass_keeps_the_floor_of_each_spelling_of_a_camelcase_read(gate_in, mode, tool, args, folder):
+    g, ctx, store = gate_in(mode, True)
+    r = call(ctx, tool, args, **_session(folder))
+    assert r is not None and r["action"] == "approve" and r.get("once") is True, (tool, r)
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and "decided_by" not in row and row["bypass"] == {"floor": "store_write"}
+    assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
+
+
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+@pytest.mark.parametrize("tool,args", SECRET_FOLDER)
+def test_bypass_keeps_the_floor_of_a_shell_call_whose_folder_argument_is_a_secret_folder(gate_in, mode, tool, args):
+    g, ctx, store = gate_in(mode, True)
+    r = call(ctx, tool, args)
+    assert r is not None and r["action"] == "approve" and r.get("once") is True, (tool, r)
+    [row] = rows(store)
+    assert row["classification"]["category"] == "read"   # the line's own category: the store read is a part
+    assert row["outcome"] == "ask" and "decided_by" not in row and row["bypass"] == {"floor": "credentials"}
+    assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
+
+
+# A SECRET_FOLDER row names its folder in its own `cwd` or `workdir`, so it needs no session folder (""). Only the
+# relative CAMEL_SPELLINGS row reads its path from the session folder.
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+@pytest.mark.parametrize("tool,args,folder", CAMEL_SPELLINGS + [(t, a, "") for t, a in SECRET_FOLDER])
+def test_without_bypass_those_calls_ask_once(gate_in, mode, tool, args, folder):
+    _, ctx, _ = gate_in(mode, False)
+    r = call(ctx, tool, args, **_session(folder))
+    assert r["action"] == "approve" and r.get("once") is True, (tool, r)
 
 
 @pytest.mark.parametrize("mode", ["enforce", "observe"])

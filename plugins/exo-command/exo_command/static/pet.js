@@ -14,6 +14,7 @@ export function savePetMode(value, store) {
 }
 const VERIFICATION_MESSAGES = {
   no_principal_store: "No principal store is configured. Personal growth is unavailable.",
+  ledger_busy: "The local ledger is changing. Try another verification.",
   ledger_missing: "The local ledger is missing. Personal growth is unavailable.",
   unanchored: "The ledger has no verified anchor. Growth cannot be verified.",
   integrity_or_trust_failed: "Ledger integrity or trust verification failed. Growth is not updated.",

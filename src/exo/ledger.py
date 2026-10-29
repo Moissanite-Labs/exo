@@ -138,6 +138,8 @@ class Ledger:
     """`Ledger(path, signer)`. `signer` may be a `crypto.Signer`, a bare `SigningKey`, or None
     for read-only use."""
 
+    _captured_anchors: tuple[tuple[Path, bytes], ...]
+
     def __init__(self, path: str | os.PathLike, signer: Signer | SigningKey | None = None,
                  *, authority=None, authority_author: str | None = None):
         from .ledger_authority import AuthorityError, validate_identity
@@ -179,6 +181,10 @@ class Ledger:
         reader.authority, reader.authority_author = None, None
         reader._lock = threading.Lock()
         reader.missing_triggers = []
+        # Anchors follow COMMIT. Capture them before BEGIN establishes the read snapshot:
+        # an intact concurrent append can then only extend, never overtake, this evidence.
+        reader._captured_anchors = tuple((p, crypto.canonical(a)) for p in anchor_paths_for(path)
+                                         if (a := cls._read_anchor(p)) is not None)
         reader.db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False,
                                     isolation_level=None, timeout=5)
         try:
@@ -251,6 +257,8 @@ class Ledger:
         return row is not None and row[0] == a.get("chain")
 
     def anchors(self) -> list[tuple[Path, dict]]:
+        if hasattr(self, "_captured_anchors"):
+            return [(p, json.loads(raw)) for p, raw in self._captured_anchors]
         out = []
         for p in self.anchor_paths():
             a = self._read_anchor(p)

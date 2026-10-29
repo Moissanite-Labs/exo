@@ -279,7 +279,8 @@ export function mount(root, { pet = null } = {}) {
       }
       case "model.call":
         if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
-        help.note({ providerError: !!b.error });
+        // The error and its attempts, so the tip can tell a refusal from a transport failure (#756, #855).
+        help.note({ providerError: b.error || "", providerAttempts: b.error && Array.isArray(b.attempts) ? b.attempts : [] });
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
@@ -591,8 +592,14 @@ export function mount(root, { pet = null } = {}) {
 
   // ---------------------------------------------------------------- actions
 
+  // Session lists can answer out of order: one asked before a thread was created must not replace one asked after it.
+  let listAsked = 0, listShown = 0;
   async function refreshSessions() {
-    try { sessions = (await api("GET", "/api/chat/sessions")).sessions; drawSessions(); } catch (e) { fail(e); }
+    const asked = ++listAsked;
+    try {
+      const fresh = (await api("GET", "/api/chat/sessions")).sessions;
+      if (asked > listShown) { listShown = asked; sessions = fresh; drawSessions(); }
+    } catch (e) { fail(e); }
   }
 
   function chooseConversation(id) {
@@ -636,13 +643,13 @@ export function mount(root, { pet = null } = {}) {
 
   async function recover() {
     if (pet) pet.selectSession(current);
-    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers), asked = ++listAsked;
     loading = true;
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
       const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
       if (id !== current || generation !== snapshotGeneration) return;
-      sessions = freshSessions;
+      if (asked > listShown) { listShown = asked; sessions = freshSessions; }
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
         dropSteers(id, had, d.steers);

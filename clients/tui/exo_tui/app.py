@@ -711,7 +711,10 @@ class ExoApp(App):
             if b.usage is not None and (b.usage.input_tokens or b.usage.output_tokens or b.usage.cache_read_tokens
                                         or b.usage.cache_write_tokens):
                 self.calls_seen += 1
-                self.unpriced += b.usage.cost_usd is None
+                # A route that stopped on its spend limit leaves the figure a floor, so it carries the same "+"
+                # an unpriced call carries (D-093). The notice already said why in words.
+                self.unpriced += b.usage.cost_usd is None or any(
+                    a.get("outcome") == "spend_limit" for a in b.attempts)
             if b.usage is not None and (share := self.cache_of(b.usage)) is not None:
                 self.cache_share = share
             if (b.requested and b.route and b.requested != b.route) or any(
@@ -1495,7 +1498,11 @@ class ExoApp(App):
                     self.close_cur()
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
-                    self.note(out if isinstance(out, str) else str(out))
+                    if name == "pet" and isinstance(out, dict):
+                        from exo_tui.pet import summary
+                        self.note(summary(out))
+                    else:
+                        self.note(out if isinstance(out, str) else str(out))
             if name == "permissions":
                 await self.load_permissions()
 

@@ -564,7 +564,9 @@ class PeerDelivery:
 @event("model.call")
 class ModelCall:
     """One model call as the harness saw it (D-025): what was asked, which route served it, every attempt.
-    attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."""
+    attempts: [{route, outcome: ok|timeout|spend_limit|error|fallback, error, ms}]. An outcome of spend_limit means
+    the provider said the route is over its spend limit (HTTP 402), so the call's cost figure is a floor.
+    ttft_ms is None when nothing streamed."""
 
     iteration: int = 0
     role: str = ""  # the router role asked for, when the provider is a router
