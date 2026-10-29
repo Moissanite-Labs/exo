@@ -148,3 +148,8 @@ never writes to the house pack, and nothing learned on one install flows back in
 - Config: the `learn` table in `config.json` (defaults in `src/exo/learn/runtime.py`).
 - Tests: `tests/learn/`.
 - What was learned since a date: `exo.learn.learned_since`, used by the brief.
+
+The rule-of-three check looks for an active agreeing belief before considering inactive
+beliefs (#882). A more similar rejected conflict cannot hide an existing active agreement
+and cause a duplicate proposal. A rejected agreeing lesson still counts as already known;
+repeated chat instructions alone do not override the principal’s rejection.
