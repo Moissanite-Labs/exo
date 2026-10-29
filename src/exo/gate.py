@@ -7206,6 +7206,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         if into[1]:
             ctx["fd_cwd"] = into[1]
     parts: list[Classification] = []
+    if any(isinstance(sub, _UnreadDenyHint) for sub in subs):
+        # Preserve the original whole-line opaque command context: category/command
+        # reserved and deny entries must not disappear when a candidate leads.
+        guard = _unread_nest()
+        guard.command = cmd
+        parts.append(guard)
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
     # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run

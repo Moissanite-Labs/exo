@@ -3511,3 +3511,6 @@ Git gc.recentObjectsHook is read as shell execution across git configuration for
 ### Unread-span deny candidates (#477)
 
 Recognized destructive words in an unread deep nesting span retain delete/force-push category denies. The existing unknown/ask part stays. This is a conservative candidate scan, not a replacement shell parser; other categories and wrappers remain outside the slice.
+
+Unread candidate parts also retain the original whole-line opaque command context,
+so old command-keyed deny/reserved hits are preserved when the candidate leads.

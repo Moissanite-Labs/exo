@@ -39,3 +39,12 @@ def test_raw_category_word_cannot_deduplicate_the_internal_hint():
     policy = gate.normalize_policies({'gates': {'deny': ['delete']}})
     assert gate.decide(gate.classify({'tool': 'bash', 'args': {'command': command}}), policy).outcome == 'deny'
     assert gate._UnreadDenyHint('delete') != 'delete'
+
+
+def test_original_whole_line_opaque_reserved_context_survives_candidate():
+    command = nest(100, 'rm -rf /srv/data')
+    c = gate.classify({'tool': 'bash', 'args': {'command': command}})
+    policy = gate.normalize_policies({'gates': {'reserved': ['command:rm']}})
+    assert ('opaque_exec', '') in gate.decide(c, policy).reserved
+    policy = gate.normalize_policies({'gates': {'deny': [{'category': 'opaque_exec', 'command': 'rm'}]}})
+    assert gate.decide(c, policy).outcome == 'deny'
