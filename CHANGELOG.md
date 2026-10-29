@@ -8,6 +8,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Explicit core shutdown now interrupts and drains runtime-owned turns before closing their store. Accepted steers and queued input survive, while new work is refused. An extension that ignores cancellation reports incomplete shutdown instead of writing through a closed store (#873).
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
