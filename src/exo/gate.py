@@ -7305,6 +7305,20 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c = secret(c, found, found, c.category in ("store_write", "credentials"))
     if more and more != found:
         c = secret(c, more, more, c.category in ("store_write", "credentials"))
+    # #481: keep the original relative target, and add its resolved secret-store
+    # alias for each literal working folder the existing bounded walk found.
+    aliases = {p.target for p in _each_part(c) if p.category == "credentials"}
+    for name in dict.fromkeys((found, more)):
+        if not name or name == _TOO_MANY or name.startswith(("/", "~", "$")) or _GLOBBY.search(name):
+            continue
+        for folder, _form in (walked[0][:64] if walked else []):
+            base = _expand_text(folder)
+            if not os.path.isabs(base) or _GLOBBY.search(base):
+                continue
+            target = _in_folder(base, name)
+            if target not in aliases and is_sensitive_path(target):
+                c = secret(c, name, target, True)
+                aliases.add(target)
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),
