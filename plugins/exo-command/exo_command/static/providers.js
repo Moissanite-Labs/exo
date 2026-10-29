@@ -158,6 +158,8 @@ export function mount(root) {
       h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
       h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
       modelsError ? h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.") : null,
+      modelsError && modelsError.retryable ? h("div", { class: "xc-prov-def-act" },
+        h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again")) : null,
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 
