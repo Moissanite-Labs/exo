@@ -148,7 +148,7 @@ class CoreRuntime:
         self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
         self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
         self.store = SessionStore(self.home / "sessions.sqlite")
-        self.hub = Hub(SqliteLog(self.store))
+        self.hub = Hub(SqliteLog(self.store), visible=self.event_visible)
         self.seat = seat
         from exo.core.seat_binding_conformance import maybe_note_load_core_seat
 
@@ -549,11 +549,20 @@ class CoreRuntime:
 
     async def handle(self, command: s.Command, hub: Hub) -> dict[str, Any]:
         self.hub = hub
+        if self.seat is not None:
+            hub.visible = self.event_visible
         await self.start()
         method = getattr(self, "_" + command.type.replace(".", "_"), None)
         if method is None:
             raise CommandFailed("unsupported", f"{command.type} is not supported yet")
         return await method(command.body)
+
+    def event_visible(self, event: s.Event) -> bool:
+        """Unattributed persisted events cannot be safely assigned to a loaded profile."""
+        if self.seat is None:
+            return True
+        info = self.store.get_session(event.session) if event.session else None
+        return info is not None and info.agent == self.agent
 
     def _info(self, sid: str) -> s.SessionInfo:
         info = self.store.get_session(sid)
