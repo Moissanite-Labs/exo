@@ -19,9 +19,13 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
   both count. Summaries (`secondary`) are not anyone's own words and do not. Nor is superseded text: the older
   versions of an edited ChatGPT prompt (`branch: alt`) and Hermes rows marked `inactive`. An imported row
   counts as said at its source time (`source_ts`), not when it was imported (`said_at`).
-- **Taste:** a new event that agrees with a known belief reinforces it (a `note` of type
-  `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`).
-- **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
+  A rejected belief that agrees still counts as encoding the instruction.
+- **Taste:** a new correction or ruling that agrees with an active belief (proposed, held, accepted) reinforces
+  it (a `note` of type `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`). Only
+  active beliefs are matched, so a rejected one is never reinforced and never hides an active one. One that
+  agrees only with a rejected belief is a new proposal. A reviewer lesson (`propose_typed`) whose evidence a
+  rejected belief it agrees with already holds in full is skipped: no proposal, question or reinforcement (#861).
+- **Conflict:** an event that opposes an active belief goes through the store's conflict rule.
   The default is newer wins unless the older belief guards something irreversible or public; then
   a numbered `question` event is raised and the new proposal is held until an `answer` arrives.
   Nothing is overwritten silently: "newer wins" still lands as a reviewed supersede proposal.
@@ -991,11 +995,19 @@ class _Run:
         if obs.event_id in self.state.seen_evidence and not self.meta:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
-        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
-        if b is not None and rel == "agree" and b.active:
+        # A lesson the principal rejected teaches nothing again from the same evidence: it is not proposed, does
+        # not reinforce another belief and raises no conflict question (#861). Only the typed path gets here with
+        # such evidence: any other signal already returned above, as its event is in seen_evidence.
+        held = set(obs.evidence)
+        if any(x.status == "rejected" and held <= {e.id for e in x.evidence}
+               and taste.relation(obs.sig, x.sig, self.thr) == "agree" for x in self.beliefs()):
+            return
+        # Only active beliefs are matched: a rejected belief that scores higher must not hide an active one (#861).
+        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr)
+        if b is not None and rel == "agree":
             self.reinforce(b, obs)
             return
-        if b is not None and rel == "conflict" and b.active:
+        if b is not None and rel == "conflict":
             self.conflict(b, obs, kind)
             return
         self.propose(obs, kind)

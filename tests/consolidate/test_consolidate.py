@@ -176,6 +176,75 @@ def test_repeated_signal_after_rejection_creates_a_new_proposal(template_store, 
     assert not [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_reinforced"]
 
 
+def _rejected(store, led, text):
+    """A ruling consolidated into a proposal that the principal then rejects."""
+    ev = led.append("ruling", {"text": text}, "principal")
+    (pid,) = run(store, led).proposals
+    C.proposal_reject(store, led, pid, "Not a standing preference", author="principal")
+    return ev, pid
+
+
+def test_rejected_belief_does_not_hide_an_active_conflicting_one(template_store, led):
+    # #861 case 1: the rejected p1 matches the repeat better than the accepted, guarded p2 it contradicts.
+    _, p1 = _rejected(template_store, led, "Use tables with headers, not bullet lists.")
+    led.append("ruling", {"text": "Use bullet lists, not tables, in public GitHub comments."}, "principal")
+    (p2,) = run(template_store, led).proposals
+    C.proposal_accept(template_store, led, p2, author="principal")
+    led.append("ruling", {"text": "Use tables with headers, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.reinforced == [] and len(result.questions) == 1 and len(result.proposals) == 1
+    (p3,) = result.proposals
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p3].status == "held" and views[p3].question == result.questions[0]
+    assert views[p2].status == "accepted" and views[p1].status == "rejected" and len(views[p1].evidence) == 1
+    body = next(e["body"] for e in proposed(led) if e["body"]["proposal_id"] == p3)
+    assert body["supersedes"] == p2
+    q = next(e["body"] for e in led.iter(kind="question") if e["id"] == result.questions[0])
+    assert q["older"] == p2 and q["newer"] == p3 and q["default"] == 1   # guarded: keep the older one
+
+
+def test_rejected_belief_does_not_hide_an_active_agreeing_one(template_store, led):
+    # #861 case 1b: the repeat reinforces the open p2 instead of opening a second, overlapping proposal.
+    _, p1 = _rejected(template_store, led, "Use tables with headers, not bullet lists.")
+    led.append("ruling", {"text": "Use tables, not bullet lists or long prose."}, "principal")
+    (p2,) = run(template_store, led).proposals
+    later = led.append("ruling", {"text": "Use tables with headers, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == [p2]
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert later["id"] in views[p2].evidence and views[p1].status == "rejected" and len(views[p1].evidence) == 1
+
+
+def test_repeated_signal_reinforces_an_accepted_belief(template_store, led):
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    (p1,) = run(template_store, led).proposals
+    C.proposal_accept(template_store, led, p1, author="principal")
+    later = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == [p1]
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p1].status == "accepted" and later["id"] in views[p1].evidence
+
+
+def test_rule_of_three_still_counts_a_rejected_belief_as_known(template_store, led):
+    # Repeating an instruction in chat does not re-raise a rejected lesson; a new ruling or correction does.
+    _, p1 = _rejected(template_store, led, "Use tables, not bullet lists.")
+    for s in "abc":
+        say(led, "Use tables, not bullet lists.", s)
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == []
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p1].status == "rejected" and len(views[p1].evidence) == 1
+
+
 def test_rule_of_three_across_runs(template_store, led):
     say(led, "Always run the tests before pushing.", "a")
     say(led, "please run the tests before you push", "b")
