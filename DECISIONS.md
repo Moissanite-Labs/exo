@@ -6307,3 +6307,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 #### D-038 unread-span deny candidates amendment — 2026-10-29 (#477)
 
 One linear scan of a nesting-cut span adds at most one conservative candidate each for direct/plain-sudo delete and forced git push, beside the original unread part. Internal typed markers cannot be forged or deduplicated by equal-looking raw text. Candidates can overmatch quoted data and never make unread text trusted. Other commands, wrappers, target semantics and cut surfaces remain open.
+
+#### D-038 unread candidate context preservation — 2026-10-29 (#477)
+
+A candidate that becomes the dominant category retains a whole-line opaque guard
+part. Command-keyed deny/reserved entries therefore retain their original opaque
+context rather than merely changing the reserved hit's category to the candidate.
