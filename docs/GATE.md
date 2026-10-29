@@ -1998,6 +1998,16 @@ gate does not read:
   (`coproc w { curl https://example.com; }` under `deny: [web_read]`).
   A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) is fed to the commands
   inside it, as for `{ ...; } <<EOF` on its own (see "Compound commands" below).
+  bash takes a command after `!`, `then`, `else`, `elif`, `if`, `while`, `until`, `do` and `{` as it
+  does after `;`, so a `coproc` there opens its compound too (`! coproc for ..; done`, `if ..; then
+  coproc { ..; }; fi`, `{ coproc W { ..; }; }`), and so does the compound right after `coproc NAME {`
+  or `function NAME {` (`coproc W { for ..; done; }`, `function f { while ..; done; }`, `coproc {
+  coproc { for ..`). Main b3efb5e7 opened it only where the `coproc` started the command (or right
+  after `coproc [NAME]` there), so elsewhere the compound stayed the coproc's argv: its parts were
+  read, but a loop in it got no second reading (#479) and a text fed after its closer did not reach
+  the commands inside it (#864). classify now also reads such a line with the compound opened,
+  beside main's reading (`_late_reading`): decide keeps the strictest, and main's `opaque_exec`
+  reading still leads on the tie, as for `coproc for ..` after `;`.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
@@ -2965,8 +2975,11 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 A loop body runs again after its own `cd` (#479, #480): in `for i in 1 2; do cp /tmp/evil gates.yaml;
 cd ~/.exo/policies; done` the `cp` rewrites the policy file on the second pass. When a `for`, `select`, `while`
 or `until` body (a `coproc` one too), nested loops and the loop's condition included, holds a `cd` or `pushd`
-into the store or a descriptor folder after its first command, the call is read a second time with that folder
-entered where the outermost such loop starts (named by the loop's first descriptor `cd`, if any), and the
+into the store or a descriptor folder after its first command (a `coproc` loop behind `!`, `then`, `else`, `elif`,
+`if` or `{`, or right after `coproc NAME {` or `function NAME {`, counts too, #864: `! coproc for i in 1 2; do cp
+/tmp/evil gates.yaml; cd ~/.exo/policies; done` is a principal-only store write that `deny: [store_write]` denies,
+where main b3efb5e7 asked as `opaque_exec` and a seat could answer it), the call is read a second time with that
+folder entered where the outermost such loop starts (named by the loop's first descriptor `cd`, if any), and the
 commands and substitutions of the loop on that reading are parts of a second reading beside the first
 (`gate.readings`). That reading leads when it is more severe, so the issue's rows are `store_write`: they ask,
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no

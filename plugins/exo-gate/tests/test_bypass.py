@@ -233,6 +233,30 @@ def test_a_secret_or_store_write_behind_a_quoted_prefix_asks_at_the_floor(keyed_
     assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
 
 
+_STORE_LOOP = "for i in 1 2; do cp /tmp/evil gates.yaml; cd $EXO_HOME/policies; done"
+COPROC_FLOOR = [
+    "! coproc " + _STORE_LOOP,
+    "if true; then coproc " + _STORE_LOOP + "; fi",
+    "{ coproc " + _STORE_LOOP + "; }",
+    "if false; then :; else coproc " + _STORE_LOOP + "; fi",
+    "coproc W { " + _STORE_LOOP + "; }",
+    "function f { " + _STORE_LOOP + "; }",
+]
+
+
+@pytest.mark.parametrize("line", COPROC_FLOOR)
+def test_a_coproc_store_loop_behind_a_reserved_word_asks_at_the_floor(keyed_store, as_caller, line):
+    """#864: main b3efb5e7 left the loop behind `! coproc`, `then coproc`, `{ coproc` (and right after `coproc NAME {`
+    or `function NAME {`) unopened, so the line was an opaque_exec with no store write, and bypass auto-allowed it.
+    The opened reading beside main's has #479's store write, so the floor holds it: an ask the principal answers."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r.get("once") is True, r
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and "decided_by" not in row and row["bypass"]["floor"] in perm.FLOOR, row
+    assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
+
+
 def test_secrets_in_an_auto_approved_call_are_redacted_in_the_ledger(keyed_store, as_caller):
     _, ctx, store = bypassed(keyed_store, as_caller)
     tok = "ghp_" + "a1B2c3D4e5" * 4

@@ -1402,6 +1402,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     parens = 0                      # `(` tokens open here, counted apart from the compounds (#479 verify)
     ariths: list = []               # per `for ((` still open: (parens before its `((`, the command holding the `for`)
     arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
+    late, late_met = _late_open.get(), _late_met.get()     # #864: open a compound behind `! coproc` and the like
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -1490,7 +1491,15 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
             if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
                 ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
-            if not v.quoted and _command_word(cur.words, lead, 0):
+            here = not v.quoted and _command_word(cur.words, lead, 0)
+            if not here and cw and v.text in _COMPOUND_OPENERS:
+                # #864: an opener in command position after a `coproc [NAME]` or `function NAME` that reserved words
+                # start (`! coproc for`, `then coproc {`), or after `coproc NAME {` (`function f { for`). bash opens
+                # it as after `;`. Main's reading leaves it as the coproc's argv; the opened reading opens it too.
+                here = late
+                if late_met is not None:
+                    late_met[0] = True
+            if here:
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
                 elif v.text in _COMPOUND_CLOSERS:
@@ -6416,8 +6425,38 @@ def _loop_word(k: _Cmd) -> int:
             return i
     first = k.words[0] if k.words else None
     if first is not None and not first.quoted and first.text in ("coproc", "function"):
-        return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
-                     and k.words[i].text in _LOOP_WORDS), -1)
+        w = next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
+                  and k.words[i].text in _LOOP_WORDS), -1)
+        if w >= 0:
+            return w
+    return _late_loop_word(k) if _late_open.get() else -1
+
+
+# #864: set while classify reads a call (_classify_reading): [met], which _parse_line sets when a line holds a compound
+# opener in command position that main's reading leaves as a `coproc` or `function` argv (`! coproc for ..`,
+# `then coproc { ..`, `coproc NAME { for ..`). classify then reads the call again with _late_open on, where _parse_line
+# opens such a compound as after `;`, and _loop_word finds the loop word behind those words (_late_loop_word), so #479's
+# second pass of a loop that `cd`s into the store runs there too. Main's reading stays beside (_late_reading).
+_late_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_late_met", default=None)
+_late_open: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_late_open", default=False)
+
+
+def _late_loop_word(k: _Cmd) -> int:
+    """#864: where the loop word is in k behind reserved words, a `coproc` or `function`, its NAME and the reserved
+    words after it (`! coproc for`, `then coproc N { while`, `function f { for`), as _parse_line opens it with
+    _late_open on (`coproc { coproc { for` too); or -1. A quoted word ends the search; a NAME is one word that is not a
+    reserved word."""
+    words, i = k.words, 0
+    while i < len(words) and not words[i].quoted:
+        text = words[i].text
+        if text in _LOOP_WORDS:
+            return i
+        if text in ("coproc", "function"):
+            if i + 1 < len(words) and words[i + 1].text not in _OPENERS and words[i + 1].text not in _LOOP_WORDS:
+                i += 1                      # the NAME
+        elif text not in _OPENERS:
+            return -1
+        i += 1
     return -1
 
 
@@ -8447,8 +8486,47 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
-    chain of floors (readings), so decide never goes below it. ``cwd`` is the folder the tool runs in, when the
-    caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    chain of floors (readings), so decide never goes below it. A line with a compound command in command position
+    behind a `coproc` or `function` that main's reading leaves unopened (`! coproc for ..`, `{ coproc N { ..; }; }`)
+    is also read with it opened (#864, _late_reading); the ``ordinary`` reading (D-074) of a call is not read that
+    way there, as the opened reading reads its own. ``cwd`` is the folder the tool runs in, when the caller knows
+    it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    met = [False]
+    token = _late_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _late_met.reset(token)
+    return _late_reading(c, action, cwd) if met[0] and not _late_open.get() and not _config_off.get() else c
+
+
+def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#864: the call as read before (c), with a second reading of it beside it in which each compound command in
+    command position behind a `coproc [NAME]` or `function NAME` that reserved words start (`! coproc for ..`,
+    `if ..; then coproc { ..; }; fi`, `{ coproc N { ..; }; }`), or behind `coproc NAME {` and `function NAME {`, is
+    opened as after `;` (_parse_line, _late_loop_word): its parts and #479's second pass of a loop in it that `cd`s
+    into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before stays as
+    it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once: decide keeps the
+    strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
+    lower than before."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _late_open.set(True), _late_met.set(None)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _late_met.reset(met)
+        _late_open.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo)
+    return c
+
+
+def _one_reading(action: Any, cwd: str | None = None) -> Classification:
+    """_classify_reading's reading of the call, in its budgets and folders: the call, its joined reading (#584) and
+    its loops' second passes (#479)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
     loops: list[int] = [False, False, 0]                            # (#479) a loop with a `cd` into the store

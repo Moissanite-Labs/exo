@@ -3827,6 +3827,59 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-29 (issue #864, to the #479 amendment's decision):* a `coproc` compound in command position
+  behind reserved words is opened as after `;`, in a reading beside main's. bash takes a command after `!`,
+  `then`, `else`, `elif`, `if`, `while`, `until`, `do` and `{` as after `;` (`bash -n` 5.2.21 accepts `! coproc
+  for i in 1; do :; done`, `if true; then coproc for ..; fi` and `{ coproc for ..; }`), and the compound right
+  after `coproc NAME {` or `function NAME {` too. `_parse_line` opened a compound only where every word before it
+  in the command was a reserved word, or within two words of a `coproc` or `function` that started the command
+  (`_command_word(cur.words, lead, 0)`), while its own command-position tracking (`head`, `pre`, #436) knew those
+  positions; `_loop_word` likewise found a loop word only at the start or one or two words after a leading
+  `coproc`/`function`. So on main b3efb5e7, under `deny: [store_write]`, `! coproc for i in 1; do cp /tmp/evil
+  gates.yaml; cd ~/.exo/policies; done`, its `if ..; then`, `else`, `elif`, `if <it>; then` and `{ ..; }` forms
+  and the `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`, `coproc W while` and `coproc { for ..`
+  loops there asked as `opaque_exec` (rule `opaque`, `no_grant` False), where after `;` or `&&` they denied with
+  `no_grant` True; `coproc W { for ..; done; }`, `coproc W { while ..; }` and `function f { for ..; done; }` did
+  so at every position, a `$( )` included, and `coproc { coproc { for ..` at any depth past one. A here-doc or
+  here-string after such a group's closer (`! coproc W { bash; } <<EOF`) did not reach the shell inside it (#161),
+  so a fed `rm -rf` was no delete. Main's first pass still read the parts of the coproc's argv, so a delete,
+  push or post body denied as without the opener; what was lost is #479's second pass and the fed text. Now,
+  while classify reads a call (`_classify_reading`), `_parse_line` marks a compound opener in command position
+  (`_command_word(cur.words, head, pre)`) that main's check leaves unopened (`_late_met`); classify then reads
+  the call again with `_late_open` on (`_late_reading`, budgets and memos of its own), where `_parse_line` opens
+  it and `_loop_word` also finds the loop word behind leading reserved words, `coproc`/`function`, their NAME
+  and the reserved words after it (`_late_loop_word`). That reading is kept beside main's by `_beside`, with each
+  reading's D-074 `ordinary` kept, as #584's and #479's readings are on main (and #853's opened reading in PR
+  #862); main's `opaque_exec` reading still leads on the tie, as for `coproc for ..` after `;`. The issue's rows
+  are a principal-only `store_write` part that `deny: [store_write]` denies, no grant covers and bypass keeps at
+  its floor. Teaching `_parse_line` the positions directly would have replaced main's reading of those lines;
+  the second reading keeps it by construction. With #853 (PR #862, not merged when this was written) whichever
+  lands second makes the opened check read #853's `_opening` too (`late = _late_open.get() or opening` in
+  `_parse_line`, the same `or` in `_loop_word`) and runs `_late_reading` after `_opened_reading` in
+  `_classify_reading`; on such a merged tree #862's `test_a_coproc_after_bang_or_then_is_a_known_limit` rows (`!
+  time coproc for ..`, `if true; then time coproc for ..`) deny under `deny: [store_write]` with `no_grant` True,
+  so that test turns into a fix test. Known limit, as without coproc: a `case` pattern's `)` inside `$( )` still
+  closes the substitution (`echo $(case x in x) for ..;; esac)` asks as on main). Cost: a line that sets the mark
+  costs about two readings (`time.process_time`, best of five, this tree against b3efb5e7: 200 `! coproc { :; }`
+  parts 0.085 s against 0.042 s, 200 `! coproc { ! coproc { :; }; }` parts 0.158 s against 0.082 s, one nest 200
+  deep 0.081 s against 0.036 s, 50 `! coproc for ..` store loops 0.183 s against 0.043 s, which adds #479's second
+  reading of each reading); a line with no mark is read once (200 `coproc { :; }` parts 0.037 s against 0.033 s).
+  The differential against b3efb5e7 (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus
+  with `--no-variants`, 13,247 actions under the 88 policies (1,165,736 pairs), lowers 0 pairs and tightens 150
+  pairs on 18 actions (`opaque_exec allow` to `opaque_exec ask` 60, `opaque_exec ask` to `opaque_exec deny` 24,
+  `opaque_exec log` to `opaque_exec ask` 24, and 42 to `delete`); an aimed corpus (`--only-corpus --no-variants`)
+  of 9,336 lines (25 coproc and function forms with 12 bodies, delete, push, post, store writes, a store `cd` in
+  a loop and plain ones, under 30 positions: `;`, `&&`, `||`, `&`, `|`, a subshell, a newline, `!`, `! !`, `then`,
+  `else`, `elif`, `if`, `while`, `until`, `do`, `{`, `{ !`, `time`, `$( )`, backticks, `bash -c`, a function body,
+  a case arm, a pipe out, and 4 fed group forms) under the 88 policies and 32 more (deny, reserved, category,
+  category-rule, command, command-rule and target entries; 1,120,320 pairs) lowers 0 pairs and tightens 9,398
+  pairs on 609 actions (`opaque_exec allow` to `opaque_exec ask` 4,184, `opaque_exec ask` to `opaque_exec deny`
+  2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
+  `tests/security/test_gate_coproc_open_864.py` (675 tests; 203 fail on b3efb5e7, the cost test only because
+  main has no `_late_reading` to patch, and the other 472 pass on both) and 6 hook rows in
+  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there).
+  *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
+  and `pre` and this second reading can go.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
