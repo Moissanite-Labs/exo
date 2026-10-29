@@ -92,3 +92,27 @@ The host must authenticate human access and bind member identities before callin
 these methods. No public API or client controls are added here. Human input is
 queued for delivery, not injected into a running provider prompt. Pause/resume
 and safe-boundary consumption remain runtime work.
+
+## Runtime checkpoints (G05, G07)
+
+`GroupRuntime` connects the store and concurrent runner. The trusted host supplies
+one authorized adapter per member. Each adapter receives a `MemberContext` with
+its member identity fixed for sending, history, delivery and consumption.
+
+Adapters call `await context.checkpoint()` between units of work. It waits while
+paused, then returns unconsumed input. Delivery alone does not acknowledge input:
+the adapter calls `consume(message_id)` after incorporating it. Reaching the same
+checkpoint again can return the same unconsumed messages. No message starts an
+adapter or triggers a reply automatically.
+
+Pause first reports `pausing`. It reports `paused` only while the adapter waits at
+a checkpoint. Resume releases the wait. Stop cancels execution through the runner,
+including paused waits, and retains the runner's cleanup-based stop receipts.
+Pause cannot alter an in-flight provider request or suspend detached adapter work.
+A pause before start prevents adapter invocation until resume.
+
+These objects are internal Python APIs, not a sandbox or model tools. Only the
+trusted human host receives group controls and full observation. The host still
+must enforce one runtime per group across clients and processes. Pause state is
+process-local. Durable execution recovery, provider adapters, protocol commands
+and client controls are not implemented by this layer.
