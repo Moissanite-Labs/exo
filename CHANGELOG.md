@@ -8,13 +8,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The Providers page says why the model list failed instead of showing only a bare exception name, and
+  offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
+  reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
+  (D-091).
 
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
+- The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).
+- The bus `Store.verify` (relay `/v1/verify` and the `verify_ledger` MCP tool) answers ok false with checked 0
+  for an inverted range, a range that starts past the head, or an explicit range on an empty log. It
+  answered ok true for all three, so a check of nothing read as a clean log. `to` is clamped to the head.
+  A verify with no range on an empty log still answers ok true, with `empty: true`. Port of
+  aska-digital/exo-desktop #70 by sparky-118 (docs/PEERS.md "Bus seats").
+- Learn review and the consolidation model reflector no longer drop a valid model reply because of a brace in
+  the prose after it. The old greedy match ran to the last brace in the text. Port of aska-digital/exo-desktop
+  #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
+  array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
+  `parse_json` takes the first brace or bracket that decodes.
 
 ### Added
+- `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
+  re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
+  write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
+  still takes the write lock briefly for its schema check (#797, refs #684).
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
@@ -100,7 +119,51 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   quoted-prefix and parameter-word lines under 112 policies (29,281 tightened on 3,018 actions), and the hook in
   bypass decides none of 908 such lines lower (158 stricter). Tests:
   `tests/security/test_gate_parameter_expansion_quoted_prefix.py`, `plugins/exo-gate/tests/test_bypass.py`.
+  On main a1dd4fec (#838, #479) each reading composes with the loop's second pass: bash's reading of the words and
+  the reading as before #143 (`flat`, main's own) are each read by `_classify_read`, which reads a loop that `cd`s
+  into the store a second time, so the command in a word in such a loop is read in the store on the next pass.
+  `for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd ~/.exo/policies; done`, which rewrites the policy
+  file on the second pass, was an allowed read on main a1dd4fec and on this PR before the merge; it is now a
+  `store_write`, the principal's alone, denied under `deny: [store_write]`, and the bypass floor holds (also in an
+  `env -S` text, a sudo shell's stdin, a `$((`, a `{ ..; }` body and a loop inside a word). A `cd` in a word's
+  `$( )` runs in a subshell and leaves the loop where it was. Against main a1dd4fec, `scripts/gate_diff.py` lowers
+  0 of 1,227,248 pairs on the built-in corpus without variants (21,852 tightened on 441 actions) and 0 of 483,280
+  pairs on an aimed corpus of 4,315 loop lines (a parameter word or `$((` behind or holding a quoted prefix, in a
+  loop that `cd`s into the store) under 112 policies (38,849 tightened on 1,044 actions); a probe of those lines
+  under 24 policies decides 0 pairs lower than main a1dd4fec or this PR before the merge (9,599 and 16,551
+  stricter), with no reserved hit, violation, binding, `no_grant` or approver lost, and the hook in bypass decides
+  none of 1,440 such lines lower (80 and 281 stricter). Tests:
+  `tests/security/test_gate_parameter_expansion_loop_cd_store.py`, `plugins/exo-gate/tests/test_bypass.py`.
   `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
+
+- A loop body that `cd`s into the store is read as running its earlier commands there on the next pass (#479, also
+  #480). The gate read the body once, in order, so `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` and its `while :` and `until false` forms, which rewrite the policy file on the second pass, were allowed
+  reads on main f28934a3, also under `deny: [store_write]` (the `select` form and the `$( )` form asked but were not
+  denied), and so was the brace-bodied `for i in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`. When a
+  `for`, `select`, `while` or `until` body (a `coproc` one too) holds a `cd` or `pushd` into the store or a
+  descriptor folder after the loop's first command, `classify` now reads the call a second time with that folder
+  entered where the outermost such loop starts, and keeps that reading beside main's (`gate.readings`; the more
+  severe leads): the rows are `store_write`, ask the principal alone, keep the bypass floor and deny under `deny:
+  [store_write]`. A `for` or `select` loop with a `{ ..; }` body (`for i in 1 2; { ..; }`, `select x in a b; {
+  ..; }`, `for ((..)) { ..; }`) counts as a `do ..; done` one; a `for ((..))` header is found from its own `((..))`,
+  so a reserved word as its variable (`for ((do=0; do<2; do++)) { ..; }`), a `!` or any number of `|`, `&&` or
+  `||` pieces in it do not hide the body. Nested loops, a loop condition, `cd -` or a `cd` out after the write,
+  `pushd`, the store spelt as `"$HOME/.exo/policies"`, `$EXO_HOME/policies`, `${X:-..}` or a glob, and a loop in a
+  `$( )` or `bash -c` count. A `for` word list, the loop's `done` or `}` redirections and a command before the loop
+  run once and keep their folder. Known limits, as on main: a `cd` through a variable set earlier or the loop
+  variable is not followed, and a loop behind `time` is not read again (it asks as `opaque_exec`, a seat may answer
+  it and permissions bypass auto-allows it). The second reading may read afresh 64 lines more than the first; past
+  that (a nest of loops in `$( )` five levels deep, which cost about 6 times main's time) it fails closed with one
+  `store_write` part for the passes it did not read, so a deeper nest costs about 2 to 3 times main's CPU time (8
+  levels: 1.05 s, main 0.39 s; 12 levels: 6.2 s, main 3.0 s), and about 4 times when the nest also writes
+  `~/.exo/config.json`, whose D-074 reading is a classify of its own (6 levels: 1.10 s, main 0.29 s). Main's
+  reading of every call is kept unchanged, so nothing decides lower: main's `scripts/gate_diff.py` against f28934a3
+  lowers 0 of 1,123,144 built-in pairs (7,129 tightened on 122 actions), 0 of 4,409,664 pairs on an aimed corpus
+  of 11,424 loop lines under 193 policies before the second verify (606,376 tightened on 7,792 actions), and 0 of
+  2,737,512 pairs on the 7,092 lines with a `((` of that corpus and 4,950 new arithmetic-header lines (135,509
+  tightened on 4,752 actions). Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`
+  "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-28), `docs/DOCS-MAP.md`.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
@@ -171,6 +234,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
   **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
 
+- Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command (#473).
+
 - The core retries its start after a failed or cancelled start instead of failing every later command
   (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
   raise once and leave every later command with the same `internal` error until exod restarted. A start cut
@@ -178,6 +243,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   always closes MCP. Tests:
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
+
+- Malformed peer presence records no longer break discovery or hide other live peers (#638).
+
+- Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
+
+- The pinned type baseline matches again after separating reused gate locals and typing terminal
+  restart environments as read-only mappings; nine resolved diagnostics are removed (#710).
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).

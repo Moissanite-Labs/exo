@@ -35,14 +35,33 @@ export function mount(root) {
   }
 
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
-  let data = null, models = null, err = "", picked = "";
+  let data = null, models = null, modelsError = null, err = "", picked = "";
+
+  // D-091: a failed model list says which failure it was. A transport failure can be retried; an authority
+  // refusal cannot, so it gets no button. A failed retry keeps the last good list, so the picker stays usable.
+  async function loadModels() {
+    try {
+      const d = await api("GET", "/api/providers/models");
+      if (d && d.error) modelsError = { text: d.error, cls: d.error_class || "other", retryable: d.retryable !== false };
+      else { models = d; modelsError = null; }
+    } catch (e) {
+      modelsError = { text: e.message || "The model list could not be read.", cls: "other", retryable: true };
+    }
+  }
 
   async function load() {
     try {
       data = await api("GET", "/api/providers");
-      models = await api("GET", "/api/providers/models").catch(() => ({ models: [], available: [] }));
       err = "";
     } catch (e) { err = e.message; }
+    await loadModels();
+    if (alive) draw();
+  }
+
+  async function retryModels() {
+    modelsError = null;
+    if (alive) draw();
+    await loadModels();
     if (alive) draw();
   }
 
@@ -120,7 +139,15 @@ export function mount(root) {
     for (const m of (models && models.models) || []) if (m.route && !routes.includes(m.route)) routes.push(m.route);
     const more = [];
     for (const m of (models && models.available) || []) if (m.route && !routes.includes(m.route) && !more.includes(m.route)) more.push(m.route);
-    if (!routes.length && !more.length) return null;
+    if (!routes.length && !more.length) {
+      if (!modelsError) return null;
+      return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
+        h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"),
+          h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
+        h("div", { class: "xc-warn", role: "status" }, modelsError.text),
+        modelsError.retryable ? h("div", { class: "xc-prov-def-act" },
+          h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again")) : null);
+    }
     if (!picked) picked = routes[0] || more[0];
     const opt = (v) => h("option", { value: v, selected: v === picked }, v);
     const sel = h("select", { class: "xc-field", "aria-label": "Default model", onchange: (e) => { picked = e.target.value; } },
@@ -130,6 +157,7 @@ export function mount(root) {
     return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
       h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
       h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
+      modelsError ? h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.") : null,
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 

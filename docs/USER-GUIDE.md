@@ -396,7 +396,8 @@ What the gate asks about, and why:
   command after it (#143, fixed in #158), down to three levels of `$( )` inside it; a deeper one, or one past the
   24 such parts a call may open (a word inside a `$( )` counts again for each pass over it), asks. Such a word is
   read in an `env -S` text and in what a `sudo -s` or `sudo -i` shell reads from its stdin too, and behind or
-  inside a quoted prefix assignment (`X='a b' echo ${v:-$(...)}`, `echo ${v:-$(X='a b' ...)}`, #471). `${!name}` and
+  inside a quoted prefix assignment (`X='a b' echo ${v:-$(...)}`, `echo ${v:-$(X='a b' ...)}`, #471), and in a loop
+  that `cd`s into your store it is read as running there on the loop's next pass (#479). `${!name}` and
   `${name@P}`, which run code a variable holds, ask, also for the positional parameters (`${@@P}`, `${!@}`, #554).
   A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
   `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579); `p=x; echo ${p@P}`, which the reading before #158
@@ -499,7 +500,8 @@ Details: `docs/GATE.md`.
 
 Peers are other live sessions on the machine: Exo sessions, Hermes agents and bus seats.
 
-- `/peers` lists them. `/send <peer> <text>` sends a message from you.
+- `/peers` lists them. `/send <peer> <text>` sends a message from you. Malformed discovery records
+  are ignored and removed during normal discovery so other live peers remain available.
 - An agent can message a peer with its `peer_send` tool.
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
@@ -551,6 +553,7 @@ folder is not inside a git repo.
 - `/trace` shows one row per turn: time, model that served, calls, fallbacks, tools, tokens and cost.
 - `exo trace [SESSION] [--last N] [--calls] [--json]` shows the same from a shell.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
+- `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
 
 Details and the cost rules: `docs/TRACE.md`.
 
