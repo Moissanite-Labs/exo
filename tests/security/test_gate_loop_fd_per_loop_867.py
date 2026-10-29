@@ -115,10 +115,10 @@ _W = "echo ${v:-$(cp /tmp/evil 3)}"
 # #158 (main d3cbd874) reads a `${..}` word as bash's parser does, and the call both ways where that may differ from
 # the reading before (``flat``): the write in a `${v:-$( )}` word of a loop body runs on the loop's second pass in its
 # own folder too. In the second loop, the first, both, a loop inside the word, the pair inside a word, after a
-# `cd /dev/fd`, in a `$((`, a nested word, a `'}'` word, a joined `$\<newline>` word (#584), a condition `<( )`, a
-# `{ ..; }` body, behind a quoted prefix (#546, and without a word) and `time` (#853), inside an outer loop, `bash -c`,
-# a sudo -i shell's stdin (#491) and an `env -S` text (#591). On main d3cbd874 each names /dev/fd only, so `deny:
-# [target:/proc*]` asks.
+# `cd /dev/fd`, in a `$((`, a nested word, after a `'}'` word (the write outside it), a joined `$\<newline>` word
+# (#584), a condition `<( )`, a `{ ..; }` body, behind a quoted prefix (#546; also a plain write behind one, with no
+# word) and `time` (#853), inside an outer loop, `bash -c`, a sudo -i shell's stdin (#491) and an `env -S` text
+# (#591). On main d3cbd874 each names /dev/fd only, so `deny: [target:/proc*]` asks.
 WORD_ROWS = [
     f"{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done",
     f"for i in 1 2; do {_W}; cd /dev/fd; done; {_B}",

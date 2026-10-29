@@ -23,9 +23,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   tightened). The reading is also made in #853's opened reading, so it counts when each loop is behind its own
   `time` or `!` (`time for ..; done; time for ..; done`), and in each of #158's two readings of a line with `${..}`
   words, so a write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too (main
-  d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2 times main's CPU time. Known limits, as on main (#888): a command run once after a second
-  descriptor `cd`, outside a loop's second pass, keeps the line's first folder, and a loop whose own commands `cd`
-  into two descriptor folders is named by its first one. Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
+  d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2 times main's CPU time. Known limits,
+  as on main (#888): a command run once after a second descriptor `cd`, outside a loop's second pass, keeps the line's
+  first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
+  Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
