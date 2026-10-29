@@ -112,7 +112,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   sleep 1; done` the `cp` rewrites the policy file from the second pass; it and five other spellings (`until !
   cd`, backticks, `pushd`, `< <(..)`, a `cd` in an `if`) were allowed reads on main 1401ff81, also under `deny:
   [store_write]`. They are now `store_write`, as the #479 rows are. A condition's `cd` into a descriptor folder
-  names that folder when the body holds no `cd` of its own (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
+  names that folder when the loop holds no other store `cd` (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
   denies under `deny: [target:/dev*]`). Main's `scripts/gate_diff.py`: 0 of 10,616,630 pairs
   lowered (built-in corpus, 11,044 aimed loop lines, `/dev*`, `/proc*` and `*store*` target rules kept apart).
   Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
