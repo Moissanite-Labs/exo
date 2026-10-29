@@ -270,6 +270,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   desktop web view with no confirm handler answers `window.confirm` with Cancel. Tests:
   `plugins/exo-command/tests/test_schedule_web.py`. **Docs:** `docs/ui/WEB.md`, `docs/USER-GUIDE.md` §5,
   `plugins/exo-command/README.md`, D-061 amendment.
+
+- The web confirm step takes focus, and Escape cancels it (#863 follow-up, review 5692507751). Schedule's remove
+  and Command's allow always redraw the cards, so focus fell to the page and a keyboard user had to find the step.
+  Focus now moves to Cancel, not to Confirm, so a second Enter cancels. Cancel and Escape put focus back on the
+  button that opened the step. On Command, a redraw on a core event keeps focus on the same approval button.
+  While a Schedule remove is in flight, its step now stays with Confirm remove and Cancel disabled. Before, Cancel
+  stayed live then. Pressing it hid the step, and the job was removed anyway. Tests:
+  `plugins/exo-command/tests/test_schedule_web.py`,
+  `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
+  `docs/USER-GUIDE.md` §5, D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
