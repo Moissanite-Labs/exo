@@ -64,6 +64,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
   was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
   bound). Test-only.
+- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is not a list no longer loads. A string such
+  as `toolsets = "fs"` read as no list, and the seat got every toolset (exo-desktop #52, D-041 amendment).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
