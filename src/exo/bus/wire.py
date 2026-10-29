@@ -120,6 +120,12 @@ def request_message(method: str, path: str, ts: str, query: str = "") -> bytes:
     return (f"{msg}\n{query}" if query else msg).encode("utf-8")
 
 
+def raw_query(scope) -> str:
+    """The query as the app parses it. Each byte is one character, so a '#' or a byte that is not UTF-8 stays in
+    what is verified, and nothing is decoded away before the signature check."""
+    return scope.get("query_string", b"").decode("latin-1")
+
+
 def request_headers(seat: str, key: SigningKey, method: str, path: str, query: str = "") -> dict[str, str]:
     ts = now_ts()
     return {HEADER_SEAT: seat, HEADER_TS: ts,

@@ -173,7 +173,8 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         return JSONResponse(body, status_code=exc.status_code)
 
     def auth(request: Request) -> str:
-        return relay.authed_seat(request.headers, request.method, request.url.path, query=request.url.query)
+        return relay.authed_seat(request.headers, request.method, request.url.path,
+                                 query=wire.raw_query(request.scope))
 
     @app.post("/v1/messages", status_code=201)
     async def post_message(request: Request):
@@ -213,7 +214,7 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
     @app.websocket("/v1/stream")
     async def stream(ws: WebSocket, seat: str):
         try:
-            who = relay.authed_seat(ws.headers, "GET", ws.url.path, query=getattr(ws.url, "query", ""))
+            who = relay.authed_seat(ws.headers, "GET", ws.url.path, query=wire.raw_query(ws.scope))
         except HTTPException as e:
             await ws.close(code=4401, reason=str(e.detail))
             return
