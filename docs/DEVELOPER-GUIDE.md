@@ -579,12 +579,15 @@ At the same outcome below deny a pair is also lower when the head loses one of t
 that depend only on the call and the decision (#551), each run with the tree's own gate: `no_grant` (the once rule),
 `body_unseen` (a post body the gate did not see), `binds_exact` (an approval bound to the exact call) and
 `reserved_elsewhere` (a reserved hit on another part than the line's own category and target, which keeps a standing
-grant from covering the call). The summary counts each one lost. A check a tree's gate does not have is not held; one
+grant from covering the call; the hook's #471 branch that also checks the line read as before, `c.before`, is not
+modelled). These are the script's `FLAGS`. Each is compared on its own, at every outcome below deny, so a head that
+drops one while another that also refuses grants stays still counts as lower: strict, and on the cautious side. The
+summary counts each one lost. A check a tree's gate does not have is not held; one
 that raises sends the hook to its error card, so the pair counts as that error. The card is once-only, so a head
 pair that is one loses none of these checks and no reserved hit. The script marks such a pair with `error_card` in
 its flags, which no gate decision can carry, so a decision whose rule is `"error"` is compared like any other. An
-outcome other than allow, log, ask or deny (`"Ask"`, `"block"`) is one the hook runs (with a decision model on,
-`tighten_only` raises on it and the hook gives its error card): it ranks as allow in the head and as ask in the base,
+outcome other than allow, log, ask or deny (`"Ask"`, `"block"`) is one the hook runs (when the decision model gives
+a verdict, `tighten_only` raises on it and the hook gives its error card): it ranks as allow in the head and as ask in the base,
 and the summary counts such pairs on each side.
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
@@ -599,8 +602,8 @@ Exit 2 also follows a run with nothing lower when a tree holds a gate table in a
 summary lists each such table with the reason, as `INCOMPLETE`. Keep the table a literal, or read the change and
 name the table in `--accept-unread TOOLS,...` to accept the missing lines. A lowered pair still exits 1.
 
-**What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
-and a line in its decision amendment:
+**What the check leaves out.** It runs `classify`, `decide` and the hook's `FLAGS` checks above, nothing else of the
+hook, so a change to any of these needs its own tests and a line in its decision amendment:
 
 - Session folders. The hook passes `classify` the session's folder (#209). Only the corpus's own `"cwd"` values and
   the folder rows run here. The rows cover what main reads from a folder today: a relative name that lands in a
@@ -616,8 +619,9 @@ and a line in its decision amendment:
   contents, links and folders a real HOME has do not run.
 - Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
   `DIVAN_*` names). Both trees run without them.
-- The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
-  executor, a policy file changed mid-session, and the decision model.
+- The hook steps after `decide` other than the `FLAGS`: which standing grants exist and match, the body files the hook
+  reads into a post, who may answer, the registry risk floor, the required executor, observe and bypass, a policy
+  file changed mid-session, errors past `decide`, and the decision model.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 

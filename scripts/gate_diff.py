@@ -39,8 +39,9 @@ standing grant from covering the call). A pair is the card only by the mark this
 (error_card), never by its rule, so a decision a gate returns with the rule "error" is compared like any other.
 
 An outcome that is not allow, log, ask or deny (not in gate.OUTCOMES, such as "Ask" or "block") is one the hook
-neither asks for nor blocks, so it runs the call (with a decision model on, tighten_only raises on it and the hook
-gives its error card instead; allow is the loosest reading, so it is the one ranked). In the head it ranks as allow:
+neither asks for nor blocks, so it runs the call (when the decision model gives a verdict, tighten_only raises on it
+and the hook gives its error card instead; allow is the loosest reading, so it is the one ranked). In the head it
+ranks as allow:
 it is lowered against a base log,
 ask or deny, and is not tighter than a base allow. In the base it ranks as ask, as before, so a head that fixes it to
 ask is not lowered by it. The same outcome on both sides ranks the same. The summary counts such pairs on each side.
@@ -2048,9 +2049,10 @@ FLAGS = ("no_grant", "body_unseen", "binds_exact", "reserved_elsewhere")
 
 
 def _reserved_elsewhere(c: Any, d: Any) -> bool:
-    """The hook's check (_grant_for, D-075, #454), as it writes it: a reserved hit that is not the line's own
+    """The hook's check (_grant_for, D-075, #454) on the line's own reading: a reserved hit that is not the line's own
     (category, target), or not that of the part a sudo write displaced, keeps a standing grant from covering the
-    call."""
+    call. _grant_for's #471 branch, which also checks the line read as before (c.before), is not modelled here;
+    binds_exact still covers such a line in practice."""
     return any(hit != (x.category, x.target) for x in (c, getattr(c, "displaced", None)) if x is not None
                for hit in d.reserved)
 
