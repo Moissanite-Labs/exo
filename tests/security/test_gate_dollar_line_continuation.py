@@ -206,7 +206,8 @@ def test_the_line_as_written_still_decides_when_it_is_stricter(line, expected):
                                   f'x=`echo "$\\\\\n({PUSH})"`'])
 def test_the_more_severe_reading_leads_the_card(line):
     c = sh(line)
-    assert len(gate.readings(c)) == 2 and c.category == "force_push"
+    # a ${..} word holding a $( ) is also read as before #143, the line as written and joined (#158)
+    assert len(gate.readings(c)) == (4 if "{x:-" in line else 2) and c.category == "force_push"
     assert gate.summarize(c, gate.decide(c)).startswith("force-push to origin (irreversible")
 
 
