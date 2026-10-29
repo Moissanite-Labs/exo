@@ -740,7 +740,8 @@ class CoreRuntime:
         return {"tools": self.registry.schemas()}
 
     async def _commands_list(self, b: s.CommandsList) -> dict[str, Any]:
-        own = [{"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
+        own = [{"name": "pet", "description": "verified local pet growth; personal XP is banked pending community hatch", "args": "[status]"},
+               {"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]

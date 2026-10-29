@@ -52,8 +52,8 @@ export async function redeem(code) {
   } catch (e) { return { error: "" }; }
 }
 
-export async function api(method, path, body) {
-  const opt = { method, headers: { "X-Exo-Token": token() } };
+export async function api(method, path, body, signal) {
+  const opt = { method, headers: { "X-Exo-Token": token() }, ...(signal ? { signal } : {}) };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(path, opt);
   let data = {};

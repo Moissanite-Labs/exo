@@ -35,6 +35,10 @@ def test_no_local_storage_anywhere():
             assert 'const CHOICES = ["dark", "light", "system"]' in body
             assert ".setItem(KEY, choice)" in body and "CHOICES.includes(value)" in body
             continue
+        if f.name == "pet.js":
+            assert 'const KEY = "xc-pet-mode", MODES = ["full", "mini", "off"]' in body
+            assert ".setItem(KEY, mode)" in body and "MODES.includes(value)" in body
+            continue
         assert "localStorage" not in body, f.name
 
 

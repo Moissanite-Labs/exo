@@ -78,6 +78,10 @@ conversation titles, IDs and agent names, and a Show latest messages control for
 layouts. Status filters show working conversations and pending approvals. Search never submits a
 prompt or changes the selected conversation.
 
+Exopet adds an activity glyph with Mini, Full and Off controls. Full includes a verified growth card and an
+empty-thread lattice; Off stops pet reads and rendering. Personal XP is banked while the community hatch is
+pending. No requests go to the project site. See [the implementation notes](../../docs/ui/EXOPET.md).
+
 - **Chat:** sessions on the left, a transcript with streamed text, tool lines, approval cards and a composer
   in the middle, and the side panel area on the right. A reply streams as plain text and, once complete, is
   rendered as Markdown (headings, lists, code, quotes and pipe tables, built as DOM nodes, never as HTML).

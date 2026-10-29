@@ -20,8 +20,8 @@ A client reads the line and decides. Three things can answer:
    (`ctx.register_command` in `src/exo/core/plugins.py`) and calls the handler with the raw argument string. An
    unknown name fails with the error code `not_found`.
 
-`commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`), optional `work` and `checkpoint`, plus every plugin command, each with a name, a description and an argument hint.
+`commands.list` returns the commands a client may offer: the core names below that are listed there (`context`,
+`compact`, `trace`, `findings` and `pet`), optional `work` and `checkpoint`, plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -125,6 +125,11 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 
 ### Core built-ins (`command.run`)
 
+`/pet [status]` reads a counts-only projection of verified personal growth. It requires a principal connection,
+accepts no mutation arguments and makes no model call. Web clients use authenticated `GET /api/pet`; Off suppresses
+pet reads until Mini or Full is selected. Personal XP remains banked while the community hatch is pending.
+See [Exopet in the workspace](ui/EXOPET.md).
+
 `/checkpoint` shows the current conversation's record-derived continuity index
 when `work_checkpoint.enabled` is true (default). It requires a principal
 connection and accepts no arguments. It never executes indexed work. See
@@ -139,6 +144,7 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 | Name | What it does | Arguments | Returns |
 |---|---|---|---|
 | `context` | Shows what the next model call for this thread carries, part by part, with token estimates. Read-only. | none, or `json` | text (`context_text`), or the report dict for `json` (`context_report`) |
+| `pet` | Reads verified personal XP, historical promotion counts and the pending community hatch. Principal only, read-only. | none, or `status` | versioned counts and verification state, without ledger content |
 | `compact` | Summarizes now what is eligible in this agent's memory, then shows tokens before and after. Fails with `busy` if a turn is running. | none | text (`compact_text`) |
 | `rename` | Gives the thread a new title and announces `session.updated` (D-069). Principal only (D-052): any other caller gets `forbidden`. Extra spaces are squeezed and the title is cut at 200 characters. | the title (empty fails with `bad_request`) | dict: `{"session": ...}` |
 | `unsteer` | Cancels queued steer messages that have not landed yet and publishes `steer.cancelled` for each (D-045). | a message id, or none for the newest | dict: `{"cancelled": [{id, text}]}` |
@@ -150,7 +156,7 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 | `memory_status` | The memory slot's state, for a client's boot line: `on`, `off` until a setup step (no principal store, and `text` is the notice naming `exo init <id>`), `failed` (an error at start) or `none` (no memory plugin). | none | dict `{state, provider, text}` |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `rename`, `unsteer`, `providers`,
+`context`, `compact`, `trace`, `findings` and `pet` appear in `commands.list`. `rename`, `unsteer`, `providers`,
 `handoff_facts`, `harness_error`, `memory_status` and `subagent` are for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
 
 ### Plugin commands

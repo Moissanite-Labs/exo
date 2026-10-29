@@ -129,6 +129,7 @@ def _route(method: str, p: list, key: str):
         "complete/commands": (_complete_commands, None),
         "complete/files": (_complete_files, None),
         "permissions": (_permissions, _permissions_set),
+        "pet": (_pet, None),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
     }
@@ -234,6 +235,13 @@ async def _ui_respond(c, p, q, body):
     return res
 
 
+async def _pet(c, p, q, body):
+    if q or body:
+        raise BadRequest("pet is a read-only status endpoint with no arguments")
+    result = await c.source.call(s.CommandRun(name="pet", args="status"))
+    return result.get("output") or {}
+
+
 async def _permissions(c, p, q, body):
     """The permission mode for the banner. A core without the gate (or an older one) reads as ask."""
     try:
@@ -304,7 +312,7 @@ async def _schedule_edit(c, p, q, body):
 
 
 # ---------------------------------------------------------------- completion (D-037)
-WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+WEB_COMMANDS = {"pet": "local Exopet status (Mini or Full must be enabled)", "context": "what the next model call carries, part by part",
                 "model": "pick or set the shared main model; default <ref> saves the default",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
@@ -325,8 +333,10 @@ async def _complete_commands(c, p, q, body):
     rows = []
     for name, desc in WEB_COMMANDS.items():
         slot = cm.plan(name, [])
-        rows.append({"name": name, "description": desc, "args": cm.ARG_HINTS.get(name, ""),
+        rows.append({"name": name, "description": desc, "args": "[status]" if name == "pet" else cm.ARG_HINTS.get(name, ""),
                      "choices": [{"value": v, "meta": m} for v, m in (slot.choices if slot else ())]})
+        if name == "pet":
+            rows[-1]["choices"] = [{"value": "status", "meta": "verified local growth, no model call"}]
     guidance: bool | None = True
     try:
         got = await c.source.call(s.ConfigGet(key="guidance.enabled"))

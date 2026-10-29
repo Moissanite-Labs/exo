@@ -40,7 +40,7 @@ class Workspace(Demo):
                 {'id':'a1','role':'assistant','content':text('I’ll check the changes and their tests, then prepare the release notes. I’ll keep any open decision beside the evidence.')},
                 {'id':'tool1','role':'assistant','content':[], 'tool_calls':[{'id':'read1','name':'read_file','arguments':{'path':'CHANGELOG.md'}}]},
                 {'id':'result1','role':'tool','content':[], 'tool_results':[{'call_id':'read1','content':text('Three changes ready for review. No live installation changed.')} ]},
-                {'id':'a2','role':'assistant','content':text('## Ready for review\n\nThe recovery changes now work together. Drafts stay with their conversation, and accepted corrections survive a restart.\n\n| Change | Evidence |\n| --- | --- |\n| Conversation drafts | Navigation and failed-send checks pass |\n| Saved steering | Restart recovery checks pass |\n| Working notes | Sources and revisions remain visible |\n\nThe remaining choice is **when to test the native build**. The release notes include the current limits and a rollback step.\n\nNo live installation has changed.')},
+                {'id':'a2','role':'assistant','content':text('## Ready for review\n\nThis synthetic sample shows a review summary with a table, an open decision and a tool result.\n\n| Change | Evidence |\n| --- | --- |\n| Conversation layout | Sample text and controls |\n| Review table | Sample evidence cells |\n| Tool result | Sample file-read record |\n\nThe remaining choice is **when to test the native build**. The release notes include the current limits and a rollback step.\n\nNo live installation has changed.')},
             ]}
         return await super().call(body)
 

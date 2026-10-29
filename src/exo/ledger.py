@@ -138,6 +138,8 @@ class Ledger:
     """`Ledger(path, signer)`. `signer` may be a `crypto.Signer`, a bare `SigningKey`, or None
     for read-only use."""
 
+    _captured_anchors: tuple[tuple[Path, bytes], ...]
+
     def __init__(self, path: str | os.PathLike, signer: Signer | SigningKey | None = None,
                  *, authority=None, authority_author: str | None = None):
         from .ledger_authority import AuthorityError, validate_identity
@@ -166,6 +168,36 @@ class Ledger:
             logger.warning("ledger %s: append-only trigger(s) %s were missing; recreated", self.path,
                            ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
+
+    @classmethod
+    def read_only(cls, path: str | os.PathLike) -> "Ledger":
+        """Open a stable read transaction without creating a ledger, repairing triggers or changing journal mode."""
+        path = _ledger_key(path)  # bind relative folders without resolving away a file symlink
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise LedgerError("read-only ledger must be a regular, non-symlink file")
+        reader = cls.__new__(cls)
+        reader.path, reader.signer = path, None
+        reader.authority, reader.authority_author = None, None
+        reader._lock = threading.Lock()
+        reader.missing_triggers = []
+        # Anchors follow COMMIT. Capture them before BEGIN establishes the read snapshot:
+        # an intact concurrent append can then only extend, never overtake, this evidence.
+        reader._captured_anchors = tuple((p, crypto.canonical(a)) for p in anchor_paths_for(path)
+                                         if (a := cls._read_anchor(p)) is not None)
+        reader.db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False,
+                                    isolation_level=None, timeout=5)
+        try:
+            reader.db.execute("PRAGMA query_only=ON")
+            reader.db.execute("BEGIN")
+            reader.head()  # establish the snapshot before verification and scoring share it
+            after = path.lstat()
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or not stat.S_ISREG(after.st_mode):
+                raise LedgerError("ledger path changed during read-only open")
+        except BaseException:
+            reader.close()
+            raise
+        return reader
 
     def _missing_triggers(self) -> list[str]:
         """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
@@ -225,6 +257,8 @@ class Ledger:
         return row is not None and row[0] == a.get("chain")
 
     def anchors(self) -> list[tuple[Path, dict]]:
+        if hasattr(self, "_captured_anchors"):
+            return [(p, json.loads(raw)) for p, raw in self._captured_anchors]
         out = []
         for p in self.anchor_paths():
             a = self._read_anchor(p)

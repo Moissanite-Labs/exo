@@ -152,6 +152,11 @@ working conversations or those waiting for an approval. It does not search messa
 messages returns to the newest message when you have scrolled away. Appearance offers Dark, Light or
 System; that preference is saved in this browser. Back and Forward move between the web views.
 
+Exopet shows the selected conversation's activity as a small lattice. Choose Mini, Full or Off in the brand bar.
+Full shows verified personal growth and learned-item counts; Off stops pet-specific reads. Personal XP is banked
+while the community hatch is pending, so the drawing stays an egg. No pet data is sent to the project site.
+See [Exopet in the workspace](ui/EXOPET.md) for the controls and verification limits.
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.
@@ -180,6 +185,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/providers` | Set up model providers: status, add or replace a key in a masked field, test, remove, default model. `/providers add <name>` opens the key field. |
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
+| `/pet [status]` | Read verified personal growth and the pending community hatch. In the web client, enable Mini or Full first. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
 | `/gate` | Show whether policy files changed this session, and any error in them. `/gate accept` adopts the change. |
 | `/permissions` | Show whether the gate asks or is in bypass, and how many calls bypass approved. `/permissions bypass` stops the asking (except Exo's own records and secrets); `/permissions ask` turns it back on. |

@@ -1,8 +1,11 @@
 # Exopet: Exo as a living lattice (D-048)
 
-Status: **Proposed** (2026-10-12), revised 2026-10-13 by D-058 (the community egg, x0, grows from repository
+Status: **Local integration in development** (2026-10-28), following the principal's request to build on the
+new web workspace. The core status command and web companion are the first local slice; see
+[the implementation notes](ui/EXOPET.md). The terminal glyph, community hatch, gallery and creation skill
+remain planned. The design below was proposed 2026-10-12, revised 2026-10-13 by D-058 (the community egg, x0, grows from repository
 activity, with an instant share and a validated share earned in meditation; section 3) and 2026-10-18 after the reviews
-of PR #107. Nothing here is built. D-048 and D-058 in `DECISIONS.md`.
+of PR #107. D-048 and D-058 in `DECISIONS.md`.
 Builds on D-040 (signed authors, anchored ledger), D-012 and D-022 (the learning loop), D-044 (taste baseline), D-031
 (the Exo look) and D-049 (the brand egg). The open questions for the principal are at the end. This page does not
 depend on the event-activation decision (D-057), and D-057 does not depend on this page.

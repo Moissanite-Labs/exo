@@ -19,7 +19,9 @@ def test_egg_is_the_site_copy():
 
 
 def test_egg_is_used_once():
-    users = [f.name for f in STATIC.glob("*.js") if f.name != "egg.js" and "egg.js" in f.read_text(encoding="utf-8")]
+    # An attribution comment is not a second instance of the ambient brand renderer.
+    imported = re.compile(r'''(?:from\s*|import\s*\(?\s*)["']\./egg\.js["']''')
+    users = [f.name for f in STATIC.glob("*.js") if f.name != "egg.js" and imported.search(f.read_text(encoding="utf-8"))]
     assert users == ["tasks.js"]
 
 

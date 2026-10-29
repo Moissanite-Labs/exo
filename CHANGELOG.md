@@ -66,6 +66,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   bound). Test-only.
 
 ### Added
+- Exopet in the web workspace: a small activity glyph, optional growth card and empty-thread lattice,
+  with Mini, Full and Off controls. Personal growth is read from verified ledger records; failed verification
+  freezes the last trusted result. XP remains banked in the egg while the community hatch is pending.
+  No community requests, install reports or pet notifications (`docs/ui/EXOPET.md`, D-048).
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store

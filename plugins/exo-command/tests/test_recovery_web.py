@@ -269,6 +269,7 @@ console.log("ok");
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_bare_link_guidance_and_fresh_fragment_in_same_tab(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
+    (tmp_path / "pet.mjs").write_text('export const createPet=()=>({glyph:{},control:{},start(){},suspend(){}});')
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";

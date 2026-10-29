@@ -1498,7 +1498,11 @@ class ExoApp(App):
                     self.close_cur()
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
-                    self.note(out if isinstance(out, str) else str(out))
+                    if name == "pet" and isinstance(out, dict):
+                        from exo_tui.pet import summary
+                        self.note(summary(out))
+                    else:
+                        self.note(out if isinstance(out, str) else str(out))
             if name == "permissions":
                 await self.load_permissions()
 

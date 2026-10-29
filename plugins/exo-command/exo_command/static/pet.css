@@ -1,0 +1,58 @@
+/* Exopet uses the workspace theme. The drawing is supplemental; text names its state. */
+.xc-root #xc-live[hidden] { display: none; }
+.xc-pet-glyph { display: block; width: 144px; height: 144px; flex: none; color: var(--fg-2); }
+.xc-pet-glyph.xc-pet-mini { width: 24px; height: 24px; }
+.xc-pet-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.xc-pet-body { transform-box: fill-box; transform-origin: center; }
+.xc-pet-lines, .xc-pet-shell { fill: none; stroke: var(--fg-3); stroke-width: .7; stroke-linecap: butt; stroke-linejoin: miter; }
+.xc-pet-frame { stroke: var(--line-2); stroke-width: .55; }
+.xc-pet-shell { stroke: var(--line-2); stroke-width: .6; }
+.xc-pet-bridge { stroke: var(--cold); }
+.xc-pet-node { fill: var(--fg-2); }
+.xc-pet-node-corner { fill: var(--fg-3); opacity: .5; }
+.xc-pet-learned { fill: var(--cold); opacity: 1; }
+.xc-pet-svg[data-form^="d"] .xc-pet-frame { stroke-opacity: .45; stroke-width: .45; }
+.xc-pet-signal { fill: var(--fg-2); }
+.xc-pet-svg[data-active="true"] .xc-pet-signal { fill: var(--accent); }
+.xc-pet-svg[data-state="asking"] .xc-pet-signal,
+.xc-pet-svg[data-state="learning"] .xc-pet-signal { fill: var(--cold); }
+.xc-pet-svg[data-state="error"] .xc-pet-signal { fill: var(--bad); }
+.xc-pet-svg[data-state="waiting"] .xc-pet-shell { stroke: var(--accent); }
+.xc-pet-svg[data-state="asking"] .xc-pet-shell { stroke: var(--cold); }
+.xc-pet-mini .xc-pet-lines, .xc-pet-mini .xc-pet-shell { stroke-width: 3; }
+.xc-pet-mini .xc-pet-frame { stroke-width: 2; }
+.xc-pet-control { display: inline-flex; align-items: center; gap: 7px; margin-left: 10px; color: var(--fg-3); font: 12px var(--xc-sans); }
+.xc-pet-mode { min-height: 36px; max-width: 100%; padding: 6px 8px; border: 1px solid var(--line-2); color: var(--fg); background: var(--bg-2); font: 13px var(--xc-sans); }
+.xc-pet-card { padding: 0 0 18px; border-bottom: 1px solid var(--line); min-width: 0; }
+.xc-pet-card-summary { min-height: 44px; padding: 10px 0; color: var(--fg); font: 600 14px/1.5 var(--xc-sans); cursor: pointer; overflow-wrap: anywhere; }
+.xc-pet-card h3 { font: 650 15px/1.4 var(--xc-sans); margin: 0 0 8px; }
+.xc-pet-figure { width: 144px; height: 144px; margin: 8px auto 12px; }
+.xc-pet-activity { color: var(--fg); font-size: 14px; line-height: 1.5; margin: 8px 0; }
+.xc-pet-growth { font-size: 13px; line-height: 1.6; color: var(--fg-2); overflow-wrap: anywhere; }
+.xc-pet-note { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--fg-3); overflow-wrap: anywhere; }
+.xc-pet-progress { display: block; width: 100%; height: 5px; margin: 10px 0; border: 0; background: var(--line); accent-color: var(--cold); }
+.xc-pet-progress::-webkit-progress-bar { background: var(--line); }
+.xc-pet-progress::-webkit-progress-value { background: var(--cold); }
+.xc-pet-progress::-moz-progress-bar { background: var(--cold); }
+.xc-pet-hero { width: 120px; height: 120px; margin: 0 0 12px; }
+.xc-hero:not([hidden]):has(.xc-pet-hero:not([hidden])) { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 24px clamp(22px, 4vw, 48px); overflow-y: auto; }
+.xc-hero:not([hidden]):has(.xc-pet-hero:not([hidden])) .xc-pet-hero-host { flex: none; margin-top: auto; }
+.xc-hero:not([hidden]):has(.xc-pet-hero:not([hidden])) .xc-hero-text { position: static; flex: none; inset: auto; padding: 0; margin-bottom: auto; max-width: 100%; }
+.xc-hero:not([hidden]):has(.xc-pet-hero:not([hidden]))::after { display: none; }
+.xc-pet-glyph[hidden], .xc-pet-card[hidden], .xc-pet-hero[hidden] { display: none; }
+@media (max-width: 1100px) {
+  .xc-pet-control > span { display: none; }
+}
+@media (max-width: 760px) {
+  .xc-pet-control { order: 1; margin-left: 6px; }
+  .xc-pet-mode { min-height: 40px; }
+  .xc-pet-hero { width: 100px; height: 100px; margin-bottom: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xc-pet-svg * { animation: none !important; transition: none !important; }
+}
+
+/* Hosts contribute no layout space when their selected mode has no visible drawing. */
+.xc-pet-hero-host:not(:has(.xc-pet-hero:not([hidden]))),
+.xc-pet-card-host:not(:has(.xc-pet-card:not([hidden]))) { display: none; }
+.xc-side-contents { display: flex; flex-direction: column; gap: 20px; min-width: 0; }

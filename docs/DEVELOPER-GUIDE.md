@@ -208,6 +208,11 @@ gets its turn. Anything else goes to a command a plugin registered. To add one:
 Worked examples: `rename` (D-069) is a short branch with a principal check and an existing event. `subagent` (D-070)
 is a thin branch that calls `src/exo/subagents.py`, which holds the rules and adds no protocol command or event.
 
+`pet` is a read-only, principal-only built-in for Exopet. It projects verified ledger records outside the turn
+path and returns counts and verification state, never conversation or lesson content. The web client reads it
+through authenticated `GET /api/pet`. Client activity is derived separately from existing events. See
+[Exopet implementation notes](ui/EXOPET.md) for the current scope and trust boundary.
+
 ## 3. Add a tool
 
 A tool is a name, a description, a JSON schema, a risk, a toolset and a handler. Built-in tools live in

@@ -21,7 +21,7 @@ function draft(id) {
   return drafts.get(id);
 }
 
-export function mount(root) {
+export function mount(root, { pet = null } = {}) {
   let mounted = true, navigation = 0, homeRevision = 0;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
@@ -89,6 +89,9 @@ export function mount(root) {
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
+  const petCardHost = h("div", { class: "xc-pet-card-host" });
+  const sideContents = h("div", { class: "xc-side-contents" });
+  sideEl.replaceChildren(petCardHost, sideContents);
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
   const recoveryEl = h("div", { class: "xc-draft-recovery", "aria-live": "polite" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
@@ -142,8 +145,9 @@ export function mount(root) {
   }, true);
   const newBtn = h("button", { class: "xc-btn xc-new-thread", onclick: () => create() }, "New thread");
   const layoutBtn = h("button", { class: "xc-btn xc-layout", onclick: () => switchLayout(layout === "inverse" ? "classic" : "inverse") });
+  const petHeroHost = h("div", { class: "xc-pet-hero-host" });
   const heroText = h("div", { class: "xc-hero-text" });
-  const heroEl = h("div", { class: "xc-hero" }, heroText);
+  const heroEl = h("div", { class: "xc-hero" }, petHeroHost, heroText);
   const stage = h("div", { class: "xc-stage" }, heroEl, logEl, latestBtn);
   const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
     h("a", { href: "#providers" }, "Set up providers"));
@@ -179,6 +183,13 @@ export function mount(root) {
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
     api("GET", "/api/providers").then((d) => { if (d && d.ready === false) setupBanner.hidden = false; }).catch(() => {});
   }
+
+  function syncPet() {
+    if (pet) pet.hydrate({ session: current, running: busy,
+      tools: items.filter(item => item.kind === "tool" && item.status === "running").map(item => item.id),
+      approvals: Object.values(approvals).filter(item => !item.session || item.session === current).map(item => item.request_id) });
+  }
+  const detachPet = pet ? pet.attach({ hero: petHeroHost, card: petCardHost, sync: () => { syncPet(); drawSide(); } }) : () => {};
 
   // ---------------------------------------------------------------- items
 
@@ -230,6 +241,7 @@ export function mount(root) {
     if (ev.seq) lastEvent = Math.max(lastEvent, ev.seq);
     if (loading) { pending.push(ev); return; }
     if (ev.seq <= loadedSeq && ev.session === current) return;
+    if (pet) pet.event(ev);
     const mine = ev.session === current;
     const b = ev.body || {};
     if (ev.type === "message.completed" && b.message && b.message.role === "user") {   // a steer that lands is no longer pending
@@ -545,6 +557,7 @@ export function mount(root) {
   }
 
   function drawApprovals() {
+    if (pet) pet.approvals(Object.values(approvals));
     const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
     approvalView.draw(mine);
   }
@@ -572,8 +585,8 @@ export function mount(root) {
   function drawSide(onlyInstruments) {
     const mine = panelsOpen.filter((p) => !p.session || p.session === current);
     if (onlyInstruments && mine.length) return;
-    sideEl.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
-    sideEl.classList.toggle("xc-has", mine.length > 0);
+    sideContents.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
+    sideEl.classList.toggle("xc-has", mine.length > 0 || (pet && pet.mode() === "full"));
     for (const p of mine) if (!seen.has(p.panel_id)) { seen.add(p.panel_id); respondPanel(p, "opened", {}, true); }
   }
 
@@ -604,7 +617,7 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    current = id; if (pet) pet.selectSession(id); loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
@@ -621,7 +634,7 @@ export function mount(root) {
       fail(e);
     }
     if (!mounted || current !== id || generation !== snapshotGeneration) return;
-    loading = false;
+    loading = false; syncPet();
     drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
     buffered.forEach(handle);
@@ -629,6 +642,7 @@ export function mount(root) {
   }
 
   async function recover() {
+    if (pet) pet.selectSession(current);
     const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers), asked = ++listAsked;
     loading = true;
     try {
@@ -647,7 +661,7 @@ export function mount(root) {
     } catch (e) { fail(e); }
     finally {
       if (id === current && generation === snapshotGeneration) {
-        loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
+        loading = false; syncPet(); drawSessions(); drawLog(); drawStatus(); drawSide();
         const buffered = pending; pending = []; buffered.forEach(handle);
         syncApprovals(); loadContext();
       }
@@ -783,6 +797,17 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
+    if (command && command.name === "pet") {
+      if (!["", "status"].includes(command.args)) { flash("usage: /pet [status]"); return; }
+      if (!pet || pet.mode() === "off") { flash("Exopet is off; choose Mini or Full to read status."); return; }
+      const owner = current, nav = navigation;
+      input.value = ""; help.sent(text);
+      try {
+        const out = await pet.inspect();
+        if (mounted && current === owner && navigation === nav) push({ kind: "report", id: "pet-" + Date.now(), title: "Exopet status", text: JSON.stringify(out, null, 2) });
+      } catch (e) { if (mounted && current === owner && navigation === nav) fail(e); }
+      return;
+    }
     const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
@@ -906,7 +931,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); detachPet(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");

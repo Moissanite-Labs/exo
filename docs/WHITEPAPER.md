@@ -346,6 +346,12 @@ palette. Richer elements, such as a diff viewer, an approval card or a task boar
 opens when they help, and that each client draws as well as it can. A terminal client, a web client and a
 plain line client are built.
 
+The web workspace's Exopet companion separates observed activity from verified growth. Existing events drive a
+small lattice; a read-only projection of the signed ledger supplies personal growth and learned counts. A failed
+trust check freezes the last verified result. The community hatch remains pending, so personal XP is banked in the
+egg. There are no install reports or care reminders. See `docs/ui/EXOPET.md` for this first local slice; the
+community feed, terminal graphics and gallery remain planned.
+
 The box you type into, the *composer*, helps you along: it completes commands and file names as you type,
 suggests a next step when the box is empty, and grows into a full editor for a long prompt. One rule is
 fixed: no single habitual key can stop the agent's work or answer an approval by accident. Section 24 has

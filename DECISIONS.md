@@ -4946,8 +4946,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
 ## D-048 (2026-10-12) Exopet: Exo as a living lattice
+- **Implementation amendment (2026-10-28):** the principal requested the planned pet integration on the new web
+  workspace. The first slice adds a read-only core status command and a web companion, with a small default glyph
+  and Full/Off controls. Personal growth requires the signed ledger's trust and anchor checks. A failed check
+  freezes the last verified process-local result. Activity uses existing events; no protocol event is added.
+  The community hatch remains pending and personal XP is banked. There is no site request or install report.
+  Terminal graphics, the community feed, gallery and creation skill remain planned. See `docs/ui/EXOPET.md`.
 - **Status:** Proposed 2026-10-12, revised 2026-10-13 (the community egg moved to D-058) and 2026-10-18 after review.
-  Design in docs/EXOPET.md, options and recommendation first. Nothing built. Independent of D-057.
+  Original design in docs/EXOPET.md, options and recommendation first; implementation scope is above. Independent of D-057.
 - **Why (principal, 2026-10-12):** bring the earlier pet experiments (EvoPet, TamaHermes) into Exo in its own look and
   make them more: the first evolution unlocks only when the community together has earned enough XP, then Exo
   hatches from its digital egg; later users get personal evolution; a pet gallery; a skill to make a pet from the
