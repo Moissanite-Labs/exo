@@ -3507,3 +3507,10 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Literal relative secret targets (#481)
+
+A key read after a literal cd or tar directory option keeps its written relative
+name and adds the normalized secret-path alias. A target deny, reserved entry or
+rule on that key folder sees the alias. Dynamic/glob folder resolution remains
+conservative and is not claimed complete by this change.

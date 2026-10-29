@@ -60,7 +60,7 @@ CASES = [
 
 KNOWN_GAPS = {
     # #479 (for/while/until second pass) is fixed: its three cases pass and carry no marker.
-    "tar_relative_key_target", "cd_relative_key_target", "sed_read_only_store", "tree_read_only_store",
+      "sed_read_only_store", "tree_read_only_store",
     "sort_read_only_store", "uniq_read_only_store", "xxd_read_only_store", "rsync_dry_run_store",
     "cat_output_outside_store", "grep_output_outside_store", "recursive_home_landing", "copy_home_itself",
     "copy_dot_contents", "copy_policy_folder", "copy_update_folder", "tar_into_home",
