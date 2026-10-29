@@ -313,6 +313,28 @@ def test_a_loop_behind_time_is_read_inside_and_keeps_main_s_reading(line, plain)
     assert (c.category, gate.decide(c).outcome) == ("opaque_exec", "ask"), line
 
 
+# Review 5692953980 on #869: `time !` compounds. A `!` after `time` leaves the program main could not see into (the
+# whole compound) as a part of the line, exactly as `time X` does, so a policy written against main's `opaque_exec`
+# reading still reaches the line: the category deny, the deny list and the reserved hit all hold, and only the
+# stricter part read inside the body can change the outcome. bash runs every line here (`bash -n`, 5.2.21).
+@pytest.mark.parametrize("line,category", [
+    ("time ! for i in 1 2; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "opaque_exec"),
+    ("time ! while :; do :; done", "opaque_exec"),
+    ("time ! { rm -rf /srv/data; }", "delete"),
+    ("time -p ! { rm -rf /srv/data; }", "delete"),
+    ("time ! { git push --force origin main; }", "force_push"),
+    ("time ! { cat ~/.ssh/id_rsa; }", "credentials"),
+])
+def test_a_compound_behind_time_bang_keeps_main_s_policy_effects(line, category):
+    c = _bash(line)
+    assert (c.category, gate.decide(c).outcome) == (category, "ask"), line
+    # the part main read as one unseen program is still a part, so a policy on the category still reaches the line
+    assert gate.decide(c, _pol(**{"categories": {"opaque_exec": "deny"}})).outcome == "deny", line
+    assert gate.decide(c, _pol(deny=["opaque_exec"])).outcome == "deny", line
+    reserved = gate.decide(c, _pol(reserved=["opaque_exec"]))
+    assert (reserved.outcome, [r[0] for r in reserved.reserved]) == ("ask", ["opaque_exec"]), line
+
+
 # The prefix stays transparent for the rest of the corpus: a `time`, in every spelling, in front of a command whose
 # reading main settled keeps that reading, so nothing this change reads is looser than main.
 @pytest.mark.parametrize("line,category,outcome", [
