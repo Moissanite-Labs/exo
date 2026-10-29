@@ -60,7 +60,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
-  still takes the write lock briefly for its schema check (#797, refs #684).
+  still takes the write lock briefly for its schema check (#797, refs #684). `docs/COMMANDS.md` lists it with
+  the other `exo findings` commands.
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
