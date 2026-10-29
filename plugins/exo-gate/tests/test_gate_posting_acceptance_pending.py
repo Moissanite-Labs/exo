@@ -76,8 +76,7 @@ CASES = [
 KNOWN_GAPS = {
     "internal_then_public_comment", "internal_then_public_close", "internal_then_public_semicolon",
     "transfer_destination_operand", "transfer_destination_with_issue_url", "public_merge_subject_scrub",
-    "public_merge_body_scrub", "api_merge_commit_title", "api_merge_commit_message",
-    "api_repo_merge_commit_message", "mcp_merge_commit_text",
+    "public_merge_body_scrub", "mcp_merge_commit_text",
     # #547 (store line lift keeps its own text) is fixed: its three store_* cases pass and carry no marker.
     "gh_host_destination",
     "gh_repo_destination", "exported_gh_repo_destination", "gh_config_directory_changes_execution",
@@ -168,3 +167,43 @@ def test_437_all_internal_compound_stays_log():
                                    "gh issue close 9 -R other/repo"])
 def test_437_standalone_public_operations_stay_ask(line):
     assert inspect(shell(line), POLICY).outcome == "ask"
+
+
+@pytest.mark.parametrize("field", ["-f", "-F", "--raw-field", "--field"])
+@pytest.mark.parametrize("name", ["commit_title", "commit_message"])
+def test_merge_api_text_option_forms_are_checked(field, name):
+    result = inspect(shell(
+        f"gh api -X PUT repos/myorg/app/pulls/5/merge {field} {name}='Zork leaked'"
+    ), POLICY)
+    assert "forbidden word: Zork" in result.violations
+
+
+@pytest.mark.parametrize("fields", [
+    "-f commit_message='Zork leaked' -f body=F",
+    "-f body='Zork leaked' -f commit_message=F",
+    "-f commit_title='Zork leaked' -f title=F",
+    "-f title='Zork leaked' -f commit_title=F",
+])
+def test_merge_text_cannot_be_hidden_by_another_posted_field(fields):
+    result = inspect(shell(f"gh api repos/myorg/app/merges {fields}"), POLICY)
+    assert "forbidden word: Zork" in result.violations
+
+
+def test_safe_merge_api_message_retains_internal_log_decision():
+    result = inspect(shell(
+        "gh api -X PUT repos/myorg/app/pulls/5/merge -f commit_title=Fix -f commit_message=F"
+    ), POLICY)
+    assert result.outcome == "log", result
+    assert not result.violations
+
+
+def test_merge_message_keeps_outer_heredoc_posting_floor():
+    result = inspect(shell(
+        "bash <<'EOF'\ngh api -X PUT repos/myorg/app/pulls/5/merge -f commit_message=F\nEOF"
+    ), {"posting": {"max_chars": 20}})
+    assert any("longer than 20 characters" in item for item in result.violations)
+
+
+def test_new_commit_field_cannot_supply_missing_footer_for_existing_body():
+    result = inspect(shell("gh api repos/myorg/app/merges -f body=hello -f commit_message=F"), POLICY)
+    assert any("missing footer: F" in item for item in result.violations)

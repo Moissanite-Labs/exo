@@ -3507,3 +3507,14 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Merge API message fields (#472 partial)
+
+For `gh api`, literal `commit_title` and `commit_message` fields now participate in the
+posting checks, alongside `title`, `body`, `text` and `message`. Multiple visible fields
+are checked together so a safe later field cannot hide forbidden text in another field.
+The existing field-option parser handles `-f`, `-F`, `--raw-field` and `--field`; file-backed
+values retain the unseen-body path. A shell heredoc body that supplied the prior posting
+reading remains checked as a separate part, retaining its violations. This is a bounded API-field fix: the separate public
+`gh pr merge` exposure and MCP merge-argument gaps in #472 remain open and retain their
+strict expected-failure acceptance cases.
