@@ -26,6 +26,7 @@ soul = "SOUL.md"
 
 [principal]                  # or principal = "ada"
 id = "ada"                   # exported as EXO_PRINCIPAL unless already set
+store = "/absolute/path/to/principal-store"  # optional; overrides the memory provider's store
 
 [models]
 tier = "fast"                # a router role (fast, standard, deep): becomes the seat's main model
@@ -83,6 +84,13 @@ When a thread starts, or a shell call works (its `cwd` argument or a leading `cd
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
 
 ## Truthful seat attribution
+
+The built-in memory provider receives the loaded seat's name, home, principal and explicit
+principal store before checking availability. A store path must be absolute (`~` is expanded).
+The seat's explicit values override plugin and memory-profile settings without changing
+`EXO_STORE`. An unavailable explicit store does not fall back to another store. This selects
+a principal knowledge store, not a sandbox: seats may deliberately share that store. It does
+not implement profile-private memory or prevent filesystem tools from accessing other stores.
 
 On a core running a seat, `session.create` attributes an omitted or empty `seat` to the
 loaded seat. An explicit matching name is accepted. A different name returns `bad_request`
