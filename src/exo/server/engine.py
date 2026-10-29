@@ -8,7 +8,7 @@ session keep their order."""
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, Iterable, Iterator, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Iterable, Iterator, Protocol, runtime_checkable
 
 from exo.protocol.schema import Command, Event, new_id
 
@@ -128,7 +128,7 @@ class Subscription:
                 return None
             if ev is None:
                 raise Closed()
-            if ev.seq <= self.last or not _matches(ev, self.session):
+            if ev.seq <= self.last or not _matches(ev, self.session) or not self._hub.visible(ev):
                 continue
             self.last = ev.seq
             return ev
@@ -152,8 +152,9 @@ class Subscription:
 class Hub:
     """Orders events, logs them, and fans them out. Use from one event loop."""
 
-    def __init__(self, log: EventLog | None = None):
+    def __init__(self, log: EventLog | None = None, *, visible: Callable[[Event], bool] | None = None):
         self.log: EventLog = log if log is not None else MemoryLog()
+        self.visible = visible or (lambda event: True)
         self.seq = self.log.last_seq()
         self.instance = new_id("i")  # this launch; a client that sees it change takes a fresh snapshot (D-060)
         self._subs: set[asyncio.Queue[Event | None]] = set()
@@ -163,6 +164,8 @@ class Hub:
         ev = Event.of(body, self.seq + 1, session)
         self.log.append(ev)
         self.seq = ev.seq
+        if not self.visible(ev):
+            return ev
         for q in list(self._subs):
             if q.qsize() < MAX_LAG:
                 q.put_nowait(ev)
@@ -179,7 +182,7 @@ class Hub:
     def replay(self, seq: int, session: str | None = None) -> Iterator[Event]:
         """Events after ``seq``, read from the log as they are taken (#254). ``since`` and every
         ``Subscription`` replay through here, so a rule on what the hub replays goes here."""
-        return iter(self.log.read(seq, session))
+        return (event for event in self.log.read(seq, session) if self.visible(event))
 
     def head(self) -> int:
         """The log's highest seq, the cursor a joining client starts from. Seats of one home share the log, so
