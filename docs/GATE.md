@@ -2804,7 +2804,15 @@ is read in the store on the next pass: `for i in 1 2; do echo ${v:-$(cp /tmp/evi
 cd ~/.exo/policies; done` is a `store_write`, the principal's alone, denied under `deny:
 [store_write]`, and its bypass floor holds (main a1dd4fec reads no command in the word and allowed
 it). The reading as before #143 (`flat`) is main's own, second pass included. A `cd` in a word's
-`$( )` runs in a subshell, so it does not move the loop into the store. So
+`$( )` runs in a subshell, so it does not move the loop into the store. Known limit: a part bash's
+reading cuts in such a loop (a command more than three levels deep in a word, or past the call's 24
+parts) is not read in the store on the second pass, and no `store_write` part stands for it as one
+does past #838's budget. It stays an unread `opaque_exec` part: the line asks, but `deny:
+[store_write]` does not deny it, a seat the approvers name may answer it, a rule that allows
+`opaque_exec` allows it, and under permissions bypass the exo-gate hook auto-allows it (`for i in 1
+2; do echo ${v:-$(echo ${v:-$(echo ${v:-$(echo ${v:-$(cp /tmp/evil g.yaml)})})})}; cd
+~/.exo/policies; done`). Main a1dd4fec reads no command in the word and allows such a line, so no
+decision is lower than main's. A here-document opened in a word ends on its exact delimiter (#333):
 `echo ${v:-$(cat <<'EOF '`, a line `hi`, a line `EOF ` (with its space), a push and a line `)}` is
 denied under a push deny: the body ends on `EOF ` and the push after it runs, where before #333 the
 body ran on to the end of the text and hid it. A part bash's reading adds can lead the

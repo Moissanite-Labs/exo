@@ -132,8 +132,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   loop that `cd`s into the store) under 112 policies (38,849 tightened on 1,044 actions); a probe of those lines
   under 24 policies decides 0 pairs lower than main a1dd4fec or this PR before the merge (9,599 and 16,551
   stricter), with no reserved hit, violation, binding, `no_grant` or approver lost, and the hook in bypass decides
-  none of 1,440 such lines lower (80 and 281 stricter). Tests:
-  `tests/security/test_gate_parameter_expansion_loop_cd_store.py`, `plugins/exo-gate/tests/test_bypass.py`.
+  none of 1,440 such lines lower (80 and 281 stricter). Known limit: a command bash's reading cuts in such a loop
+  (more than three levels deep in a word, or past the call's 24 parts) is not read in the store on the next pass
+  and stays an unread `opaque_exec` part, not a `store_write` part as past #838's budget: the line asks, but `deny:
+  [store_write]` does not deny it and permissions bypass auto-allows it (main a1dd4fec allows it; docs/GATE.md).
+  Tests: `tests/security/test_gate_parameter_expansion_loop_cd_store.py`, `plugins/exo-gate/tests/test_bypass.py`.
   `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 
 - A loop body that `cd`s into the store is read as running its earlier commands there on the next pass (#479, also
