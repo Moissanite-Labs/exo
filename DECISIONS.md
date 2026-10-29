@@ -6258,3 +6258,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-075 mixed simple outbound commands amendment — 2026-10-29 (#437)
+
+For distinct simple outbound commands, retain the strictest scoped outbound matrix/category/rule result, third-party escalation and public irreversible floor. Alternate-target copies still describe one post, so its original per-target own-text decision and reason are preserved. Broader non-outbound and unknown-own-text aggregation remains outside this slice.

@@ -1356,7 +1356,7 @@ gate does not read:
   third-party escalation and the floors see the dominant part (a `reserved:` entry gives an ask on
   any part, and the opaque bump also fires on the `indirection` or `unknown program` signal of any
   part, #471). The posting checks are the one exception: they read every post on the line (#396,
-  "Every post on a line"). Third-party escalation on a part is open as #437. A part carries the
+  "Every post on a line"). Distinct simple outbound commands now keep their strictest scoped matrix/rule result, third-party escalation and public floor (#437). The wider non-outbound/unknown-own-text case remains open. A part carries the
   tool of the call it came in on (`tool:execute_code` matches the `execute_code` tool, not
   `python -c` run from bash) and the views of its line, so the
   `command` regex of a `reserved` or `deny` entry or a deny rule matches a part as it matches the
@@ -3492,3 +3492,7 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Mixed simple outbound commands (#437)
+
+Mixed internal/public simple commands cannot use the first internal post to hide a later public post or close. Two internal posts still log. A single post with alternate targets retains its existing per-target behavior.
