@@ -24,6 +24,8 @@ function draft(id) {
 export function mount(root) {
   let mounted = true, navigation = 0, homeRevision = 0;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
+  let delegatedTasks = {}, delegatesAsked = 0, delegatesShown = 0;
+  const delegatedButtons = new Map();
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
@@ -85,7 +87,8 @@ export function mount(root) {
   const latestBtn = h("button", { class: "xc-btn xc-latest", type: "button", hidden: true, "aria-controls": "xc-transcript",
     onclick: () => { home(); logEl.focus(); } }, "Show latest messages");
   logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); });
-  const apprEl = h("div", { class: "xc-approvals" });
+  const delegatedEl = h("aside", { class: "xc-warn xc-delegated-approvals", hidden: true, "aria-label": "Delegated approvals", "aria-live": "polite" });
+  const apprEl = h("div", { class: "xc-approvals" }, delegatedEl);
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
@@ -241,6 +244,14 @@ export function mount(root) {
       case "session.created": case "session.updated": refreshSessions(); return;
       case "approval.requested": if (gone.has(b.request_id)) return; approvals[b.request_id] = { ...b, session: ev.session, seq: ev.seq }; drawApprovals(); drawSessions(); return;
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
+      case "task.updated":
+        if (b.task_id) {
+          const task = { ...delegatedTasks[b.task_id], task_id: b.task_id, seq: ev.seq };
+          for (const key of ["title", "status", "child_session"]) if (b[key]) task[key] = b[key];
+          if (ev.session) task.parent = ev.session;
+          delegatedTasks[b.task_id] = task;
+        }
+        drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
       case "notice":
         if (!mine) return;
@@ -476,6 +487,8 @@ export function mount(root) {
   function drawStatus() {
     const cell = (label, ...v) => h("span", null, h("span", { class: "xc-i" }, label), h("span", { class: "xc-v" }, ...v));
     const out = [h("span", { class: "xc-state" + (busy ? " on" : "") }, h("span", { class: "xc-dot" + (busy ? " on" : "") }), busy ? "working" : "idle")];
+    const delegated = delegatedApprovals(current);
+    if (delegated.length) out.push(cell("needs you", "delegated approval pending"));
     if (model) {
       const fell = requested && requested !== model;
       const m = cell("model", model);
@@ -544,9 +557,42 @@ export function mount(root) {
     drawWhere();
   }
 
+  function delegatedApprovals(parent) {
+    if (!parent) return [];
+    const edges = new Map();
+    // Only task records prove delegation: even a fork of a subagent retains its kind.
+    for (const task of Object.values(delegatedTasks)) if (task.child_session && task.parent && ["queued", "running"].includes(task.status)) edges.set(task.child_session, task.parent);
+    return Object.values(approvals).filter((approval) => {
+      if (!approval.session || approval.session === parent) return false;
+      const visited = new Set();
+      let child = approval.session;
+      while (edges.has(child) && !visited.has(child)) {
+        visited.add(child); child = edges.get(child);
+        if (child === parent) return true;
+      }
+      return false;
+    });
+  }
+
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
     approvalView.draw(mine);
+    const delegated = delegatedApprovals(current), children = new Map();
+    for (const request of delegated) children.set(request.session, (children.get(request.session) || 0) + 1);
+    const focused = [...delegatedButtons].find(([, button]) => button === document.activeElement)?.[0];
+    delegatedButtons.clear();
+    delegatedEl.hidden = !delegated.length;
+    delegatedEl.replaceChildren(...(delegated.length ? [h("p", null, "Delegated work needs approval. Parent work may still be running."),
+      ...[...children].map(([id, count]) => {
+        const task = Object.values(delegatedTasks).find(t => t.child_session === id);
+        const session = sessions.find(s => s.id === id);
+        const label = (task && task.title) || (session && session.title) || short(id, 28);
+        const button = h("button", { class: "xc-btn", type: "button", "data-delegated-session": id,
+          onclick: () => chooseConversation(id) }, "Open delegated thread: " + label + " (" + count + " pending)");
+        delegatedButtons.set(id, button); return button;
+      })] : []));
+    if (focused) delegatedButtons.get(focused)?.focus({ preventScroll: true });
+    drawStatus();
   }
 
   function gaugeRow(label, n, max, hot) {
@@ -585,7 +631,7 @@ export function mount(root) {
     const asked = ++listAsked;
     try {
       const fresh = (await api("GET", "/api/chat/sessions")).sessions;
-      if (asked > listShown) { listShown = asked; sessions = fresh; drawSessions(); }
+      if (asked > listShown) { listShown = asked; sessions = fresh; drawSessions(); drawApprovals(); }
     } catch (e) { fail(e); }
   }
 
@@ -625,7 +671,7 @@ export function mount(root) {
     drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
     buffered.forEach(handle);
-    syncApprovals();
+    syncApprovals(); syncDelegates();
   }
 
   async function recover() {
@@ -649,9 +695,23 @@ export function mount(root) {
       if (id === current && generation === snapshotGeneration) {
         loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
         const buffered = pending; pending = []; buffered.forEach(handle);
-        syncApprovals(); loadContext();
+        syncApprovals(); syncDelegates(); loadContext();
       }
     }
+  }
+
+  async function syncDelegates() {
+    const stamp = lastEvent, asked = ++delegatesAsked;
+    try {
+      const data = await api("GET", "/api/tasks");
+      if (!mounted || asked < delegatesShown) return;
+      delegatesShown = asked;
+      const fresh = {};
+      for (const task of data.tasks || []) if (task.task_id) fresh[task.task_id] = task;
+      for (const [id, task] of Object.entries(delegatedTasks)) if (task.seq > stamp) fresh[id] = task;
+      delegatedTasks = fresh;
+      drawApprovals(); drawSessions();
+    } catch (_) { /* Leave the last known task graph; Command still exposes the global approval list. */ }
   }
 
   // The server's list is the truth (it asks the core): replace what we hold, so a card the core no longer has goes (D-045).

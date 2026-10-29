@@ -4584,6 +4584,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-29 (#889):** a selected parent conversation shows pending approvals in its active
+  delegated task descendants, with a labeled Open control for each child. Only task records establish this
+  relationship; session parent/kind metadata can also describe forks. Parent work can continue in parallel.
+  Child navigation preserves the parent's draft and does not answer requests or extend permissions. Terminal
+  and retargeted task edges stop projecting the old child's approvals. Reconnect refreshes the task graph;
+  newer events and snapshots take precedence over delayed replies.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
