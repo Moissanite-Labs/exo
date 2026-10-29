@@ -580,6 +580,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   finished before the principal allowed it is denied on release, and opens no new thread: that thread is only for
   a message that named no session (PR #212). A job notice is the harness's own and still reaches its job's
   session, a subagent's too. Hermes' peers target picks a named session only when it knows it, so it follows.
+  A message that tries to approve something is still refused first. The warning to the principal went to the named
+  session even when that session takes no message, so no client showed it. It now goes where a message with no
+  session would go.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
