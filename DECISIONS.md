@@ -4224,6 +4224,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+### Amendment proposal, 2026-10-29: Recursive cp destination landings (#483)
+
+A recursive cp destination that is the Exo home or an ancestor adds a store-write part beside the authoritative prior reading. Short recursive flags and the full --recursive form are covered, including target-directory destinations. Original command, descriptor and remote targets remain present. Extraction tools, generated output names, curl operations and wider option-ambiguity forms remain open.
+
+The aimed 218-action by 88-policy differential has zero lowered pairs and zero classification/decision errors; write, descriptor, ssh and force-push controls are included.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own

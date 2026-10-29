@@ -3507,3 +3507,9 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Recursive cp destination landings (#483)
+
+A recursive cp destination that is the Exo home or an ancestor adds a store-write part beside the authoritative prior reading. Short recursive flags and the full --recursive form are covered, including target-directory destinations. Original command, descriptor and remote targets remain present. Extraction tools, generated output names, curl operations and wider option-ambiguity forms remain open.
+
+The aimed 218-action by 88-policy differential has zero lowered pairs and zero classification/decision errors; write, descriptor, ssh and force-push controls are included.
