@@ -97,13 +97,19 @@ KEPT = [
     "echo $((1+2)) junk",
     "echo $((echo hi; (printf lo) ))",      # arithmetic error in bash: nothing runs
     "echo $(( (echo hi) ))",                # arithmetic error in bash: nothing runs
-    "echo $((echo hi; echo HIDDEN",         # unclosed: bash cannot parse the line and runs nothing
 ]
 
 
 @pytest.mark.parametrize("line", KEPT)
 def test_plain_arithmetic_keeps_its_reading(line):
     assert outcomes(line) == ALLOWED
+
+
+def test_an_unclosed_span_asks():
+    """Unclosed: bash cannot parse the line and runs nothing. #158 reads a `$((` bash never closes as a part
+    bash rejects, an opaque part that asks (a shell may close it elsewhere), beside this reading of it as
+    arithmetic text to the end of the line, and the stricter decision holds."""
+    assert outcomes("echo $((echo hi; echo HIDDEN") == ASKS
 
 
 def test_an_assignment_keeps_its_reading():
