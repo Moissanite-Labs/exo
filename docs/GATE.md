@@ -3492,3 +3492,11 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Issue-transfer destinations (#449)
+
+The gate checks both the source and destination of `gh issue transfer`. A source
+under an internal scope does not authorize a public destination. A target deny,
+reserved entry or rule can match either repository. Destination owner/name,
+explicit host and repository URL forms use the same parser as `-R`; an external
+instance's raw spelling stays visible beside the normalized repository name.

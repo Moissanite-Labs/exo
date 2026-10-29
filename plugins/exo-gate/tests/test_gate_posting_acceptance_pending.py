@@ -75,7 +75,7 @@ CASES = [
 
 KNOWN_GAPS = {
     "internal_then_public_comment", "internal_then_public_close", "internal_then_public_semicolon",
-    "transfer_destination_operand", "transfer_destination_with_issue_url", "public_merge_subject_scrub",
+      "public_merge_subject_scrub",
     "public_merge_body_scrub", "api_merge_commit_title", "api_merge_commit_message",
     "api_repo_merge_commit_message", "mcp_merge_commit_text",
     # #547 (store line lift keeps its own text) is fixed: its three store_* cases pass and carry no marker.

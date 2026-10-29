@@ -6258,3 +6258,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 issue-transfer target amendment — 2026-10-29 (#449)
+
+The second positional operand of `gh issue transfer` is read with `_gh_repo` and
+added as an alternate target. The source remains unchanged. Other-instance raw
+spellings remain an alternate beside the repository name, as for `-R`, so a GitHub
+owner/name scope cannot authorize another host. Existing option-value parsing
+finds the operands; body text is not treated as a destination. All readings retain
+the strictest decision. The 14,155 by88 harvested differential against080e87ba
+reports no lowerings or errors.
