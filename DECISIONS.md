@@ -4747,7 +4747,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `seen_pos`, `/compact`'s `compact_seq`) read the whole object and wrote it back in two store calls, so a key
   another writer set in between was lost. A note written while a child finished could unlock it. They now go
   through `SessionStore.update_meta`, which sets only its keys and keeps the rest in one write transaction.
-  `docs/AGENT-WIRE.md` "Done in wave 3".
+  `docs/AGENT-WIRE.md` "Done in wave 3". A provider whose `key_env` lists several names numbered only the keys it
+  found, so when a key came or went the others moved to new ids. A call in flight across the reload kept the old
+  ids: it skipped the new key as the one that failed, sent the failed key again, and cooled the new key in its
+  place. Each key now takes its place in `key_env` as its id. A 501 is a transport saying it cannot carry this
+  request (`muse-cli` refuses a call with tools, D-051), not a fault of the key or the model. It cooled the whole
+  credential, so a later call without tools skipped a route that would have served it. It now falls back and
+  cools nothing. `docs/PROVIDERS.md`.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its

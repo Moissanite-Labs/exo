@@ -74,6 +74,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A finished subagent stays locked when a context note or `/compact` writes its session's meta at the same time.
   Each writer read the whole meta and wrote it back, so the lock, or another writer's key, could be lost. Meta
   writes now keep the keys they do not set, in one transaction (exo-desktop #52, D-041 amendment).
+- A provider with several `key_env` names keeps each key's credential id when another key is added or removed. A
+  call that ran across the change skipped the new key as the one that had failed and sent the failed key again.
+  A 501 (`muse-cli` asked to carry tools) falls back without cooling `muse-cli`, so the next call without tools
+  still reaches it (exo-desktop #52, D-041 amendment).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
