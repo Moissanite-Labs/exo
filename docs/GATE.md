@@ -823,13 +823,20 @@ system or bash will.
   are denied under `deny: [target:*/.kube/config]`, as their plain spellings are. So are the command behind a quoted
   prefix assignment (#471), a loop body read again after its `cd` into the store (#479) and a
   `gc.recentObjectsHook` value (#473): `X='a b' cat ~/.kube//config` and
-  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under that entry too.
+  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under that entry too. So are a command in a
+  `${..}` word (#143), a compound behind `time` or `!` (#853) and a while or until condition's `cd` into the store
+  (#857): `echo ${X:-$(cat ~/.kube//config)}`, `time { cat ~/.kube//config; }` and
+  `until cd ~/.exo/policies$(cat ~/.kube//config); do sleep 1; done`.
 
 An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decided lower
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
 `read` no longer matched it as `credentials`: `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
 `read` asked, as `sudo ssh host cat ~/.kube/config` did on main then. Since #320 a costly copy of each part a
-privileged wrapper runs over ssh sits beside the line, so that rule denies both, here and on main. Beside a call's
+privileged wrapper runs over ssh sits beside the line, so that rule denies both, here and on main. Since #839 (#547) a
+rule that would lift a part's deny on a line a store write leads must name the whole line. A line that names a secret
+only in an odd spelling was such a line on main, and it is `credentials` now, as its plain spelling is. So under
+`categories: {delete: deny}` and an allow rule on `.*`, `cat ~/.kube//config; cd ~/.exo && rm keys` asks, as
+`cat ~/.kube/config; cd ~/.exo && rm keys` does on main, where main denied the odd spelling. Beside a call's
 folder that names a store, the line's heaviest other command stays a part as well (#320), so under `delete: deny` and
 a rule that allows the rest, `cat ~/.kube//config; rm -rf keys` with `cwd: ~/.ssh` is denied, as on main. A line's
 target is the first store it names, and that can now be a spelling main did not read: an odd spelling, a glob such as

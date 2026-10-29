@@ -3412,6 +3412,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pairs of the merges before, on 17 actions, and the 855 calls of (aa) the same 105 pairs. A quoted prefix before a
   remote delete (`X='a b' ssh prod "rm -rf ~/.kube//config"`) loses the host's `delete` as main's plain spelling does
   (group 1). Neither tree had a classify or decide error.
+  *2026-10-29 (#513, the merge of main 080e87ba):* (dd) Main merged #158 (#143, #553), which reads a command in a
+  `${..}` word, in a backquote there and in a `$((` it reads as a subshell, and keeps the call read as before #143 in
+  `flat`, #862 (#853), which reads a compound behind `time`, `time -p` or `!` without them, #858 (#857), which reads
+  again a while or until condition whose first command is the `cd` into the store, and #839 (#547), which asks a rule
+  that lifts a part's deny on a store line to name every command on it. `src/exo/gate.py` merged with no conflict,
+  and this branch's change to it is the same as against main a1dd4fec. Each new reading reads its text as a shell
+  line, so the lexical form, main's target part, each other store's part and the hop's copy hold there too.
+  `echo ${X:-$(cat ~/.kube//config)}`, `time { cat ~/.kube//config; }` and
+  `until cd ~/.exo/policies$(cat ~/.kube//config); do sleep 1; done` are denied under
+  `deny: [target:*/.kube/config]`, as their plain spellings are, where main allows or asks. Under a matrix that
+  denies the irreversible cells and one allow rule that names both commands,
+  `git push --force origin main && gh gist create ~/.kube//config` is denied, as its plain spelling is, where main
+  allows it. Main's script (080e87ba) compared main 080e87ba with the merge and its tests under the 88 built-in
+  policies, on the built-in set with its variants (97,090 actions). It lowered 22 pairs on 22 actions. 17 are the
+  pairs of the merges before (group 1), and a remote delete in a `${..}` word or behind `time`
+  (`time { ssh prod 'rm -rf ~/.kube//config'; }`) loses the host's `delete` the same way, as main's plain spelling
+  does. The other 5 are a new group, (6), and 3 of them are this branch's own tests for it. Since #839 a rule that
+  would lift a part's deny on a line a store write leads must name the whole line. A line that names a secret only in
+  an odd spelling was such a line on main. Here it is `credentials`, as its plain spelling is on main, where the rule
+  lifts that deny and the line asks. So under `categories: {delete: deny}` and an allow rule on `.*`,
+  `cat ~/.docker/./config.json; cd ~/.exo && rm keys` asks, as `cat ~/.docker/config.json; cd ~/.exo && rm keys`
+  does on main, where main denied the odd spelling. The store line alone is denied on both. A follow-up issue tracks
+  main's side. On the 855 calls of (aa) it lowered the same 105 pairs as before. Neither tree had a classify or decide
+  error.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
