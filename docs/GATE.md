@@ -2994,7 +2994,8 @@ followed into, but its call is a command in the store on that reading, which ask
 bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading. bash takes
 `time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`, `time
 time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
-`do`, `then`, `else`, `elif`, `if`, `while` or `until`, never after `|` or `|&`), and runs the compound after them
+`do`, `then`, `else`, `elif`, `if`, `while`, `until` or a case pattern's `)`, never after `|` or `|&`), and runs
+the compound after them
 (`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f { ..; }` definition,
 whose body runs when `f` is called) as without them. `_parse` reads `time` as a program with options, so that
 compound was the program's argv: `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` asked

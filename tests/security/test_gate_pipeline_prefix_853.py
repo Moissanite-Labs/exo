@@ -10,13 +10,17 @@ out and the compound opened, beside main's reading (decide keeps the strictest, 
 Every command string here is data for exo.gate.classify/decide and the exo-gate hook; none is run.
 """
 import asyncio
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
-from exo import crypto, gate, principal
-from exo.ledger import Ledger
-from exo_gate import hook
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "plugins" / "exo-gate"))  # the root suite has no plugin path
+
+from exo import crypto, gate, principal  # noqa: E402
+from exo.ledger import Ledger  # noqa: E402
+from exo_gate import hook  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

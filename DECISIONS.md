@@ -3916,8 +3916,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pairs on 2,054 actions, mostly `opaque_exec ask` to `opaque_exec deny` (6,130), `opaque_exec allow` to
   `opaque_exec ask` (6,034), `opaque_exec ask` to `force_push deny` (3,654) and to `delete deny` (2,601); 190,906
   pairs keep their outcome with another detail. No classify or decide errors. Tests:
-  `tests/security/test_gate_pipeline_prefix_853.py` (509 tests; 158 fail on main a1dd4fec and pass here, the
-  other 351 pass on both) and `tests/security/test_gate_loop_cd_store_479.py`, whose known
+  `tests/security/test_gate_pipeline_prefix_853.py` (521 tests, which also collect alone; 158 fail on main
+  e86af96c and pass here, the other 363 pass on both) and `tests/security/test_gate_loop_cd_store_479.py`, whose known
   limit row `test_a_loop_behind_time_is_a_known_limit` is now `test_a_loop_behind_time_is_read_as_without_it`
   (2 rows that fail on main a1dd4fec).
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
