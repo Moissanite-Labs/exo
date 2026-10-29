@@ -368,18 +368,22 @@ def test_a_core_on_tcp_that_refuses_the_bearer_token_is_an_authority_failure(tmp
         web = make_server(src)
         port = await web.start("127.0.0.1", 0)
         try:
-            return await raw(port, "GET", "/api/providers/models", ok_headers(port))
+            return (await raw(port, "GET", "/api/providers/models", ok_headers(port)),
+                    await raw(port, "POST", "/api/chat/sessions", ok_headers(port), {"title": "x"}))
         finally:
             await web.close()
             await src.aclose()
             serving.cancel()
             await core.close()
 
-    status, data, text = asyncio.run(go())
+    (status, data, text), (chat_status, chat, chat_text) = asyncio.run(go())
     assert status == 200 and data["models"] == [] and data["available"] == []
     assert data["error_class"] == "authority" and data["retryable"] is False
     assert "token" in data["error"] and "exod.token" in data["error"]
     assert "bearer token required" not in text and "SourceError" not in text and "a-stale-token" not in text
+    # the chat routes relay a core error through error_reply(): the same sentence, not the core's 401 body
+    assert chat_status == 502 and chat["code"] == "http_401" and "exod.token" in chat["error"]
+    assert "bearer token required" not in chat_text and "a-stale-token" not in chat_text
 
 
 def test_a_key_value_in_a_failed_model_list_never_reaches_the_page(monkeypatch):
