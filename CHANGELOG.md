@@ -8,6 +8,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
+  pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
+  start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
+  web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
+  names the Chrome binary and version it drove.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
@@ -109,6 +114,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
+  run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
 - `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
   each add a bullet here no longer conflict. For a branch cut before this, run
   `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"` once per clone.
