@@ -80,7 +80,8 @@ each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5
 ## 2. The two clients
 
 The web chat status strip wraps to fit the conversation width in either layout. Model names and values remain
-readable as the window narrows; notices appear on their own wrapped row.
+readable as the window narrows; notices appear on their own wrapped row. In a short window, scroll the chat column
+to reach the status, message box and thread.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
@@ -213,7 +214,9 @@ your recent threads by title, `/tutorial ` the words `on`, `off` and `reset`, `/
 running a shell command. A mistyped `/comand` is not sent: Exo says "did you mean /compact?" and leaves the fixed
 line in the box. Up arrow brings back earlier lines, and as you type, the rest of an earlier line shows dim; press
 right arrow to take it. With the box empty, a dim line sometimes suggests a next step (`/providers` after a failed
-call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help. Inspired by the
+call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help, except that its
+line after a failed call reads the error: a refused key or login points at the Providers page, a network failure or
+timeout says the model could not be reached, and anything else points at `/trace` (D-092). Inspired by the
 Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance".
 
 ## 4. Memory
@@ -308,7 +311,8 @@ The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
 - **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
 
 Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
-appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+appears on the Tasks page) and remove it. Remove cannot be undone, so it asks for a second click on Confirm remove.
+Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
@@ -392,10 +396,17 @@ What the gate asks about, and why:
   `setsid`, `flock` or `watch` (#160, fixed in #196), a heredoc or pipe into a group such as `{ bash; }`
   (#161, fixed in #198), and a pipe, here-string or heredoc into the shell `sudo -s` or `sudo -i` starts
   (#491). The gate finds programs only in the shell forms its parser reads. A command inside a
-  parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
-  #158). A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
-  `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579), and `p=x; echo ${p@P}` stays a read when the line
-  assigns `p` a literal value with no `$`, backtick or backslash. A command nested more than four levels deep
+  parameter expansion such as `${x:-$(...)}` is read too, and a quote or brace in such a word no longer hides the
+  command after it (#143, fixed in #158), down to three levels of `$( )` inside it; a deeper one, or one past the
+  24 such parts a call may open (a word inside a `$( )` counts again for each pass over it), asks. Such a word is
+  read in an `env -S` text and in what a `sudo -s` or `sudo -i` shell reads from its stdin too, and behind or
+  inside a quoted prefix assignment (`X='a b' echo ${v:-$(...)}`, `echo ${v:-$(X='a b' ...)}`, #471), and in a loop
+  that `cd`s into your store it is read as running there on the loop's next pass (#479). `${!name}` and
+  `${name@P}`, which run code a variable holds, ask, also for the positional parameters (`${@@P}`, `${!@}`, #554).
+  A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
+  `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579); `p=x; echo ${p@P}`, which the reading before #158
+  keeps a read because the line assigns `p` a literal value, asks too, as bash's reading of the word does not see
+  the value. A command nested more than four levels deep
   (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
@@ -555,7 +566,8 @@ Details and the cost rules: `docs/TRACE.md`.
 | Symptom | Try |
 |---|---|
 | No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
-| The error says a provider "rejected the key" | The key is wrong, revoked or out of credit. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "rejected the key" | The key is wrong, revoked or refused. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "is over its provider spend limit" | The provider stopped billing this key: top up the account or raise the limit in the provider's own console, then test it in `/providers` (`t`). A new key does not help. |
 | The error says a local model "is not running" | Start the server it names (for Ollama, `ollama serve`), then test it in `/providers` (`t`). A passing test lets the next message through at once. |
 | The error says "next route reopens in" some seconds | The provider failed and Exo rests it for a while. Wait, or test it in `/providers` (`t`): a passing test retries it at once. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |

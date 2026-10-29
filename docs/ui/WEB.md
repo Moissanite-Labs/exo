@@ -211,6 +211,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   loaded scope; this is not full-history or message search. The status selector shows all conversations,
   working conversations or those with an approval waiting. Search and filtering do not switch the active
   conversation or touch its draft. Clear or Show all conversations resets the search.
+  The list comes from `GET /api/chat/sessions`, which takes a `limit` from 1 to 500 (100 when none is given).
+  A larger limit is cut to 500. A limit below 1, or one that is not a number, gets a 400 and sends nothing to
+  the core: SQLite reads a negative `LIMIT` as no limit, so `limit=-1` used to return every session (exo-desktop #55).
   Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
   search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
   does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
@@ -218,6 +221,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
   current composer draft. A refused save keeps the title draft and shows the error.
+  The page asks for the thread list again after each change, and two such requests can answer in either
+  order. Only an answer to a later request replaces the list on screen, so a list asked for before a new
+  thread existed cannot hide that thread once a newer list shows it (#859).
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
   readers already at the newest item continue following it. The transcript is keyboard focusable.
@@ -277,8 +283,14 @@ not move the backoff on. So a long core restart never turns a core command into 
 as soon as the core answers. An older core that answers `unknown_command` or `unsupported` for `commands.list` also
 counts as an answer (`core` is `[]`); a core-only name the page then cannot know goes as a message.
 A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
-a finished job, open findings, a slow turn, a long thread). A failed call reads its own error: a refusal (401 or 403, an invalid or missing key, a permission denial) may
-point at the Providers page, a transport failure says the model could not be reached and offers no key advice, and an error that reads as neither points at `/trace` (D-092), one new line per 25 seconds at most, off when the core
+a finished job, open findings, a slow turn, a long thread). A failed call reads its own error and the errors of its
+attempts, since a failure before any output ends as "all routes for 'main' failed or are cooling down" and its cause
+is only in the attempts (#855). A refusal (`HTTP 401` or `HTTP 403`, an invalid or missing key, a permission denial,
+the router's "rejected the key", "refused the login" or "no credentials for role") may point at the Providers page.
+A transport failure (`ReadError`, `ReadTimeout`, `ConnectError` and the like) says the model could not be reached,
+offers no key advice, and Tab fills in `/trace`. An error that reads as neither, a spend limit included, points at
+`/trace` (D-092). Each of the three keeps its own count of two a session. The line shows one new tip per 25 seconds
+at most, and it is off when the core
 config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
 yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back; an
 unset key, which the core answers with `not_found`, is on, and the asking ends once both answers are in),
@@ -298,7 +310,10 @@ the "Layout" button under the thread list or `/layout inverse|classic`; the choi
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
+height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
+pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
+its bounded height when the chat column scrolls.
 
 ## Cost and jobs (D-032)
 
@@ -323,7 +338,9 @@ routes also need a loopback peer). Without a token the tab only asks you to open
 is ready, the Chat view shows one quiet line with a link to this tab.
 
 When the model list cannot be fetched the tab says why: a core that never answered, one that answered and
-refused this page, or one whose own call failed. The reply is still 200 with both lists present, plus
+refused this page, or one whose own call failed. A core on TCP that refuses this web process's bearer token
+(`exo web --url URL --token-file FILE` with a stale token) is a refusal too, and the sentence names the token
+file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
 A failed retry keeps the last good list, so the default picker stays usable.
@@ -353,6 +370,10 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
+  Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
+  drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
+  Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
+  and run now act at once.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with

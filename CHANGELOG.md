@@ -8,11 +8,33 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
+  (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
+  showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
+  now names the token file and offers no retry. A core's own failure is shown in its own words, without
+  `CommandFailed:` or `SourceError:` before it.
+- The web guidance line after a failed model call now reads what the core records (#855, D-092 amendment).
+  - A connection drop or timeout says the model could not be reached. Before, it pointed at `/trace`: the router
+    reports a failure before any output as "all routes failed or are cooling down", and the `ReadError` or
+    `ReadTimeout` behind it is only in the call's attempts.
+  - A CLI login refusal (claude-cli "Not logged in", an expired OAuth token) points at the Providers page again,
+    and so does a first run with no credentials.
+  - `HTTP 404` and a proxy's `HTTP 407` are no longer read as a refused key.
+  - A refusal still gets its line after two other failures, since each kind keeps its own count of two.
+- The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
+  the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
+  conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
+  It now draws an answer only when it was asked after the list on screen. This was the intermittent failure of
+  `test_first_submission_recovery_belongs_to_created_thread_after_remount` (#859).
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- A provider spend limit (HTTP 402) now says so instead of blaming the key, and a call whose route stopped on it
+  carries the cost `+` mark, because that route's work is not billed in this turn. `trace` reports
+  `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
+- Short chat windows scroll the chat column when status text expands, keeping the transcript and composer reachable.
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
@@ -73,6 +95,72 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
 
 ### Fixed
+- The gate reads `${...}` words and `$((` as bash's parser reads them (#143, #553, #554, PR #158). The lexer ended a
+  `${...}` word at its first `}` and read nothing in it, so `echo ${X:-$(git push --force origin main)}` was an
+  allowed `read` under every policy, and a `'}'` in a word hid the command after it
+  (`echo ${x:-'}'} && rm -rf ./work`). Now each `$( )`, backquote, `$((` and unquoted `<( )` in a word is
+  classified, a `'` pairs with the next one in the word (in double quotes too), and a part opened in quoted text
+  ends at its quote. `$((` is arithmetic only when bash reads it so: `echo $((echo '((' ; git push --force origin
+  main) )` is a `force_push` (#553). `${name@P}`, `${@@P}`, `${*@P}`, `${!name}`, `${!@}` and `${!*}`, which run a
+  value, ask (#554); the listing forms `${!prefix*}` and `${!arr[@]}` do not. A here-document opened in a `$( )`
+  stays with it, a backslash-newline after `$` is joined as #584 joins it, `$'` in double quotes is no ANSI-C
+  string, and bash 5.3's `${ cmd; }` is read and asks, and so does a line that ends inside a quote (`'`, `"` or
+  `$'`). A part only bash's reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((` in a word, a
+  `$((` bash runs as a subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels deep, its
+  first `$(` or backquote level 1, and a call opens 24 such parts; a command deeper or past them asks. Where bash's
+  reading may differ from the one before, the call is read both ways, the stricter decision holds, and an approval on
+  such a line is bound to its exact text, even where both readings are the same act, as for any line with an `also`
+  reading, so a standing grant on its category and target does not cover it. `scripts/gate_diff.py` finds no
+  decision lower than before on its built-in corpus (with and without variants) and on an aimed corpus of these
+  forms. Each of the two readings keeps its own #584 joined reading and D-074 `ordinary` reading, and
+  `gate.readings` lists the `ordinary` reading of each. A command in a word keeps the readings it has alone: an ssh
+  host target (#493), each store path a write names (#514), a write into a code-load folder (#459), a gh download
+  into the store (#461), a glob in a secret store's folder (#594), a here-document's exact delimiter line (#328),
+  `env -S`'s own argv (#591), a backslash-newline after `$` (#585), a `$((` bash runs as a `$( ( )` (#553), a
+  store name in any letter case (#601), a `${..@P}` (#579) and legacy `$[ ]` (#588). The reading before is
+  main's own lexer (on main f28934a3), #553's `$((` reading among them; a `${..@P}` is weighed as #579 weighs it (a
+  literal the line assigns keeps the read), and a `$((` bash never closes asks where main reads it as text. Each of
+  main's `env -S` readings (#591, #707: `Classification.split_readings`) is read both ways too, and so is the stdin
+  of a `sudo -s` or `sudo -i` shell (#491, #718) with its reading as before #491, so a word in an `env -S` text or
+  in that stdin is read: `env --split='echo ${v:-$(git push --force origin main)}'` and
+  `sudo -i <<< 'echo ${v:-$(git push --force origin main)}'` deny under `categories: {force_push: deny}` (main
+  f28934a3: ask), and a store write in such a word is answered by the principal only. `gate.readings` lists the
+  `ordinary` and `split_readings` of every reading, and `binds_exact` binds a line with either in any reading.
+  On main 34b5b495 (#546, #471) the quoted prefix reading composes with both: classify reads a quoted prefix
+  assignment both ways (`Classification.before` is main's own reading, the quoted word the program), each with
+  main's `env -S` readings, and each of those both ways for its words, the reading as before #143 named
+  `Classification.flat`. So `X='a b' echo ${v:-$(rm -rf /srv/data)}` and the same word in an `env -S` text or a
+  `sudo -s` shell's stdin behind a quoted prefix deny under `deny: [delete]` (main 34b5b495: ask), and
+  `echo ${v:-$(X='a b' rm -rf /srv/data)}` denies under `categories: {delete: deny}` (main: allow); a store write
+  in such a word is answered by the principal only. The exo-gate hook's bypass floor takes main's own reading
+  first, `flat` where a word was read both ways, so a secret only bash's reading of a word finds is held beside
+  a post that breaks the posting rules, as on main (the isolated head asked at the floor there). A word in an
+  arithmetic `$((` behind or inside a quoted prefix is read the same way (`X='a b' echo $(( ${v:-$(rm -rf
+  /srv/data)} ))`). Against main 34b5b495, `scripts/gate_diff.py` lowers 0 of 1,210,616 pairs on the built-in
+  corpus without variants (20,428 tightened on 433 actions) and 0 of 603,680 pairs on an aimed corpus of 5,390
+  quoted-prefix and parameter-word lines under 112 policies (29,281 tightened on 3,018 actions), and the hook in
+  bypass decides none of 908 such lines lower (158 stricter). Tests:
+  `tests/security/test_gate_parameter_expansion_quoted_prefix.py`, `plugins/exo-gate/tests/test_bypass.py`.
+  On main a1dd4fec (#838, #479) each reading composes with the loop's second pass: bash's reading of the words and
+  the reading as before #143 (`flat`, main's own) are each read by `_classify_read`, which reads a loop that `cd`s
+  into the store a second time, so the command in a word in such a loop is read in the store on the next pass.
+  `for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd ~/.exo/policies; done`, which rewrites the policy
+  file on the second pass, was an allowed read on main a1dd4fec and on this PR before the merge; it is now a
+  `store_write`, the principal's alone, denied under `deny: [store_write]`, and the bypass floor holds (also in an
+  `env -S` text, a sudo shell's stdin, a `$((`, a `{ ..; }` body and a loop inside a word). A `cd` in a word's
+  `$( )` runs in a subshell and leaves the loop where it was. Against main a1dd4fec, `scripts/gate_diff.py` lowers
+  0 of 1,227,248 pairs on the built-in corpus without variants (21,852 tightened on 441 actions) and 0 of 483,280
+  pairs on an aimed corpus of 4,315 loop lines (a parameter word or `$((` behind or holding a quoted prefix, in a
+  loop that `cd`s into the store) under 112 policies (38,849 tightened on 1,044 actions); a probe of those lines
+  under 24 policies decides 0 pairs lower than main a1dd4fec or this PR before the merge (9,599 and 16,551
+  stricter), with no reserved hit, violation, binding, `no_grant` or approver lost, and the hook in bypass decides
+  none of 1,440 such lines lower (80 and 281 stricter). Known limit: a command bash's reading cuts in such a loop
+  (more than three levels deep in a word, or past the call's 24 parts) is not read in the store on the next pass
+  and stays an unread `opaque_exec` part, not a `store_write` part as past #838's budget: the line asks, but `deny:
+  [store_write]` does not deny it and permissions bypass auto-allows it (main a1dd4fec allows it; docs/GATE.md).
+  Tests: `tests/security/test_gate_parameter_expansion_loop_cd_store.py`, `plugins/exo-gate/tests/test_bypass.py`.
+  `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
+
 - A loop body that `cd`s into the store is read as running its earlier commands there on the next pass (#479, also
   #480). The gate read the body once, in order, so `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
   done` and its `while :` and `until false` forms, which rewrite the policy file on the second pass, were allowed
@@ -101,10 +189,67 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   2,737,512 pairs on the 7,092 lines with a `((` of that corpus and 4,950 new arithmetic-header lines (135,509
   tightened on 4,752 actions). Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`
   "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-28), `docs/DOCS-MAP.md`.
+- A `while` or `until` loop whose condition starts with the `cd` into the store is read again too (#857, a #479
+  follow-up). The condition runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do
+  sleep 1; done` the `cp` rewrites the policy file from the second pass; it and five other spellings (`until !
+  cd`, backticks, `pushd`, `< <(..)`, a `cd` in an `if`) were allowed reads on main 1401ff81, also under `deny:
+  [store_write]`. They are now `store_write`, as the #479 rows are. A condition's `cd` into a descriptor folder
+  names that folder when the loop holds no other store `cd` (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
+  denies under `deny: [target:/dev*]`). Main's `scripts/gate_diff.py`: 0 of 10,616,630 pairs
+  lowered (built-in corpus, 11,044 aimed loop lines, `/dev*`, `/proc*` and `*store*` target rules kept apart).
+  Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment, #857), `docs/DOCS-MAP.md`.
+- A compound command behind `time`, `time -p`, `time --` or `!` (and their combinations) is read as the same
+  compound without them (#853). bash runs `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` as it runs the loop alone, but the gate read `time` as a program and the loop as its arguments, so on
+  main a1dd4fec the line asked as `opaque_exec`, `deny: [store_write]` did not deny it, a seat could answer it
+  and permissions bypass auto-allowed it, and `time { rm -rf /srv/data; }` was no delete. `classify` now also
+  reads such a line with those prefix words left out, beside main's reading: the loop gets #479's second reading
+  (a principal-only `store_write` that `deny: [store_write]` denies and bypass keeps at its floor), and a group's
+  delete, force push or post (also in a `function f { ..; }` body behind `time !`, which main read behind `time`
+  or `!` alone) is denied by a policy that denies it without the prefix. Main's reading stays, so
+  `time { ls; }` still asks and nothing decides lower. Lines bash rejects (`nohup for ..`, `command for ..`, `env
+  X=1 while ..`, `sudo -n while ..`, `time -p -p for ..`, `time` after `|`) run nothing and decide as on main.
+  Main's `scripts/gate_diff.py` against a1dd4fec lowers 0 of 1,167,760 built-in pairs (79 tightened on 9
+  actions) and 0 of 2,262,408 pairs on an aimed corpus of 10,572 prefixed compound lines under 214 policies
+  (28,559 tightened on 2,054 actions). Tests: `tests/security/test_gate_pipeline_prefix_853.py`,
+  `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
+  `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
+- Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
+  {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
+  allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
+  (`store_write ask floor`; `ask posting` with a `gh issue create -F` tail), while the same push beside
+  `/tmp/plain.txt` is denied. The store send leads such a line, so the rule step does not run the own text test
+  (#394), and #191's pass lifted the push part's matrix deny because the rule names the push's own text. That pass now
+  also asks such a rule, on a store line, to pass the own text test of the whole line (`_line_own_test`), so the push
+  stays denied with a `gh gist create`, `aws s3 cp` or `gh issue create -F` tail on a `plugins/` or `policies/` file,
+  joined by `&&`, `;` or `||`, and with a `cp` write into the store after it. The change only passes more rules over
+  in that pass, so nothing decides lower: against main f28934a3 the gate
+  differential lowers no pair, on the built-in corpus (1,111,528 pairs, 73 tightened) and on an aimed corpus of these
+  lines (1,892,784 pairs, 32,334 tightened, all `store_write ask -> store_write deny`). One rule that names
+  every command on the line lifts the deny as before, and the store floor still asks. Separate rules that each name
+  one command do not combine: under a `'^git push'` and a `'^gh gist create'` allow rule the push-first store line is
+  `store_write deny matrix` (it asked at the floor before), as #394 decides the push beside a plain file. An `rm` or
+  `curl -T` tail of a store file was already denied by its own cell. The whole line test runs once per rule on a line,
+  not once per part, so a long store line stays linear in its parts; a rule that fails it is still passed over at each
+  part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
+  CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
+  `tests/security/test_gate_store_lift_own_text_547.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
+
+- The web session list answers 400 to a `limit` below 1 (exo-desktop #55). Only the top was cut, to 500, so
+  `GET /api/chat/sessions?limit=-1` reached SQLite as `LIMIT -1`, which returns every session. A larger limit is
+  still cut to 500. Tests: `plugins/exo-command/tests/test_chat.py`. **Docs:** `docs/ui/WEB.md` "What is where",
+  D-039 amendment.
+
+- The web Schedule page asks before it removes a job (exo-desktop #55). One click on remove deleted the job, and
+  there is no undo. Remove now waits for a separate Confirm remove click on that card, drawn in the page, since a
+  desktop web view with no confirm handler answers `window.confirm` with Cancel. Tests:
+  `plugins/exo-command/tests/test_schedule_web.py`. **Docs:** `docs/ui/WEB.md`, `docs/USER-GUIDE.md` §5,
+  `plugins/exo-command/README.md`, D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
@@ -187,6 +332,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - The pinned type baseline matches again after separating reused gate locals and typing terminal
   restart environments as read-only mappings; nine resolved diagnostics are removed (#710).
+
+- Repeated corrections and rulings no longer reinforce rejected beliefs. New agreeing evidence creates a separate proposal for review while preserving the rejection (desktop audit #54).
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
