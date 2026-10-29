@@ -113,10 +113,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   joined by `&&`, `;` or `||`, and with a `cp` write into the store after it. The change only passes more rules over
   in that pass, so nothing decides lower: against main f28934a3 the gate
   differential lowers no pair, on the built-in corpus (1,111,528 pairs, 73 tightened) and on an aimed corpus of these
-  lines (1,892,784 pairs, 32,334 tightened, all `store_write ask -> store_write deny`). A rule that names every
-  command on the line lifts the deny as before, and the store floor still asks. An `rm` or `curl -T` tail of a store
-  file was already denied by its own cell. The whole line test runs once per rule on a line, not once per part, so a
-  3,000-part store line decides in about a tenth of a second of CPU, as on main. Tests:
+  lines (1,892,784 pairs, 32,334 tightened, all `store_write ask -> store_write deny`). One rule that names
+  every command on the line lifts the deny as before, and the store floor still asks. Separate rules that each name
+  one command do not combine: under a `'^git push'` and a `'^gh gist create'` allow rule the push-first store line is
+  `store_write deny matrix` (it asked at the floor before), as #394 decides the push beside a plain file. An `rm` or
+  `curl -T` tail of a store file was already denied by its own cell. The whole line test runs once per rule on a line,
+  not once per part, so a long store line stays linear in its parts; a rule that fails it is still passed over at each
+  part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
+  CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
   `tests/security/test_gate_store_lift_own_text_547.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped

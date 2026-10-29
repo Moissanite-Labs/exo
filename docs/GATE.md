@@ -2772,10 +2772,17 @@ the shell for the rest. Under a matrix that denies the irreversible cells, an al
 on `'^git push'` therefore no longer lifts the push's deny in `git push --force origin main && gh gist
 create ~/.exo/plugins/foo/__init__.py`, nor with an `aws s3 cp` or `gh issue create -F` send of the
 file, or of any other store file, after the push; before #547 those lines asked the principal (an
-`rm` or `curl -T` of the file after the push was already denied, by that part's own cell). A
-rule that names the push and the send lifts the push's deny as before, and the line still asks the
-principal alone. The gate runs the whole line test once per rule on a line, not once per part, so a
-long store line decides as fast as before. `deny: [store_write]` is the reliable way to refuse
+`rm` or `curl -T` of the file after the push was already denied, by that part's own cell). One
+rule that names both the push and the send lifts the push's deny as before, and the line still asks
+the principal alone. Separate rules do not combine: under one allow rule on `'^git push'` and
+another on `'^gh gist create'`, each is tested on its own, neither names the whole line, and the
+push-first store line is denied (`store_write deny matrix`; before #547 it asked at the floor), as
+#394 already decides the same push beside a plain file. The gate runs the whole line test once per
+rule on a line, not once per part, so a long store line stays linear in its parts. A rule that
+fails the test is still passed over at each part that a later rule lifts, so the pass grows with
+the parts times the rules ahead of the one that lifts: on 3,000 `git push` parts followed by a store
+send, with 0, 19 or 99 push rules ahead of one rule that names every command, `decide` takes 0.06,
+0.28 and 0.96 s of CPU (main a1dd4fec: 0.05, 0.10 and 0.12 s). `deny: [store_write]` is the reliable way to refuse
 every write into the folder. A `target:` entry matches the path only as the call spells it:
 `target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
 absolute path and `~/.exo/../.exo/plugins/...` still only ask.
