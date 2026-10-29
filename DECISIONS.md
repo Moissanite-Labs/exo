@@ -4293,8 +4293,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   category-rule, command, command-rule and target entries; 1,120,320 pairs) lowers 0 pairs and tightens 9,398
   pairs on 609 actions (`opaque_exec allow` to `opaque_exec ask` 4,184, `opaque_exec ask` to `opaque_exec deny`
   2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
-  `tests/security/test_gate_coproc_open_864.py` (675 tests; 203 fail on b3efb5e7, the cost test only because
-  main has no `_late_reading` to patch, and the other 472 pass on both) and 6 hook rows in
+  `tests/security/test_gate_coproc_open_864.py` (688 tests; when added, 203 failed on b3efb5e7, the cost test
+  only because main has no `_late_reading` to patch, and the rest passed on both) and 6 hook rows in
   `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there). With #158 (main
   d3cbd874) the layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (#158's two
   ways: bash's reading of the words, and `flat`, main's reading before #143) -> `_classify_read` (budgets, the
