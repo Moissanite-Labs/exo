@@ -2733,3 +2733,7 @@ The public site at exo.askaconsult.com. Versions are `site-vMAJOR.MINOR` (docs/V
 - **v2.0** (2026-10-13, live): the lattice redesign. The living lattice egg on the home page, the roadmap page with linked nodes, the brand page, credits limited to open source and genuine innovators.
 - **v2.0-rc.1** (2026-10-13, staging): the approved redesign candidate, commit `6b8800f`.
 - **v1.0** (2026-10-12, live): the first public site, commit `8d54b55`. Archive: tag `site-live-2026-10-13`.
+
+### 2026-10-29 — literal GH_HOST routing (#566)
+
+- A literal GH_HOST prefix cannot borrow a GitHub internal scope for its default-host request. Explicit repository/issue URL hosts retain their own routing. Exported/dynamic environment, GH_REPO and GH_CONFIG_DIR remain separate pending work.

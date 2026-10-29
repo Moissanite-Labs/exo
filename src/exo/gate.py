@@ -4820,6 +4820,40 @@ def _runs_prompt(k: "_Cmd", literals: dict) -> str:
     return ""
 
 
+def _prefix_gh_host_parts(before: list, words: list, parts: list[Classification]) -> None:
+    """Retain the actual host beside GitHub scope targets for a literal GH_HOST prefix.
+
+    This bounded slice covers a bare -R owner/name and numeric operands only;
+    exported/default repos, dynamic hosts and other gh environment remain separate.
+    """
+    argv = [w.text for w in words]
+    if not argv or argv[0].rsplit("/", 1)[-1] != "gh":
+        return
+    repo = _opt(argv, "-R", "--repo") or ""
+    if repo.count("/") != 1 or ":" in repo:
+        return
+    group, verb = (argv + ["", ""])[1:3]
+    row = _GH_TAKES.get((group, verb))
+    if row is None:
+        return
+    _repo, operands = _gh_operands(argv, *_gh_options(group, row))
+    if any("://" in argv[index] for index in operands):
+        return  # an explicit issue URL selects its own host
+    value = None
+    for w in before[:max(len(before) - len(words), 0)]:
+        name, sep, val = w.text.partition("=")
+        if name == "GH_HOST" and sep:
+            value = val if not w.dynamic and re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", val) else None
+    if value is None or _gh_on_github(host := _gh_host(value)):
+        return
+    for p in [p for root in parts for p in _each_part(root) if p.category in OUTBOUND]:
+        target = host + "/" + p.target
+        if target in p.alt_targets or target == p.target:
+            continue
+        p.parts = [*p.parts, replace(p, target=target, parts=[], alt_targets=[], alt_copy=True)]
+        p.alt_targets = [*p.alt_targets, target]
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
@@ -4867,6 +4901,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts += [classify_shell(x, depth + 1) for x in ([split] if split is not None else []) + lines]
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        _prefix_gh_host_parts(before, words, parts)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
             token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
