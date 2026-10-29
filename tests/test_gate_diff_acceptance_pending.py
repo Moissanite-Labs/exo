@@ -60,7 +60,6 @@ def compare_pair(tmp_path, base, head):
     return gate_diff.compare(tmp_path / "base.gz", tmp_path / "head.gz", [url_action(1)])
 
 
-@pytest.mark.xfail(strict=True, reason="Open #551: unknown outcomes currently rank as ask")
 @pytest.mark.parametrize("base,unknown", [("ask", "Ask"), ("allow", "block")])
 def test_unknown_outcomes_are_not_reported_as_safe_or_tighter(tmp_path, base, unknown):
     try:
@@ -93,7 +92,6 @@ def reaches_reported_store_cap(action):
                for reading in gate.readings(classification) for part in gate._each_part(reading))
 
 
-@pytest.mark.xfail(strict=True, reason="Open #551: built-in corpus omits the repeated-store-folder budget family")
 def test_builtin_corpus_reaches_the_store_folder_budget_family():
     actions, _ = gate_diff.build_corpus([ROOT])
     candidates = [a for a in actions if isinstance(a.get("args"), dict) and any(
