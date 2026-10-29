@@ -69,7 +69,7 @@ CASES = [
 
 # Reproduced on the reviewed base; never infer xfail from the running code.
 KNOWN_GAPS = {
-    "here_string_cannot_authorize_delete", "comment_cannot_authorize_push",
+    "here_string_cannot_authorize_delete",
     "compound_here_string_cannot_authorize_push", "backtick_continuation_delete",
     "backtick_continuation_push", "deny_inside_unread_nest", "deny_inside_deeper_unread_nest",
     "continued_heredoc_delimiter", "tab_stripped_continued_delimiter", "backtick_escaped_hash",

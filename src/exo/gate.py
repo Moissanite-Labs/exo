@@ -9583,6 +9583,51 @@ def _policy_command_view(command: str) -> str:
     return " ".join(rendered)
 
 
+def _without_plain_comments(text: str) -> str:
+    """Raw spelling minus unambiguous comments; nested/dynamic shell text stays untouched.
+
+    This view can only reject an authorization, never create one. Heredocs,
+    substitutions and other data-bearing authorization gaps remain separate.
+    """
+    if any(token in text for token in ("$", "`", "<<")):
+        return text
+    out, quote, boundary, i = [], "", True, 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(text):
+            out.append(text[i:i + 2])
+            boundary = boundary if text[i + 1] == "\n" else False
+            i += 2
+            continue
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch == "#" and boundary:
+            end = text.find("\n", i)
+            if end < 0:
+                break
+            out.append("\n")
+            i, boundary = end + 1, True
+            continue
+        else:
+            out.append(ch)
+        boundary = not quote and (ch.isspace() or ch in ";&|()")
+        i += 1
+    return "".join(out)
+
+
+def _comment_authorizes(rule: Mapping, c: Classification, current: str) -> bool:
+    if "command" not in rule["match"] or OUTCOMES.index(rule["decision"]) >= OUTCOMES.index(current):
+        return True
+    view = _without_plain_comments(c.command)
+    return view == c.command or any(re.search(str(pattern), view)
+                                   for pattern in _as_list(rule["match"]["command"]))
+
+
 def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
                      line: Callable[[str], bool] | None = None) -> bool:
     regex = re.compile(pattern)
@@ -9791,6 +9836,8 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
         first = None
         for r in rules:
             if not _rule_matches(r["match"], p):
+                continue
+            if not _comment_authorizes(r, p, out):
                 continue
             # #465: a part read from a nested line carries that line as its text, so a rule keyed on `command` that
             # would lift it must also name the whole line, as it must when that command decides the line itself
@@ -10006,6 +10053,8 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     base = OUTCOMES.index(outcome)
     for r in gates.get("rules") or []:
         if not _rule_matches(r["match"], eff):
+            continue
+        if not _comment_authorizes(r, eff, outcome):
             continue
         first = first or r
         if passed is not None and eff.parts and "command" in r["match"] and \

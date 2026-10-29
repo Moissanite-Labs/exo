@@ -3507,3 +3507,7 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Plain-comment authorization (#458)
+
+A plain comment cannot authorize an otherwise denied command by naming an allowed flag. Quoted hashes and genuine arguments remain available to rules. Nested/dynamic and input-body authorization gaps are not claimed fixed.
