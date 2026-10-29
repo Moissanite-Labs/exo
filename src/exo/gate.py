@@ -5335,6 +5335,11 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         return [_opaque(f"{prog} {sub} runs project scripts or code the gate cannot see".strip(), cmd)]
     if prog == "hash" and (rebind := _hash_rebind(words)):     # `hash -p` rebinds a name to another file (#330)
         return [_opaque(rebind[0], cmd, target=rebind[1], rebinds=True)]
+    if prog == "tree" and not k.redirs and all(not (w.dynamic or w.glob or w.brace or w.locale or w.split) and
+                               not w.text.startswith("-") for w in words[1:]):
+        # #482: only literal, option-free operands. Output options and ambiguous expansions keep the old reading.
+        return [_make("read", summary="tree", target=w.text, command=cmd) for w in words[1:]] or [
+            _make("read", summary="tree", command=cmd)]
     if prog in READ_PROGRAMS:
         return [_make("read", summary=prog, command=cmd)]
     if prog in SHELL_PROGRAMS:

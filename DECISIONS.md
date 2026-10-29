@@ -4224,6 +4224,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+### Amendment proposal, 2026-10-29: Literal option-free tree reads (#482)
+
+Only literal option-free tree operands, with no redirection, are now reads. Each operand remains a read target so target denies still match. Options, dynamic/glob/brace operands and any redirection retain the previous conservative reading. Sed, sort, uniq, xxd, rsync and external-redirection false positives remain open.
+
+The aimed 13-action by 88-policy differential intentionally lowers 347 pairs across six literal-tree actions (including tree read parts beside a force push or after cd). It removes only the false store-write/category/reserved/no-grant/body-binding consequences of those reads; credential-read and force-push denies remain tested. All output-option, ambiguous and redirected write controls are unchanged. This is an intentional policy relaxation, not a zero-lowering result.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
