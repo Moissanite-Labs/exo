@@ -22,6 +22,10 @@ notice in the client. It names `exo init <id>`.
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+A repeated agreeing correction or ruling reinforces an active belief (proposed, held or accepted). It does not
+reinforce a rejected belief. New evidence agreeing with a rejected belief creates a separate proposal for review;
+the earlier rejection stays recorded.
+
 A correction or ruling in chat is written once, by its capture key. exo-memory writes the same keys, so neither
 doubles the other. After each turn the learner checks the chat against the keys already in the ledger. It keeps
 those keys between turns, with the last row it read, and reads only the rows after that row (#263). The ledger is

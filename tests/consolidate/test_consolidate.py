@@ -159,6 +159,23 @@ def test_reject_records_reason_and_leaves_nodes(template_store, led, corrections
     assert pid not in {v.id for v in C.proposals_list(template_store, led)}
 
 
+def test_repeated_signal_after_rejection_creates_a_new_proposal(template_store, led):
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    first = run(template_store, led).proposals[0]
+    C.proposal_reject(template_store, led, first, "Not a standing preference", author="principal")
+    later = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.reinforced == []
+    assert len(result.proposals) == 1 and result.proposals[0] != first
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[first].status == "rejected"
+    assert views[result.proposals[0]].status == "proposed"
+    assert views[result.proposals[0]].evidence == [later["id"]]
+    assert not [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_reinforced"]
+
+
 def test_rule_of_three_across_runs(template_store, led):
     say(led, "Always run the tests before pushing.", "a")
     say(led, "please run the tests before you push", "b")

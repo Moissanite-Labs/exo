@@ -992,7 +992,7 @@ class _Run:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
         b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
-        if b is not None and rel == "agree":
+        if b is not None and rel == "agree" and b.active:
             self.reinforce(b, obs)
             return
         if b is not None and rel == "conflict" and b.active:
