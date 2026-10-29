@@ -88,6 +88,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
+  each add a bullet here no longer conflict. For a branch cut before this, run
+  `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"` once per clone.
 - Chat status instruments wrap within the conversation width. Model names, values and full-row notices
   remain readable when the window or conversation pane narrows, in both layouts.
 - Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings

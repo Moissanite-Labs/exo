@@ -721,6 +721,24 @@ heading, and the map says so.
 6. A reviewer reads the diff, runs the suite, and merges. Merge your own pull request only where you hold merge
    rights.
 
+**Changelog merges (#842).** `.gitattributes` gives `CHANGELOG.md` git's union merge driver. Two branches that each
+add a bullet in the same place merge without a conflict: both bullets stay, the checked-out branch's first.
+`DECISIONS.md` and `docs/DOCS-MAP.md` keep the normal driver, so two branches that take the same `D-NNN` or edit the
+same map row still conflict.
+
+- Git reads the attribute from the branch you have checked out. A branch cut before it landed still conflicts when
+  it merges `main`. Run `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"`
+  once in your clone, and every branch and worktree there gets it. (In a linked worktree `.git` is a file, so
+  `.git/info/attributes` fails.) A `git rebase main` or a cherry-pick onto `main` needs no step: it replays onto a
+  tree that already has the attribute.
+- Union only decides the lines both sides changed: it keeps both versions, ours first, where git would stop with a
+  conflict. A change that only one side made, a deletion included, applies as in any merge.
+- Union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk. So when
+  both sides add under `### Fixed` and under the `### Added` just below it, one side's fix can land under `### Added`,
+  and the lines between the two changes appear twice. `tests/test_merge_attributes.py` fails when a version section
+  holds a bullet twice or a `###` heading with nothing under it. Where each entry sits is yours to check: read the
+  merged `[Unreleased]` section before you push.
+
 Private data and secrets never go in the repo. The principal store is separate from this repository.
 
 ### Cutting a release
@@ -732,7 +750,9 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). Four thin
 1. Merge the work. Pick the next version: MINOR for a milestone, PATCH for fixes only.
 2. Bump the number in `pyproject.toml` and the files that VERSIONING section 1 lists (`src/exo/__init__.py`,
    `clients/tui/pyproject.toml`, `plugins/*/plugin.yaml`, `plugins/exo-command/exo_command/__init__.py`, `uv.lock`).
-3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading.
+3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading. The union driver
+   (#842) gives no conflict when an open PR's entry sits where the new heading goes, so that entry lands in the
+   released section. After a cut, each open PR that merges `main` checks which heading its entries are under.
 4. Run the root suite and the plugin suites. `tests/test_versioning.py` fails if the version files or the changelog drift.
 5. After the merge, sign the tag on main with `git tag -s exo-vX.Y.Z -m "one-line summary"` and push the tag.
 
