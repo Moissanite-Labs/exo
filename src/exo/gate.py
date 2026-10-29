@@ -9765,7 +9765,9 @@ def _whole_line_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[
 
 
 def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | None = None,
-                   whole: Callable[[Mapping], bool] | None = None) -> tuple[Classification, str, str] | None:
+                   whole: Callable[[Mapping], bool] | None = None,
+                   levels: list[tuple[Classification, str, str, str]] | None = None
+                   ) -> tuple[Classification, str, str] | None:
     """The first part of the line, below the combined result, that its matrix cell, a category line or a rule denies
     as it would deny that command alone (#191): its matrix cell (#464), then its category's line, then the first rule
     that matches it; or a deny rule whose `command` regex matches only a decoded view of the line (#136).
@@ -9779,9 +9781,10 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
     such a rule that passes the part's test must also pass this one, as it must at the rule step of a line that a
     store write does not lead: an allow rule for the push in `git push --force origin main && gh gist create
     ~/.exo/plugins/foo/__init__.py` names neither the store send nor the line's lead, so the push's matrix deny stands.
-    It only passes more rules over, so every part denied without it is denied with it."""
+    It only passes more rules over, so every part denied without it is denied with it.
+    When `levels` is provided, collect non-deny outcomes too for the bounded mixed-outbound check (#437)."""
     cats, rules, matrix = gates.get("categories") or {}, gates.get("rules") or [], gates["matrix"]
-    if not (cats or rules or any(v == "deny" for row in matrix.values() for v in row.values())):
+    if levels is None and not (cats or rules or any(v == "deny" for row in matrix.values() for v in row.values())):
         return None
     line = _line_matcher(c)
     for p in list(_each_part(c))[1:]:
@@ -9813,6 +9816,8 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
             veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
                          and _rule_matches(r["match"], p, veto=True, line=line)), None)
             if veto is None:
+                if levels is not None:
+                    levels.append((p, out, why, step))
                 continue
             why, step = veto["reason"], "rule"
         return p, why, step
@@ -10066,7 +10071,13 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             per_day = float(budget.get("per_day_max") or 0)
             if float(ctx.get("spent_today") or 0) + eff.cost > per_day:
                 bump("ask", f"spend would pass the daily limit {per_day:g}", "budget")
-    if esc.get("third_party", True) and eff.third_party:
+    outbound_parts = [p for p in _each_part(eff)
+                      if p.category in (*OUTBOUND, "github_close", "vcs_merge") and not p.alt_copy]
+    # Target copies describe one post, not another command. Preserve the existing
+    # per-target own-text decision and reason for a single post (#399/#394).
+    outbound_line = eff.category in (*OUTBOUND, "github_close", "vcs_merge") and \
+        len({p.own for p in outbound_parts}) > 1
+    if esc.get("third_party", True) and (any(p.third_party for p in outbound_parts) if outbound_line else eff.third_party):
         bump("ask", "affects a third party", "escalate")
     if eff.category in (esc.get("categories") or []):
         bump("ask", f"{eff.category} always asks", "escalate")
@@ -10158,7 +10169,8 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
-    if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
+    if any(p.reversibility == "irreversible" and p.exposure == "public" and p.third_party
+           for p in (outbound_parts if outbound_line else [eff])):
         bump("ask", "irreversible, public and affects a third party", "floor")
 
     # Credentials floor: no policy, rule, scope or escalate setting lowers this. The principal answers. A line that
@@ -10178,13 +10190,18 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # whole line (#547), as the rule step asks of a rule on a line a store write does not lead (#394).
     whole = _whole_line_test(eff, pol, ctx) if outcome != "deny" and passed is not None and \
         eff.category == "store_write" and eff.parts else None
-    if outcome != "deny" and (part := _override_deny(eff, gates, passed, whole)):
+    part_levels: list[tuple[Classification, str, str, str]] = []
+    if outcome != "deny" and (part := _override_deny(eff, gates, passed, whole, part_levels if outbound_line else None)):
         p, why, step = part
         outcome, reason, rule = "deny", f"denied by policy ({why}: {redact_userinfo(p.summary or p.category)})", step
+    for p, level, why, step in part_levels:
+        if not p.alt_copy and p.category in (*OUTBOUND, "github_close", "vcs_merge") and OUTCOMES.index(level) > OUTCOMES.index(outcome):
+            bump(level, f"{why} on {redact_userinfo(p.summary or p.category)}", step)
     if (denied := _part_hits(gates.get("deny") or [], eff)):
         outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
-                 exposure=eff.exposure, third_party=eff.third_party,
+                 exposure=EXPOSURE[max(EXPOSURE.index(p.exposure) for p in outbound_parts)] if outbound_line else eff.exposure,
+                 third_party=any(p.third_party for p in outbound_parts) if outbound_line else eff.third_party,
                  reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)), hidden=hidden)
     if _QUOTED in c.signals:
         # #471: the parts read behind a quoted prefix assignment were hidden before, and the other parts decided the
