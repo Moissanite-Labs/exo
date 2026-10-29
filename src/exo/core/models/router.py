@@ -51,7 +51,7 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
-REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key, the login or the spend: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
@@ -455,7 +455,9 @@ class Router:
                             break
                 if candidate is not None:
                     if last is not None:
-                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                        why = (f"is over its provider spend limit ({(last.error or '')[:80]}); this turn's cost is a floor"
+                               if last.status == 402 else f"failed ({(last.error or '')[:80]})")
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} {why}; "
                                                        f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
@@ -622,9 +624,9 @@ class Router:
 
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
-        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
-        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
-        not running."""
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 403), or the key is
+        over its spend limit (402) which a new key does not fix; on a later call too, while that credential, or a model
+        of the chain on it, reopens first; or a local server is not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
             cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
