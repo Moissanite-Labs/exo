@@ -8,6 +8,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
+  `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
+  in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the
+  `/proc/self/fd` write was never named and `deny: [target:/proc*]` asked instead of denying (also on main
+  d742d1bb, b3efb5e7 and 75d72a7f). The same held in both orders, with `&&`, `||` or a newline between the loops,
+  for `pushd`, `builtin cd` and `/dev/fd/3`, the pair in `$( )`, `bash -c` or a function body, the pair inside one
+  outer loop (`while :; do ..; done`, also `for`, `until`, `select`, `{ }` and two loops deep), and a store loop
+  after a descriptor loop (`deny: [target:*store*]` asked). `classify` now adds one more reading beside main's, in
+  which each loop's second pass, an inner loop's too, starts in its own folder; main's readings are kept, so nothing decides
+  lower: main's `scripts/gate_diff.py` against d742d1bb lowers 0 of 1,170,048 built-in pairs and 0 of 2,163,000
+  pairs on 21,000 aimed loop lines with `/dev*`, `/proc*` and `*store*` target rules kept apart (34,612
+  tightened, ask to deny). A line of 100 such loops costs about 1.4 to 2.2 times main's CPU time. A command run
+  once after a second descriptor `cd`, outside a loop's second pass, keeps the line's first folder (known limit, as
+  on main). Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`. **Docs:** `docs/GATE.md` "The
+  store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
