@@ -116,6 +116,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
+
+- The web session list answers 400 to a `limit` below 1 (exo-desktop #55). Only the top was cut, to 500, so
+  `GET /api/chat/sessions?limit=-1` reached SQLite as `LIMIT -1`, which returns every session. A larger limit is
+  still cut to 500. Tests: `plugins/exo-command/tests/test_chat.py`. **Docs:** `docs/ui/WEB.md` "What is where",
+  D-039 amendment.
+
+- The web Schedule page asks before it removes a job (exo-desktop #55). One click on remove deleted the job, and
+  there is no undo. Remove now waits for a separate Confirm remove click on that card, drawn in the page, since a
+  desktop web view with no confirm handler answers `window.confirm` with Cancel. Tests:
+  `plugins/exo-command/tests/test_schedule_web.py`. **Docs:** `docs/ui/WEB.md`, `docs/USER-GUIDE.md` §5,
+  `plugins/exo-command/README.md`, D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
