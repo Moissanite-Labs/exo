@@ -354,6 +354,14 @@ class SessionStore:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
         return rows[0]["seq"] if rows else None
 
+    def last_messages(self, sid: str, limit: int) -> list[Message]:
+        """Decode at most ``limit`` visible messages, returned in transcript order."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("message limit must be a non-negative integer")
+        rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 ORDER BY seq DESC LIMIT ?",
+                       (sid, limit))
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in reversed(rows)]
+
     def truncate(self, sid: str, after_seq: int) -> int:
         """Remove messages with seq > after_seq and summaries holding them. Agent log entries are hidden,
         not deleted, so the log stays append-only. Context notes stay: they hold other threads' news."""
