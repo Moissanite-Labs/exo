@@ -184,6 +184,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
   cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
   `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-29 (exo-desktop #2, follow-up to #726):** the next command clears a failed start before it
+  waits. The 2026-10-27 change cleared a start that raised or was cancelled only in a command that was waiting on
+  it. When the only waiting command was cancelled and the start then failed, no command cleared it. The next
+  command got that old error once more, and only the command after that started again. Now `start()` first drops
+  a finished start task that raised or was cancelled, then starts again. A start that is still running stays, so a
+  cancelled command still never causes a second start, and every command that waits on a failed start still gets
+  its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
+  Tests: `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
