@@ -3492,3 +3492,7 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Literal gh_host routing (#566)
+
+A literal GH_HOST prefix cannot borrow a GitHub internal scope for its default-host request. Explicit repository/issue URL hosts retain their own routing. Exported/dynamic environment, GH_REPO and GH_CONFIG_DIR remain separate pending work.
