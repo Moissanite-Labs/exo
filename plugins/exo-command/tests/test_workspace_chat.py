@@ -49,7 +49,26 @@ def test_loaded_search_filters_preserve_active_conversation_and_draft():
     src = WorkspaceSource(pairs=0); srv = Served(src)
     try:
         with Browser(width=1200, height=900) as b:
+            # Stamp exact-read responses with the bus sync epoch that requested them. A selected row alone
+            # precedes transcript loading, so it cannot establish the filtering test's RPC baseline.
+            b.call("Page.addScriptToEvaluateOnNewDocument", source=r"""
+const realFetch = window.fetch;
+window.fetch = async (url, ...args) => {
+  const epoch = window.testRecoveryEpoch ?? -1, response = await realFetch(url, ...args);
+  if (/^\/api\/chat\/sessions\/[^/]+$/.test(new URL(url, location.href).pathname)) {
+    const json = response.json.bind(response);
+    response.json = async () => {
+      const data = await json();
+      if (data.session) data.session.model = 'fixture-sync-' + epoch;
+      return data;
+    };
+  }
+  return response;
+};
+""")
             b.goto(srv.url()); b.wait("document.querySelectorAll('.xc-sess').length===3 && !!document.querySelector('[aria-current=true]')")
+            epoch = b.eval("import('/static/bus.js').then(async bus=>{bus.onState(s=>window.testRecoveryEpoch=s.synced);const next=testRecoveryEpoch+1;await bus.restart();return next;})")
+            b.wait("document.querySelector('.xc-model')?.textContent.includes(" + json.dumps('fixture-sync-' + str(epoch)) + ")")
             assert b.eval("document.querySelector('.xc-sess[aria-current=true]').textContent.includes('Ship <img')")
             assert not b.eval("!!document.querySelector('.xc-sessions img')")
             put(b, '.xc-composer .xc-input', 'keep this draft', 2, 7)
