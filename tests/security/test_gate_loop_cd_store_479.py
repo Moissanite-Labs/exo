@@ -281,11 +281,11 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
 
 
 # #853: `time` is a reserved word: every word after it stays in command position, so a loop behind it is the same
-# loop bash runs. It now reads as that loop with no `time` in front (the reading `for`/`while` get on their own), so
-# the store write the loop's second pass makes is read and `deny: [store_write]` denies it. `!` composes with both
-# spellings, and stacked `time`s and `time`'s own options read alike. Each row keeps the same reading as its plain
-# form, so the fix can only tighten what main read (`opaque_exec`, ask). Main's ask is kept as an `indirection`
-# signal, so a row the fix now reads as a plain read still asks where main asked (review on #869).
+# loop bash runs. Its body is read with no `time` in front (the reading `for`/`while` get on their own), so the store
+# write the loop's second pass makes is read and `deny: [store_write]` denies it. `!` composes with both spellings,
+# and stacked `time`s and `time`'s own options read alike. Main read the whole line as one program name it could not
+# see into (`opaque_exec`, ask); that reading is kept as a part beside the body's, so no rule that names the category
+# decides looser than it did on main, while a deny on a part read inside the loop still wins (review on #869).
 @pytest.mark.parametrize("line,plain", [
     ("time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
      "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
@@ -304,13 +304,13 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
     ("time ! time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
      "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
 ])
-def test_a_loop_behind_time_reads_as_the_loop_itself(line, plain):
+def test_a_loop_behind_time_is_read_inside_and_keeps_main_s_reading(line, plain):
     c, base = _bash(line), _bash(plain)
-    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == (
-        base.category, gate.decide(base).outcome, gate.decide(base, DENY).outcome), line
-    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == (
-        "store_write", "ask", "deny"), line
+    # the body is read: its store write is a part of the line, and a deny on it still denies
     assert _store_write_part(c), line
+    assert gate.decide(c, DENY).outcome == gate.decide(base, DENY).outcome == "deny", line
+    # and the one unseen program main read is kept as a part, so the line keeps its category and its ask
+    assert (c.category, gate.decide(c).outcome) == ("opaque_exec", "ask"), line
 
 
 # The prefix stays transparent for the rest of the corpus: a `time`, in every spelling, in front of a command whose
@@ -321,10 +321,10 @@ def test_a_loop_behind_time_reads_as_the_loop_itself(line, plain):
     ("time rm -rf /tmp/evil", "delete", "ask"),
     ("time cd ~/.exo/policies", "read", "allow"),      # a `cd` into the store is a read on its own, as on main
     ("time cat ~/.exo/state/credentials/canary.json", "credentials", "ask"),
-    # main read both as one program name it cannot see into and asked; the fix reads them as their loops, and keeps
-    # that ask (`indirection`), since lowering it would be a looser decision than main's
-    ("time for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "ask"),
-    ("time while :; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "ask"),
+    # main read both as one program name it cannot see into and asked; the fix reads the body too and keeps that
+    # reading as a part, since lowering it would be a looser decision than main's
+    ("time for i in 1 2; do cp /tmp/evil gates.yaml; done", "opaque_exec", "ask"),
+    ("time while :; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "opaque_exec", "ask"),
     ("time sudo rm -rf /tmp/evil", "delete", "ask"),
     ("time X=1 cp /tmp/evil gates.yaml", "shell", "allow"),
     ("time env FOO=1 rm -rf /tmp/evil", "delete", "ask"),
