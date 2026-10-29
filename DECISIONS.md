@@ -6258,3 +6258,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+### D-040 amendment proposal, 2026-10-29: unavailable closed-target snapshots
+
+A symlinked closed ledger whose private copy is unavailable raises an explicit error. Availability is traded for avoiding a new live reader and sidecars; retry when the target settles or temporary space is available. Existing writer-WAL reads retain their current behavior. This does not introduce an immutable fallback, delete sidecars, or claim a read-only VFS.

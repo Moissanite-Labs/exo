@@ -29,10 +29,10 @@ head. It refuses when the one beside the ledger still trails, or when none is at
 appends never go on more than one event past every anchor. `verify` checks every anchor it finds: the ledger must
 hold at least that many events and the chain hash at that position must match. A ledger file that is gone while an
 anchor remains fails too (`missing_ledger_problem`). A ledger file that is a symlink fails verify, and append and
-anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
-opening it writes nothing through the link. The exceptions are SQLite's own `-shm` file beside a target that
-already has a `-wal` file, and its `-wal` and `-shm` files beside a target read live because no copy of it could be
-taken at open (`_snapshot`). `verify` warns when the anchors are more than one event apart. `append` also refuses to
+anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file.
+A target with an existing `-wal` is read live with SQLite's documented sidecar behavior. A closed target whose
+private copy cannot be obtained raises LedgerError rather than opening live and creating new sidecars.
+`verify` warns when the anchors are more than one event apart. `append` also refuses to
 write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
 `anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
 `verify` reports it.
@@ -601,9 +601,9 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
     Only a regular file is opened: opening a FIFO would block. A target with a `-wal` file beside it has a writer: it
     is read live (SQLite's `mode=ro`) through the writer's own files, and stays current. A target without one holds
     all its data in its main file, and `_snapshot` copies it at open (#317). Reads are then a snapshot of the target
-    as it stood at open: a fresh open sees later appends. The rare target a writer changes during every copy is read
-    live too, and so is one whose copy fails (a full temporary folder). SQLite may then leave its `-wal` and `-shm`
-    files beside it. A target that is gone, not a regular file, not a database or without an events table reads as an
+    as it stood at open: a fresh open sees later appends. If no copy is available and no writer WAL exists, opening
+    raises LedgerError rather than creating sidecars or retaining a stale immutable reader. An existing writer's
+    live-read sidecar behavior is unchanged. A target that is gone, not a regular file, not a database or without an events table reads as an
     empty ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor
     refuse."""
     target, db = Path(os.path.realpath(path)), None
@@ -611,7 +611,9 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
         if target.is_file():
             db = _snapshot(target)
             if db is None:
-                db = _open_live(target)
+                if not Path(f"{target}-wal").exists():
+                    raise LedgerError("private snapshot unavailable for symlinked ledger; retry after the target settles or temporary storage is available")
+                db = _open_live(target)  # an existing writer's WAL retains the documented live-read behavior
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
                 return db
     except sqlite3.DatabaseError:
@@ -642,11 +644,11 @@ def _open_live(target: Path) -> sqlite3.Connection:
                            isolation_level=None, timeout=30)
 
 
-SNAPSHOT_TRIES = 3  # copies of a symlinked ledger a writer may spoil before it is read live instead (#317)
+SNAPSHOT_TRIES = 3  # copies of a symlinked ledger a writer may spoil before explicit unavailable refusal (#564)
 
 
 def _snapshot(target: Path) -> sqlite3.Connection | None:
-    """A read-only copy of a symlinked ledger's target, or None to read it live: a `-wal` file is beside it, a writer
+    """A read-only copy of a symlinked ledger's target, or None for the caller to choose live WAL read or refusal: a `-wal` file is beside it, a writer
     changed it during each of `SNAPSHOT_TRIES` copies, or a copy failed while it stayed the same (a full temporary
     folder: a second copy would fill it again). A target that is not a ledger raises DatabaseError.
 

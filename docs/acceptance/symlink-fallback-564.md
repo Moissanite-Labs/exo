@@ -1,7 +1,5 @@
-# Symlink fallback acceptance gap (#564)
+# Symlink copy refusal proposal (#564)
 
-When a private snapshot cannot be obtained, the read-only symlink path opens live SQLite. The executable regression forces that existing fallback seam and observes new `-wal` and `-shm` files beside the disposable target after reader close. It is a strict expected failure, not a production fix.
+The production draft now refuses a failed private copy when the target has no writer WAL. It raises an explicit LedgerError instead of silently opening live and creating sidecars. The former strict expected failure is a passing regression: the target folder is unchanged. Existing-writer live reads still pass the append/checkpoint freshness control.
 
-The passing control requires a reader to observe a concurrent writer append and checkpoint. Switching all fallback opens to immutable mode is therefore insufficient: it can retain stale page state. Removing sidecars when the reader closes is unsafe because a writer may still own or need them.
-
-A repair must choose a safe availability policy: a clear failure when a private snapshot cannot be obtained, or a genuinely read-only live reader with the same freshness guarantees. Silent empty-ledger fallback is not acceptance. Snapshot integrity work in #776 is separate; this draft neither changes that code nor claims to close #564. Independent implementation and review remain required.
+This is a deliberate availability tradeoff: a full temporary folder or a target changing throughout all copy attempts now requires retry, including on read-only media. No stale immutable fallback or sidecar deletion is introduced. Existing-WAL behavior, including SQLite sidecar races, remains unchanged. Snapshot integrity work #776 remains separate; this draft changes only copy-unavailable fallback policy and its documented tests. Independent review is required before adopting the policy.
