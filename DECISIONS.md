@@ -3850,11 +3850,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and the test runs once per rule on a line, not once per part (each run reads every part): the pass stays linear in
   the parts of a long line. Run once per part, a line of 3,000 denied pushes before a store send (about 98 KB) took
   9 to 11 seconds of CPU in `decide` under a rule that names every command or `'.'`; once per rule it takes about a
-  tenth of a second, as on main, and a test bounds it with `time.process_time()`. The change only passes more rules
+  tenth of a second under that one rule, as on main, and a test bounds it with `time.process_time()`. A rule that
+  fails the test is still passed over at each part that a later rule lifts (a memo lookup and its two regex
+  matches), so the pass grows with the parts times the rules ahead of the one that lifts (review 5690862857). On the
+  same 3,000 pushes (`git push --force origin b<i>`) before `gh gist create ~/.exo/plugins/foo/__init__.py`, with 0,
+  19 and 99 allow rules on `'^git push'` ahead of one rule that names every command, `decide` took 0.06, 0.28 and
+  0.96 s of CPU, against 0.05, 0.10 and 0.12 s on main a1dd4fec (the best of three, `time.process_time()`); with the
+  push rules alone the first push's deny ends the pass, about a tenth of a second on both (0.11 to 0.12 s on
+  main, 0.12 to 0.15 s here, where the rule passed over adds one more pass). The change only passes more rules
   over in that pass, so each part denied before is denied now: nothing decides lower. With the store send first, or
   with an `rm` or `curl -T` tail (denied by that part's own cell), main already denies, and so do key lines
-  (`~/.exo/keys/k`, a secret line). A rule that names every command on the line (`'^git push|^gh gist create|...'`)
-  lifts the deny as before, and the store floor still asks. The gate differential against main f28934a3 (main's
+  (`~/.exo/keys/k`, a secret line). One rule that names every command on the line (`'^git push|^gh gist
+  create|...'`) lifts the deny as before, and the store floor still asks. Separate rules that each name one command do
+  not combine: each is tested on its own, so under `{match: {command: '^git push'}, decision: allow}` and `{match:
+  {command: '^gh gist create'}, decision: allow}` neither names the whole line and the push-first store line is
+  `store_write deny matrix` where main a1dd4fec asks at the floor; that matches #394 on a line with no store write
+  (the same push beside `/tmp/plain.txt` is `force_push deny matrix` under both rules, on main too). The gate differential against main f28934a3 (main's
   `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants` (12,631 actions under 88
   policies, 1,111,528 pairs) lowers 0 pairs and tightens 73 pairs on 73 actions, all `store_write ask ->
   store_write deny`; 284 pairs keep their outcome with another reason (a deny that now names the push rather than a
@@ -3870,7 +3881,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   leads. Elsewhere a rule that names a part still lifts that part's deny when the line's lead is not denied by its
   own cell and the rule does not lower the lead: under a matrix that denies only the costly cells and `{match:
   {command: '^gh gist'}, decision: allow}`, `gh gist create /tmp/plain.txt && git push --force origin main` asks
-  (`force_push ask matrix`) on main and here, while the push-first order denies.
+  (`force_push ask matrix`) on main and here, while the push-first order denies; a guard row pins both.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

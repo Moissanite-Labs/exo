@@ -9,11 +9,13 @@ plain file is denied (the rule step passes the rule over there, since it does no
 
 Now, on a store line, a rule that would lift a part's deny in that pass must also pass the own text test of the whole
 line (#394, `_line_own_test`), as the rule step asks of a rule on a line a store write does not lead. The rule for the
-push names neither the store send nor the line's lead, so the push's matrix deny stands. A rule that names every
-command on the line lifts the deny as before, and the store floor still asks.
+push names neither the store send nor the line's lead, so the push's matrix deny stands. One rule that names every
+command on the line lifts the deny as before, and the store floor still asks. Separate rules that each name one command
+do not combine: each is tested on its own, so none passes and the deny stands.
 
-Rows marked "main:" give that result on main f28934a3 and on main 3570be0e, whose src/exo/gate.py and
-plugins/exo-gate/exo_gate are byte-identical to f28934a3, so those tests fail there; the other rows guard what stays.
+Rows marked "main:" give that result on main f28934a3 and on main a1dd4fec, so those tests fail there; the other rows
+guard what stays. On a1dd4fec (since #546) the `aws s3 cp` tail asks at the opaque step, where f28934a3 asked at the
+floor.
 Classification and decision only; no command string here is run.
 """
 import pytest
@@ -64,7 +66,7 @@ RM_ROWS = [line for f in STORE_FILES for line in (f"{PUSH} && rm -rf {f}", f"rm 
 
 @pytest.mark.parametrize("line", PUSH_FIRST)
 def test_a_rule_for_the_push_does_not_lift_its_deny_on_a_store_line(line):
-    # main: store_write ask floor (ask posting for the gh issue tail)
+    # main: store_write ask floor (ask posting for the gh issue tail; ask opaque for the aws tail since #546)
     category, outcome, rule, reason = result(line, pol(PUSH_RULE))
     assert (category, outcome, rule) == ("store_write", "deny", "matrix"), (line, outcome, rule, reason)
     assert reason == "denied by policy (irreversible and internal: force-push to origin)", reason
@@ -155,17 +157,67 @@ def test_without_the_rule_the_store_line_stays_denied(line):
 EVERY = {"match": {"command": "^git push|^gh gist create|^aws s3 cp|^gh issue create"}, "decision": "allow"}
 
 
-@pytest.mark.parametrize("line, expected", [
-    (PUSH_FIRST[0], ("store_write", "ask", "floor")),
-    # `aws` is an unknown program, which main asks as opaque since #546; the ask is still the principal's alone.
-    (PUSH_FIRST[1], ("store_write", "ask", "opaque")),
-    (PUSH_FIRST[2], ("store_write", "ask", "posting")),
-    (PUSH_FIRST[3], ("store_write", "ask", "floor")),
+@pytest.mark.parametrize("line", PUSH_FIRST[:4])
+def test_a_rule_that_names_every_command_lifts_the_deny_as_on_main(line):
+    # One rule names the push, the store send and the line's lead, so it passes the test of the whole line and
+    # lifts the push's deny as on main; the store floor still asks the principal. The step that asks first is left
+    # open: the floor, the posting checks for `gh issue create -F`, or (since #546) the opaque step for `aws`, an
+    # unknown program; each reason carries the store floor's.
+    category, outcome, _, reason = result(line, pol(EVERY))
+    assert (category, outcome) == ("store_write", "ask"), (line, outcome, reason)
+    assert "writes to the Exo store" in reason, reason
+
+
+SEPARATE = [{"match": {"command": "^git push"}, "decision": "allow"},
+            {"match": {"command": "^gh gist create"}, "decision": "allow"}]
+
+
+@pytest.mark.parametrize("line, rules, expected", [
+    # main: store_write ask floor. Each rule is tested on its own and names one command, so neither passes the test
+    # of the whole line and the push's deny stands; two rules do not add up to one that names both.
+    (PUSH_FIRST[0], SEPARATE, ("store_write", "deny", "matrix")),
+    (PUSH_FIRST[3], SEPARATE, ("store_write", "deny", "matrix")),
+    # Guard rows, as on main: one rule naming both commands lifts the deny and the floor asks; with the store send
+    # first the push's deny stands; beside a plain file the rule step passes both rules over (#394).
+    (PUSH_FIRST[0], [{"match": {"command": "^git push|^gh gist create"}, "decision": "allow"}],
+     ("store_write", "ask", "floor")),
+    (SEND_FIRST[0], SEPARATE, ("store_write", "deny", "matrix")),
+    (f"{PUSH} && gh gist create /tmp/plain.txt", SEPARATE, ("force_push", "deny", "matrix")),
 ])
-def test_a_rule_that_names_every_command_lifts_the_deny_as_on_main(line, expected):
-    # The rule names the push, the store send and the line's lead, so it passes the test of the whole line and
-    # lifts the push's deny as on main; the store floor (or #546's opaque step) still asks the principal.
-    assert result(line, pol(EVERY))[:3] == expected, line
+def test_separate_rules_for_each_command_do_not_combine(line, rules, expected):
+    assert result(line, pol(*rules))[:3] == expected, line
+
+
+DENY_COSTLY = {"costly": {"internal": "deny", "private": "deny", "public": "deny"}}
+
+
+@pytest.mark.parametrize("line, expected", [
+    # No store write leads either line, so the whole-line test does not run (D-038's Revisit-if note): the gist send
+    # of a plain file is costly and denied by its cell, the rule lifts that deny, and the push's own cell asks, as on
+    # main. In the other order the push leads and its deny stands, as on main.
+    (f"gh gist create /tmp/plain.txt && {PUSH}", ("force_push", "ask", "matrix")),
+    (f"{PUSH} && gh gist create /tmp/plain.txt", ("force_push", "deny", "matrix")),
+])
+def test_a_line_no_store_write_leads_keeps_the_rule_step_as_on_main(line, expected):
+    assert result(line, pol({"match": {"command": "^gh gist"}, "decision": "allow"}, matrix=DENY_COSTLY))[:3] == expected
+
+
+def _raises(*args, **kwargs):
+    raise RuntimeError("probe")
+
+
+@pytest.mark.parametrize("rule", [PUSH_RULE, EVERY])
+@pytest.mark.parametrize("where", ["building the test", "running the test"])
+def test_a_failure_in_the_whole_line_test_keeps_the_deny(rule, where, monkeypatch):
+    # _whole_line_test fails closed: when _line_own_test raises, or the test it returns raises, no rule passes, so
+    # the push's matrix deny stands, even under the one rule that names every command (which lifts it otherwise).
+    # main: store_write ask floor (main has no whole line test, so the patched function is never called).
+    if where == "building the test":
+        monkeypatch.setattr(gate, "_line_own_test", _raises)
+    else:
+        monkeypatch.setattr(gate, "_line_own_test", lambda c, p, ctx: _raises)
+    category, outcome, step, reason = result(PUSH_FIRST[0], pol(rule))
+    assert (category, outcome, step) == ("store_write", "deny", "matrix"), (where, outcome, step, reason)
 
 
 def test_the_whole_line_test_runs_on_a_store_line(monkeypatch):
@@ -230,6 +282,9 @@ def test_a_long_store_line_decides_in_linear_time(rule, expected):
     # 3,000 denied pushes before a store send (about 98 KB, under bash's 128 KB argument cap): one run of the whole
     # line test per rule, not one per part. Run once per part, each run reading every part, decide took 9 to 11
     # seconds of CPU here under the first two rules; once per rule it takes about a tenth of a second, as on main.
+    # That is under one rule: a rule that fails the test is still passed over at every part that a later rule lifts,
+    # so the pass grows with parts times such rules (with 99 push rules ahead of one that names every command, about
+    # 1 s here against 0.12 s on main; see the D-038 #547 amendment).
     # CPU time of this process only (time.process_time), so other work on the machine does not count, and the bound
     # leaves room for a slow one.
     import time
