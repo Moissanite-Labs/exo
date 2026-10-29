@@ -102,6 +102,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   2,737,512 pairs on the 7,092 lines with a `((` of that corpus and 4,950 new arithmetic-header lines (135,509
   tightened on 4,752 actions). Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`
   "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-28), `docs/DOCS-MAP.md`.
+- A `while` or `until` loop whose condition starts with the `cd` into the store is read again too (#857, a #479
+  follow-up). The condition runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do
+  sleep 1; done` the `cp` rewrites the policy file from the second pass; it and five other spellings (`until !
+  cd`, backticks, `pushd`, `< <(..)`, a `cd` in an `if`) were allowed reads on main 1401ff81, also under `deny:
+  [store_write]`. They are now `store_write`, as the #479 rows are. A condition's `cd` into a descriptor folder
+  names that folder when the body holds no `cd` of its own (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
+  denies under `deny: [target:/dev*]`). Main's `scripts/gate_diff.py`: 0 of 10,616,630 pairs
+  lowered (built-in corpus, 11,044 aimed loop lines, `/dev*`, `/proc*` and `*store*` target rules kept apart).
+  Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment, #857), `docs/DOCS-MAP.md`.
 - A compound command behind `time`, `time -p`, `time --` or `!` (and their combinations) is read as the same
   compound without them (#853). bash runs `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
   done` as it runs the loop alone, but the gate read `time` as a program and the loop as its arguments, so on

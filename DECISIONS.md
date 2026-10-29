@@ -3827,6 +3827,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
+  `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
+  gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
+  second (bash 5.2 writes the policy file; the same with `until ! cd`, backticks, `pushd`, a `< <(..)` on the `cd`
+  and a `cd` inside an `if` in the condition). `_loop_spans` took a loop only when its `cd` sat after the loop's
+  first command (`bisect_right`), so these six lines were allowed reads on main 1401ff81 under every policy, and
+  the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
+  (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
+  `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
+  condition's `cd` into a descriptor folder names that folder when the loop holds no other store `cd`, so `while cd
+  /dev/fd < <(cp /tmp/evil 3); do :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies; when
+  the body holds a `cd` of its own, the body's names the second pass, as on main, since that pass starts where the
+  last `cd` left it (reviews of #858: taking the condition's folder first dropped main's reading of `while cd
+  /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done`, deny to ask under `deny: [target:/proc*]`). A
+  condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
+  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 938b027a
+  against this change): the built-in corpus with variants, the 4,804 condition lines below and 6,240 lines that
+  mix a condition `cd` and a body `cd` into the store, `/dev/fd`, `/proc/self/fd` or `/dev/fd/3` (`while`, `until`,
+  `while !`, `{ }` and `for`; `cd`, `builtin cd`, `cd -P`, `pushd`; `< <(..)`, `<<< "$(..)"` and `$( )`; `cp`,
+  `rm -rf` and `git push` bodies), under the 88 built-in policies and seven more that keep `/dev*`, `/proc*` and
+  `*store*` target rules apart, lower 0 of 10,616,630 pairs and tighten 282,981 on 3,337 actions. The first draft
+  of the descriptor rule, which took the condition's folder before the body's, lowered 4,992 pairs on 2,048 of the
+  mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
+  and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
+  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 10 of its tests fail without the change).
+  *Revisit if:* the same as #479's.
 - *Amendment 2026-10-29 (issue #853, to the #479 amendment's decision):* a compound command behind bash's
   pipeline prefixes is read as the same compound without them, beside main's reading, which lifts the #479
   amendment's `time` limit. bash's grammar takes `time`, `time -p`, `time --`, `time -p --` and `!` before a
