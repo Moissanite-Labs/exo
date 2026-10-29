@@ -82,6 +82,17 @@ bypass. A required tool executor (Exo OS) ignores `mode = "bypass"`.
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
 
+## Truthful seat attribution
+
+On a core running a seat, `session.create` attributes an omitted or empty `seat` to the
+loaded seat. An explicit matching name is accepted. A different name returns `bad_request`
+without creating a session. Selecting a label does not load another profile or change the
+core's identity, permissions or memory scope. Use the other seat's core to create its session.
+
+An unseated core preserves the client's seat label for compatibility. That label alone is
+not proof of profile execution or a memory access boundary. This check governs new sessions;
+it does not isolate access to existing sessions.
+
 ## Skills
 
 Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/` in the checkout, or

@@ -567,7 +567,14 @@ class CoreRuntime:
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
         if b.kind not in ("", "thread", "private"):
             raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
-        info = await self.loop.create_session(title=b.title, seat=b.seat, model=b.model or self._main_ref(),
+        seat = b.seat  # an unseated core keeps whatever the client asked for (""/None included)
+        if self.seat is not None:
+            seat = b.seat or self.seat.name
+            if seat != self.seat.name:
+                raise CommandFailed(
+                    "bad_request", f"this core runs the {self.seat.name!r} seat; it cannot start a thread for seat {seat!r}"
+                )
+        info = await self.loop.create_session(title=b.title, seat=seat, model=b.model or self._main_ref(),
                                               cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
         why = self.cwd_note if not b.cwd else ""
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
