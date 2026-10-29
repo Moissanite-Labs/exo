@@ -163,6 +163,10 @@ class Classification:
     # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
     # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The same call read with the lexer as before #143 (_flat_words), where its reading of a ${..} word or a $(( may
+    # differ (_classify_reading): the reading that ends the ``also`` chain above, named here so the exo-gate hook's
+    # bypass floor takes main's own reading of the call first, as main does. None where it was not made.
+    flat: "Classification | None" = field(default=None, repr=False, compare=False)
     # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
     # as before, and keeps the stricter outcome. None on any other result.
     displaced: "Classification | None" = field(default=None, repr=False, compare=False)
@@ -193,6 +197,7 @@ class Classification:
         d.pop("own_signals")
         d.pop("before")
         d.pop("also")
+        d.pop("flat")
         if d["alt_targets"]:
             d["alt_targets"] = [redact_userinfo(t) for t in d["alt_targets"]]
         else:
@@ -394,8 +399,30 @@ _DEPTH = 4
 # the gate hook. A deeper part is not read: _nest_end finds where it ends, and it stands as _TOO_DEEP, an unread
 # part that asks, also in an exported value. No hand-written command comes near this.
 _NEST = 16
+# A part that only bash's reading of #143 opens (a $( ), <( ), >( ), backquote or arithmetic $(( in a ${..} word, a
+# $(( read as a subshell, single-quoted text bash expands, bash 5.3's ${ cmd; }) is read _WORD_NEST + 1 levels deep:
+# its first $( or backquote is level 1, and the _NEST cap stands _WORD_NEST levels below that (_Lexer._part). The
+# reading before reads no such nest, and costs next to nothing on it, so bash's reading of one stays a short nest; a
+# deeper level is not read and asks.
+_WORD_NEST = 2
+# How many such parts one classify call opens (_Lexer._part), in classify order: a part counts once for each lexer
+# pass that opens it (the line's, each $( ) level around it, _dollar_brace and _unknown_forms), and inner levels are
+# opened when their source is classified, after the rest of the line. A part past them is cut as a part past the cap
+# is, an unread part that asks. So a line of many such parts costs a small multiple of the reading before.
+_WORD_PARTS = 24
 _TOO_DEEP = "__exo_gate_nested_too_deep__"
 _STAND_INS = re.compile(r"(?:__exo_gate_nested_too_deep__(?:\n|\Z))+")   # a run of stand-in lines (_classify_shell)
+# A part of a line that runs a value the gate does not see, or that bash rejects (#143, #553, #554): `${!name}`,
+# `${name@P}`, a ${..} word or a $(( bash never closes. The lexer lists it with the substitution sources, and it is an
+# opaque part that asks (_classify_shell).
+_ODD_WORD = "__exo_gate_unread_word__"
+_FUNSUB = re.compile(r"\$\{[ \t\n|]")       # bash 5.3's `${ cmd; }` and `${| cmd; }`
+# The start of a ${..} word that runs a value: an indirect one (`${!name}`, `${!1}`, `${!@}`, `${!*}`: the value is
+# read as a name, and `a[$(..)]` in it runs), but not a listing (`${!prefix*}`, `${!prefix@}`, `${!arr[@]}`,
+# `${!arr[*]}`); or a prompt expansion, whose `$( )` runs (`${name@P}`, `${arr[0]@P}`, `${@@P}`, `${*@P}`, `${@:2@P}`).
+# A subscript or offset is read only up to a bracket or brace, so a long run of `${a[` costs one step each.
+_RUNS_VALUE = re.compile(r"!(?![A-Za-z_]\w*(?:[*@]|\[[*@]\])\})(?:[A-Za-z_]\w*|\d+|[@*])"
+                         r"|(?:(?:[A-Za-z_]\w*|\d+)(?:\[[^\][{}]*\])?|[@*](?::[^\][{}]*)?)@P\}")
 _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
@@ -505,6 +532,51 @@ class _Lexer:
         self.cuts: list[tuple[int, int, str]] = []   # (start, end, stand-in) of each part not read, in order
         self.marks: list[tuple[int, int]] = []        # the last run's token spans, one per token, with scan (#394)
         self.met: list[int] = []           # per mark, how many subs the line met by the end of its token (#465)
+        self.bash = not _flat_words.get()  # ${..} words and $(( as bash's parser reads them (#143, _param, _arith)
+        self.differs = False               # that reading may differ from the one before #143 here (_two_ways)
+        self.left_open = False             # the text ends inside a quote
+        self.brace_at = -1                 # _param_open's last first } found
+        self.odd = False                   # _ODD_WORD is listed
+        self.ends: dict[int, int] = {}     # _arith_end's, shared with the lexers that read a part of this text
+        self.ran_out = False               # a run(closer=True) reached the end of the text before its `)`
+        self.part = False                  # it reads a part only bash's reading opens: a backquote is a level too
+
+    def _deeper(self) -> int:
+        """The level of the text inside a part only bash's reading opens, whose own $( or backquote is level 1 of
+        _WORD_NEST + 1: _WORD_NEST levels from the _NEST cap at most."""
+        return max(self.nest + 1, _NEST - _WORD_NEST)
+
+    def _part(self, s: str, nest: int, spend: bool = True) -> _Lexer | None:
+        """A lexer at level ``nest`` for a part only bash's reading opens (#143), or None when the part lies past the
+        _NEST cap or past what is left of the call's _WORD_PARTS (``spend``), and is cut as a part past the cap is.
+        The reading before reads no such part, so it is kept (_differ). A lexer for words alone opens none."""
+        if nest > _NEST or _words_only.get():
+            self._differ()
+            return None
+        memo = _call_memo.get()
+        if spend:
+            self._differ()
+            left = [1] if memo is None else memo.setdefault("word_parts", [_WORD_PARTS])
+            left[0] -= 1
+            if left[0] < 0:
+                return None
+        lx = _Lexer(s, scan=False, nest=nest)
+        lx.part = True
+        if s is self.s:
+            lx.ends = self.ends
+        return lx
+
+    def _odd(self) -> None:
+        """List _ODD_WORD among the sources, once: each odd part of a text is the same part."""
+        if not self.odd:
+            self.odd = True
+            self.subs.append(_ODD_WORD)
+        self._differ()
+
+    def _differ(self) -> None:
+        self.differs = True
+        if (flag := _two_ways.get()) is not None:
+            flag[0] = True
 
     def _cut(self, w: _Word, a: int) -> None:
         """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
@@ -513,10 +585,20 @@ class _Lexer:
         cap (a $( ) in it is not read either), and the stand-in ends that body with an empty one, so a level read
         again does not take the lines after the part for the body."""
         s = self.s
-        b, read = _nest_end(s, a + 2, self.pending)
+        b, read = _nest_end(s, a + 2, [] if self.bash else self.pending)    # with bash, it reads its own (_nested)
+        if self.bash and ("<<" in s[a:b] or (self.pending and "\n" in s[a:b])):
+            self._differ()                           # the reading before shares the here-docs (_nested)
+        elif self.bash and not self.part and _MAY_DIFFER.search(s, a, b + 2):    # (it reads no part)
+            flat = _flat_words.set(True)
+            try:
+                if _nest_end(s, a + 2, [])[0] != b:
+                    self._differ()                   # the reading before ends it elsewhere (#143)
+            finally:
+                _flat_words.reset(flat)
         for hd in read:
             if not hd.quoted:
                 sub = _Lexer(hd.body, scan=False, nest=_NEST)
+                sub.part = self.part
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
         ends = "".join("\n" + (hd.cut or hd.delim) for hd in read) + "\n" if read else ""
@@ -604,7 +686,8 @@ class _Lexer:
                 self.i += 2
             elif ch == "'":
                 j = s.find("'", self.i + 1)
-                j = len(s) if j < 0 else j
+                if j < 0:
+                    j, self.left_open = len(s), True
                 w.text += s[self.i + 1:j]
                 w.quoted = w.started = True
                 self.i = j + 1
@@ -621,9 +704,7 @@ class _Lexer:
                 if self.nest >= _NEST:
                     self._cut(cast(_Word, w), start - 2)
                     continue
-                self.nest += 1
-                self.run(closer=True)
-                self.nest -= 1
+                self._nested()
                 src = self._source(start, max(start, self.i - 1))
                 self.subs.append(_OutSub(src) if ch == ">" else src)
                 w.text += "<(..)"
@@ -664,6 +745,7 @@ class _Lexer:
                 self.i += 1
         flush()
         self.marks, self.met = marks or [], met
+        self.ran_out = self.ran_out or closer
         return toks
 
     def _read_heredocs(self, closer: bool = False) -> None:
@@ -674,9 +756,11 @@ class _Lexer:
             if not hd.quoted:
                 w = _Word()
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
+                sub.part = self.part
                 sub._dquote(w, until_end=True)
                 hd.prompt = w.prompt              # a ${..@P} in the body expands as the body is made (#579)
                 self.subs += sub.subs
+                self.differs = self.differs or sub.differs
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
             if hd.cut and last < len(self.s):  # and its end line as they spell the delimiter, so the two still pair
@@ -702,6 +786,23 @@ class _Lexer:
             else:
                 w.text += ch
                 self.i += 1
+        self.left_open = self.left_open or not until_end
+
+    def _nested(self) -> list:
+        """run() for the $( ) or <( ) whose text starts at i, one level deeper. With bash, a here-doc opened in it is
+        its own, as in bash's parser: one left open at its `)` takes no line after it, and one from the line around
+        it waits for that line's newline, not one inside the part (#143). The reading before shares them."""
+        start, outer = self.i, self.pending
+        if self.bash:
+            self.pending = []
+        self.nest += 1
+        toks = self.run(closer=True)
+        self.nest -= 1
+        if self.bash:
+            if self.pending or (outer and "\n" in self.s[start:self.i]):
+                self._differ()
+            self.pending = outer
+        return toks
 
     def _procsub(self, w: _Word) -> None:
         """<( ) or >( ) at i, as run() reads one at the start of a word (for the scans that read text again)."""
@@ -711,15 +812,16 @@ class _Lexer:
         out = self.s[self.i:self.i + 1] == ">"
         self.i += 2
         start = self.i
-        self.nest += 1
-        self.run(closer=True)
-        self.nest -= 1
+        self._nested()
         src = self._source(start, max(start, self.i - 1))
         self.subs.append(_OutSub(src) if out else src)
         w.text += "<(..)"
         w.dynamic = w.started = True
 
-    def _backtick(self, w: _Word, double: bool = False) -> None:
+    def _backtick(self, w: _Word, double: bool = False, at: int = -1) -> None:
+        """A backquote at i. One in a ${..} word (``at``: the level of its text, _deeper) or in a part only bash's
+        reading opens is a level of that part (#143): its text is read at its level, and its source lists each part
+        past the cap in it as a stand-in, which the levels around spell too (_part)."""
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
             if s[j] == "\\" and j + 1 < len(s):
@@ -728,12 +830,207 @@ class _Lexer:
                 continue
             out.append(s[j])
             j += 1
-        inner = "".join(out)
-        self.subs.append(inner)
+        inner = src = "".join(out)
+        if (at >= 0 or self.part) and j < len(s) and ("(" in inner or "`" in inner):
+            lx = self._part(inner, at if at >= 0 else self.nest + 1, spend=at >= 0)
+            if lx is None:
+                src = _TOO_DEEP
+                self.cuts.append((self.i, j + 1, "$(" + _TOO_DEEP + ")"))
+            else:
+                lx.run()
+                if lx.cuts:
+                    src = lx._source(0, len(inner))
+                    self.cuts.append((self.i, j + 1, "`" + src.replace("\\", "\\\\").replace("`", "\\`") + "`"))
+        self.subs.append(src)
         self.i = j + 1
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
         w.split = w.split or not double
+
+    def _arith(self, i: int) -> int:
+        """Where the $(( at s[i] ends when it is arithmetic, else -1. With bash off it is main's reading (#553,
+        _dollar_paren): arithmetic to the `))` bash's own scan finds, a $( ) holding a subshell when the text there
+        does not balance (-1, read as any $( ) is), and arithmetic text to the end when no `)` closes it. bash
+        matches the group as its parser matches one (_arith_end), and reads it as arithmetic only when the text
+        between its `$(` and that `)` is one group that balances (_is_arith); else it is a $( ) that holds a
+        subshell, read as one (_group_sub). One bash never closes it rejects, and nothing on the line runs: an odd
+        part that takes the rest of the text. Where main's reading may end it elsewhere, or read it as the other
+        form, the reading before is kept beside (_differ), so main's reading of it is never lost."""
+        s = self.s
+        if not self.bash:
+            return _dollar_paren(s, i) or -1
+        end = _arith_group(s, i, self.ends)
+        if end >= 0:
+            if _hides_paren(s, i, end) or _dollar_paren(s, i) != end:   # the reading before may end it elsewhere
+                self._differ()
+            return end
+        if _arith_end(s, i, self.ends) < 0:
+            self._odd()
+        self._differ()
+        return -1
+
+    def _arith_parts(self, i: int, j: int, word: bool = False, legacy: bool = False) -> None:
+        """The $( ) and backquotes in the arithmetic s[i:j], a $(( )) or bash's legacy `$[ ]` (``legacy``, #588),
+        listed as sources (cut past _NEST). Its lexer reads the text up to the closing `))` (or `]`) in place, so the
+        group ends _arith_end found hold for it too. One in a ${..} word (``word``) is a part only bash's reading
+        opens, whose first $( or backquote is its level 1."""
+        at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
+        body = "$((" + self.s[i + 2:j] + "))" if legacy else self.s[i:j]
+        sub = None
+        if self.nest < _NEST and ("$(" in body[3:] or "`" in body):
+            # main reads a legacy body to the end of its span, its `]` too, also when no `]` closes it (#588)
+            text = self.s[:max(at, j if legacy else end)]
+            sub = self._part(text, self._deeper() - 1) if word else _Lexer(text, scan=False, nest=self.nest + 1)
+        if sub is None and (self.nest >= _NEST or word) and (_SUBST.search(body, 3) or "`" in body):
+            self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
+            self.subs.append(_TOO_DEEP)
+        elif sub is not None:
+            sub.i, sub.ends, sub.part = at, self.ends, sub.part or self.part
+            sub._dquote(_Word(), until_end=True)
+            self.subs += sub.subs
+            self.cuts += sub.cuts
+            self.differs = self.differs or sub.differs
+
+    def _param(self, i: int, dq: bool, first: int, prompts: set[int] | None = None) -> int:
+        """bash's reading of the ${..} word at s[i] (#143), where the reading before #143 ends it at its first }
+        (``first``): the index of the } that closes it, or len(s) - 1 when none does (bash rejects the line: an odd
+        part). Only a } outside quotes and escapes closes it. A ' pairs with the next one, in double quotes (``dq``)
+        too; $'..' ends at its first ' that is not escaped; in a ".." inside the word a ' is text. A nested ${ opens
+        a level on a stack, not a recursion, so a nest of any depth is read in one pass. Each $( ), $(( and
+        backquote in the word, and each <( ) and >( ) outside double quotes, is read as one elsewhere and its source
+        listed (_param_part). Single-quoted text bash expands (in double quotes after an operator other than
+        _DQ_QUOTING_OP's: `"${a:-'$(cmd)'}"`) is read within that text alone, so nothing opened in it runs past its
+        quote (_quoted_span). A ${ that runs a value (_RUNS_VALUE) is an odd part, but for a ${..@P} the word's own
+        reading weighs (``prompts``, where each starts): main's #579 reading asks for it unless the line assigns
+        its parameter a literal value."""
+        s, n = self.s, len(self.s)
+        prompts = prompts or set()
+        # per open ${: [in a ".." inside it, '..' expands, in double quotes]
+        stack = [self._param_open(i, dq, i in prompts)]
+        j = _joins_past(s, i + 1) + 1          # past its {, a \<newline> before it dropped (#585)
+        while (m := _PARAM_STOP.search(s, j)) is not None:
+            j, ch = m.start(), m.group()
+            inq, sq, fdq = stack[-1]
+            if ch == "\\":
+                j += 2
+            elif (ch == "'" or s.startswith("$'", j)) and not inq:
+                a = j + 1 if ch == "'" else j + 2
+                j = _skip(s, a, "'", ch != "'")
+                if sq:
+                    self._quoted_span(a, j - 1 if s[j - 1:j] == "'" and j > a else j)
+            elif ch == "`":
+                self.i = j
+                self._backtick(_Word(), at=self._deeper())
+                j = self.i
+                self._differ()
+                if j > n:                   # it runs out, so the word never closes and asks: its text is not read
+                    self.subs.pop()
+            elif s.startswith("$(", j) or (ch in "<>" and s.startswith("(", j + 1) and not (fdq or inq)):
+                j = self._param_part(j)
+            elif s.startswith("${", j):
+                stack.append(self._param_open(j, fdq or inq, j in prompts))
+                j += 2
+            elif ch == "}" and not inq:
+                stack.pop()
+                if not stack:
+                    if j != first:
+                        self._differ()
+                    return j
+                j += 1
+            else:
+                if ch == '"':
+                    stack[-1][0] = not inq
+                j += 1
+        self._odd()
+        return n - 1
+
+    def _param_open(self, at: int, dq: bool, prompt: bool = False) -> list:
+        """A level of _param's stack for the ${ at s[at]. One that runs a value is an odd part, and so are bash
+        5.3's `${ cmd; }` and `${| cmd; }`, which run cmd: its text to the first } is listed as a source too, when
+        a } closes it and it holds no other. That text is a part only bash's reading opens (_part), whose first $( or
+        backquote is its level 1, as _param reads the $( ) in it as parts of the word. A ${..@P} the word itself
+        lists (``prompt``, _Word.prompt) is weighed as main weighs it (#579, _runs_prompt): an opaque part unless the
+        line assigns its parameter a literal value."""
+        s = self.s
+        b = _joins_past(s, at + 1) + 1         # past its {, a \<newline> before it dropped (#585)
+        if _RUNS_VALUE.match(s, b) and not prompt:
+            self._odd()
+        elif s[b:b + 1] in (" ", "\t", "\n", "|"):
+            if self.brace_at < at:                   # else the text listed for one before holds this one
+                end = s.find("}", at)
+                self.brace_at = len(s) if end < 0 else end
+                # one bash never closes runs nothing; one holding another is not read again at each level (asks)
+                if end >= 0 and not _FUNSUB.search(s, b, end):
+                    lx = self._part(s[:end], self._deeper() - 1)
+                    if lx is not None:
+                        lx.i = b
+                        lx.run()
+                    self.subs.append(_TOO_DEEP if lx is None else lx._source(b, end).lstrip("|"))
+            self._odd()
+        return [False, dq and not _DQ_QUOTING_OP.match(s, b), dq]
+
+    def _group_sub(self, i: int, end: int) -> None:
+        """The $(( at s[i] that bash runs as a $( ) holding a subshell (_arith): its text up to the ) where bash's parser
+        ends the word (end) is read by a lexer of its own, which goes no further, and listed as a source."""
+        lx = self._part(self.s[:end - 1], self._deeper())
+        if lx is None:
+            self.cuts.append((i, end, "$(" + _TOO_DEEP + ")"))
+            self.subs.append(_TOO_DEEP)
+            return
+        lx.i = i + 2
+        lx.run()
+        self.subs.append(lx._source(i + 2, end - 1))      # the parts in it are listed when it is read
+        self.cuts += lx.cuts
+
+    def _param_part(self, j: int) -> int:
+        """The $( ), $(( or <( ) at s[j] in a ${..} word (_param), read by a lexer of its own, as one elsewhere on the
+        line: a here-document opened in it stays in it, as in bash. Returns where it ends."""
+        s = self.s
+        if s.startswith("$((", j) and (end := self._arith(j)) >= 0:
+            self._arith_parts(j, end, word=True)
+            return end
+        self._differ()
+        if s.startswith("$((", j):
+            if (end := _arith_end(s, j, self.ends)) >= 0:
+                self._group_sub(j, end)
+                return end
+            return len(s)                           # one bash never closes takes the rest of the text and asks
+        lx = self._part(s, self._deeper())
+        if lx is None:
+            end = _nest_end(s, j + 2, [])[0]
+            if end >= len(s) and (end > len(s) or _nest_end(s + "\n", j + 2, [])[0] > len(s)):
+                return len(s)                       # it runs out (as below)
+            self.cuts.append((j, end, s[j] + "(" + _TOO_DEEP + ")"))
+            self.subs.append(_TOO_DEEP)
+            return end
+        lx.i = j + 2
+        lx.run(closer=True)
+        if lx.ran_out:
+            return len(s)             # it runs out, so the word never closes and asks; the reading before stands in
+        src = lx._source(j + 2, max(j + 2, lx.i - 1))
+        # the parts in it are listed when its source is read, a level deeper (each level of a nest only bash's
+        # reading opens is classified once per level above it, not once more at the top)
+        self.subs.append(_OutSub(src) if s[j] == ">" else src)
+        self.cuts += lx.cuts
+        return lx.i
+
+    def _quoted_span(self, a: int, b: int) -> None:
+        """Single-quoted text s[a:b] in a ${..} word that bash expands as double-quoted text (_param): its $( ),
+        backquotes and ${..} are read within it alone."""
+        seg = self.s[a:b]
+        if "$" not in seg and "`" not in seg:
+            return
+        sub = self._part(seg, self._deeper() - 1, spend="(" in seg or "`" in seg) if self.nest < _NEST else None
+        if sub is None:
+            if "$(" in seg or "`" in seg:
+                self.subs.append(_TOO_DEEP)
+                self._differ()
+            return
+        sub._dquote(_Word(), until_end=True)
+        if sub.subs or sub.differs:
+            self.subs += sub.subs
+            self.cuts += [(x + a, y + a, stand_in) for x, y, stand_in in sub.cuts]
+            self._differ()
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
@@ -750,25 +1047,27 @@ class _Lexer:
                 if depth == 0:
                     break
         elif s.startswith("$((", i):
-            j = _dollar_paren(s, i)        # 0 when bash runs the span as a $( ( ) command substitution (#553)
+            j = self._arith(i)             # -1 when bash runs the span as a $( ( ) command substitution (#553)
         else:
-            j = 0
-        if j:
+            j = -1
+        if j >= 0:
             body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]   # the span to what bash's own scan finds (#553)
-            at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
             if legacy:
                 w.legacy = True
-            if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
-                self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
-                self.subs.append(_TOO_DEEP)
-            elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
-                sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
-                sub._dquote(_Word(), until_end=True)
-                self.subs += sub.subs
-                self.cuts += [(x + at, y + at, stand_in) for x, y, stand_in in sub.cuts]
+            self._arith_parts(i, j, legacy=legacy)
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
             w.text += s[i:j]               # as written, `$[..]`, so the word keeps its own spelling
+            w.dynamic = True
+            w.split = w.split or not double
+            self.i = j
+        elif nxt == "(" and self.bash and s.startswith("$((", i):
+            j = _arith_end(s, i, self.ends)
+            if j >= 0:
+                self._group_sub(i, j)      # bash runs it as a $( ) holding a subshell (#553)
+            else:                          # one bash never closes takes the rest of the text and asks (_arith)
+                j = len(s)
+            w.text += s[i:j]
             w.dynamic = True
             w.split = w.split or not double
             self.i = j
@@ -778,9 +1077,7 @@ class _Lexer:
                 return
             self.i = k + 1
             start = self.i
-            self.nest += 1
-            toks = self.run(closer=True)
-            self.nest -= 1
+            toks = self._nested()
             inner = s[start:max(start, self.i - 1)]
             lit = _literal_heredoc(toks)
             w.split = w.split or not double                  # bash splits its output outside double quotes
@@ -793,7 +1090,8 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
-            if k > i + 1:                  # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
+            prompts: set[int] = set()      # where a ${..@P} main's reading weighs starts (#579, _Lexer._param)
+            if k > i + 1:                # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
                 sub = _Lexer(s[k:j + 1], scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
@@ -805,20 +1103,31 @@ class _Lexer:
                 for at, (end, _) in rel.items():   # the outer ${ and every one nested in it
                     if m := _RUNS_PROMPT.fullmatch(s[i + at:i + end + 1]):
                         w.prompt.append(m[1])      # a value bash runs as a prompt string (#579)
+                        prompts.add(i + at)
             elif m := _RUNS_PROMPT.fullmatch(s[i:j + 1]):
                 w.prompt.append(m[1])
+                prompts.add(i)
+            if self.bash:
+                if k > i + 1:              # the reading before reads such a ${ to its first } as text bash runs
+                    self._differ()         # (#585), which bash's reading of the word may not: it is kept beside
+                j = self._param(i, double, j, prompts)
             w.text += s[i:j + 1]
             w.dynamic = True
             # "${name[@]}", "${!name@}" and "${@:2}" make several words. bash may read past the first } when a
             # quote, a backtick, a backslash or a $( comes before it, and the lexer cannot tell what is quoted after.
             w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
+        elif nxt == "'" and double and self.bash:  # in double quotes bash reads `$'` as a $ and a quote (#143)
+            self._differ()
+            w.text += "$"
+            self.i = i + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
             j, out = k + 1, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
                 out.append(s[j:j + step])
                 j += step
+            self.left_open = self.left_open or j >= len(s)
             raw = "".join(out)
             try:
                 w.text += _ansi_c(raw)
@@ -888,6 +1197,12 @@ _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
 _BRACKETS = re.compile(r"[\[\]]")
 _VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
+_HIDES_PAREN = re.compile(r"[\"'`\\#]")     # what bash's $(( matching steps over and a count of every ( does not
+_MAY_DIFFER = re.compile(r"\$[{']|\$\(\(|<<")   # what _nest_end reads otherwise with bash on (_Lexer._cut)
+_GROUP_STOP = re.compile(r"[\\`$\"'#(){}]")   # what _group_end and _expand_end read; the rest they step over
+_ARITH_STOP = re.compile(r"[\\'\"$()]")       # what _is_arith reads
+_PARAM_STOP = re.compile(r"[\\'\"`$<>}]")     # what _Lexer._param reads
+_COMMENT_OR_HEREDOC = re.compile(r"(?:^|(?<=[\s;&|()]))#|<<")
 _DELIM_MAX = 1024
 
 
@@ -899,13 +1214,15 @@ def _match_end(rx: re.Pattern[str], s: str, i: int) -> int:
 class _Open:
     """For _nest_end: a part it is inside. A $( ) or <( ) holds commands, read as run() reads them, with the state
     of its current word (`text` collects it when it will be a here-doc delimiter). Double-quoted text belongs to the
-    word of the part below it (`owner`)."""
+    word of the part below it (`owner`). A ${..} word (`{`, #143) is read as _Lexer._param reads it."""
     __slots__ = ("kind", "start", "owner", "depth", "delim", "started", "digits", "quoted", "dollar", "text", "size",
-                 "over")
+                 "over", "pend", "dq", "inq")
 
     def __init__(self, kind: str, start: int = 0, owner: _Open | None = None):
         self.kind, self.start, self.owner, self.depth = kind, start, owner, 0
         self.delim: bool | None = None           # a << before the word (True for <<-): it is a delimiter
+        self.pend: list[_Heredoc] = []           # the here-docs waiting for its newline (with bash, its own)
+        self.dq = self.inq = False               # a ${..} word: in double quotes, in a ".." inside it
         self.new_word()
 
     def new_word(self) -> None:
@@ -931,15 +1248,26 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
     $ forms, redirections and here-documents), but only to find that end: one pass, with a stack of the open parts in
     place of the lexer's recursion, and no here-doc body read again. ``pending`` is the lexer's list of here-docs
     waiting for a newline: a body read here leaves it, and a here-doc opened here whose body comes later joins it.
-    Also returns the here-docs from before the cut whose body was read here."""
+    Also returns the here-docs from before the cut whose body was read here. A ${..} word and a $(( are read as the
+    lexer reads them (#143, #553): with bash off as before, else as _Lexer._param and _Lexer._arith read them, and a
+    here-doc opened in a $( ) or <( ) waits in it alone (_Lexer._nested)."""
     n, before = len(s), {id(h) for h in pending}
+    bash = not _flat_words.get()
+    ends: dict[int, int] = {}                    # _arith_end's
     read: list[_Heredoc] = []
     stack = [_Open("$", i)]
+    stack[0].pend = pending
+
+    def push(kind: str, at: int = 0, owner: _Open | None = None, dq: bool = False) -> None:
+        f = _Open(kind, at, owner)
+        f.pend = [] if bash and kind != '"' else stack[-1].pend      # as _Lexer._nested
+        f.dq = dq
+        stack.append(f)
 
     def flush(f: _Open) -> None:                 # as run()'s flush: a started word after << is a delimiter
         if f.started and f.delim is not None:
             delim = "\n" if f.over else "".join(f.text or [])     # no body line is "\n": the body runs to the end
-            pending.append(_Heredoc(delim, f.delim, f.quoted, f.dollar))
+            f.pend.append(_Heredoc(delim, f.delim, f.quoted, f.dollar))
             f.delim = None
         f.new_word()
 
@@ -950,14 +1278,22 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.started, w.digits = True, False
             if f.kind == "<":
                 w.add("<(..)", 0, 5)
+            elif f.kind == "{":
+                w.add(s, f.start - 2, i)
             else:
                 w.add(s, f.start, max(f.start, i - 1), "$()")
+
+    def arith(i: int) -> int:                    # where a $(( ends, as _Lexer reads it (_arith, _group_sub)
+        if bash:                                 # with bash, one that never closes takes the rest of the text
+            j = _arith_end(s, i, ends)
+            return n if j < 0 else j
+        return _dollar_paren(s, i)               # main's (#553): 0 when it is a $( ) holding a subshell
 
     def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
         k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
         nxt = s[k:k + 1]
         w.started, w.digits = True, False
-        if s.startswith("$((", i) and (j := _dollar_paren(s, i)):
+        if s.startswith("$((", i) and (j := arith(i)):
             w.add(s, i, j)
             return j
         if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
@@ -970,14 +1306,17 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.add(s, i, j)
             return j
         if nxt == "(":
-            stack.append(_Open("$", k + 1))
+            push("$", k + 1)
+            return k + 1
+        if nxt == "{" and bash:
+            push("{", k + 1, dq=double)
             return k + 1
         if nxt == "{":
             j = s.find("}", i)
             j = n - 1 if j < 0 else j
             w.add(s, i, j + 1)
             return j + 1
-        if nxt == "'":
+        if nxt == "'" and not (double and bash):
             j = _match_end(_ANSI_BODY, s, k + 1)
             j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
             w.quoted = w.dollar = True
@@ -990,7 +1329,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             return j + 1
         if nxt == '"' and not double:
             w.quoted = w.dollar = True
-            stack.append(_Open('"', owner=w))
+            push('"', owner=w)
             return k + 1
         parameter = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
         if parameter:
@@ -1013,13 +1352,36 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
     while True:
         f = stack[-1]
         if i >= n:                               # the line ends: each open part ends as run() ends it
+            if any(o.kind == "{" for o in stack):
+                i = n                            # _Lexer._param ends a word left open at the end, wherever inside it
             while stack:
                 if stack[-1].kind != '"':
                     flush(stack[-1])
                 close(stack[-1], i)
             return i, read
         ch, nxt = s[i], s[i + 1:i + 2]
-        if f.owner is not None:                  # in double quotes, as _Lexer._dquote
+        if f.kind == "{":                        # a ${..} word, as _Lexer._param reads it
+            if ch == "\\":
+                i += 2
+            elif (ch == "'" or s.startswith("$'", i)) and not f.inq:
+                i = _skip(s, i + 1 if ch == "'" else i + 2, "'", ch != "'")
+            elif ch == "`":
+                i = backtick(f, i)
+            elif s.startswith("$((", i):
+                i = arith(i)                     # with bash on, as here, it ends where the parser ends it
+            elif s.startswith("$(", i) or (ch in "<>" and nxt == "(" and not (f.dq or f.inq)):
+                push("<" if ch in "<>" else "$", i + 2)
+                i += 2
+            elif s.startswith("${", i):
+                push("{", i + 2, dq=f.dq or f.inq)
+                i += 2
+            elif ch == "}" and not f.inq:
+                i += 1
+                close(f, i)
+            else:
+                f.inq = f.inq != (ch == '"')
+                i += 1
+        elif f.owner is not None:                # in double quotes, as _Lexer._dquote
             if ch == '"':
                 stack.pop()
                 i += 1
@@ -1040,8 +1402,8 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
         elif ch == "\n":
             flush(f)
             i += 1
-            while pending:
-                hd = pending.pop(0)
+            while f.pend:
+                hd = f.pend.pop(0)
                 i = _heredoc_body(s, i, hd, closer=True)[0]
                 if id(hd) in before:
                     read.append(hd)
@@ -1061,14 +1423,14 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             i = j + 1
         elif ch == '"':
             f.started, f.quoted, f.digits = True, True, False
-            stack.append(_Open('"', owner=f))
+            push('"', owner=f)
             i += 1
         elif ch == "`":
             i = backtick(f, i)
         elif ch == "$":
             i = dollar(f, i, False)
         elif ch in "<>" and nxt == "(" and not f.started:
-            stack.append(_Open("<", i + 2))
+            push("<", i + 2)
             i += 2
         elif ch in "<>" or (ch == "&" and nxt == ">"):
             if f.started and f.digits:           # an fd number belongs to the operator
@@ -1105,6 +1467,170 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
     while k < len(s) and s[k] != closer:
         k += 2 if escapes and s[k] == "\\" else 1
     return min(k + 1, len(s))
+
+
+def _group_end(s: str, k: int, kind: str, ends: dict[int, int] | None = None) -> int:
+    """Where bash's parser ends the part that starts at s[k] (#553), or -1 when none does: a $(( group (`a`, from its
+    `(`: just past the `)` that matches it) or a double-quoted string (`d`, from after its quote: just past the one
+    that closes it). One pass with a stack of the parts open in it, in place of bash's recursion, from one character
+    it reads to the next (_GROUP_STOP). Escapes, '..', $'..' (`\\'` escaped) and backquotes are stepped over; a $( )
+    in it is a part (`c`) where a `#` that starts a word starts a comment; a ".." holds $( ), $(( and ${..} (`b`,
+    whose quotes pair as in a ${..} word); in a $(( group a ${ is text. ``ends`` keeps the end of each ( a $(( group
+    holds, so a chain of them is scanned once and _arith_group reads the first group's end from it."""
+    if ends is not None and k in ends:
+        return ends[k]
+    n = len(s)
+    stack: list[list[Any]] = [[kind, [] if kind == "a" else 0, k]]   # per part: [kind, its open ( (a list in `a`;
+    while (m := _GROUP_STOP.search(s, k)) is not None:               # in `b`: in a ".."), start]
+        k, ch, f = m.start(), m.group(), stack[-1]
+        if f[0] == "a" and ch in "()":                                # the most of a dense nest, read first
+            k += 1
+            if ch == "(":
+                f[1].append(k - 1)
+            elif f[1]:
+                at = f[1].pop()
+                if ends is not None:
+                    ends[at] = k
+                if not f[1]:
+                    stack.pop()
+                    if not stack:
+                        return k
+            continue
+        nxt = s[k + 1:k + 2]
+        if ch == "\\":
+            k += 2
+        elif ch == "`":
+            k = _skip(s, k + 1, "`", True)
+        elif ch == "$" and nxt == "(":
+            stack.append(["a", [], k + 1] if s.startswith("$((", k) else ["c", 0, k + 1])
+            k += 1                                       # its ( is counted in it
+        elif ch == "$" and nxt == "{" and f[0] != "a":
+            stack.append(["b", 0, k])
+            k += 2
+        elif f[0] == "d" or (ch == '"' and f[0] == "b"):
+            if f[0] == "b":
+                f[1] = not f[1]
+            elif ch == '"':
+                stack.pop()
+                if not stack:
+                    return k + 1
+            k += 1
+        elif (ch == "'" or (ch == "$" and nxt == "'")) and not (f[0] == "b" and f[1]):
+            k = _skip(s, k + (2 if ch == "$" else 1), "'", ch == "$")
+        elif f[0] == "b":
+            if ch == "}" and not f[1]:
+                stack.pop()
+            k += 1
+        elif ch == '"':
+            stack.append(["d", 0, k + 1])
+            k += 1
+        elif ch == "#" and f[0] == "c" and s[k - 1] in " \t\n;|&()" and s[k - 2:k - 1] != "\\":
+            j = s.find("\n", k)
+            k = n if j < 0 else j
+        elif ch in "()":
+            f[1] += 1 if ch == "(" else -1
+            k += 1
+            if f[1] == 0:
+                stack.pop()
+                if not stack:
+                    return k
+        else:
+            k += 1
+    if ends is not None:
+        ends.update(dict.fromkeys((at for f in stack if f[0] == "a" for at in f[1]), -1))
+    return -1
+
+
+def _arith_end(s: str, i: int, ends: dict[int, int]) -> int:
+    """Where bash's parser ends the $(( at s[i]: just past the ) that matches the ( at s[i + 1], or -1 (_group_end)."""
+    return _group_end(s, i + 1, "a", ends)
+
+
+def _expand_end(s: str, i: int, end: int) -> int:
+    """Where bash's second reading of the $(( at s[i], when it expands the word (extract_command_subst), ends the text
+    from s[i + 2]: just past the `)` that closes it, or -1 when none does before ``end``, where the parser ended the
+    word. Unlike the parser it takes a `#` after a blank or a newline for a comment and steps over '..' with no
+    escapes, $'..' too; a nested $( ) is read as the parser reads one (_group_end)."""
+    k, depth = i + 2, 1
+    while (m := _GROUP_STOP.search(s, k, end)) is not None:
+        k, ch = m.start(), m.group()
+        if ch == "\\":
+            k += 2
+        elif ch == "#" and s[k - 1] in " \t\n":
+            j = s.find("\n", k, end)
+            k = end if j < 0 else j
+        elif ch == "$" and s.startswith("$(", k) and not s.startswith("$((", k):
+            k = _group_end(s, k + 1, "c")
+            k = end + 1 if k < 0 else k
+        elif ch == "`":
+            k = _skip(s, k + 1, "`", True)
+        elif ch == "'":
+            k = _skip(s, k + 1, "'", False)
+        elif ch == '"':
+            k = _group_end(s, k + 1, "d")
+            k = end + 1 if k < 0 else k
+        else:
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+            k += 1
+            if depth == 0:
+                return k
+    return -1
+
+
+def _hides_paren(s: str, i: int, end: int) -> bool:
+    """Whether bash's parser may match the $(( at s[i] otherwise than a count of every parenthesis, which ends it at
+    ``end`` too when it does not: a quote, an escape, a backquote or a `#` in it, or a ${..} in a $( ) nested in it,
+    whose parentheses the parser does not count but chk_arithsub does (_is_arith)."""
+    return bool(_HIDES_PAREN.search(s, i, end)) or (s.find("${", i, end) >= 0 and s.find("$(", i + 2, end) >= 0)
+
+
+def _arith_group(s: str, i: int, ends: dict[int, int]) -> int:
+    """The end of the $(( at s[i] when bash reads it as arithmetic, else -1: the parser ends it (_arith_end), bash's
+    second reading ends it at the same place (_expand_end), and the text between is a group that balances
+    (_is_arith). Else bash runs that text as a $( ) holding a subshell (#553)."""
+    end = _arith_end(s, i, ends)
+    if end < 0:
+        return -1
+    if _hides_paren(s, i, end):
+        if not _is_arith(s[i + 2:end - 1]):
+            return -1
+        if ("#" in s[i:end] or "$'" in s[i:end]) and _expand_end(s, i, end) != end:   # else both end alike
+            return -1
+    elif ends.get(i + 2) != end - 1:              # with no quote, escape or comment the text balances when its
+        return -1                                 # first ( closes at its last )
+    # bash checks the group as it prints a nested $( ) back, with its comments dropped and its here-documents
+    # rewritten, which the gate does not model: such a group is read as a $( ) (stricter than bash)
+    k = i + 3
+    while (m := _SUBST.search(s, k, end)) is not None:
+        k = _group_end(s, m.end() - 1, "c")
+        k = end if k < 0 else k
+        if _COMMENT_OR_HEREDOC.search(s, m.start(), k):
+            return -1
+    return end
+
+
+def _is_arith(t: str) -> bool:
+    """bash reads a $(( as arithmetic when the text between its `$(` and the `)` that ends it, ``t``, is a group
+    ( .. ) whose inside balances, with only escapes and quotes skipped: '..', $'..' and "..", which steps over what is
+    nested in it (bash's chk_arithsub)."""
+    if len(t) < 2 or t[0] != "(" or t[-1] != ")":
+        return False
+    count, k, t = 0, 0, t[1:-1]
+    while (m := _ARITH_STOP.search(t, k)) is not None:
+        k, ch = m.start(), m.group()
+        if ch == "\\":
+            k += 2
+        elif ch == "'" or t.startswith("$'", k):
+            k = _skip(t, k + (2 if ch == "$" else 1), "'", ch == "$")
+        elif ch == '"':
+            end = _group_end(t, k + 1, "d")
+            k = len(t) if end < 0 else end
+        else:
+            count += {"(": 1, ")": -1}.get(ch, 0)
+            if count < 0:
+                return False
+            k += 1
+    return count == 0
 
 
 def _arith_body(s: str, a: int, b: int) -> bool:
@@ -1260,6 +1786,16 @@ def _literal_heredoc(toks: list) -> str | None:
 # one fell is read again and spends it again. Every $( ) is listed at each level above it, so a nest of n levels was
 # classified about n**4 / 24 times without this.
 _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_shell_seen", default=None)
+# #143, #553: the lexer reads ${..} words and $(( as bash's parser reads them (_Lexer.bash). The reading before, a
+# ${..} word to its first } and a $(( to the ) that balances every parenthesis, is kept: classify reads a call that
+# way too (_flat_words) when the two may differ anywhere in it (_two_ways, set by _Lexer._differ), and decide keeps
+# the stricter (readings). So a line bash's reading lowers, through a part it adds that leads the line, keeps its
+# decision, and the words dash (the /bin/sh fallback) ends at their first } are read as dash reads them.
+_flat_words: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_flat_words", default=False)
+_two_ways: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_two_ways", default=None)
+# A lexer that reads only the words of a line (_policy_command_view) opens no part only bash's reading opens: it finds
+# where each ends, as for a part past the cap, and the line's own parse reads it (_Lexer._part).
+_words_only: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_words_only", default=False)
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
@@ -1286,7 +1822,7 @@ class _LoopBudget(Exception):
 # #853: bash reads `time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline as prefixes of it, so a
 # compound command after them (`time for ..; done`, `! time { ..; }`) runs as it does without them. _parse reads
 # `time` as a program that takes options (_PREFIXES), so the compound after it is that program's argv. Set while
-# classify reads a call (_classify_reading): [seen], which _parse_line sets when a line holds such a `time` before a
+# classify reads a call (_classify_read): [seen], which _parse_line sets when a line holds such a `time` before a
 # compound opener (_time_prefix). classify then reads the call again with _opening on, where _parse_line leaves out
 # those `time`, `-p` and `--` words and opens the compound after them, as without them. Main's reading stays beside.
 _timed: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_timed", default=None)
@@ -1573,6 +2109,11 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                 after.operands.append(v)
         i += 1
     end()
+    if lx.left_open and lx.bash:
+        # bash rejects a line that ends inside a quote and runs nothing, but where the lexer ends a quote otherwise
+        # than the shell, the shell may close it and run the rest (dash, the /bin/sh fallback, #143): an odd part.
+        # The reading before stays as it was (_differ), so the part never turns the line into one a rule allows.
+        lx._odd()
     return cmds, lx.subs, func
 
 
@@ -6411,7 +6952,8 @@ def _store_post_text(c: Classification, body: str) -> None:
 
 def _unread_nest() -> Classification:
     """What a $( ) nested past _NEST stands for: an opaque part, signed so that an exported value keeps it."""
-    c = _too_deep("", f"a $( ) nested more than {_NEST} levels deep, not read")
+    c = _too_deep("", f"a $( ) nested more than {_NEST} levels deep, or in a ${{..}} word or $(( past "
+                      f"{_WORD_NEST + 1} levels or {_WORD_PARTS} parts, not read")
     c.signals.append("unread nest")
     return c
 
@@ -6663,7 +7205,11 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         seed = seed_of(j)
         token = _cd_into.set(seed) if seed else None
         try:
-            got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
+            if sub == _ODD_WORD:          # a word that runs a value, or one bash rejects (#143, #553, #554)
+                got = [_opaque("a ${..} word or $(( that runs a value the gate does not see, or that bash rejects",
+                               cmd)]
+            else:
+                got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
         finally:
             if token is not None:
                 _cd_into.reset(token)
@@ -8486,7 +9032,8 @@ def _split_reading(action: Any, cwd: str | None = None) -> Classification:
     one (a nested text a missed spelling hid, verify 2 of #707); as before #634 (mode 0); and with every spelling
     read as `-S TEXT` (mode 3). Each is a call of its own, in ``split_readings`` with main's first (the hook's bypass
     keeps main's order with it), so a part that leads one reading or takes an ssh hop's host there keeps it (review
-    of #634), and decide keeps the strictest."""
+    of #634), and decide keeps the strictest. Each of those readings is read the way the lexer reads a ${..} word
+    and a $(( now and, where that may differ from the reading before #143, that way too (_classify_reading, #158)."""
     if _env_split_mode.get() is not None:      # a reading inside a reading (D-074's ordinary): the same mode
         return _classify_reading(action, cwd)
     mark: list[int] = [0]
@@ -8507,18 +9054,47 @@ def _split_reading(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
+def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call in one reading of its `env -S` texts (classify), as the lexer reads it now
+    (_classify_read). Where the lexer's reading of a ${..} word or a $(( may differ from the one before #143 anywhere
+    in the call (_two_ways), the call is also read that way in the same `env -S` reading, with budgets of its own, at
+    the end of its chain of ``also`` readings, and decide keeps the stricter (#143, #553). So each `env -S` reading
+    keeps both, and a word in an `env -S` text, a sudo -s or -i shell's stdin (#491) or a joined line (#584) is read
+    both ways too."""
+    if _two_ways.get() is not None or _flat_words.get():
+        return _classify_read(action, cwd)
+    flag = _two_ways.set([False])
+    try:
+        c = _classify_read(action, cwd)
+        two = (_two_ways.get() or [False])[0]
+    finally:
+        _two_ways.reset(flag)
+    if two:
+        flat = _flat_words.set(True)
+        try:
+            before = _classify_read(action, cwd)
+        finally:
+            _flat_words.reset(flat)
+        last = c
+        while last.also is not None:
+            last = last.also
+        last.also = c.flat = before
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
-def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
-    """Classify one tool call in one reading of its quoted prefix assignments (#471) and of its `env -S` texts
-    (_split_reading), with its own budgets. When a gh command in it has
-    its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
-    is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
-    ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
-    also read with each one joined, as bash reads it (#584), with budgets of its own. The more severe of that
-    reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
-    stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
-    the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
+def _classify_read(action: Any, cwd: str | None = None) -> Classification:
+    """One reading of the call (_classify_reading), in one reading of its quoted prefix assignments (#471, classify)
+    and of its `env -S` texts (_split_reading), with its own budgets: as the lexer reads now, or as before #143
+    (_flat_words). When a gh command in it has its subcommand past an option (_gh_verb_order), or a gh api method gh
+    reads otherwise (_gh_api_method), the call is also read as before #399, with each gh command's third word for
+    its subcommand, and that reading is its ``floor``. A shell line with a `$` form split by a backslash-newline,
+    there or in a line read again from it, is also read with each one joined, as bash reads it (#584), with budgets
+    of its own. The more severe of that reading and the line as read before leads, and the other ends its ``also``
+    readings, so decide keeps the stricter. When the Exo home's config.json counted as the store, or an exo command
+    that writes it ran (D-074), the call is also read as before D-074, as a call of its own, and that reading is its
+    ``ordinary``.
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
     chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
@@ -8541,7 +9117,7 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     is read as the same compound without them: its parts, their categories, and #479's second pass of a loop that
     `cd`s into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before
     stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once (the reading
-    as before reads its own without opening it, _classify_reading): decide keeps the strictest, and no_grant (and
+    as before reads its own without opening it, _classify_read): decide keeps the strictest, and no_grant (and
     through it the hook's bypass floor) counts each reading, so a line never decides lower than before."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _opening.set(True), _timed.set(None)
@@ -8559,7 +9135,7 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
 
 
 def _one_reading(action: Any, cwd: str | None = None) -> Classification:
-    """_classify_reading's reading of the call, in its budgets and folders: the call, its joined reading (#584) and
+    """_classify_read's reading of the call, in its budgets and folders: the call, its joined reading (#584) and
     its loops' second passes (#479)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
@@ -8983,7 +9559,11 @@ def _policy_command_view(command: str) -> str:
     This is an additional veto view, never an authorization view. Dynamic words stay
     opaque. Execution strings get their own views only through classify_shell recursion.
     """
-    tokens = _Lexer(command, scan=False).run()
+    words = _words_only.set(True)          # a word that holds a part is dynamic, read or not
+    try:
+        tokens = _Lexer(command, scan=False).run()
+    finally:
+        _words_only.reset(words)
     rendered = []
     for kind, value in tokens:
         if kind == "w":
@@ -10063,14 +10643,20 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
     with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
     ``ordinary`` reading (D-074) or ``split_readings`` (#591). A sudo write also binds when its displaced part names
-    a target or asks with that part leading (#454). A line also read as before #471 (``before``) binds as that
-    reading does, its own ``split_readings`` included."""
-    q = c.displaced
-    return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or "unknown program" in c.signals or bool(c.alt_targets) or c.floor is not None or c.also is not None
-            or c.ordinary is not None or bool(c.split_readings)
-            or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks))
-            or (c.before is not None and binds_exact(c.before, d)))
+    a target or asks with that part leading (#454), and a line with an unknown program (#471). Each reading counts
+    (``readings``), a split reading's too. A line also read as before #143 binds, whether its readings are one act or
+    not: that reading ends its ``also`` chain, and no grant on one reading covers another. A line also read as before
+    #471 (``before``) binds as that reading does, its own ``split_readings`` and readings as before #143 included:
+    ``readings`` lists them, and ``before`` is a reading of the call of its own."""
+    def one(r: Classification) -> bool:
+        q = r.displaced
+        return (r.category == "opaque_exec" or "indirection" in r.signals or "unknown program" in r.signals
+                or bool(r.alt_targets) or r.floor is not None or r.also is not None or r.ordinary is not None
+                or bool(r.split_readings)
+                or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
+    rs = readings(c)
+    return (is_outward(c, d) or no_grant(c) or any(one(r) for r in rs)
+            or any((r.category, r.target) != (c.category, c.target) for r in rs))
 
 
 def readings(c: Classification) -> list[Classification]:
@@ -10085,7 +10671,10 @@ def readings(c: Classification) -> list[Classification]:
     body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
     as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
     readings, each with its own ``floor``. A floor may have a floor of its own: the reading as read before #491 ends
-    its chain (_read_core), with its own readings."""
+    its chain (_read_core), with its own readings. The call as read before #143 ends the chain of ``also`` readings
+    of each `env -S` reading (_classify_reading), in the call and in the call as read before #471, with a floor and an
+    ``ordinary`` reading of its own; any reading's ``ordinary``, ``before`` and ``split_readings`` are read here, not
+    only the call's."""
     out: list[Classification] = []
     todo: list[Classification | None] = [c]
     while todo:
@@ -10093,9 +10682,10 @@ def readings(c: Classification) -> list[Classification]:
         if x is not None and not any(x is r for r in out):
             out.append(x)
             todo += [x.floor, x.also]
-    for other in (c.ordinary, c.before, *c.split_readings):
-        if other is not None and not any(other is r for r in out):
-            out += [r for r in readings(other) if not any(r is e for e in out)]
+    for x in list(out):
+        for other in (x.ordinary, x.before, *x.split_readings):
+            if other is not None and not any(other is r for r in out):
+                out += [r for r in readings(other) if not any(r is e for e in out)]
     return out
 
 
@@ -10122,10 +10712,13 @@ def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping |
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval must bind to the exact text: posts, messages, money, and anything
-    public or irreversible, also when only the line as read before #399 (``floor``) is one."""
-    exposure = (d.exposure if d is not None and d.exposure else c.exposure)
-    return (c.category in OUTBOUND or c.category in ("payment", "account") or exposure == "public"
-            or c.reversibility == "irreversible" or (c.floor is not None and is_outward(c.floor, d)))
+    public or irreversible, also when only another reading of the line (``readings``: the line as read before #399
+    or #143) is one."""
+    def one(r: Classification) -> bool:
+        exposure = (d.exposure if d is not None and d.exposure else r.exposure)
+        return (r.category in OUTBOUND or r.category in ("payment", "account") or exposure == "public"
+                or r.reversibility == "irreversible")
+    return any(one(r) for r in readings(c))
 
 
 def approval_binding(c: Classification, args: Mapping | None = None) -> str:
