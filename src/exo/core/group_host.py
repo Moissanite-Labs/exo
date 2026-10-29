@@ -1,0 +1,185 @@
+"""Trusted-host injection layer for Swarm group lifecycle (docs/SWARM-HOST.md).
+
+The host supplies the authenticated owner, an explicit authorized profile set
+and an authorized engine factory at construction. Authorization is never
+inferred from seat files, stored metadata, credentials or configuration, and
+this module constructs no profiles, engines or CoreEngine instances itself.
+
+``GroupHost`` is an internal composition seam, not an authentication boundary,
+protocol command or agent tool. Host objects must never be exposed to models.
+It delegates durable claims, pause/stop semantics and receipts to
+``GroupRuntime``: one claim per group, no automatic retry, no stale-claim
+takeover. A real factory integration (constructing authorized engines) is
+deliberately out of scope for this slice.
+"""
+from __future__ import annotations
+
+from typing import Callable, Collection, Mapping
+
+from exo.core.group_engine_adapter import GroupEngineAdapter
+from exo.core.group_execution import GroupExecutions
+from exo.core.group_messages import GroupMessage, GroupMessages
+from exo.core.group_runner import MemberStatus
+from exo.core.group_runtime import GroupRuntime
+from exo.core.groups import GroupStore, SavedGroup
+
+# Trusted host hook: returns one authorized, distinct engine per member profile.
+# The factory decides binding; this layer only validates membership coverage.
+EngineFactory = Callable[[SavedGroup], Mapping[str, object]]
+
+
+class HostError(ValueError):
+    """Host-level rejection: authorization, unknown group or lifecycle misuse."""
+
+
+class GroupHost:
+    """Owner-scoped controller for creating and operating saved groups.
+
+    The owner is fixed at construction and verified against the stored group
+    before every runtime operation. Runtimes are process-local; durable claims
+    survive this object, so a crashed start still blocks automatic retry.
+    """
+
+    def __init__(self, groups: GroupStore, *, owner: str,
+                 known_profiles: Collection[str], engine_factory: EngineFactory):
+        if not isinstance(owner, str) or not owner.strip():
+            raise HostError("owner is required")
+        if isinstance(known_profiles, (str, bytes)):
+            raise HostError("known_profiles must be a collection of profile IDs")
+        profiles = frozenset(known_profiles)
+        if not profiles:
+            raise HostError("at least one authorized profile is required")
+        if not callable(engine_factory):
+            raise HostError("an authorized engine factory is required")
+        self._groups = groups
+        self._messages = GroupMessages(groups)
+        self._owner = owner
+        self._profiles = profiles
+        self._factory = engine_factory
+        self._runtimes: dict[str, GroupRuntime] = {}
+
+    @property
+    def owner(self) -> str:
+        return self._owner
+
+    def create(self, *, mode: str, members: Collection[str],
+               conductor: str | None = None) -> SavedGroup:
+        """Persist a group restricted to the injected authorized profile set."""
+        try:
+            return self._groups.create(owner=self._owner, mode=mode, members=members,
+                                       known_profiles=self._profiles, conductor=conductor)
+        except ValueError as e:
+            raise HostError(str(e)) from e
+
+    def _group(self, group_id: str) -> SavedGroup:
+        """Ownership check precedes every runtime operation; never infer access."""
+        if not isinstance(group_id, str) or not group_id.strip():
+            raise HostError("group id must be a non-empty string")
+        group = self._groups.get(group_id, owner=self._owner)
+        if group is None:
+            raise HostError("no such group")
+        return group
+
+    def _runtime(self, group_id: str) -> GroupRuntime:
+        self._group(group_id)
+        runtime = self._runtimes.get(group_id)
+        if runtime is None:
+            raise HostError("group execution has not started in this process")
+        return runtime
+
+    def start(self, group_id: str, *,
+              audiences: Mapping[str, list[str]]) -> tuple:
+        """Bind authorized engines and claim one durable execution. No retry.
+
+        Stored membership is re-validated against the injected profile set
+        before the factory is invoked or any claim is made: authorization is
+        never inferred from stored metadata. A factory failure or invalid
+        audience leaves no runtime and no durable claim, so the caller may fix
+        inputs and start once. A partial start failure after the claim still
+        blocks retry by design (GroupExecutions).
+        """
+        group = self._group(group_id)
+        if group_id in self._runtimes:
+            raise HostError("group execution already started in this process")
+        unknown = [m.profile for m in group.members if m.profile not in self._profiles]
+        if unknown:
+            raise HostError("group members outside the injected profile set: "
+                            + ", ".join(sorted(unknown)))
+        engines = dict(self._factory(group) or {})
+        try:
+            adapter = GroupEngineAdapter(group, engines, audiences=audiences)
+            runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
+                                   adapters=adapter.adapters())
+            runtime.start()
+        except ValueError as e:
+            raise HostError(str(e)) from e
+        self._runtimes[group_id] = runtime
+        return runtime.status()
+
+    def status(self, group_id: str) -> dict:
+        """Structured snapshot: member states, durable receipt, liveness flags.
+
+        Returns a dict with ``members`` (live runner states for a group started
+        in this process, otherwise the settled receipt's terminal states or
+        ``"idle"`` when no claim exists), ``receipt`` (the durable
+        ``ExecutionReceipt`` or ``None``) and ``reconciliation_required``. With
+        no local runtime there is no claimed liveness: an active receipt means
+        a prior process claimed execution and may still hold it, so
+        ``reconciliation_required`` is set and no start may be attempted until
+        the receipt is reconciled. The receipt is never a liveness probe.
+        """
+        group = self._group(group_id)
+        runtime = self._runtimes.get(group_id)
+        receipt = GroupExecutions(self._groups).get(group.id, owner=self._owner)
+        if runtime is not None:
+            members = runtime.status()
+        elif receipt is not None and receipt.state == "settled":
+            members = tuple(MemberStatus(m.profile, receipt.members[m.profile])
+                            for m in group.members)
+        elif receipt is not None:
+            # Active claim, no local runtime: liveness is unknown, never "idle".
+            members = tuple(MemberStatus(m.profile, "unknown") for m in group.members)
+        else:
+            members = tuple(MemberStatus(m.profile, "idle") for m in group.members)
+        return {
+            "group_id": group.id,
+            "owner": self._owner,
+            "members": members,
+            "receipt": receipt,
+            "local_runtime": runtime is not None,
+            "reconciliation_required": runtime is None and receipt is not None
+            and receipt.state == "active",
+        }
+
+    def pause(self, group_id: str, *, profile: str | None = None) -> None:
+        try:
+            self._runtime(group_id).pause(profile)
+        except ValueError as e:
+            raise HostError(str(e)) from e
+
+    def resume(self, group_id: str, *, profile: str | None = None) -> None:
+        try:
+            self._runtime(group_id).resume(profile)
+        except ValueError as e:
+            raise HostError(str(e)) from e
+
+    def stop(self, group_id: str, *, profile: str | None = None) -> None:
+        try:
+            self._runtime(group_id).stop(profile)
+        except ValueError as e:
+            raise HostError(str(e)) from e
+
+    async def wait(self, group_id: str) -> tuple:
+        try:
+            return await self._runtime(group_id).wait()
+        except ValueError as e:
+            raise HostError(str(e)) from e
+
+    def send(self, group_id: str, *, audience: list[str], text: str) -> GroupMessage:
+        """Human message with an explicit audience; never a member tool."""
+        group = self._group(group_id)
+        try:
+            return self._messages.send_human(group.id, owner=self._owner,
+                                             audience=audience, text=text)
+        except ValueError as e:
+            raise HostError(str(e)) from e
