@@ -5,6 +5,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Brand gallery images reserve their dimensions and use lazy loading and asynchronous decoding; local desktop/narrow browser geometry is checked. The broader asset pipeline and deployment acceptance remain open (#258).
+
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
