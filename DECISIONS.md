@@ -5892,6 +5892,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** a new `error_class` field on `model.call` as the only signal (an older core would leave the tip silent, and the text is already there); a single softer sentence for every error (it is the specificity that makes the line worth showing).
 - **Revisit if:** the core records a structured error category on `model.call`, in which case the classifier should prefer it and keep the text as a fallback.
 - **Docs and user impact:** `docs/ui/WEB.md` guidance paragraph, `docs/DOCS-MAP.md`, `CHANGELOG.md`. No new command or setting; nothing about keys is stored or shown.
+- **Amendment 2026-10-29 (#855):** the classifier reads what a real core records.
+  - A failure before any output is retried, and while the route cools down the router answers "all routes for 'main' failed or are cooling down; next route reopens in 60s". The cause (`ReadError`, `ReadTimeout`, `ConnectError`) is only in `attempts[].error`, so the page classifies the error joined with its attempts' errors (`providerErrorText`). `chat.js` hands the attempts to the guide beside the error.
+  - httpx names its timeouts `ReadTimeout`, `ConnectTimeout` and so on, with no word boundary before `Timeout`, so the transport pattern takes `(read|connect|write|pool)timeout`.
+  - The router words its own refusals: "rejected the key", "refused the login" (a CLI login such as claude-cli's "Not logged in" or an expired OAuth token) and "no credentials for role". Each reads as a refusal and points at the Providers page.
+  - A status counts as a refusal only as `HTTP 401`, `HTTP 403` or an SDK's `Error code: 401`, and "authentication" only as an authentication error or failure. So `HTTP 404: model gpt-403 not found` and a proxy's `HTTP 407: Proxy Authentication Required` read as neither. A spend limit (D-093) reads as neither too, so the line never points at the key for it.
+  - Each kind keeps its own count of two a session, as this decision said: `Guide.pick` counts by a tip's `rule` (`providers:auth`, `providers:transport`, `providers:error`), where it used to count all three as `providers`. Two transport or general lines no longer use up a refusal's.
+  - The transport line fills `/trace` when Tab is pressed, since it names it.
+  - Tests in `plugins/exo-command/tests/test_complete_web.py`:
+    - `test_js_router_failures_get_the_line_their_cause_calls_for` runs a real Loop and Router (httpx `MockTransport`) for a `ReadError`, a `ReadTimeout`, a `ConnectError`, a 401 with a key, a 401 without one, no key, a 402 and a 503. It feeds the recorded `model.call` bodies to the page's guide.
+    - Three more node tests cover the CLI and status strings, the per-kind counts and the fill.
+  - `test_model_command_web.py::test_a_failed_calls_line_reads_the_attempts_chat_hands_over` pins the `chat.js` wiring in the real page.
+  - Results: all six fail on main. With only `chat.js` reverted, the browser test fails.
 
 ## D-093 (2026-10-30) A spend limit names itself, and the money figure says it is a floor
 - **Status:** Accepted. Records after D-092 (#846) and lands on its own branch, `fix/spend-limit-transparency`.
