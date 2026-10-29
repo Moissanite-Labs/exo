@@ -3897,6 +3897,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
   limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
   keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (exo-desktop #55):* `GET /api/chat/sessions` takes a `limit` from 1 to 500, 100 when none
+  is given. A larger limit is cut to 500, as before. A limit below 1 gets a 400 JSON error and sends no
+  `session.list` to the core, as a limit that is not a number already did. Before, only the top was cut, and
+  SQLite reads a negative `LIMIT` as no limit, so `limit=-1` returned every session. A 400, not a cut to 0,
+  names the caller's mistake. `docs/ui/WEB.md` "What is where".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
@@ -4996,6 +5001,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   grid and cards; Command and Providers like an instrument panel. The lattice egg (`site/brand/egg.js`, copied
   byte for byte to `static/egg.js`) appears once, in the Tasks empty state. Presentation only: no route, protocol,
   token (D-039), approval (D-045), layout (D-046) or completion (D-037) behaviour changes; element ids stay.
+- **Amendment 2026-10-27 (exo-desktop #55):** Schedule's remove has no undo, so it waits for a separate Confirm
+  remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
+  `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
+  Cancel and remove would never run there.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root

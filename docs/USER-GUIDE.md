@@ -309,7 +309,8 @@ The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
 - **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
 
 Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
-appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+appears on the Tasks page) and remove it. Remove cannot be undone, so it asks for a second click on Confirm remove.
+Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
