@@ -275,6 +275,56 @@ def test_a_line_with_both_marks_reads_the_coproc_loop_either_way(monkeypatch):
         assert got == ((False, "ask") if len(off) == 2 else (True, "deny")), (off, got)
 
 
+# #158 (main d3cbd874): a ${..} word or a $(( in the coproc's loop body, and the coproc line inside such a word. Each
+# of #158's two readings (bash's reading of the words, and `flat`) has its own opened and late readings
+# (_classify_read), so the store loop is found where bash's reading of the word puts it. Each row fails on d3cbd874.
+WORD_FIX = [
+    "! coproc for i in 1 2; do echo ${v:-$(cp /tmp/evil gates.yaml)}; cd ~/.exo/policies; done",
+    "if true; then coproc W { for i in 1 2; do echo ${v:-`cp /tmp/evil gates.yaml`}; cd ~/.exo/policies; done; }; fi",
+    "{ coproc { while :; do echo ${x:-'}'} ; cp /tmp/evil gates.yaml; cd ~/.exo/policies; done; }; }",
+    "time ! function f { for i in 1 2; do echo $(( ${v:-$(cp /tmp/evil gates.yaml)} )); cd ~/.exo/policies; done; }",
+    "echo ${v:-$(! coproc for i in 1 2; do " + LOOP + "; done)}",
+    "echo ${v:-`if true; then coproc W { for i in 1 2; do " + LOOP + "; done; }; fi`}",
+    "echo ${x:-'}'} ; { coproc for i in 1 2; do " + LOOP + "; done; }",
+    "echo $(( ${v:-$(time ! coproc { while :; do " + LOOP + "; done; })} ))",
+]
+
+
+@pytest.mark.parametrize("line", WORD_FIX)
+def test_a_coproc_loop_and_a_word_read_both_ways_is_a_principal_only_store_write(line):
+    c = _bash(line)
+    assert c.flat is not None, line                 # #158's reading as before #143 stays beside
+    assert _store_write(c), (line, [r.category for r in gate.readings(c)])
+    assert (gate.decide(c, DENY).outcome, gate.decide(c, DENY).rule) == ("deny", "deny"), line
+    assert gate.no_grant(c) and gate.binds_exact(c), line
+    assert gate.call_approvers(c, APPROVALS) == ["principal"], line
+    assert gate.decide(c, POLICIES["lifted"]).outcome == "ask", line
+
+
+# The coproc loop where only `flat` (#158's reading as before #143) reads it as a command: bash keeps it inside the
+# quoted ${..} word, and flat ends the word at the first `}`. The store write comes only from flat's own late
+# reading, so these rows pin that `flat` gets one: with _late_reading skipped in that way they are an unread ask
+# again, as on d3cbd874, where neither way has a late reading.
+FLAT_FIX = [
+    "echo ${x:-'} ; ! coproc for i in 1 2; do " + LOOP + "; done ; : '}",
+    "echo ${x:-\"} ; { coproc for i in 1 2; do " + LOOP + "; done; } ; : \"}",
+    "echo ${x:-'} ; if true; then coproc W { for i in 1 2; do " + LOOP + "; done; }; fi ; : '}",
+    "echo ${x:-'} ; { coproc N { while :; do " + LOOP + "; done; }; } ; : '}",
+]
+
+
+@pytest.mark.parametrize("line", FLAT_FIX)
+def test_flat_reads_a_coproc_loop_bash_keeps_in_a_word_with_its_own_late_reading(line, monkeypatch):
+    c = _bash(line)
+    assert c.flat is not None and _store_write(c.flat), line
+    assert _store_write(c) and gate.decide(c, DENY).outcome == "deny", line
+    assert gate.no_grant(c) and gate.call_approvers(c, APPROVALS) == ["principal"], line
+    real = gate._late_reading
+    monkeypatch.setattr(gate, "_late_reading", lambda c, *a: c if gate._flat_words.get() else real(c, *a))
+    c = _bash(line)
+    assert (_store_write(c), gate.decide(c, DENY).outcome) == (False, "ask"), line
+
+
 def _nested(n):
     line = ":"
     for _ in range(n):

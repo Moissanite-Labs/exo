@@ -4301,6 +4301,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   first reading with both marks set, #853's `_opened_reading`, then `_late_reading`) -> `_one_reading`. So each of
   #158's two readings has its own opened and late readings, each with budgets of its own, and a coproc compound
   that only bash's reading of a `${..}` word finds (`! coproc for ..` in `${v:-$(..)}`) is opened there.
+  `test_a_coproc_loop_and_a_word_read_both_ways_is_a_principal_only_store_write` pins 8 such rows (a word in the
+  loop body behind `!`, `then`, `{` and `time !`, and the coproc line in a `${..}` word, a backquote, after a
+  quoted `}` and in a `$((`), each failing on d3cbd874.
+  `test_flat_reads_a_coproc_loop_bash_keeps_in_a_word_with_its_own_late_reading` pins `flat`'s own late reading: 4
+  rows (`! coproc for`, `{ coproc for`, `then coproc W {`, `{ coproc N {`) where bash keeps the coproc loop inside
+  a quoted `${..}` word and only `flat` reads it as a command, which are an unread ask again when `_late_reading` is
+  skipped in that way, as on d3cbd874.
   *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
   and `pre` and this second reading can go.
 
