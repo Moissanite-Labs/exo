@@ -69,6 +69,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Two folder plugins whose names differ only in punctuation, such as `a-b` and `a_b`, no longer share one module.
   The second replaced the first's package, so the first plugin's later relative imports ran the second's files.
   The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
+- `exo findings fix ID` reads `ID` as text. The id went into a SQL `LIKE` as a pattern, so `%` or `_` matched
+  other ids: `exo findings fix % --in SHA` marked the only finding fixed (exo-desktop #52).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
