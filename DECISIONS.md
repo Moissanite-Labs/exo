@@ -3835,15 +3835,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
   (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
   `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
-  condition's `cd` into a descriptor folder names it as a body's does, so `while cd /dev/fd < <(cp /tmp/evil 3); do
-  :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies (review of #858). A
+  condition's `cd` into a descriptor folder names that folder when the loop holds no other store `cd`, so `while cd
+  /dev/fd < <(cp /tmp/evil 3); do :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies; when
+  the body holds a `cd` of its own, the body's names the second pass, as on main, since that pass starts where the
+  last `cd` left it (reviews of #858: taking the condition's folder first dropped main's reading of `while cd
+  /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done`, deny to ask under `deny: [target:/proc*]`). A
   condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
-  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 1401ff81 against
-  this change): the built-in corpus with variants lowers 0 of 7,882,688 pairs and tightens 1,505 pairs on 18
-  actions, the six rows above and their tool forms (`read allow` to `store_write ask` or `deny`); an aimed corpus of
-  4,804 `while`/`until` lines (six condition shapes, `cd`, `pushd`, `builtin cd` and `cd -P`, eight folders, five
-  substitution forms, five bodies) and their shell forms, 845,504 pairs, lowers 0 and tightens 238,456 on 2,882
-  actions. Tests:
+  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 938b027a
+  against this change): the built-in corpus with variants, the 4,804 condition lines below and 6,240 lines that
+  mix a condition `cd` and a body `cd` into the store, `/dev/fd`, `/proc/self/fd` or `/dev/fd/3` (`while`, `until`,
+  `while !`, `{ }` and `for`; `cd`, `builtin cd`, `cd -P`, `pushd`; `< <(..)`, `<<< "$(..)"` and `$( )`; `cp`,
+  `rm -rf` and `git push` bodies), under the 88 built-in policies and seven more that keep `/dev*`, `/proc*` and
+  `*store*` target rules apart, lower 0 of 10,616,630 pairs and tighten 282,981 on 3,337 actions. The first draft
+  of the descriptor rule, which took the condition's folder before the body's, lowered 4,992 pairs on 2,048 of the
+  mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
+  and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
   `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 10 of its tests fail without the change).
   *Revisit if:* the same as #479's.
 
