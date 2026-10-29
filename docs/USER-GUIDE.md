@@ -395,7 +395,8 @@ What the gate asks about, and why:
   parameter expansion such as `${x:-$(...)}` is read too, and a quote or brace in such a word no longer hides the
   command after it (#143, fixed in #158), down to three levels of `$( )` inside it; a deeper one, or one past the
   24 such parts a call may open (a word inside a `$( )` counts again for each pass over it), asks. Such a word is
-  read in an `env -S` text and in what a `sudo -s` or `sudo -i` shell reads from its stdin too. `${!name}` and
+  read in an `env -S` text and in what a `sudo -s` or `sudo -i` shell reads from its stdin too, and behind or
+  inside a quoted prefix assignment (`X='a b' echo ${v:-$(...)}`, `echo ${v:-$(X='a b' ...)}`, #471). `${!name}` and
   `${name@P}`, which run code a variable holds, ask, also for the positional parameters (`${@@P}`, `${!@}`, #554).
   A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
   `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579); `p=x; echo ${p@P}`, which the reading before #158
