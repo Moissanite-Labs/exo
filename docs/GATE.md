@@ -820,7 +820,10 @@ system or bash will.
   `environ`, ask, and so does `cat /tmp/k/../conf*` where `/tmp/k` links into `~/.kube`. The Exo-store names are
   read the same way (see "The store is credentials"). So is the line an `env -S` text runs (#591) and what a
   `sudo -s` or `sudo -i` shell runs (#491): `env -S 'cat ~/.kube//config'` and `sudo -i <<< 'cat ~/.kube//config'`
-  are denied under `deny: [target:*/.kube/config]`, as their plain spellings are.
+  are denied under `deny: [target:*/.kube/config]`, as their plain spellings are. So are the command behind a quoted
+  prefix assignment (#471), a loop body read again after its `cd` into the store (#479) and a
+  `gc.recentObjectsHook` value (#473): `X='a b' cat ~/.kube//config` and
+  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under that entry too.
 
 An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decided lower
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a

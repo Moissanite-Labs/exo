@@ -1055,7 +1055,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   does on main. Each other store a line names keeps the part the #609 follow-up gives it, also in these spellings, so
   `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under `deny: [target:*/.kube/config]`, as its plain spelling is.
   The line an `env -S` text runs (#591) and what a `sudo -s` or `sudo -i` shell runs (#491) are read the same way, so
-  `sudo -i <<< 'cat ~/.kube//config'` is denied under that entry too. Such a line now takes the store's class, and a
+  `sudo -i <<< 'cat ~/.kube//config'` is denied under that entry too. So are the command behind a quoted prefix
+  assignment (#471), a loop body read again after its `cd` into the store (#479) and a `gc.recentObjectsHook` value
+  (#473): `X='a b' cat ~/.kube//config` is denied there as well. Such a line now takes the store's class, and a
   few lines decide as main decides the plain spelling, lower than before. The D-038 amendment lists the groups.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
