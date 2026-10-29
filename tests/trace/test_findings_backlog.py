@@ -30,7 +30,7 @@ def test_counts_and_bounded_oldest_match_ledger_without_mutation(findings):
     add(findings, "verified", status="verified", severity="idea", first="2020-01-01T00:00:00Z")
     before = findings.list()
     report = findings.backlog(1, now=NOW)
-    assert report["counts"] == {"open": 1, "fixed": 1, "verified": 1, "reopened": 1, "total": 4}
+    assert report["counts"] == {"open": 1, "triaged": 0, "fixed": 1, "verified": 1, "closed": 0, "reopened": 1, "total": 4}
     assert report["pending"] == 3 and report["shown"] == 1
     assert report["oldest"][0]["id"] == oldest
     assert report["by_severity"] == {"blocker": 1, "bug": 1, "papercut": 1, "idea": 0}

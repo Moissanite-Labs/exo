@@ -6,6 +6,9 @@
     exo findings add TITLE [--severity bug|papercut] [--signature S] [--detail TEXT]  file one by hand
     exo findings export --md                      a digest for the developer session
     exo findings backlog [--limit 20] [--json]     unresolved counts by severity and age, oldest rows
+    exo findings triage ID --owner SEAT          assign a data owner
+    exo findings close ID --reason TEXT          record a closed disposition
+    exo findings history ID | retests [--session ID] | ack-retest REQUEST
 """
 from __future__ import annotations
 
@@ -48,9 +51,9 @@ def register(sp, common) -> None:
     p.add_argument('--calls', action='store_true', help='list every model call with its cost (default: last turn)')
     p.add_argument('--json', action='store_true')
     p = sp.add_parser('findings', help='what the harness found wrong with itself')
-    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add', 'backlog'])
+    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add', 'backlog', 'triage', 'close', 'history', 'retests', 'ack-retest'])
     p.add_argument('id', nargs='?', help='finding id (for fix) or title (for add)')
-    p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened', 'all'],
+    p.add_argument('--status', choices=['open', 'triaged', 'fixed', 'verified', 'closed', 'reopened', 'all'],
                    help='default: all states (verified ones too)')
     p.add_argument('--in', dest='sha', metavar='SHA', help='commit the fix landed in (for fix)')
     p.add_argument('--md', action='store_true', help='markdown (for export)')
@@ -58,6 +61,9 @@ def register(sp, common) -> None:
     p.add_argument('--signature', help='for add: dedup key (default: made from the title)')
     p.add_argument('--detail', default='', help='for add: what happened, how to see it')
     p.add_argument('--limit', type=int, default=20, help='for backlog: oldest unresolved rows, 0..100 (default 20)')
+    p.add_argument('--owner', help='for triage: person or seat identifier, not an authority grant')
+    p.add_argument('--reason', help='for close: a recorded disposition reason')
+    p.add_argument('--session', help='for retests: original filing session')
     p.add_argument('--json', action='store_true')
 
 
@@ -92,9 +98,38 @@ def cmd_findings(a) -> int:
     from .core.findings import Findings
 
     fnd = Findings(_store(), _thresholds())
+    if a.action in ('triage', 'close', 'history', 'retests', 'ack-retest'):
+        try:
+            if a.action != 'retests' and not a.id:
+                raise ValueError('this findings action requires an id')
+            if a.action == 'triage':
+                data = fnd.triage(a.id, a.owner)
+            elif a.action == 'close':
+                data = fnd.close(a.id, a.reason)
+            elif a.action == 'history':
+                data = fnd.history(a.id, a.limit)
+            elif a.action == 'retests':
+                data = fnd.retests(a.session, a.limit)
+            else:
+                data = fnd.ack_retest(a.id)
+        except KeyError:
+            sys.exit(f'exo: no finding or retest request {a.id}')
+        except ValueError as exc:
+            sys.exit(str(exc))
+        if a.json:
+            print(json.dumps(data, indent=2))
+        elif a.action in ('triage', 'close'):
+            print(f"{data['id']} {data['status']}" + (f" owner {data['owner']}" if data['owner'] else ''))
+        elif a.action == 'ack-retest':
+            print(f"{data['id']} acknowledged (verification remains separate)")
+        elif a.action == 'history':
+            print('\n'.join(f"{r['at']} {r['before_state'] or 'new'} -> {r['after_state']} owner {r['owner'] or '-'}" for r in data) or 'no transitions')
+        else:
+            print('\n'.join(f"{r['id']} {r['finding']} fix {r['fix_marker']} session {r['target_session'] or 'unrouted'}" for r in data) or 'no pending retest requests')
+        return 0
     if a.action == 'backlog':
         if a.status:
-            sys.exit('exo findings backlog includes open, reopened and fixed; --status applies to list/export')
+            sys.exit('exo findings backlog includes open, triaged, reopened and fixed; --status applies to list/export')
         try:
             print(json.dumps(fnd.backlog(a.limit), indent=2) if a.json else fnd.backlog_text(a.limit))
         except ValueError as exc:
@@ -107,6 +142,8 @@ def cmd_findings(a) -> int:
             row = fnd.fix(a.id, a.sha)
         except KeyError:
             sys.exit(f'exo: no finding {a.id}')
+        except ValueError as exc:
+            sys.exit(str(exc))
         print(f"{row['id']} fixed in {row['fixed_in']}")
         return 0
     if a.action == 'add':

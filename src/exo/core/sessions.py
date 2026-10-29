@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS findings (
 CREATE TABLE IF NOT EXISTS finding_views (
     viewer TEXT PRIMARY KEY, snapshot TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_transitions (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, finding TEXT NOT NULL, at TEXT NOT NULL,
+    before_state TEXT NOT NULL, after_state TEXT NOT NULL, owner TEXT, fix_marker TEXT, reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS finding_transition_id ON finding_transitions(finding, seq);
+CREATE TABLE IF NOT EXISTS finding_retests (
+    id TEXT PRIMARY KEY, finding TEXT NOT NULL, fix_marker TEXT NOT NULL, target_session TEXT,
+    requested_at TEXT NOT NULL, acknowledged_at TEXT, UNIQUE(finding, fix_marker)
+);
 CREATE TABLE IF NOT EXISTS summaries (
     id TEXT PRIMARY KEY, session TEXT NOT NULL, level INTEGER NOT NULL, idx INTEGER NOT NULL,
     start_seq INTEGER NOT NULL, end_seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '',
@@ -75,7 +84,10 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
             ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"),   # ... and how many the capture hook took
             ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"),   # failed summary tries so far
-            ("findings", "quiet", "TEXT"))  # D-025: {"turns", "days"} quiet since the fix (fixed_turns is unused)
+            ("findings", "quiet", "TEXT"),  # D-025: quiet turns/days since the fix
+            ("findings", "owner", "TEXT"), ("findings", "triaged_at", "TEXT"),
+            ("findings", "closed_at", "TEXT"), ("findings", "close_reason", "TEXT"),
+            ("findings", "reported_session", "TEXT"))
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 

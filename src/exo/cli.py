@@ -21,7 +21,8 @@
                                            (D-028, D-040)
   exo taste [list|export-house|review]     the taste layers with a source on every item; build and
                                            review the house taste pack (D-044)
-  exo findings [add TITLE|fix ID --in SHA|export --md|backlog [--limit N]]
+  exo findings [add TITLE|fix ID --in SHA|triage ID --owner SEAT|close ID --reason TEXT]
+  exo findings [history ID|retests [--session ID]|ack-retest REQUEST|export --md|backlog]
                                            the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes

@@ -558,6 +558,10 @@ folder is not inside a git repo.
 - `exo trace [SESSION] [--last N] [--calls] [--json]` shows the same from a shell.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
 - `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
+- `exo findings triage ID --owner SEAT` records who is handling a finding; `close ID --reason TEXT` records a disposition.
+- Marking a fix queues one local retest request per exact fix marker. Read it with `exo findings retests --session ID`,
+  then `ack-retest REQUEST` to acknowledge receipt. This does not send a Bus message or mark the fix verified.
+- `exo findings history ID` shows the recorded state and owner transitions. The existing quiet-turn verification stays in place.
 
 Details and the cost rules: `docs/TRACE.md`.
 
