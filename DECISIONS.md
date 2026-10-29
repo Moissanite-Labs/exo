@@ -5109,6 +5109,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
 
 ## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Amendment 2026-10-29 (#832, wait component):** an identified turn gets one timed overflow-wait opportunity per thread/tree, rather than repeating it before every model round. New turns and other threads retain independent opportunities. Ready-summary assembly, private pending-span cuts and context budgets are unchanged. This adds no wall-time limit or autonomy policy.
 - **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
   bookkeeping delayed replies (issue #99).
 - **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in
