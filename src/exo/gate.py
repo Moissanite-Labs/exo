@@ -1164,6 +1164,13 @@ def _heredoc_body(s: str, i: int, hd: _Heredoc, closer: bool = False) -> tuple[i
         end = len(s) if j < 0 else j
         line, start = s[i:end], i
         i = len(s) if j < 0 else j + 1
+        # Unquoted heredocs join an odd backslash-newline before delimiter matching.
+        # For <<-, strip tabs from the resulting logical line, not each physical line.
+        while not hd.quoted and j >= 0 and (len(line) - len(line.rstrip("\\"))) % 2:
+            j = s.find("\n", i)
+            end = len(s) if j < 0 else j
+            line = line[:-1] + s[i:end]
+            i = len(s) if j < 0 else j + 1
         cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
         if cand == hd.delim:
             # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
@@ -1181,7 +1188,8 @@ def _heredoc_body(s: str, i: int, hd: _Heredoc, closer: bool = False) -> tuple[i
             # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
             # fail closed -- keep reading to the exact terminator and read the whole body as commands too.
             hd.ambiguous = True
-        lines.append(line.lstrip("\t") if hd.strip else line)
+        raw_line = s[start:end]  # retain physical spelling for existing body/visibility checks
+        lines.append(raw_line.lstrip("\t") if hd.strip else raw_line)
     hd.body = "\n".join(lines)
     if not found:
         start = len(s)

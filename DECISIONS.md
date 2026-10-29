@@ -6303,3 +6303,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 heredoc logical-line amendment — 2026-10-29 (#517)
+
+Unquoted heredoc delimiter comparison joins physical lines ending in an odd run
+of backslashes. Quoted delimiters and even runs retain their existing behavior.
+`<<-` drops leading tabs from the joined line, not each physical continuation:
+a tab on the second physical line remains internal and does not close `EF`.
+An inert Bash control verifies this distinction; the old acceptance fixture that
+claimed a second-line tab disappeared has been corrected. Raw body spelling stays
+available so this cannot turn a previously unseen post body into a visible one.
+Main080e87ba differential:1,245,640 harvested pairs plus1,760 aimed pairs, no
+lowerings, lost reserved hits, lost violations or errors.

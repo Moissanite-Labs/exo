@@ -51,7 +51,7 @@ CASES = [
     Case(477, "deny_inside_unread_nest", nest(17), DENY_DELETE, "deny"),
     Case(477, "deny_inside_deeper_unread_nest", nest(40), DENY_DELETE, "deny"),
     Case(517, "continued_heredoc_delimiter", "cat <<EF\nE\\\nF\n" + PUSH + "\nEF", DENY_PUSH, "deny"),
-    Case(517, "tab_stripped_continued_delimiter", "cat <<-EF\n\tE\\\n\tF\n" + PUSH + "\nEF", DENY_PUSH, "deny"),
+    Case(517, "tab_stripped_continued_delimiter", "cat <<-EF\n\tE\\\nF\n" + PUSH + "\nEF", DENY_PUSH, "deny"),
     Case(518, "backtick_escaped_hash", "echo `echo \\#; " + PUSH + "`", DENY_PUSH, "deny"),
     Case(518, "backtick_escaped_quote", "echo `echo \\'; " + PUSH + "; echo \\'`", DENY_PUSH, "deny"),
     Case(518, "backtick_escaped_double_quote", 'echo `echo \\"; ' + PUSH + '; echo \\"`', DENY_PUSH, "deny"),
@@ -72,7 +72,7 @@ KNOWN_GAPS = {
     "here_string_cannot_authorize_delete", "comment_cannot_authorize_push",
     "compound_here_string_cannot_authorize_push", "backtick_continuation_delete",
     "backtick_continuation_push", "deny_inside_unread_nest", "deny_inside_deeper_unread_nest",
-    "continued_heredoc_delimiter", "tab_stripped_continued_delimiter", "backtick_escaped_hash",
+      "backtick_escaped_hash",
     "backtick_escaped_quote", "backtick_escaped_double_quote", "tilde_unset_name", "tilde_read_name",
     "tilde_printf_name", "tilde_nameref_name",
 }

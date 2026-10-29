@@ -3507,3 +3507,11 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Continued heredoc terminators (#517)
+
+Unquoted heredocs compare their delimiter after joining an odd backslash-newline
+continuation. Quoted delimiters do not join, nor does an even run of backslashes.
+For `<<-`, only leading tabs of the resulting logical line are removed; a tab
+inside a joined delimiter remains significant. Original body spelling is retained
+for the existing conservative posting/body visibility checks.
