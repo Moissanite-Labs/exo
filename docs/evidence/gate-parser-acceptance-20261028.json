@@ -1,0 +1,180 @@
+{
+  "base": "64bfee2c4e075e91f7789a97fec7c2c8dd82407d",
+  "scope": "Pure classifier/decision acceptance only; no command strings executed and no runtime fix claimed",
+  "cases": [
+    {
+      "issue": 458,
+      "case": "here_string_cannot_authorize_delete",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 458,
+      "case": "comment_cannot_authorize_push",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 458,
+      "case": "compound_here_string_cannot_authorize_push",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 469,
+      "case": "backtick_continuation_delete",
+      "expected": "deny",
+      "observed": "ask",
+      "strict_xfail": true
+    },
+    {
+      "issue": 469,
+      "case": "backtick_continuation_push",
+      "expected": "deny",
+      "observed": "ask",
+      "strict_xfail": true
+    },
+    {
+      "issue": 474,
+      "case": "process_substitution_delimiter",
+      "expected": "deny",
+      "observed": "deny",
+      "strict_xfail": false
+    },
+    {
+      "issue": 474,
+      "case": "quoted_delimiter_in_ps4",
+      "expected": "deny",
+      "observed": "deny",
+      "strict_xfail": false
+    },
+    {
+      "issue": 477,
+      "case": "deny_inside_unread_nest",
+      "expected": "deny",
+      "observed": "ask",
+      "strict_xfail": true
+    },
+    {
+      "issue": 477,
+      "case": "deny_inside_deeper_unread_nest",
+      "expected": "deny",
+      "observed": "ask",
+      "strict_xfail": true
+    },
+    {
+      "issue": 517,
+      "case": "continued_heredoc_delimiter",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 517,
+      "case": "tab_stripped_continued_delimiter",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 518,
+      "case": "backtick_escaped_hash",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 518,
+      "case": "backtick_escaped_quote",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 518,
+      "case": "backtick_escaped_double_quote",
+      "expected": "deny",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 570,
+      "case": "arithmetic_path_array_assignment",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 570,
+      "case": "arithmetic_command_hash_assignment",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 570,
+      "case": "arithmetic_alias_assignment",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 570,
+      "case": "assigned_arithmetic_array",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 570,
+      "case": "echoed_arithmetic_array",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 570,
+      "case": "legacy_arithmetic_array_assignment",
+      "expected": "ask",
+      "observed": "ask",
+      "strict_xfail": false
+    },
+    {
+      "issue": 571,
+      "case": "tilde_unset_name",
+      "expected": "ask",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 571,
+      "case": "tilde_read_name",
+      "expected": "ask",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 571,
+      "case": "tilde_printf_name",
+      "expected": "ask",
+      "observed": "allow",
+      "strict_xfail": true
+    },
+    {
+      "issue": 571,
+      "case": "tilde_nameref_name",
+      "expected": "ask",
+      "observed": "allow",
+      "strict_xfail": true
+    }
+  ],
+  "validation": "18 passed, 16 strict xfailed; --runxfail separately exposes expected gaps",
+  "extension_568": {
+    "base": "f28934a3f6bfcaec3a5e29223f7354df788afe07",
+    "validation": "41 ordinary regression guards pass on current main; no gap reproduced and no runtime fix claimed",
+    "scope": "four documented dd read/write/plain/odd operands under direct,sudo,bash with target deny,reserved,rule; multi-store SSH policy plus copy and unrelated-dd controls"
+  }
+}

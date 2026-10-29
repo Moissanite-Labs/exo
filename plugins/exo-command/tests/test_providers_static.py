@@ -131,3 +131,15 @@ process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, s
                           capture_output=True, text=True, timeout=10)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"]]
+
+
+def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps():
+    """D-091: a refused core is not a broken core. The page shows the sentence the route sent and puts the retry
+    button behind ``retryable``, so a refusal cannot be answered with a button that changes nothing."""
+    js = text("providers.js")
+    assert "modelsError" in js and "error_class" in js and "retryable" in js
+    assert "modelsError.retryable ?" in js                       # the button is conditional on the class
+    assert '"Try again"' in js and "loadModels" in js
+    assert "console." not in js
+    # the old silent swallow is gone: a failure used to become an empty list, which reads as "no models"
+    assert 'catch(() => ({ models: [], available: [] }))' not in js

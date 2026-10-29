@@ -1,0 +1,232 @@
+{
+  "base": "64bfee2c4e075e91f7789a97fec7c2c8dd82407d",
+  "scope": "Pure classifier/decision acceptance only; no commands executed and no runtime fix claimed",
+  "validation": "14 passed, 25 strict xfailed; --runxfail exposes 25 failed, 14 passed",
+  "cases": [
+    {
+      "issue": 479,
+      "case": "for_second_pass_store_cwd",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 479,
+      "case": "while_second_pass_store_cwd",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 479,
+      "case": "until_second_pass_store_cwd",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 481,
+      "case": "tar_relative_key_target",
+      "expected": "deny",
+      "expected_category": null,
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 481,
+      "case": "cd_relative_key_target",
+      "expected": "deny",
+      "expected_category": null,
+      "observed": "ask",
+      "category": "credentials",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "sed_read_only_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "tree_read_only_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "sort_read_only_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "uniq_read_only_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "xxd_read_only_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "rsync_dry_run_store",
+      "expected": "allow",
+      "expected_category": "read",
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "cat_output_outside_store",
+      "expected": "allow",
+      "expected_category": null,
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 482,
+      "case": "grep_output_outside_store",
+      "expected": "allow",
+      "expected_category": null,
+      "observed": "ask",
+      "category": "store_write",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "recursive_home_landing",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "copy_home_itself",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "copy_dot_contents",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "copy_policy_folder",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "copy_update_folder",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "tar_into_home",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "tar_into_home_parent",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 483,
+      "case": "unzip_into_home",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "shell",
+      "gap": true
+    },
+    {
+      "issue": 484,
+      "case": "ssh_log_with_read_remote",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 484,
+      "case": "ssh_log_with_compound_read_remote",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 484,
+      "case": "ssh_known_hosts_with_read_remote",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    },
+    {
+      "issue": 484,
+      "case": "ssh_socket_with_read_remote",
+      "expected": "deny",
+      "expected_category": "store_write",
+      "observed": "allow",
+      "category": "read",
+      "gap": true
+    }
+  ]
+}

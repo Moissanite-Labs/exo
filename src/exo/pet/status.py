@@ -15,7 +15,7 @@ from exo import provenance
 from exo.keyring import KeyRegistry
 from exo.ledger import Ledger, missing_ledger_problem
 from exo.ledger_authority.factory import open_authority
-from exo.ledger_authority.verify import verify_authority
+from exo.ledger_authority.verify import capture_authority
 from exo.learn.runtime import resolve_store
 from exo.principal import require_principal
 from exo.protocol import schema as s
@@ -110,17 +110,21 @@ class PetStatus:
                 broken = True
             return failure("unverified" if broken else "unavailable", "ledger_missing")
         try:
+            # External evidence precedes the SQLite snapshot; a concurrent append is not tampering.
+            captured = capture_authority(context.authority) if context.source == "authority" else None
             with Ledger.read_only(path) as reader:
-                if context.source == "authority":
-                    verified = verify_authority(path, context.authority, reader=reader)
+                if captured is not None:
+                    verified = captured.verify(reader)
                     checked = verified.get("local_seq")
                     anchored = bool(verified.get("ok"))
                 else:
                     verified = reader.verify(trusted=context.registry)
                     checked, anchored = verified.get("checked"), verified.get("anchored", False)
+                if verified.get("state") == "unconfirmed_tail":
+                    return failure("unavailable", "ledger_busy", checked)
                 if not verified.get("ok") or not anchored:
                     return failure("unverified", "integrity_or_trust_failed" if verified.get("ok") is not True else "unanchored", checked)
-                projection = score(reader.iter(), context.principals)  # the exact SQLite snapshot verified above
+                projection = score(captured.events(reader) if captured is not None else reader.iter(), context.principals)  # the exact SQLite snapshot verified above
             result = _blank("empty" if checked == 0 else "ready", source=context.source)
             result.update(projection)
             result["verification"] = {"state": "verified", "source": context.source, "checked": checked,

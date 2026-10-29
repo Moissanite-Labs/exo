@@ -1,0 +1,43 @@
+name: gate preflight
+
+on:
+  pull_request:
+    paths:
+      - src/exo/gate.py
+      - plugins/exo-gate/**
+      - scripts/gate_diff.py
+      - tests/security/test_gate*.py
+      - tests/test_gate_diff*.py
+      - .github/workflows/gate-preflight.yml
+
+permissions:
+  contents: read
+
+jobs:
+  never-looser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      EXO_BUS_URL: http://127.0.0.1:9
+      EXO_BUS_SEAT: builder
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --all-extras --python 3.11
+      - name: Gate plugin acceptance
+        working-directory: plugins/exo-gate
+        run: uv run --project ../.. pytest -q
+      - name: Compare base with the composed PR tree using the base comparator
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/gate-base" "$BASE_SHA"
+          uv run python "$RUNNER_TEMP/gate-base/scripts/gate_diff.py" --base "$RUNNER_TEMP/gate-base" --head "$GITHUB_WORKSPACE" --json gate-diff.json
+      - name: Preserve differential evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-preflight-differential
+          path: gate-diff.json
+          if-no-files-found: warn

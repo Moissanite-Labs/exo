@@ -3,7 +3,8 @@
 import { h, api, short, errorBox, pageHead, readout, pill, emptyState, stamp, until } from "./dom.js";
 
 export function mount(root) {
-  let jobs = [], err = "", msg = "", loaded = false;
+  // removing: the job whose remove waits for a Confirm remove click. Remove has no undo (exo-desktop #55).
+  let jobs = [], err = "", msg = "", loaded = false, removing = null;
   const list = h("div", { class: "xc-jobs" });
   const field = (label, el, hint) => h("label", { class: "xc-fl" }, h("span", { class: "xc-fl-k" }, label), el,
     hint ? h("span", { class: "xc-fl-hint" }, hint) : null);
@@ -35,20 +36,25 @@ export function mount(root) {
     note.replaceChildren(...[err ? errorBox(err) : null, msg ? h("div", { class: "xc-note" }, msg) : null].filter(Boolean));
     if (!loaded) { list.replaceChildren(h("div", { class: "xc-loading" }, "Reading the schedule...")); return; }
     list.replaceChildren(...(jobs.length ? jobs.map((j) => {
-      const paused = isPaused(j);
+      const paused = isPaused(j), name = j.title || short(j.prompt, 60) || jid(j);
       const time = (label, iso) => h("div", null, h("dt", null, label),
         h("dd", null, iso ? [h("span", null, stamp(iso) || String(iso)), h("i", null, until(iso))] : h("span", { class: "xc-faint" }, "not yet")));
       return h("article", { class: "xc-job", "data-s": paused ? "pause" : "on" },
         h("header", { class: "xc-job-top" }, h("code", { class: "xc-cron", title: "when it runs" }, j.when || ""),
           paused ? pill("paused", "pause") : pill("active", "on")),
-        h("h3", null, j.title || short(j.prompt, 60) || jid(j)),
+        h("h3", null, name),
         j.prompt ? h("p", { class: "xc-job-prompt" }, short(j.prompt, 240)) : null,
         h("dl", { class: "xc-job-when" }, time("Next", paused ? "" : j.next_run), time("Last", j.last_run),
           h("div", null, h("dt", null, "Tier"), h("dd", null, h("span", null, j.tier || "fast")))),
-        h("div", { class: "xc-btnrow" },
+        // The confirm is drawn in the page: a desktop web view with no confirm handler answers window.confirm with
+        // Cancel. e.detail > 1 is the second click of a double click on "remove", not a confirmation.
+        h("div", { class: "xc-btnrow" }, removing === jid(j) ? [
+          h("span", { role: "status", "aria-live": "polite" }, "Remove " + name + "? It cannot be undone."),
+          h("button", { class: "xc-btn xc-danger", onclick: (e) => { if (e.detail > 1 || removing !== jid(j)) return; edit("remove", j); } }, "Confirm remove"),
+          h("button", { class: "xc-btn", onclick: () => { removing = null; draw(); } }, "Cancel")] : [
           h("button", { class: "xc-btn", onclick: () => edit(paused ? "resume" : "pause", j) }, paused ? "resume" : "pause"),
           h("button", { class: "xc-btn", onclick: () => edit("run_now", j) }, "run now"),
-          h("button", { class: "xc-btn xc-danger", onclick: () => edit("remove", j) }, "remove")));
+          h("button", { class: "xc-btn xc-danger", onclick: () => { removing = jid(j); draw(); } }, "remove")]));
     }) : [emptyState({ k: "No jobs yet", title: "Nothing runs on its own yet.",
       body: "A job is a prompt on a clock: a morning brief at 07:00, the tests every six hours, a weekly digest.",
       hint: "Add the first one with the form: a cron line such as 0 9 * * 1-5, or every 30m." })]));
@@ -69,7 +75,7 @@ export function mount(root) {
       .then(() => { if (!err) { f.when.value = f.prompt.value = f.title.value = ""; } });
   }
   const DONE = { pause: "Paused.", resume: "Resumed.", run_now: "Run started; it appears in Tasks.", remove: "Removed." };
-  function edit(action, j) { post({ action, job_id: jid(j) }, DONE[action] || action + " done."); }
+  function edit(action, j) { removing = null; post({ action, job_id: jid(j) }, DONE[action] || action + " done."); }
 
   load(); draw();
   return () => {};

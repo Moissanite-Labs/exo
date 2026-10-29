@@ -275,8 +275,7 @@ def test_an_unopenable_sealed_body_reads_as_a_placeholder(relay, client_for, cas
 
 @pytest.mark.parametrize("case", ["garbage box", "old key"])
 def test_poll_once_moves_past_an_unopenable_sealed_envelope(as_seat, relay, client_for, case):
-    """One bad envelope must not stop the inbox: it goes to the core (checked and held like any message) as the
-    placeholder, the cursor passes it, and the next message arrives."""
+    """An unreadable envelope advances the cursor without creating a placeholder turn."""
     me = as_seat("beta")
     _post_unopenable(relay, case)
     client_for("alpha").post("beta", "hello after")
@@ -284,10 +283,29 @@ def test_poll_once_moves_past_an_unopenable_sealed_envelope(as_seat, relay, clie
     chan = adapter.BusChannel(link, {"state_dir": str(me.keys_dir)}, client=me)
     chan._cursor = settings.Cursor("beta", {"state_dir": str(chan._extra["state_dir"])})
     chan._map_path = chan._cursor.path.with_name("sessions-beta.json")
-    assert asyncio.run(chan.poll_once()) == 2
+    assert asyncio.run(chan.poll_once()) == 1
     texts = [c.text for c in link.calls if getattr(c, "action", "") == "bus"]
-    assert texts[0] == UNOPENED and "hello after" in texts[1]
+    assert len(texts) == 1 and "hello after" in texts[0]
     assert chan._cursor.get() == len(relay.log) == 2
+    assert asyncio.run(chan.poll_once()) == 0
+
+
+@pytest.mark.parametrize("recipient, expected", [("beta", 1), ("gamma", 0)])
+def test_group_encryption_only_dispatches_to_the_sealed_recipient(as_seat, client_for, recipient, expected):
+    me = as_seat(recipient)
+    client_for("alpha").post("group", "private group body", enc_to="beta")
+    link = RecordingLink()
+    chan = adapter.BusChannel(link, {"state_dir": str(me.keys_dir)}, client=me)
+    chan._cursor = settings.Cursor(recipient, {"state_dir": str(chan._extra["state_dir"])})
+    chan._map_path = chan._cursor.path.with_name(f"sessions-{recipient}.json")
+    assert asyncio.run(chan.poll_once()) == expected
+    turns = [c for c in link.calls if getattr(c, "action", "") == "bus"]
+    assert len(turns) == expected
+    if expected:
+        assert turns[0].text == "private group body"
+    else:
+        assert link.calls == []  # no session allocation or core command for an unreadable envelope
+    assert chan._cursor.get() == 1
     assert asyncio.run(chan.poll_once()) == 0
 
 

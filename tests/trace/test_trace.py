@@ -143,7 +143,14 @@ def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
     async def go():
         info = await eng.loop.create_session(title="t")
         await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
-        await asyncio.sleep(0.2)
+        # TurnSend runs the turn in a background task, and the tool.error finding is filed only at its end (the
+        # turn-end rules): wait for that task, not a fixed time, which a loaded machine can outrun
+        turns = set(eng._tasks)
+        assert turns
+        done, pending = await asyncio.wait(turns, timeout=30)
+        assert not pending, "the turn did not end within 30 s"
+        for t in done:
+            t.result()  # asyncio.wait keeps a failed turn's exception; raise it here
         trace.report("direct caller", NotConfigured("off until set up"), info.id)
         return info.id
 
@@ -291,6 +298,20 @@ def sigs(t, **limits):
     return {f.signature for f in trace.detect(t, Thresholds(**limits) if limits else TH)}
 
 
+def test_a_spend_limit_attempt_is_marked_a_floor_and_still_flagged_as_a_fallback():
+    """A route that stopped on its spend limit did work nobody bills this turn. The call's figure is a floor, so it
+    carries the "+" an unpriced call carries, is counted apart (#848, D-093), and keeps the model.fallback signature a
+    finding filed before this outcome existed already uses."""
+    c = Call(route="free:m", tokens_in=100, tokens_out=10, cost_usd=0.0,
+             attempts=[{"route": "paid:m", "outcome": "spend_limit", "error": "HTTP 402: key_spend_limit_reached"},
+                       {"route": "free:m", "outcome": "ok"}], undercounted=True)
+    t = tt(calls=[c])
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["unpriced_calls"] == 0
+    assert t.summary()["cost"] == "$0.0000+"
+    (f,) = [f for f in trace.detect(t, TH) if f.signature == "model.fallback:paid:m"]
+    assert f.title == "paid:m is over its provider spend limit; the call fell back"
+
+
 def test_rule_turn_slow_and_threshold_from_config():
     assert "turn.slow" not in sigs(tt(wall_ms=29_000))
     assert "turn.slow" in sigs(tt(wall_ms=31_000))
@@ -389,6 +410,38 @@ def test_cost_sums_priced_calls_and_never_reports_zero_for_unpriced():
     failed = tt(calls=[Call(route="", error="boom")])  # used no tokens: not an unpriced call
     assert failed.cost() == (None, 0)
     assert trace.money(1.5) == "$1.50"
+
+
+def test_a_call_that_hit_a_spend_limit_marks_the_figure_as_a_floor():
+    """A paid route that stopped on its own spend limit did work this turn is not billed for. The figure under it is a
+    floor, so it gets the same "+" the unpriced calls get, and the JSON says how many calls were short (D-093)."""
+    short = _usage_call("p:a", 0.02, undercounted=True)
+    t = tt(calls=[short, _usage_call("p:b", 0.01)])
+    assert t.undercounted() == 1
+    s = t.summary()
+    assert s["undercounted_calls"] == 1 and s["unpriced_calls"] == 0 and s["cost"] == "$0.0300+"
+    assert "0.0200+" in trace.table([t])  # the call line says it too, not just the turn total
+    assert "unknown" in trace.table([tt(calls=[_usage_call("p:c", None)])])  # unchanged: no price is still unknown
+    # the count follows the attempt outcome the router writes, not a second field the trace has to guess
+    turn = tt(calls=[])
+    assert turn.undercounted() == 0
+
+
+def test_a_spend_limit_attempt_marks_the_call_short_through_parse():
+    """The flag comes from the event the router writes, not from a guess: a model.call whose attempts include one
+    spend_limit parses into a call marked undercounted, and the JSON carries it on the call (D-093)."""
+    evs = [s.Event.of(s.TurnStarted(turn_id="t1", model="paid:m"), seq=1, session="s"),
+           s.Event.of(s.ModelCall(iteration=1, requested="paid:m", route="free:m", total_ms=10,
+                                  attempts=[{"route": "paid:m", "outcome": "spend_limit",
+                                             "error": "HTTP 402: key_spend_limit_reached"},
+                                            {"route": "free:m", "outcome": "ok"}],
+                                  usage=Usage(input_tokens=10, output_tokens=1, cost_usd=0.0)), seq=2, session="s"),
+           s.Event.of(s.TurnCompleted(turn_id="t1"), seq=3, session="s")]
+    (t,) = trace.parse(evs, "s")
+    assert [c.undercounted for c in t.calls] == [True]
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["cost"] == "$0.0000+"
+    (c,) = trace.as_dict("s", [t])["turns"][0]["call_list"]
+    assert c["undercounted"] is True and c["cost"] == "$0.0000+"
 
 
 def test_cost_includes_subagent_turns_and_shows_in_table_and_json():

@@ -51,3 +51,8 @@
 @media (prefers-reduced-motion: reduce) {
   .xc-pet-svg * { animation: none !important; transition: none !important; }
 }
+
+/* Hosts contribute no layout space when their selected mode has no visible drawing. */
+.xc-pet-hero-host:not(:has(.xc-pet-hero:not([hidden]))),
+.xc-pet-card-host:not(:has(.xc-pet-card:not([hidden]))) { display: none; }
+.xc-side-contents { display: flex; flex-direction: column; gap: 20px; min-width: 0; }

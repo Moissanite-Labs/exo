@@ -19,9 +19,14 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
   both count. Summaries (`secondary`) are not anyone's own words and do not. Nor is superseded text: the older
   versions of an edited ChatGPT prompt (`branch: alt`) and Hermes rows marked `inactive`. An imported row
   counts as said at its source time (`source_ts`), not when it was imported (`said_at`).
-- **Taste:** a new event that agrees with a known belief reinforces it (a `note` of type
-  `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`).
-- **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
+  A rejected belief that agrees still counts as encoding the instruction.
+- **Taste:** a new correction or ruling that agrees with an active belief (proposed, held, accepted) reinforces
+  it (a `note` of type `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`). Only
+  active beliefs are matched, so a rejected one is never reinforced and never hides an active one. One that
+  agrees only with a rejected belief is a new proposal. A reviewer taste or fact lesson (`propose_typed`) whose
+  evidence the rejected beliefs it agrees with already hold in full, together, is skipped: no proposal, question
+  or reinforcement (#861). A skill lesson is not checked and is proposed as before.
+- **Conflict:** an event that opposes an active belief goes through the store's conflict rule.
   The default is newer wins unless the older belief guards something irreversible or public; then
   a numbered `question` event is raised and the new proposal is held until an `answer` arrives.
   Nothing is overwritten silently: "newer wins" still lands as a reviewed supersede proposal.
@@ -523,6 +528,33 @@ Reply with one JSON object and nothing else:
  "domain": "one of the allowed domains", "type": "preference or rule", "title": "short title"}}"""
 
 
+_JSON_STARTS = 64   # brace positions tried before the reply counts as having no object
+
+
+def _decode_model_json(raw: str) -> Any:
+    """Decode the first JSON object in model output, skipping the prose around it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the object dropped valid output. Decoding is tried
+    from each `{` in turn, so a bracketed note, an array or an object wrapped
+    in an array before or around the answer does not hide it either. The first
+    start that decodes to an object wins.
+    """
+    decoder, start = json.JSONDecoder(), raw.find("{")
+    for _ in range(_JSON_STARTS):
+        if start < 0:
+            break
+        try:
+            value = decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+        start = raw.find("{", start + 1)
+    raise ValueError("no JSON object in the model output")
+
+
 class ModelReflector:
     """Adapter seam for a model call. `complete(prompt) -> str` is any function the host supplies
     (Hermes auxiliary model, a local model, a test double). Bad output falls back to the rules."""
@@ -537,8 +569,7 @@ class ModelReflector:
         try:
             raw = self.complete(MODEL_PROMPT.format(text=obs.text, rejected=obs.rejected or "",
                                                     reason=obs.reason or "", domains=", ".join(ctx.domains)))
-            m = re.search(r"\{.*\}", raw, re.S)
-            data = json.loads(m.group(0) if m else raw)
+            data = _decode_model_json(raw)
             wants = _tidy(str(data["wants"]))
             if not wants or re.match(r"^(not|no|don'?t|never)\b", wants, re.I):
                 raise ValueError("wants must be positive")
@@ -965,11 +996,26 @@ class _Run:
         if obs.event_id in self.state.seen_evidence and not self.meta:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
-        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
+        # A lesson the principal rejected teaches nothing again from the same evidence: it is not proposed, does
+        # not reinforce another belief and raises no conflict question (#861). The evidence may be split across
+        # several rejected beliefs that agree with it (since #770 each agreeing ruling after a rejection is its own
+        # proposal), so it is checked against their union. Only the typed taste and fact path gets here with such
+        # evidence: any other signal already returned above, as its event is in seen_evidence. A skill lesson goes
+        # to _propose_skill and is not checked.
+        ids = set(obs.evidence)
+        ruled: set[str] = set()
+        for x in self.beliefs():
+            got = {e.id for e in x.evidence}
+            if x.status == "rejected" and ids & got and taste.relation(obs.sig, x.sig, self.thr) == "agree":
+                ruled |= got
+        if ids and ids <= ruled:
+            return
+        # Only active beliefs are matched: a rejected belief that scores higher must not hide an active one (#861).
+        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr)
         if b is not None and rel == "agree":
             self.reinforce(b, obs)
             return
-        if b is not None and rel == "conflict" and b.active:
+        if b is not None and rel == "conflict":
             self.conflict(b, obs, kind)
             return
         self.propose(obs, kind)

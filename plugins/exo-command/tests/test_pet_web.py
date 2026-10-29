@@ -343,3 +343,38 @@ def test_growth_unavailability_is_not_zero_xp_and_freeze_reasons_are_safe(state,
             assert not any(kind == 'turn.send' for kind, _ in src.calls)
     finally:
         srv.close()
+
+
+@needs_browser
+@pytest.mark.parametrize('choice', ['mini', 'full'])
+def test_pet_hosts_preserve_empty_hero_and_instrument_spacing(choice):
+    srv = Served(PetSource())
+    try:
+        with Browser(width=1440, height=900) as b:
+            b.goto(srv.url()); mode(b, choice)
+            b.wait("!!document.querySelector('.xc-side-contents .xc-ins')")
+            assert b.eval("getComputedStyle(document.querySelector('.xc-side-contents')).gap") == '20px'
+            assert b.eval("(()=>{const a=[...document.querySelector('.xc-side-contents').children].map(x=>x.getBoundingClientRect());return a.length>1 && a[1].top-a[0].bottom>=19;})()")
+            if choice == 'mini':
+                assert b.eval("document.querySelector('.xc-pet-hero-host').getBoundingClientRect().height") == 0
+                assert b.eval("document.querySelector('.xc-pet-card-host').getBoundingClientRect().height") == 0
+            else:
+                b.wait("!!document.querySelector('.xc-pet-hero svg')")
+                assert b.eval("(()=>{const p=document.querySelector('.xc-pet-hero').getBoundingClientRect(),t=document.querySelector('.xc-hero-title').getBoundingClientRect();return p.height>0 && t.top>=p.bottom;})()")
+    finally:
+        srv.close()
+
+
+@needs_browser
+def test_changing_ledger_is_not_presented_as_an_integrity_failure():
+    src = PetSource()
+    src.status = {**STATUS, 'state': 'unavailable', 'stale': True,
+                  'verification': {'state': 'unavailable', 'reason': 'ledger_busy'}}
+    srv = Served(src)
+    try:
+        with Browser() as b:
+            b.goto(srv.url()); mode(b, 'full')
+            b.wait("document.querySelector('.xc-pet-card').textContent.includes('The local ledger is changing.')")
+            assert 'integrity or trust verification failed' not in b.eval("document.querySelector('.xc-pet-card').textContent")
+    finally:
+        srv.close()

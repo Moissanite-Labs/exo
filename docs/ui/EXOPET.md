@@ -19,6 +19,7 @@ prove that the work succeeded. Switching conversations or losing the connection 
 `/pet` reads a counts-only status through the existing command protocol. It does not call a model, create a store
 or write to the ledger. The web route uses the same authenticated core connection as the rest of the workspace.
 Conversation text, lesson text and other memory contents do not reach the renderer.
+The terminal command prints a short summary of banked XP, recorded promotions and verification state.
 
 Growth requires valid signatures, pinned author keys and a verified anchor. If verification fails, the current
 core process keeps its last verified result and labels it frozen. Without a previous verified result, growth is
@@ -32,7 +33,12 @@ has been measured. Unlinked promotion notes and delegated actions without comple
 
 Legacy ledgers require pinned signer keys and matching anchors. Stores configured for the separate ledger authority
 use its authenticated checkpoint chain against the same read snapshot. That verifies a signed prefix, not a fresh
-independent witness. An unavailable authority does not fall back to legacy verification. Last-good values are scoped
+independent witness. Anchors and checkpoints are captured before the read snapshot opens, so an ordinary concurrent
+append cannot appear to be a missing tail. Authority growth includes only the captured authenticated prefix; newer
+events wait for the next read. A changing ledger without a confirmed prefix reports temporary unavailability rather
+than an integrity alarm. Actual truncation or invalid evidence still fails verification.
+
+An unavailable authority does not fall back to legacy verification. Last-good values are scoped
 to the store and trust configuration. Full verification runs in one background worker. On a synthetic ledger of
 100,000 signed events, scoring took 0.301 seconds and verification plus scoring took 58.698 seconds. The proposed
 two-second full-replay target is not met. The client allows 90 seconds for a read; Off still cancels the client
