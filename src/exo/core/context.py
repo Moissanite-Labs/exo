@@ -236,20 +236,27 @@ class DefaultCompressor:
             if attempt:
                 await asyncio.sleep(self.retry_delay * (2 ** (attempt - 1)))
             text, done_text, retryable = [], None, True
+            completed, failed = False, False
             try:
                 async for ev in self.provider.stream([Message.user(prompt)], [], **opts):
                     if ev.kind == "text":
                         text.append(ev.text)
                     elif ev.kind == "done":
                         done_text = ev.message.text() if ev.message else None
+                        completed = ev.stop_reason in (None, "end")
+                        if not completed:
+                            last_error = "provider ended without successful completion"
                     elif ev.kind == "error":
+                        failed = True
                         last_error, retryable = ev.error or "provider error", ev.retryable or bool(ev.retry_after)
             except Exception as exc:  # transport failure: treat as retryable
                 last_error = str(exc) or type(exc).__name__
                 continue
             out = (done_text or "".join(text)).strip()
-            if out:
+            if out and completed and not failed:
                 return out
+            if not failed and not completed:
+                last_error = "provider ended without successful completion"
             if not retryable:
                 break
         raise SummaryError(f"summary failed: {last_error}", retryable=retryable)
