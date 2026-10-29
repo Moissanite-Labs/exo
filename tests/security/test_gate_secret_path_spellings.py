@@ -1401,6 +1401,20 @@ def test_an_env_split_or_sudo_shell_text_reads_the_odd_spellings_as_the_line_doe
     assert full(form.format(odd), policy)[1] == full(form.format(plain), policy)[1] == "deny"
 
 
+# Since #546 (#471) the gate reads the command behind a quoted prefix assignment, since #838 (#479) a loop body that
+# enters the store again after its `cd`, and since #775 (#473) a `gc.recentObjectsHook` value as a shell command. Each
+# reads its text as a shell line, so the spellings #446 reads hold there too (#513, the merge of main a1dd4fec). Main
+# asks about the odd `~/.kube//config` and backslash rows, and allows the loop with `cat ~/.kube//config`
+LATER_READINGS = ["X='a b' {}", 'X="a b" {}', "X=a\\ b {}", "for i in 1 2; do {}; cd ~/.exo/policies; done",
+                  "git -c gc.recentObjectsHook='{}' gc", "git config gc.recentObjectsHook '{}'"]
+
+
+@pytest.mark.parametrize("odd, plain, policy", IN_READINGS)
+@pytest.mark.parametrize("form", LATER_READINGS)
+def test_a_quoted_prefix_loop_or_gc_hook_text_reads_the_odd_spellings_as_the_line_does(form, odd, plain, policy):
+    assert full(form.format(odd), policy)[1] == full(form.format(plain), policy)[1] == "deny"
+
+
 @pytest.mark.parametrize("command", ["sudo -s <<< 'ls'", "env -S 'ls'", "echo ls | sudo -i"])
 @pytest.mark.parametrize("tool, key", [("bash", "command"), ("exec_command", "cmd")])
 def test_main_s_folder_stays_a_part_beside_an_env_split_or_sudo_shell_line(tool, key, command):

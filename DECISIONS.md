@@ -3392,6 +3392,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   touched, 204 rows aimed at such words and the reviews' 33 rows decide the same before and after it. The cost in (z)
   and (aa) is the line of short words with links, which this does not change. The merge of main 0d077c8d brought no
   gate code.
+  *2026-10-29 (#513, the merge of main a1dd4fec):* (cc) Main merged #546 (#471), which reads the command behind a
+  quoted prefix assignment and keeps the call read as before in `before`, #838 (#479), which reads a loop body that
+  enters the store again after its `cd`, and #775 (#473), which reads a `gc.recentObjectsHook` value as a shell
+  command. `src/exo/gate.py` merged with no conflict, and this branch's change to it is the same as against main
+  0d077c8d. Each new reading reads its text as a shell line, so the lexical form, main's target part, each other
+  store's part and the hop's copy hold there too. `X='a b' cat ~/.kube//config`,
+  `for i in 1 2; do cat ~/.kube//config; cd ~/.exo/policies; done` and
+  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under `deny: [target:*/.kube/config]`, as their
+  plain spellings are, where main asks or, for the loop, allows. Main's script (a1dd4fec) compared main a1dd4fec with
+  the merge under the 88 built-in policies, on the built-in set with its variants (95,143 actions). It lowered the 17
+  pairs of the merges before, on 17 actions, and the 855 calls of (aa) the same 105 pairs. A quoted prefix before a
+  remote delete (`X='a b' ssh prod "rm -rf ~/.kube//config"`) loses the host's `delete` as main's plain spelling does
+  (group 1). Neither tree had a classify or decide error.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
