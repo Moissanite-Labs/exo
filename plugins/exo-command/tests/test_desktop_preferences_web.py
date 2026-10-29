@@ -69,12 +69,12 @@ def test_delayed_saved_thread_cannot_restore_over_a_new_selection():
     try:
         with Browser() as b:
             inject(b, {'view': 'chat', 'thread': 's1', 'layout': 'inverse', 'scroll': .6})
-            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
+            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.savedReleased=false;window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')&&!savedReleased?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
             b.goto(srv.url())
             b.wait("releaseSaved.length>0 && document.querySelectorAll('.xc-sess').length===2")
             b.eval("[...document.querySelectorAll('.xc-sess')].find(x=>x.textContent.startsWith('s2')).click()")
             b.wait("document.querySelector('.xc-sess.on')?.textContent.startsWith('s2') && document.querySelectorAll('.xc-msg').length>100")
-            b.eval("Promise.all(releaseSaved.map(f=>f()))")
+            b.eval("savedReleased=true;Promise.all(releaseSaved.map(f=>f()))")
             assert b.eval("document.querySelector('.xc-sess.on').textContent.startsWith('s2')")
             assert b.eval("document.querySelector('.xc-log').scrollTop") == 0
             assert b.eval("savedPrefs.filter(p=>p.thread).at(-1).thread") == 's2'
@@ -142,10 +142,10 @@ def test_layout_change_cancels_held_native_reading_restore(layout):
     try:
         with Browser() as b:
             inject(b, {'view': 'chat', 'thread': 's1', 'layout': layout, 'scroll': .45})
-            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
+            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.savedReleased=false;window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')&&!savedReleased?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
             b.goto(srv.url())
             b.wait("releaseSaved.length>0 && !!document.querySelector('.xc-layout')")
-            b.eval("document.querySelector('.xc-layout').click();releaseSaved.forEach(f=>f())")
+            b.eval("document.querySelector('.xc-layout').click();savedReleased=true;Promise.all(releaseSaved.map(f=>f()))")
             b.wait("document.querySelectorAll('.xc-msg').length>100")
             target = 'classic' if layout == 'inverse' else 'inverse'
             b.wait(f"(()=>{{const l=document.querySelector('.xc-log');return Math.abs(l.scrollTop-({'l.scrollHeight-l.clientHeight' if target == 'classic' else '0'}))<2;}})()")
@@ -159,12 +159,12 @@ def test_unmount_rejects_pending_saved_reading_response():
     try:
         with Browser() as b:
             inject(b, {'view': 'chat', 'thread': 's1', 'layout': 'classic', 'scroll': .6})
-            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
+            b.call('Page.addScriptToEvaluateOnNewDocument', source="const realFetch=window.fetch;window.releaseSaved=[];window.savedReleased=false;window.fetch=(url,...args)=>String(url).endsWith('/api/chat/sessions/s1')&&!savedReleased?new Promise(resolve=>releaseSaved.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
             b.goto(srv.url())
             b.wait("releaseSaved.length>0")
             b.eval("document.querySelector('a[href=\"#tasks\"]').click()")
             b.wait("document.querySelector('.xc-nav-link[aria-current]')?.textContent==='Tasks'")
-            b.eval("Promise.all(releaseSaved.map(f=>f()))")
+            b.eval("savedReleased=true;Promise.all(releaseSaved.map(f=>f()))")
             assert not b.eval("!!document.querySelector('.xc-log')")
             assert b.eval("savedPrefs.filter(p=>p.view).at(-1).view") == 'tasks'
             assert not b.eval("savedPrefs.some(p=>p.scroll===.6)")
