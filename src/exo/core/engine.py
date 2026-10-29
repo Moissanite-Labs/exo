@@ -731,7 +731,8 @@ class CoreRuntime:
         return {}
 
     async def _search(self, b: s.Search) -> dict[str, Any]:
-        return {"results": self.store.search(b.query, b.limit)}
+        return {"results": self.store.search(b.query, b.limit,
+                                             owner=self.agent if self.seat is not None else None)}
 
     async def _models_list(self, b: s.ModelsList) -> dict[str, Any]:
         from exo.models_cmd import available_models  # network on a cold cache, so off the event loop

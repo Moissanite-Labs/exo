@@ -183,3 +183,14 @@ all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
   lock, leaves live tasks alone.
 - **Scheduled jobs.** A job with a `seat` runs only in that seat's core, and each due slot runs once
   (docs/SCHEDULE.md).
+
+## Search ownership
+
+With a loaded seat, the protocol search command returns messages only from sessions
+whose stored agent matches the loaded profile. The filter runs before the result
+limit, so foreign matches cannot crowd out authorized results. Session display
+labels do not grant access. Owned child sessions and owned private threads remain
+searchable through this direct history command.
+
+This owner filter is separate from agent-log recall, which continues to exclude
+private threads and their descendants. Unseated search keeps its existing behavior.
