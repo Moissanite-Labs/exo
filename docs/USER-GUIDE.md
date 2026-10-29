@@ -557,7 +557,8 @@ Details and the cost rules: `docs/TRACE.md`.
 | Symptom | Try |
 |---|---|
 | No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
-| The error says a provider "rejected the key" | The key is wrong, revoked or out of credit. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "rejected the key" | The key is wrong, revoked or refused. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "is over its provider spend limit" | The provider stopped billing this key: top up the account or raise the limit in the provider's own console, then test it in `/providers` (`t`). A new key does not help. |
 | The error says a local model "is not running" | Start the server it names (for Ollama, `ollama serve`), then test it in `/providers` (`t`). A passing test lets the next message through at once. |
 | The error says "next route reopens in" some seconds | The provider failed and Exo rests it for a while. Wait, or test it in `/providers` (`t`): a passing test retries it at once. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |

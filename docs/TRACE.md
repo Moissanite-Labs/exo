@@ -49,6 +49,10 @@ cache read, the way Anthropic reports them. The prompt a call sent is tokens in 
 recorded on those routes before D-080 keep the whole prompt in tokens in, and their cost as recorded. A
 route with no price shows `unknown`, never `$0`. A turn with some unpriced calls shows the sum of the priced ones
 with a `+` (`$0.0210+`). A call that used no tokens costs nothing and is not "unknown".
+A call where a route stopped on its provider spend limit (HTTP 402) keeps the figure it did bill, and that figure
+carries the same `+`, because that route did work this turn is not billed for and the sum may be short. `trace` JSON
+says `undercounted_calls` for those calls, and lists `undercounted` on each call. `unpriced_calls` keeps its own
+meaning: a route with no price at all (D-093).
 Add or override a price in config.json under `models.models`, for example
 `{"models": {"models": {"opencode-go:glm-5.3-flash": {"input": 0.3, "output": 1.2}}}}`; a seat can add or
 override prices the same way under `[models.models]`, model by model, and config.json's other prices stay.
