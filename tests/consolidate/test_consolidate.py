@@ -159,6 +159,23 @@ def test_reject_records_reason_and_leaves_nodes(template_store, led, corrections
     assert pid not in {v.id for v in C.proposals_list(template_store, led)}
 
 
+def test_repeated_signal_after_rejection_creates_a_new_proposal(template_store, led):
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    first = run(template_store, led).proposals[0]
+    C.proposal_reject(template_store, led, first, "Not a standing preference", author="principal")
+    later = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.reinforced == []
+    assert len(result.proposals) == 1 and result.proposals[0] != first
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[first].status == "rejected"
+    assert views[result.proposals[0]].status == "proposed"
+    assert views[result.proposals[0]].evidence == [later["id"]]
+    assert not [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_reinforced"]
+
+
 def test_rule_of_three_across_runs(template_store, led):
     say(led, "Always run the tests before pushing.", "a")
     say(led, "please run the tests before you push", "b")
@@ -454,7 +471,39 @@ def test_model_reflector_seam_and_fallback(template_store, led, corrections):
     ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
     assert bad.reflect(obs, ctx).reflector == "rules"
     assert C.ModelReflector(lambda p: "not json").reflect(obs, ctx).reflector == "rules"
+    trailing = C.ModelReflector(lambda p: json.dumps({"wants": "unsigned comments", "avoid": None,
+                                                     "because": "agent names leak the team",
+                                                     "implication": "All public text.",
+                                                     "domain": "mind", "type": "preference",
+                                                     "title": "Unsigned"}) + " } trailing brace in prose }")
+    got = trailing.reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
     assert isinstance(C.RuleReflector(), C.Reflector) and res.proposals
+
+
+@pytest.mark.parametrize("wrap", [
+    "Note [draft]: {}",
+    'Options ["a", "b"] then {}',
+    "Scores [1, 2, 3]: {}",
+    "[{}]",
+    "See [1]: {} } and a trailing brace }",
+])
+def test_model_reflector_reads_the_object_past_brackets_in_prose(wrap):
+    # #835 review: a bracket or an array before the object must not hide it, as the greedy match did not.
+    answer = json.dumps({"wants": "unsigned comments", "avoid": None, "because": "names leak",
+                         "implication": "public text", "domain": "mind", "type": "preference",
+                         "title": "Unsigned"})
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    got = C.ModelReflector(lambda p: wrap.replace("{}", answer)).reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
+
+
+def test_model_reflector_without_an_object_falls_back():
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    for raw in ('["unsigned comments"]', "{not json} [1, 2]", "{" * 200):
+        assert C.ModelReflector(lambda p, r=raw: r).reflect(obs, ctx).reflector == "rules"
 
 
 def test_parse_instruction_forms():
