@@ -11,13 +11,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Web chat keeps a reader's place when the event stream catches up. On load and after a reconnect, the page reads the
   conversation again and redraws it. That redraw moved a reader who had scrolled back to the newest message. It now
   keeps their place, as new output does, and a reader at the newest message stays there.
-- Tests: the timing and browser tests that failed on GitHub's hosted runners, unrelated to the PRs they ran on, now
-  check what they mean to check without depending on the runner's speed (`docs/DEVELOPER-GUIDE.md` §7 "Timing and
-  browser tests on hosted runners").
-  - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) took the largest wall-clock
-    gap between two 10 ms ticks, which also counts the time a loaded runner keeps the process waiting for a CPU
-    (0.26 s and 0.56 s on macOS). It now measures the CPU time each loop callback used on the loop thread, and the
-    process's CPU time. The 0.1 s bound is unchanged.
+- Tests: more of the timing and browser tests that failed on GitHub's hosted runners, unrelated to the PRs they ran
+  on, no longer fail on a slow runner (`docs/DEVELOPER-GUIDE.md` §7 "Timing and browser tests on hosted runners").
+  - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) built the tool registry
+    inside its timed call. The first build imports the built-in tools, and beside 8 to 10 busy loops that took the
+    call past its 3 s wall-clock bound. The registry is now built before the clock starts. The 3 s bound is
+    unchanged, and so is the bound on the event loop's largest gap between ticks (#907 has its own entry).
   - The chat tests that set a layout loaded the page a second time with `goto()`. That only changed the part after
     `#`, so the old view answered until the app replaced it, and a test could run against a view about to vanish
     (`test_show_latest_...`, `test_appending_inside_a_tall_stream_...`, `test_pending_home_frame_...`). They now
