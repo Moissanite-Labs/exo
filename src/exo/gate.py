@@ -6090,6 +6090,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
+    if prog == "cp" and _has(argv, "-r", "-R", "--recursive"):
+        # #483: a recursive destination may land protected descendants without naming them. Keep the original
+        # narrow scan authoritative, and add this destination hit beside it rather than replacing its parts.
+        destinations = _option_values(argv, ("-t", "--target-directory"), takes="S")
+        if not destinations and len(argv) >= 3 and not argv[-1].startswith("-"):
+            destinations = [argv[-1]]
+        hits += [p for p in destinations if _store_word(p, ancestors=True)]
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
     def pieces(e: str) -> list[str]:
