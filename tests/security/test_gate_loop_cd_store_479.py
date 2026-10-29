@@ -284,7 +284,8 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
 # loop bash runs. It now reads as that loop with no `time` in front (the reading `for`/`while` get on their own), so
 # the store write the loop's second pass makes is read and `deny: [store_write]` denies it. `!` composes with both
 # spellings, and stacked `time`s and `time`'s own options read alike. Each row keeps the same reading as its plain
-# form, so the fix can only tighten what main read (`opaque_exec`, ask).
+# form, so the fix can only tighten what main read (`opaque_exec`, ask). Main's ask is kept as an `indirection`
+# signal, so a row the fix now reads as a plain read still asks where main asked (review on #869).
 @pytest.mark.parametrize("line,plain", [
     ("time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
      "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"),
@@ -320,8 +321,10 @@ def test_a_loop_behind_time_reads_as_the_loop_itself(line, plain):
     ("time rm -rf /tmp/evil", "delete", "ask"),
     ("time cd ~/.exo/policies", "read", "allow"),      # a `cd` into the store is a read on its own, as on main
     ("time cat ~/.exo/state/credentials/canary.json", "credentials", "ask"),
-    ("time for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "allow"),
-    ("time while :; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "allow"),
+    # main read both as one program name it cannot see into and asked; the fix reads them as their loops, and keeps
+    # that ask (`indirection`), since lowering it would be a looser decision than main's
+    ("time for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "ask"),
+    ("time while :; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "ask"),
     ("time sudo rm -rf /tmp/evil", "delete", "ask"),
     ("time X=1 cp /tmp/evil gates.yaml", "shell", "allow"),
     ("time env FOO=1 rm -rf /tmp/evil", "delete", "ask"),
