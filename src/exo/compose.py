@@ -66,7 +66,18 @@ def create(seat: str | None = None) -> CoreEngine:
         raise ValueError("model-spend policy principal does not match the configured principal")
     if st and st.principal and not os.environ.get("EXO_PRINCIPAL"):
         os.environ["EXO_PRINCIPAL"] = st.principal
-    pm = PluginManager(config=cfg.data.get("plugin_config") or {},
+    plugin_config = {name: dict(values) for name, values in (cfg.data.get("plugin_config") or {}).items()}
+    if st is not None:
+        memory = plugin_config.setdefault("exo-memory", {})
+        memory.update(exo_home=str(cfg.home), agent_id=st.name)
+        if st.principal:
+            memory["principal"] = st.principal
+        if st.principal_store:
+            root = Path(st.principal_store).expanduser()
+            if not root.is_absolute():
+                raise ValueError("seat principal store must be an absolute path")
+            memory["store_root"] = str(root)
+    pm = PluginManager(config=plugin_config,
                        executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
