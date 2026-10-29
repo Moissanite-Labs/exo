@@ -461,9 +461,8 @@ def test_a_writer_during_the_copy_does_not_leave_a_torn_snapshot(tmp_path, signe
     assert sorted(p.name for p in tmp_path.iterdir()) == beside
 
 
-def test_a_target_changed_during_every_copy_is_read_live(tmp_path, signer, monkeypatch):
-    """After `SNAPSHOT_TRIES` copies a writer changed, the open reads the target live (`mode=ro`) as it does beside
-    a `-wal` file, and later appends show without a fresh open."""
+def test_a_target_changed_during_every_copy_without_wal_is_refused(tmp_path, signer, monkeypatch):
+    """Repeated changing copies without a remaining writer WAL report unavailable; direct target data survives."""
     from exo.ledger import SNAPSHOT_TRIES
 
     target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
@@ -475,18 +474,15 @@ def test_a_target_changed_during_every_copy_is_read_live(tmp_path, signer, monke
         _padded(target, signer, 100 + 10 * len(added), 110 + 10 * len(added))
         added.append(1)
     made = _write_during_copies(monkeypatch, write, copies=SNAPSHOT_TRIES)
-    with Ledger(path, signer) as reader:
-        assert len(made) == SNAPSHOT_TRIES and len(reader) == 100 + 10 * SNAPSHOT_TRIES
-        assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        _padded(target, signer, len(reader), len(reader) + 1)
-        assert len(reader) == 101 + 10 * SNAPSHOT_TRIES
-        _refuses(reader)
+    with pytest.raises(LedgerError, match="private snapshot unavailable"):
+        Ledger(path, signer)
+    assert len(made) == SNAPSHOT_TRIES
+    with Ledger(target, signer) as direct:
+        assert len(direct) == 100 + 10 * SNAPSHOT_TRIES
 
 
-def test_a_copy_that_fails_on_an_unchanged_target_is_read_live_at_once(tmp_path, signer, monkeypatch):
-    """A copy can fail while the target stays the same: the temporary folder is full. Each try filled the folder
-    again before the target was read live. Now the first such failure reads it live. A copy that fails while a
-    writer changed the target is still taken again."""
+def test_a_copy_that_fails_on_an_unchanged_target_is_refused(tmp_path, signer, monkeypatch):
+    """A changed failed copy retries; an unchanged failed copy refuses without making target sidecars."""
     target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
     _padded(target, signer, 0, 3)
     path.symlink_to(target)
@@ -502,17 +498,15 @@ def test_a_copy_that_fails_on_an_unchanged_target_is_read_live_at_once(tmp_path,
     connect = sqlite3.connect
     monkeypatch.setattr(sqlite3, "connect", lambda db, *a, **k: connect(
         db, *a, **({**k, "factory": Full} if isinstance(db, str) and "immutable=1" in db else k)))
-    with Ledger(path, signer) as reader:
-        assert tried == [1, 1] and len(reader) == 4
-        _padded(target, signer, 4, 5)
-        assert len(reader) == 5  # read live
-        _refuses(reader)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(LedgerError, match="private snapshot unavailable"):
+        Ledger(path, signer)
+    assert tried == [1, 1]
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
-def test_a_failed_copy_on_read_only_media_reads_the_target_as_before(tmp_path, signer, monkeypatch):
-    """The live read after a failed copy makes `-wal` and `-shm` files beside the target. On read-only media, or in a
-    folder the reader cannot write, SQLite cannot, so its first read fails, and the ledger read as empty where main
-    read it whole. A target with no `-wal` file is read with `immutable=1` then, as before #317."""
+def test_a_failed_copy_on_read_only_media_reports_unavailable(tmp_path, signer, monkeypatch):
+    """Read-only media gets the same explicit unavailable result, without a stale immutable fallback."""
     target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
     _padded(target, signer, 0, 3)
     path.symlink_to(target)
@@ -536,9 +530,8 @@ def test_a_failed_copy_on_read_only_media_reads_the_target_as_before(tmp_path, s
         return connect(db, *a, **k)
 
     monkeypatch.setattr(sqlite3, "connect", opened)
-    with Ledger(path, signer) as reader:
-        assert len(reader) == 3 and [e["body"]["i"] for e in reader.iter()] == [0, 1, 2]
-        _refuses(reader)
+    with pytest.raises(LedgerError, match="private snapshot unavailable"):
+        Ledger(path, signer)
     assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
