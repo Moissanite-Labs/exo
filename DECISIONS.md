@@ -3877,6 +3877,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the irreversible or costly cells, anchored, unanchored, log and ask rules on the push, rules that name every
   command, category lines, deny and reserved entries), lowers 0 of 1,892,784 pairs and tightens 32,334 pairs on
   4,686 actions, all `store_write ask -> store_write deny`; 7,682 pairs keep their outcome with another reason.
+  A line whose #479/#857 loop-`cd` second reading writes the store is a store line in that reading
+  (`gate.readings`, which `decide` decides too), so the pass asks the same there: under that matrix and the
+  `'^git push'` rule, `git push --force origin main && while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` is `force_push deny matrix`, where main d742d1bb asked (`force_push ask floor`; review 5693575235).
   Tests: `tests/security/test_gate_store_lift_own_text_547.py`.
   *Revisit if:* the #191 pass should ask the whole line test on every compound line, not only on one a store write
   leads. Elsewhere a rule that names a part still lifts that part's deny when the line's lead is not denied by its
@@ -3913,7 +3917,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   second reading named a loop's second pass with `ctx.setdefault("fd_cwd", ..)`, once per line, so the second of
   two loops kept the folder of the first descriptor `cd` the line made: `for i in 1; do cd /dev/fd; done; while cd
   /proc/self/fd < <(cp /tmp/evil 3); do break; done` read the `cp` in `/dev/fd` only, and under `deny:
-  [target:/proc*]` asked where it should deny (the same on b3efb5e7 and 75d72a7f, so not a lowering). The same
+  [target:/proc*]` asked where it should deny (the same on b3efb5e7, 75d72a7f and 69e33d50, so not a lowering). The same
   held for two body or condition `cd`s in either order, `&&`, `||` or a newline between the loops, `pushd`,
   `builtin cd`, `/dev/fd/3`, the pair in `$( )`, `bash -c` or a function body, the pair inside one outer loop
   (`for`, `while`, `until`, `select`, a `{ }` body, in `$( )`, two loops deep; the outer loop is one span, named
@@ -3928,9 +3932,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   other readings. Main's readings stay, so each target main named is still named, and decide keeps the strictest.
   A line with one loop, or loops into the same folder, is not read again. The added reading has the second
   reading's budget and fails closed past it as that one does; when only the added reading runs past it, the
-  joined form (#584) still gets its second reading, as on main.
-  Differential (main's `scripts/gate_diff.py` from a d742d1bb worktree, d742d1bb against this change): the
-  built-in corpus without variants lowers 0 of 1,170,048 pairs (13,296 actions, 88 policies; the built-in
+  joined form (#584) still gets its second reading, as on main. `_loop_reading` runs in `_one_reading`, so the
+  added reading is also made inside #853's opened reading (`_opened_reading`). That matters when each loop is
+  behind its own prefix, so only the opened reading sees them: `time for i in 1 2; do cp /tmp/evil 3; cd /dev/fd;
+  done; time for i in 1 2; do cp /tmp/evil 3; cd /proc/self/fd; done`, the same with `!` before the
+  `/proc/self/fd` loop and `time -p` before the `/dev/fd` one, and a store loop behind its own `time` after the
+  `/dev/fd` one, name both folders, where main 69e33d50 named the first only.
+  Differential (main's `scripts/gate_diff.py` from a 69e33d50 worktree, main 69e33d50 against this change, as
+  merged; against d742d1bb, before the merge, it lowered and tightened the same counts): the built-in
+  corpus without variants lowers 0 of 1,182,808 pairs (13,441 actions, 88 policies; the built-in
   `deny_target_dev_proc` denies both folders at once, so it tightens none), and an aimed corpus of 21,000 loop
   lines (two loops in both orders into `/dev/fd`, `/proc/self/fd`, `/dev/fd/3` and `~/.exo/policies`; `for`,
   `while`, `until`, `select` and `{ }` bodies; `cd`, `pushd`, `builtin cd`; body and condition `cd`s; `cp`, `rm
@@ -3939,20 +3949,27 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   )`, `bash -c` or function loop and two loops deep, with inner `$( )` writes and a `cd` in the outer body; a
   straight command after the loops; one loop alone and two loops into one folder) under the 88 built-in policies
   and 15 that keep `/dev*`, `/proc*` and `*store*` target rules apart (deny and reserved) lowers 0 of 2,163,000
-  pairs and tightens 34,612 on 10,352 actions (`store_write` ask to deny). Cost (`time.process_time`, best of
-  5, on a shared machine under load 3 to 4, so noisy): 100 loops alternating `/dev/fd` and `/proc/self/fd` on one
-  line (5,398 characters), 100 alternating `/dev/fd` and the store, and 25 outer loops each holding the pair cost
-  about 1.4 to 2.2 times what they cost on d742d1bb (0.29 to 0.39 s against 0.17 to 0.19 s for the first); 100
-  loops into `/dev/fd` alone cost the same (no reading is added). Tests:
-  `tests/security/test_gate_loop_fd_per_loop_867.py` (83 of its 92 tests fail on d742d1bb; the 9 guard rows pass
-  on both).
+  pairs and tightens 34,612 on 10,352 actions (`store_write` ask to deny). #853's aimed corpus (10,572 lines
+  behind `time` and `!` prefixes, under 214 policies, 2,262,408 pairs) decides every pair as main 69e33d50 does.
+  Cost (`time.process_time`, best of 5, two rounds, on a shared machine under load 3.5 to 7, so noisy): 100
+  loops alternating `/dev/fd` and `/proc/self/fd` on one line (5,398 characters), 100 alternating `/dev/fd` and
+  the store, and 25 outer loops each holding the pair cost about 1.2 to 2.0 times what they cost on main 69e33d50
+  over two measures (the last: 0.27, 0.33 and 0.15 s against 0.13, 0.18 and 0.09 s); 100 loops into `/dev/fd`
+  alone cost about the same (0.17 against 0.16 s; no reading is added). Tests:
+  `tests/security/test_gate_loop_fd_per_loop_867.py` (86 of its 97 tests fail on d742d1bb and on main 69e33d50;
+  the other 11, the 9 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass on both).
   Known limit, as on main: a command that runs once, outside any loop's second pass, after a second descriptor
   `cd` is still named by the first descriptor folder of the line, since the line's first reading keeps one folder
   (`fd_cwd`) for the whole line. That holds on a straight line (`cd /dev/fd; cd /proc/self/fd; cp /tmp/evil 3`)
   and for a straight command after a loop whose `cd` changes the folder (`cd /dev/fd; for i in 1; do cd
   /proc/self/fd; done; cp /tmp/evil 3`, `for i in 1; do cd /dev/fd; done; for i in 1; do cd /proc/self/fd;
   done; cp /tmp/evil 3`): each names only `/dev/fd`, and `deny: [target:/proc*]` asks there. It is the first
-  reading's single folder, not a loop's second pass, and is left for a follow-up.
+  reading's single folder, not a loop's second pass, and is left for its follow-up issue #888. Also as on main,
+  a loop whose own commands hold two `cd`s into different descriptor folders is named by its first descriptor one
+  (`_loop_folder`), while bash starts its second pass where the last one left: `while :; do cp /tmp/evil 3; cd
+  /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only, and `while :; do for i in 1 2; do cp /tmp/evil 3; cd
+  /proc/self/fd; done; cd /dev/fd; done` names `/proc/self/fd` only. It is the same one-folder choice, inside one
+  loop, and is left for the same follow-up.
   *Revisit if:* the same as #479's.
 - *Amendment 2026-10-29 (issue #853, to the #479 amendment's decision):* a compound command behind bash's
   pipeline prefixes is read as the same compound without them, beside main's reading, which lifts the #479

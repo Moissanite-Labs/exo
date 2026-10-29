@@ -87,6 +87,10 @@ TWO_ROWS = [
     f"{_A}; for i in 1 2; do cp /tmp/evil 3; cd /proc/self/fd; cd /dev/fd; done",
     "cd /dev/fd; " + _B,
     f"cd /dev/fd; echo $({_B})",
+    # each loop behind its own `time`, `time -p` or `!` (#853): only the opened reading sees the loops, so the second
+    # folder is named only if the reading this change adds is made inside it (_opened_reading) too
+    f"time {_A}; time {_B}",
+    f"! {_B}; time -p {_A}",
 ]
 _AC = "while cd /dev/fd < <(cp /tmp/evil 3); do :; done"
 _BC = "while cd /proc/self/fd < <(cp /tmp/evil 3); do :; done"
@@ -112,6 +116,8 @@ NEST_ROWS = [w.format(f"{x}; {y}") for w in _WRAPS for x, y in _PAIRS] + [
 STORE_ROWS = [
     f"{_A}; for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
     "cd /dev/fd; echo $(for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done)",
+    # each loop behind its own `time` (#853): named in the opened reading only
+    f"time {_A}; time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
 ]
 
 
@@ -165,6 +171,10 @@ GUARD_ROWS = [
      [{IN_STORE}, {IN_STORE, "/proc/self/fd"}]),
     # a `cd` after the loop, outside any loop: the `cp` before it runs once, in /dev/fd
     (f"{_A}; cp /tmp/evil 3; cd /proc/self/fd", [{"/dev/fd"}]),
+    # known limit, as on main (#888): a loop whose own commands `cd` into two folders is named by its first
+    # descriptor `cd`, though bash starts its second pass where the last one left
+    ("while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done", [{"/dev/fd"}, set()]),
+    (f"while :; do {_B}; cd /dev/fd; done", [{"/proc/self/fd"}, set()]),
 ]
 
 
