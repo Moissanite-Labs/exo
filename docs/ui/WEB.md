@@ -338,7 +338,9 @@ routes also need a loopback peer). Without a token the tab only asks you to open
 is ready, the Chat view shows one quiet line with a link to this tab.
 
 When the model list cannot be fetched the tab says why: a core that never answered, one that answered and
-refused this page, or one whose own call failed. The reply is still 200 with both lists present, plus
+refused this page, or one whose own call failed. A core on TCP that refuses this web process's bearer token
+(`exo web --url URL --token-file FILE` with a stale token) is a refusal too, and the sentence names the token
+file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
 A failed retry keeps the last good list, so the default picker stays usable.
