@@ -636,10 +636,12 @@ The cleanup signal-handler test does not need `/proc` and still runs where SIGHU
 shared. A test that passes on your machine can fail there for reasons that have nothing to do with the code. Write
 these tests so that only the defect they guard against can fail them:
 
-- Do not assert on wall-clock gaps. A loaded runner can keep a process waiting for a CPU for half a second. Measure
-  what the defect would cost instead: CPU time (of one event-loop callback, with `time.thread_time()`, or of the
-  process, with `time.process_time()`), or a count. `tests/core/tools/test_search_worker.py` measures each callback
-  by patching `asyncio.events.Handle._run`.
+- A loaded runner can keep a process waiting for a CPU for half a second. Keep a wall-clock bound well above what
+  the code needs, and keep the test's own setup out of the timed part. `tests/core/tools/test_search_worker.py`
+  bounds the whole call at 3 s for a 1 s search limit, and builds the tool registry before it starts the clock: the
+  first build imports the built-in tools, and inside the timed part it took the call past 3 s beside 8 to 10 busy
+  loops. A count or CPU time cannot be inflated by a slow runner, but check that it still catches the defect: a
+  stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
@@ -651,6 +653,9 @@ these tests so that only the defect they guard against can fail them:
     catch-up redraws the transcript.
 - A longer timeout is fine where a test waits for a condition. A bound the test asserts stays as it is unless it was
   wrong for what the test checks.
+- Before you change what a test measures, run the old and the new test against stand-ins for the defect it guards
+  against (for example a wrapper that blocks or works on the event loop). The new one must fail every stand-in the
+  old one failed.
 - Reproduce on Linux under load: run the test in a loop beside a few busy-loop processes, both from the plugin
   folder and with `pytest plugins`, as CI runs them.
 
