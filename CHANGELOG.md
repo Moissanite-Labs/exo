@@ -23,6 +23,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   once after a second descriptor `cd`, outside a loop's second pass, keeps the line's first folder (known limit, as
   on main). Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`. **Docs:** `docs/GATE.md` "The
   store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
+- The web guidance line after a failed model call now reads what the core records (#855, D-092 amendment).
+  - A connection drop or timeout says the model could not be reached. Before, it pointed at `/trace`: the router
+    reports a failure before any output as "all routes failed or are cooling down", and the `ReadError` or
+    `ReadTimeout` behind it is only in the call's attempts.
+  - A CLI login refusal (claude-cli "Not logged in", an expired OAuth token) points at the Providers page again,
+    and so does a first run with no credentials.
+  - `HTTP 404` and a proxy's `HTTP 407` are no longer read as a refused key.
+  - A refusal still gets its line after two other failures, since each kind keeps its own count of two.
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
@@ -135,7 +143,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   lowered (built-in corpus, 11,044 aimed loop lines, `/dev*`, `/proc*` and `*store*` target rules kept apart).
   Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment, #857), `docs/DOCS-MAP.md`.
+- A compound command behind `time`, `time -p`, `time --` or `!` (and their combinations) is read as the same
+  compound without them (#853). bash runs `time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` as it runs the loop alone, but the gate read `time` as a program and the loop as its arguments, so on
+  main a1dd4fec the line asked as `opaque_exec`, `deny: [store_write]` did not deny it, a seat could answer it
+  and permissions bypass auto-allowed it, and `time { rm -rf /srv/data; }` was no delete. `classify` now also
+  reads such a line with those prefix words left out, beside main's reading: the loop gets #479's second reading
+  (a principal-only `store_write` that `deny: [store_write]` denies and bypass keeps at its floor), and a group's
+  delete, force push or post (also in a `function f { ..; }` body behind `time !`, which main read behind `time`
+  or `!` alone) is denied by a policy that denies it without the prefix. Main's reading stays, so
+  `time { ls; }` still asks and nothing decides lower. Lines bash rejects (`nohup for ..`, `command for ..`, `env
+  X=1 while ..`, `sudo -n while ..`, `time -p -p for ..`, `time` after `|`) run nothing and decide as on main.
+  Main's `scripts/gate_diff.py` against a1dd4fec lowers 0 of 1,167,760 built-in pairs (79 tightened on 9
+  actions) and 0 of 2,262,408 pairs on an aimed corpus of 10,572 prefixed compound lines under 214 policies
+  (28,559 tightened on 2,054 actions). Tests: `tests/security/test_gate_pipeline_prefix_853.py`,
+  `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
+  `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
+- Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
+  {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
+  allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
+  (`store_write ask floor`; `ask posting` with a `gh issue create -F` tail), while the same push beside
+  `/tmp/plain.txt` is denied. The store send leads such a line, so the rule step does not run the own text test
+  (#394), and #191's pass lifted the push part's matrix deny because the rule names the push's own text. That pass now
+  also asks such a rule, on a store line, to pass the own text test of the whole line (`_line_own_test`), so the push
+  stays denied with a `gh gist create`, `aws s3 cp` or `gh issue create -F` tail on a `plugins/` or `policies/` file,
+  joined by `&&`, `;` or `||`, and with a `cp` write into the store after it. The change only passes more rules over
+  in that pass, so nothing decides lower: against main f28934a3 the gate
+  differential lowers no pair, on the built-in corpus (1,111,528 pairs, 73 tightened) and on an aimed corpus of these
+  lines (1,892,784 pairs, 32,334 tightened, all `store_write ask -> store_write deny`). One rule that names
+  every command on the line lifts the deny as before, and the store floor still asks. Separate rules that each name
+  one command do not combine: under a `'^git push'` and a `'^gh gist create'` allow rule the push-first store line is
+  `store_write deny matrix` (it asked at the floor before), as #394 decides the push beside a plain file. An `rm` or
+  `curl -T` tail of a store file was already denied by its own cell. The whole line test runs once per rule on a line,
+  not once per part, so a long store line stays linear in its parts; a rule that fails it is still passed over at each
+  part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
+  CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
+  `tests/security/test_gate_store_lift_own_text_547.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).

@@ -280,17 +280,20 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
     assert (c.category, gate.decide(c, DENY).outcome) == ("read", "allow"), (line, c.category)
 
 
-# A known limit too: `_parse` does not open a compound behind `time`, so such a loop has no second reading. It asks as
-# `opaque_exec` and `deny: [store_write]` does not deny it, as on main f28934a3 (the hook's bypass auto-allows it there
-# too; docs/GATE.md says so).
+# Issue #853 (a known limit here before): `_parse` reads `time` as a program, so the compound behind it was its argv
+# and the loop had no second reading. On main a1dd4fec these ask as `opaque_exec`, `deny: [store_write]` does not deny
+# them and the hook's bypass auto-allows them. classify now also reads the line with the compound behind a pipeline
+# prefix opened, beside main's reading (opaque_exec, which still leads on the tie): the second pass's write is a store
+# write in that reading, so the line denies under `deny: [store_write]` and no grant covers it.
+# tests/security/test_gate_pipeline_prefix_853.py has the other prefixes, bodies and the hook.
 @pytest.mark.parametrize("line", [
     "time for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
     "time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
 ])
-def test_a_loop_behind_time_is_a_known_limit(line):
+def test_a_loop_behind_time_is_read_as_without_it(line):
     c = _bash(line)
-    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == ("opaque_exec", "ask", "ask"), line
-    assert c.also is None and not _store_write_part(c), line
+    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == ("opaque_exec", "ask", "deny"), line
+    assert c.also is not None and _store_write_part(c) and gate.no_grant(c), line
 
 
 # Review 5689293944 on #838: headers the gate's lexer reads apart from bash, which decide as on main 3570be0e. In
