@@ -8,6 +8,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- An identified turn now waits once per thread/tree for overflowing memory upkeep, rather than adding the full summary-settle delay before every model round. Ready summaries and the existing context fallback remain available. This addresses the repeated-wait part of #832.
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
