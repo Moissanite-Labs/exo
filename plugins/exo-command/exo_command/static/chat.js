@@ -683,6 +683,7 @@ export function mount(root, { pet = null } = {}) {
     // Text entered during the read stays with its owner; an empty missing thread returns to the chooser.
     if (!draft(id).text && !draft(id).pending) { current = lastThread = null; restoreDraft(); }
     ++snapshotGeneration; loading = false;
+    if (pet) pet.selectSession(current);
     drawSessions(); drawLog(); drawStatus(); drawSide();
     const buffered = pending; pending = []; buffered.forEach(handle);
   }

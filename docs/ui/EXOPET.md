@@ -11,8 +11,10 @@ brand bar. Full adds a growth card and a larger drawing in an empty conversation
 stops its status reads. The choice is local to this browser; it does not change the model or execution permissions.
 
 The companion is still at rest. Motion follows observed activity and respects reduced motion. Its state describes
-what the client has seen, such as thinking, answering, using a tool or waiting for approval. A turn ending does not
-prove that the work succeeded. Switching conversations or losing the connection clears stale activity.
+what the client has seen, such as thinking, answering, using a tool or waiting for approval. When an exact
+saved-thread read confirms that the conversation is missing and the workspace returns to its chooser, the
+companion clears that selection too. A turn ending does not prove that the work succeeded. Switching
+conversations or losing the connection clears stale activity.
 
 ## Growth and trust
 
