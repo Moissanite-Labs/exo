@@ -1,0 +1,46 @@
+{
+  "issue": 482,
+  "scope": "Only literal option-free tree operands, with no redirection, are now reads. Each operand remains a read target so target denies still match. Options, dynamic/glob/brace operands and any redirection retain the previous conservative reading. Sed, sort, uniq, xxd, rsync and external-redirection false positives remain open.",
+  "differential_summary": {
+    "actions": 13,
+    "pairs_same": 783,
+    "lowered_pairs": 347,
+    "lowered_actions": 6,
+    "lowered_outcome": 269,
+    "lowered_reserved": 8,
+    "lowered_violations": 0,
+    "lowered_no_grant": 75,
+    "lowered_body_unseen": 0,
+    "lowered_binds_exact": 9,
+    "lowered_reserved_elsewhere": 4,
+    "violations_reworded": 0,
+    "tightened_pairs": 0,
+    "tightened_actions": 0,
+    "pairs_detail_changed": 14,
+    "classification_only_actions": 0,
+    "base_classify_errors": 0,
+    "base_decide_errors": 0,
+    "head_classify_errors": 0,
+    "head_decide_errors": 0,
+    "base_unknown_outcomes": 0,
+    "head_unknown_outcomes": 0
+  },
+  "intentional_lowering": true,
+  "evidence_note": "The aimed 13-action by 88-policy differential intentionally lowers 347 pairs across six literal-tree actions (including tree read parts beside a force push or after cd). It removes only the false store-write/category/reserved/no-grant/body-binding consequences of those reads; credential-read and force-push denies remain tested. All output-option, ambiguous and redirected write controls are unchanged. This is an intentional policy relaxation, not a zero-lowering result.",
+  "base_commit": "cc3925b3",
+  "no_command_execution": true,
+  "comparator_verified_tree_local_imports": true,
+  "source_sha256": {
+    "base": "c0daaceddffe249bc89fa24c1b30c27c86920bd982dcbf056be13b89cb76fd3d",
+    "head": "706a624188ddb70584d79af795145e2daaf4232725f151310d77188d0e189874"
+  },
+  "intentional_lowered_commands": [
+    "tree ~/.exo/plugins",
+    "tree ~/.exo/plugins/foo ~/.exo/policies",
+    "tree ~/.exo/keys",
+    "tree /tmp/x",
+    "tree ~/.exo/plugins; git push --force origin main",
+    "cd /dev; tree ~/.exo/plugins"
+  ],
+  "write_option_and_redirect_controls_lowered": 0
+}

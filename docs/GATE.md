@@ -3507,3 +3507,9 @@ is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plug
 ### Security repair #473
 
 Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command. Classifier tests treat these command strings as data and never execute them.
+
+### Literal option-free tree reads (#482)
+
+Only literal option-free tree operands, with no redirection, are now reads. Each operand remains a read target so target denies still match. Options, dynamic/glob/brace operands and any redirection retain the previous conservative reading. Sed, sort, uniq, xxd, rsync and external-redirection false positives remain open.
+
+The aimed 13-action by 88-policy differential intentionally lowers 347 pairs across six literal-tree actions (including tree read parts beside a force push or after cd). It removes only the false store-write/category/reserved/no-grant/body-binding consequences of those reads; credential-read and force-push denies remain tested. All output-option, ambiguous and redirected write controls are unchanged. This is an intentional policy relaxation, not a zero-lowering result.
