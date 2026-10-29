@@ -992,10 +992,10 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
             return k + 1
-        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
-        if m:
-            j = k + len(m.group(0))
-            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        parameter = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if parameter:
+            j = k + len(parameter.group(0))
+            w.add("$" + parameter.group(0), 0, 1 + len(parameter.group(0)))
         else:
             j = i + 1
             w.add(s, i, j)
@@ -2024,7 +2024,7 @@ symbolic-ref update-ref ls-remote ls-tree show-ref version help range-diff whatc
 maintenance count-objects verify-commit verify-tag merge-base name-rev check-ignore check-attr var
 """.split())
 _GIT_EXEC_KEY = re.compile(r"^(alias\..+|core\.(pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|"
-                           r"sequence\.editor|diff\.external|interactive\.difffilter|.+\.[\w-]*(command|cmd)|"
+                           r"sequence\.editor|diff\.external|interactive\.difffilter|gc\.recentobjectshook|.+\.[\w-]*(command|cmd)|"
                            r".+\.(textconv|clean|smudge|process|driver|program|helper)|credential\..*|pager\..+|"
                            r"filter\..+|uploadpack\..+|remote\..+\.(uploadpack|receivepack)|"
                            r"(difftool|mergetool|man|browser)\..+\.path)$", re.I)
@@ -4547,9 +4547,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
             elif top is not None and _fold_made(top.target) and \
-                    (old := _most_severe([p for p in c.parts
+                    (prior_action := _most_severe([p for p in c.parts
                                           if p.category not in ("credentials", "store_write")])) is not None and \
-                    old.target != dest:
+                    prior_action.target != dest:
                 # #601: the fold made the part that took the line's category, so the decision on the alt target
                 # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
                 # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
@@ -4557,8 +4557,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
                 # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
                 # with no parts and no post, as #320's.
-                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
-                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
+                c.parts = [*c.parts, replace(prior_action, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (prior_action.signals if prior_action.own_signals is None else prior_action.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
@@ -6442,9 +6442,11 @@ def _brace_head(cmds: list[_Cmd], b: int) -> int:
 
 
 def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int, int]]:
-    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder after
-    its first command (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A
-    `for` or `select` loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify)."""
+    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder
+    (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A `for` or `select`
+    loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify). The first command counts
+    too: for `while` and `until` it is the condition's, which runs again on every pass, so a substitution in a
+    `while cd ~/.exo/policies$(..)` runs in the store from the second pass (#857); a `for` header holds no `cd`."""
     spans: list[tuple[int, int]] = []
     for e, k in enumerate(cmds):
         if k.opens is None:
@@ -6462,7 +6464,7 @@ def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int
             spans.pop()
         spans.append((s, e))
     at = [n for n, _ in went]
-    return [(s, e) for s, e in spans if (i := bisect.bisect_right(at, s)) < len(at) and at[i] <= e]
+    return [(s, e) for s, e in spans if (i := bisect.bisect_left(at, s)) < len(at) and at[i] <= e]
 
 
 def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple[int, str]], cmd: str, depth: int,
@@ -6498,6 +6500,11 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
                 while i < len(at) and at[i] <= end and not went[i][1]:
                     i += 1
                 if i < len(at) and at[i] <= end:
+                    ctx.setdefault("fd_cwd", went[i][1])
+                elif (i := bisect.bisect_left(at, n)) < len(at) and at[i] == n and went[i][1] and \
+                        not (i + 1 < len(at) and at[i + 1] <= end):
+                    # #857: a `while`/`until` condition's own descriptor `cd` names the folder when the loop holds no
+                    # other store `cd`; a body's `cd` keeps naming it, as the second pass starts where the last `cd` left
                     ctx.setdefault("fd_cwd", went[i][1])
                 w = _loop_word(k)
                 once = k.words[w].text in ("for", "select") and \
@@ -6601,7 +6608,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     if went and (again := _loop_pass.get()) is not None and (spans := _loop_spans(cmds, went)):
         if not again[0]:
             again[1] = True
-        elif not into or not into[1] and any(d and any(s < n <= e for s, e in spans) for n, d in went):
+        elif not into or not into[1] and any(d and any(s <= n <= e for s, e in spans) for n, d in went):
             pass2 = _loop_again(cmds, spans, went, cmd, depth, (subs, stdin_unknown, inherits, given), into, seed_of)
             keys = {_part_key(p) for q in parts for p in _each_part(q)}
             pass2 = [m for m in pass2 if any(_part_key(p) not in keys for p in _each_part(m))]   # only what is new
