@@ -31,6 +31,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- `scripts/gate_diff.py` no longer reports "0 lowered" for three kinds of looser gate: one that fails open once a
+  shared classify budget is spent (six long budget lines now run with the harvest, also under `--no-variants`), one
+  whose `decide` returns an outcome the hook runs but does not know (`"Ask"`, `"block"`: ranked as allow in the head),
+  and one that drops a hook check after `decide` at the same outcome (`no_grant`, `body_unseen`, `binds_exact`, a
+  reserved hit on another part). The summary counts each (#551).
 - A provider spend limit (HTTP 402) now says so instead of blaming the key, and a call whose route stopped on it
   carries the cost `+` mark, because that route's work is not billed in this turn. `trace` reports
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).

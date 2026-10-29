@@ -2965,6 +2965,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  2026-10-28 (#551): three gaps of the comparator are closed, so "0 lowered" means more. (1) No test line reached the
+  gate's shared fail-closed budgets of one classify call, so a head that failed open once one was spent showed 0
+  lowered. Six budget lines now run with the harvest, also under `--no-variants`: past `_exo_relative`'s 64 store
+  folders, past its join budget `_EXO_PARTS` (many names, the stress tests' `_NEAR_CAP` line, and two `<( )` each
+  under it alone), and past `_BRACE_BUDGET` for a read and a write. Each asks on main only because its budget is
+  spent, which a test checks by lifting the budget. The brace budget's share for a repeated store spelling is left
+  out (past it a repeat counts as the hit it had), and so is its Exo-store share alone (no line found spends it
+  without the secret-store share). (2) An outcome not in `gate.OUTCOMES` (`"Ask"`, `"block"`) ranked as ask, but the
+  hook runs any outcome but ask or deny: it now ranks as allow in the head and as ask in the base, and the summary
+  counts such pairs. (3) At the same outcome below deny a pair is also lower when the head loses one of the hook's
+  checks after `decide` that depend only on the call and the decision: `no_grant`, `body_unseen`, `binds_exact`, or
+  a reserved hit on another part than the line's own (`_grant_for`). A check a tree's gate lacks is not held; one that
+  raises is the hook's error card (a decide error, once-only, so neither a check nor a reserved hit is lost). The
+  script marks the card's pairs in their flags (`error_card`), which no gate decision carries, so a decision whose rule
+  is `"error"` is compared like any other. These are no longer among the
+  hook steps left out; standing grants themselves, who may answer, the risk floor, the required executor, observe
+  and bypass modes, a policy changed mid-session and the decision model still are. Chosen over listing budgets as
+  left out: the linear-time PRs change exactly these paths. Main 7cc2eb14 against itself with the new script, built-in
+  corpus `--no-variants`: 12,666 actions x 88 policies, 1,114,608 pairs, 0 lowered (139.8 s, against 130.4 s for
+  main's script on its 12,660 actions). Against mutants of main on that corpus, main's script reports 0 lowered where
+  this one reports 348 pairs (`_exo_relative`'s "too many to resolve" returns made `""`), 808,963 (`binds_exact`
+  returning False) and 27,985 (`body_unseen` dropped, `decide`'s own reading kept); for `NO_GRANT = ()` 222 against
+  350,322, and for a `decide` that says `"Ask"` 11,530 against 625,921.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
