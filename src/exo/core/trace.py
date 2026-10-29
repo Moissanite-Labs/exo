@@ -234,7 +234,7 @@ class Call:
     cache_read: int = 0
     cache_write: int = 0
     cost_usd: float | None = None  # from the route's catalog price (or the provider's own figure); None = unknown
-    undercounted: bool = False  # a route in this call stopped on its spend limit: the figure below the real one
+    undercounted: bool = False  # a route in this call stopped on its spend limit: the figure may be short of the real one
 
     @property
     def spent(self) -> bool:
@@ -319,8 +319,8 @@ class TurnTrace:
         return (round(sum(priced), 8) if priced else None), len(calls) - len(priced)
 
     def undercounted(self) -> int:
-        """Calls whose figure is a floor: a route in the call stopped on its spend limit, so its work went unbilled
-        here. Counted with the unpriced calls, because the sum is short for the same reason."""
+        """Calls whose figure may be short: a route in the call stopped on its spend limit after doing work this turn
+        is not billed for. Counted with the unpriced calls, because the sum cannot be trusted for the same reason."""
         return sum(1 for x in self.everything() for c in x.calls if c.spent and c.undercounted)
 
     def everything(self) -> list[TurnTrace]:
@@ -750,5 +750,6 @@ def as_dict(session: str, turns: list[TurnTrace]) -> dict[str, Any]:
         "flag_list": [vars(f) for f in t.flags],
         "call_list": [{"iteration": c.iteration, "route": c.route, "ms": c.total_ms, "tokens_in": c.tokens_in,
                        "tokens_out": c.tokens_out, "cache_read": c.cache_read, "cache_write": c.cache_write,
-                       "cost_usd": c.cost_usd, "cost": money(c.cost_usd) if c.spent else "-", "error": c.error}
+                       "cost_usd": c.cost_usd, "cost": money(c.cost_usd, 1 if c.undercounted else 0) if c.spent else "-",
+                       "undercounted": c.undercounted, "error": c.error}
                       for x in t.everything() for c in x.calls]} for t in turns]}

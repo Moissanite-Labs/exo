@@ -420,6 +420,23 @@ def test_a_call_that_hit_a_spend_limit_marks_the_figure_as_a_floor():
     assert turn.undercounted() == 0
 
 
+def test_a_spend_limit_attempt_marks_the_call_short_through_parse():
+    """The flag comes from the event the router writes, not from a guess: a model.call whose attempts include one
+    spend_limit parses into a call marked undercounted, and the JSON carries it on the call (D-093)."""
+    evs = [s.Event.of(s.TurnStarted(turn_id="t1", model="paid:m"), seq=1, session="s"),
+           s.Event.of(s.ModelCall(iteration=1, requested="paid:m", route="free:m", total_ms=10,
+                                  attempts=[{"route": "paid:m", "outcome": "spend_limit",
+                                             "error": "HTTP 402: key_spend_limit_reached"},
+                                            {"route": "free:m", "outcome": "ok"}],
+                                  usage=Usage(input_tokens=10, output_tokens=1, cost_usd=0.0)), seq=2, session="s"),
+           s.Event.of(s.TurnCompleted(turn_id="t1"), seq=3, session="s")]
+    (t,) = trace.parse(evs, "s")
+    assert [c.undercounted for c in t.calls] == [True]
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["cost"] == "$0.0000+"
+    (c,) = trace.as_dict("s", [t])["turns"][0]["call_list"]
+    assert c["undercounted"] is True and c["cost"] == "$0.0000+"
+
+
 def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     kid = tt(calls=[_usage_call("p:k", 0.5)])
     t = tt(calls=[_usage_call("p:a", 0.25, cache_read=900)], children=[kid], t0=1.0, wall_ms=1000)
