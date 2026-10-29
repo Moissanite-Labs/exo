@@ -7,6 +7,8 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
+from . import wire
+
 # Seats may reach the relay through tunnels or VPNs with arbitrary Host headers; signatures are the access control.
 NO_HOST_CHECK = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
@@ -21,7 +23,7 @@ class AuthGate:
         if scope["type"] == "http":
             try:
                 self.relay.authed_seat(Headers(scope=scope), scope["method"], scope["path"],
-                                       query=scope.get("query_string", b"").decode())
+                                       query=wire.raw_query(scope))
             except HTTPException as e:
                 await JSONResponse({"error": e.detail}, status_code=e.status_code)(scope, receive, send)
                 return
