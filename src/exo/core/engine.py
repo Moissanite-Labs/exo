@@ -558,7 +558,9 @@ class CoreRuntime:
 
     def _info(self, sid: str) -> s.SessionInfo:
         info = self.store.get_session(sid)
-        if info is None:
+        if info is None or (self.seat is not None and info.agent != self.agent):
+            # Ownership comes from the stored agent, never the client-visible seat label.
+            # Use the missing-session response so another profile's existence is not disclosed.
             raise CommandFailed("not_found", f"no session {sid}")
         info.cwd = info.cwd or self.cwd  # report the same fallback used by tools for older sessions
         info.status = "live" if (st := self.loop._state.get(sid)) is not None and st.running else "idle"
@@ -590,7 +592,7 @@ class CoreRuntime:
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
         rows = []
-        for i in self.store.list_sessions(b.limit, b.seat):
+        for i in self.store.list_sessions(b.limit, b.seat, agent=self.agent if self.seat is not None else None):
             st = self.loop._state.get(i.id)  # do not create state for an idle session
             i.status = "live" if st is not None and st.running else "idle"
             rows.append(to_dict(i))
