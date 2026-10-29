@@ -6258,3 +6258,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 skipped body-file note amendment — 2026-10-29 (#567)
+
+The hook records a per-call, content-free reason when an absolute body file is
+above the existing 256 KiB limit or names process/descriptor state, directly or
+through a symlink. The decision uses that note for the unseen file without changing
+classification, outcome, grants or once-only approval. Compound lines retain the
+same skip reason. Relative/missing/unreadable-file and disabled-reader hints keep
+their existing behavior; this is the two reproduced absolute-path cases only.
