@@ -91,8 +91,12 @@ count, status, fixed_in. One row per signature; a recurrence bumps the count.
   none for a private thread or a session under it, such as its delegate child (D-028): findings are listed in every
   thread, and the note would carry its text.
 
-Lifecycle: `open`, then `fixed` (`exo findings fix ID --in SHA`), then `verified` after 20 quiet eligible turns
-(`verify_turns`) or 3 quiet days of activity (`verify_days`) on a harness at or after SHA. The same signature
+Lifecycle: `open` (new), optionally `triaged` with a data owner, then `fixed` (`exo findings fix ID --in SHA`,
+meaning fixed pending retest), then `verified` after 20 quiet eligible turns (`verify_turns`) or 3 quiet days of
+activity (`verify_days`) on a harness at or after SHA. Triage is ownership metadata, never a permission grant.
+`close ID --reason TEXT` records an explicit closed disposition. A closed fixed regression still reopens;
+a closed unfixed disposition stays closed until explicitly triaged. State/owner changes carry timestamps and
+an append-only local transition history. The same signature
 coming back on such a harness makes it `reopened`. On an older harness it only counts, and the quiet clock
 restarts from zero. "At or after" is a git ancestor check on the source tree; when it cannot be told, the fix is
 assumed live.
@@ -117,12 +121,40 @@ one counted turn, so idle days do not verify anything. The count and days are ke
 
 ## Commands
 - `exo trace [SESSION] [--last N] [--json]`
-- `exo findings [--status open|fixed|verified|reopened|all] [--json]` lists every state by default, each fixed one with the commit it was fixed in
+- `exo findings [--status open|triaged|fixed|verified|closed|reopened|all] [--json]` lists every state by default, each fixed one with the commit it was fixed in
 - `exo findings fix ID --in SHA`
 - `exo findings export --md` (digest for the developer, grouped by severity, newest first)
-- `exo findings backlog [--limit 20] [--json]` shows unresolved counts by severity and age, plus the oldest rows (0..100). Backlog includes open, reopened and fixed-awaiting-retest; verified findings remain in total state counts but leave the backlog. Age runs from first seen, in elapsed days; malformed historical timestamps have an unknown-age bucket and future timestamps count as zero. The counts and rows come from one database snapshot, read without the write lock, so the read itself neither waits for nor holds up a core that is filing a finding. Opening the store still runs its schema check in a short write transaction, so the command can wait behind a long write before it reads. This read does not update the last-view marker or any lifecycle state.
+- `exo findings backlog [--limit 20] [--json]` shows unresolved counts by severity and age, plus the oldest rows (0..100). Backlog includes open, triaged, reopened and fixed-awaiting-retest; verified findings remain in total state counts but leave the backlog. Age runs from first seen, in elapsed days; malformed historical timestamps have an unknown-age bucket and future timestamps count as zero. The counts and rows come from one database snapshot, read without the write lock, so the read itself neither waits for nor holds up a core that is filing a finding. Opening the store still runs its schema check in a short write transaction, so the command can wait behind a long write before it reads. This read does not update the last-view marker or any lifecycle state.
 - In the TUI: `/trace`, `/findings`; the status line shows the serving route and the open-findings count.
 
-The count reconciles by state. `exo trace`, `/trace` and `exo_trace` start with `findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened` (`exo trace --json` has the same under `findings`). Without a session, they list up to five open or reopened findings by id and title (issue #100); the summary line counts the rest. A finding that was fixed moves from open to fixed, so the open count drops without any being lost; `/findings` and `exo findings` list fixed and verified ones too, and say what moved since you last looked (`open -> fixed`, `new`). The status-line badge counts open plus reopened.
+The count reconciles by state. `exo trace`, `/trace` and `exo_trace` start with `findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened` (`exo trace --json` has the same under `findings`). Without a session, they list up to five open, triaged or reopened findings by id and title (issue #100); the summary line counts the rest. A finding that was fixed moves from open to fixed, so the open count drops without any being lost; `/findings` and `exo findings` list fixed and verified ones too, and say what moved since you last looked (`open -> fixed`, `new`). The status-line badge counts open, triaged and reopened.
 
-The backlog command is the read-only visibility slice of #684. Owner assignment, a triaged state and exactly-once retest notifications are not implemented by it; the existing lifecycle and quiet-turn verification remain unchanged.
+### Owner and local retest workflow (#684)
+
+```sh
+exo findings triage FINDING --owner gpt-forge
+exo findings fix FINDING --in FIX_MARKER
+exo findings retests --session ORIGINAL_SESSION --json
+exo findings ack-retest REQUEST
+exo findings history FINDING --json
+exo findings close FINDING --reason "handled elsewhere"
+```
+
+`fix` atomically records the fix state, transition and one durable local retest request per finding and exact
+fix marker. Retrying the same marker does not duplicate the request or reset the quiet clock. Acknowledgement
+only records receipt; it does not mark the fix verified. A new fix supersedes older requests; reopened,
+verified and closed findings have no actionable pending request. Request records stay for audit.
+
+New findings preserve their first filing session separately from the most recent recurrence, so another
+session reproducing a finding cannot redirect its request. Legacy rows fall back to the last known session;
+the original filing session and past transitions cannot be reconstructed. Requests without a session remain
+locally visible as unrouted. Reads are bounded to 0..100 requests/history entries. Payloads contain IDs, fix
+markers and timestamps, not finding bodies or private message content. Owner is shown in list/backlog/export.
+
+This is a trusted local CLI/API slice. It adds no remote mutation command, Bus sender, background delivery,
+model call or automatic commit/merge watcher. A fix marker is the caller's assertion, not proof a commit
+exists or landed; different aliases of a commit are not canonicalized. Automatic routed notifications to a
+filing seat, landed-commit validation, product review controls and full seat inbox integration remain open.
+Use the matching runtime for the new states: older binaries may omit triaged rows from their old unresolved
+counts. The existing eligibility and quiet-turn/day verification are reused, with stale observations prevented
+from verifying a newer fix marker. No live session database was used for the fixture tests.

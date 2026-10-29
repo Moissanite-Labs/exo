@@ -277,9 +277,15 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
 | `exo trace [SESSION]` | The per-turn table for a session (default: the newest), with anomaly flags and peer traffic. | `--last N`, `--calls` list every model call with its cost, `--json` | `cmd_trace` in `src/exo/trace_cmd.py` |
-| `exo findings [list]` | What the harness found wrong with itself. | `--status` (`open`, `fixed`, `verified`, `reopened`, `all`; default all), `--json` | `cmd_findings` |
+| `exo findings [list]` | What the harness found wrong with itself. | `--status` (`open`, `triaged`, `fixed`, `verified`, `closed`, `reopened`, `all`; default all), `--json` | `cmd_findings` |
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
+| `exo findings triage <id>` | Assigns an owner and records triage; ownership grants no authority. | `--owner SEAT`, `--json` | same |
+| `exo findings close <id>` | Records a closed disposition. | `--reason TEXT`, `--json` | same |
+| `exo findings history <id>` | Reads bounded state/owner transitions. | `--limit N` (0..100), `--json` | same |
+| `exo findings retests` | Reads pending local retest requests, without sending them. | `--session ID`, `--limit N` (0..100), `--json` | same |
+| `exo findings ack-retest <request>` | Acknowledges receipt, not verification. | `--json` | same |
+| `exo findings backlog` | Unresolved counts by age/severity and oldest rows with owners. | `--limit N` (0..100), `--json` | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
 | `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too, and so does one whose ledger file is a symlink. A ledger whose two anchors are more than one event apart passes with a warning. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |

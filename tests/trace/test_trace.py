@@ -946,7 +946,7 @@ def test_findings_counts_by_state_reconcile_and_fixed_stay_listed():
     f.fix(c, "abc1234")
     f.store._q("UPDATE findings SET status='verified' WHERE id=?", (c,))
     f.store._q("UPDATE findings SET status='reopened' WHERE id=?", (d,))
-    assert f.counts() == {"open": 1, "fixed": 1, "verified": 1, "reopened": 1, "total": 4}
+    assert f.counts() == {"open": 1, "triaged": 0, "fixed": 1, "verified": 1, "closed": 0, "reopened": 1, "total": 4}
     assert f.open_count() == 2  # open + reopened still need work
     assert f.summary() == "findings 4: 1 open, 1 fixed (awaiting re-verification), 1 verified, 1 reopened"
     text = f.text("all")
