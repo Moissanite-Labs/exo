@@ -51,7 +51,7 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
-REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key, the login or the spend: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
@@ -455,7 +455,9 @@ class Router:
                             break
                 if candidate is not None:
                     if last is not None:
-                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                        why = (f"is over its provider spend limit ({(last.error or '')[:80]}); this turn's cost is a floor"
+                               if last.status == 402 else f"failed ({(last.error or '')[:80]})")
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} {why}; "
                                                        f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
@@ -505,7 +507,14 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
+                    if last.status == 402:
+                        # The route stopped on the provider's own spend limit. Say it in those words once, and say the
+                        # money figure will read low: the paid route did work nobody will bill this turn for.
+                        yield ProviderEvent(kind="notice", attempts=attempts,
+                                            text=f"{route.ref} is over its provider spend limit; trying {nxt.ref}"
+                                                 " (this turn's cost is a floor)")
+                    else:
+                        yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
@@ -562,7 +571,9 @@ class Router:
                     ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
-                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                    # "spend_limit" keeps the cause after the fallback, so the money figure can say it is a floor.
+                    note("spend_limit" if ev.status == 402 else
+                         "timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
                          else "fallback", ev.error or "")
                     failed.append(ev)
                 return
@@ -613,9 +624,9 @@ class Router:
 
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
-        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
-        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
-        not running."""
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 403), or the key is
+        over its spend limit (402) which a new key does not fix; on a later call too, while that credential, or a model
+        of the chain on it, reopens first; or a local server is not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
             cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
@@ -623,6 +634,9 @@ class Router:
         else:
             name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
         spec = self.providers.get(name) or {}
+        if status == 402:  # the provider's own spend limit: a new key fixes nothing, raising the limit does
+            return status, (f"{name} is over its provider spend limit ({err}): raise the limit or top up the account, "
+                            "then test it in /providers")
         if status in REFUSED_STATUS:
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else envs

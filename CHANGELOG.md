@@ -8,11 +8,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
+  the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
+  conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
+  It now draws an answer only when it was asked after the list on screen. This was the intermittent failure of
+  `test_first_submission_recovery_belongs_to_created_thread_after_remount` (#859).
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- A provider spend limit (HTTP 402) now says so instead of blaming the key, and a call whose route stopped on it
+  carries the cost `+` mark, because that route's work is not billed in this turn. `trace` reports
+  `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
 - Short chat windows scroll the chat column when status text expands, keeping the transcript and composer reachable.
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
@@ -107,15 +115,46 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   sleep 1; done` the `cp` rewrites the policy file from the second pass; it and five other spellings (`until !
   cd`, backticks, `pushd`, `< <(..)`, a `cd` in an `if`) were allowed reads on main 1401ff81, also under `deny:
   [store_write]`. They are now `store_write`, as the #479 rows are. A condition's `cd` into a descriptor folder
-  names that folder when the body holds no `cd` of its own (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
+  names that folder when the loop holds no other store `cd` (`while cd /dev/fd < <(cp /tmp/evil 3); do :; done`
   denies under `deny: [target:/dev*]`). Main's `scripts/gate_diff.py`: 0 of 10,616,630 pairs
   lowered (built-in corpus, 11,044 aimed loop lines, `/dev*`, `/proc*` and `*store*` target rules kept apart).
   Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment, #857), `docs/DOCS-MAP.md`.
 
+- Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
+  {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
+  allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
+  (`store_write ask floor`; `ask posting` with a `gh issue create -F` tail), while the same push beside
+  `/tmp/plain.txt` is denied. The store send leads such a line, so the rule step does not run the own text test
+  (#394), and #191's pass lifted the push part's matrix deny because the rule names the push's own text. That pass now
+  also asks such a rule, on a store line, to pass the own text test of the whole line (`_line_own_test`), so the push
+  stays denied with a `gh gist create`, `aws s3 cp` or `gh issue create -F` tail on a `plugins/` or `policies/` file,
+  joined by `&&`, `;` or `||`, and with a `cp` write into the store after it. The change only passes more rules over
+  in that pass, so nothing decides lower: against main f28934a3 the gate
+  differential lowers no pair, on the built-in corpus (1,111,528 pairs, 73 tightened) and on an aimed corpus of these
+  lines (1,892,784 pairs, 32,334 tightened, all `store_write ask -> store_write deny`). One rule that names
+  every command on the line lifts the deny as before, and the store floor still asks. Separate rules that each name
+  one command do not combine: under a `'^git push'` and a `'^gh gist create'` allow rule the push-first store line is
+  `store_write deny matrix` (it asked at the floor before), as #394 decides the push beside a plain file. An `rm` or
+  `curl -T` tail of a store file was already denied by its own cell. The whole line test runs once per rule on a line,
+  not once per part, so a long store line stays linear in its parts; a rule that fails it is still passed over at each
+  part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
+  CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
+  `tests/security/test_gate_store_lift_own_text_547.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
+
+- The web session list answers 400 to a `limit` below 1 (exo-desktop #55). Only the top was cut, to 500, so
+  `GET /api/chat/sessions?limit=-1` reached SQLite as `LIMIT -1`, which returns every session. A larger limit is
+  still cut to 500. Tests: `plugins/exo-command/tests/test_chat.py`. **Docs:** `docs/ui/WEB.md` "What is where",
+  D-039 amendment.
+
+- The web Schedule page asks before it removes a job (exo-desktop #55). One click on remove deleted the job, and
+  there is no undo. Remove now waits for a separate Confirm remove click on that card, drawn in the page, since a
+  desktop web view with no confirm handler answers `window.confirm` with Cancel. Tests:
+  `plugins/exo-command/tests/test_schedule_web.py`. **Docs:** `docs/ui/WEB.md`, `docs/USER-GUIDE.md` §5,
+  `plugins/exo-command/README.md`, D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
