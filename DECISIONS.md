@@ -5911,7 +5911,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   model rows rather than a scrolling select. Terms are matched case-insensitively against the route and the model name,
   whitespace separates terms, and a row whose route equals the whole query sorts first. Typing only narrows the rows.
   Applying takes Enter, a row click or the explicit button, and it applies the exact route of the highlighted row. Escape
-  or Cancel closes the picker. The client keeps a generation counter: a later `/model` or `/default` replaces a list still
+  or Cancel closes the picker. Rows carry an `available` tag for a route no role uses yet, so the picker keeps the
+  configured/available split the select had, and the tag is the one thing a row states besides its name and route. The
+  client keeps a generation counter: a later `/model` or `/default` replaces a list still
   loading, and an answer to a superseded request is dropped instead of drawn over the newer one.
 - **Why:** a thread's route list is long and mostly unlike the row you want, so scrolling a select is the slow path; the
   person almost always knows part of the name. The risk a search box adds is accidental application while typing, so the
@@ -5921,9 +5923,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   still posts to `POST /api/providers/default`, which answers loopback pages only (D-034). Rows are built as DOM nodes with
   `h()` and text nodes, so a model name cannot become markup. The generation counter is the same discipline D-091 needed:
   a slow first answer must not overwrite a newer list.
-- **Rejected:** applying on a single click of a search result without a button (a mis-click changes the shared main route);
-  a `<datalist>` (no place to show which routes are configured, which routes are free, or a failure sentence); keeping the
-  select and adding a filter box above it (two controls for one choice, and the select's own arrow keys then fight the
-  filter's).
+- **Rejected:** applying as the query changes, or on a row that is only hovered or was reached only by the arrow keys (the
+  highlight moves without applying, so a mis-click cannot change the shared main route by accident); a `<datalist>` (no
+  place to show which routes a role already uses, which routes are free, or a failure sentence); keeping the select and
+  adding a filter box above it (two controls for one choice, and the select's own arrow keys then fight the filter's).
 - **Docs and user impact:** `docs/ui/WEB.md` ("Commands from the box"), `CHANGELOG.md`, `docs/COMMANDS.md` unchanged (the
   command syntax and its arguments are the same). No settings change, no protocol change, no new route.

@@ -6,10 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 - `/model` and `/default` open a search box instead of a scrolling list: typing narrows the rows and never
-  changes the model, and Enter, a row click or "Use model" applies the exact route of the highlighted row (D-094).
+  changes the model, and Enter, a row click or "Use model" applies the exact route of the highlighted row. Rows
+  a role already uses come first, and a route no role uses yet carries an `available` tag, so the split the
+  Providers select had is kept (D-094).
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- A `/model` or `/default` change that fails while you switch threads still shows its error, and one that lands
+  on a thread you have left says so, instead of being dropped with the picker that asked. The hovered picker row
+  now looks lighter than the highlighted one, because Enter applies the highlight and not the hover (D-094).
 - The web thread list keeps a thread it just showed when an older list request answers late. Leaving Chat while
   the first message's new thread was being created, then coming back, could leave the sidebar empty ("No
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.

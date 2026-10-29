@@ -139,3 +139,13 @@ def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps
     assert "console." not in js
     # the old silent swallow is gone: a failure used to become an empty list, which reads as "no models"
     assert 'catch(() => ({ models: [], available: [] }))' not in js
+
+
+def test_the_highlighted_picker_row_looks_different_from_a_hovered_one():
+    """Enter applies the highlighted row, not the hovered one, so the two cues must not be the same rule (D-094)."""
+    css = re.sub(r"/\*.*?\*/", "", text("style.css"), flags=re.S)
+    active = [line for line in css.splitlines() if line.startswith(".xc-model-option.active")]
+    hovered = [line for line in css.splitlines() if line.startswith(".xc-model-option:hover")]
+    assert len(active) == 1 and len(hovered) == 1
+    assert ":hover" not in active[0]
+    assert ".active" in hovered[0]          # the hover cue steps aside for the highlight

@@ -328,7 +328,10 @@ The Providers tab (`providers.js`) shows where keys are stored, one row per prov
 installed), the source of the key (never a value), the model count and a default mark. A provider that needs a
 key has a password field with Save, Test and Remove. After Save the field is cleared at once, also on error;
 the key is read once to build the request body and is never logged, shown again, put in a URL or kept in
-browser storage. A select lists the configured routes, then the available ones, with Save default. The routes
+browser storage. A search box lists the configured routes first, then the routes no role uses yet behind an
+`available` tag, with Save default. Typing only narrows the rows; Enter, a row click or Save default applies the
+exact route of the highlighted row (D-094). The whole section is built once per visit and updated in place, so a
+save, a provider Test reply or a background refresh never clears what is typed or moves the cursor. The routes
 need the page token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this
 tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
 routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider

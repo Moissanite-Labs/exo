@@ -27,7 +27,9 @@ export function createModelPicker({ label = "Model", rows, selected = "", applyL
     list.replaceChildren(...visible.map((m, i) => h("button", { class: "xc-model-option" + (i === active ? " active" : ""),
       type: "button", role: "option", id: id + "-" + i, tabindex: "-1", "aria-selected": i === active ? "true" : "false",
       onmousedown: e => e.preventDefault(), onclick: () => { active = i; submit(); } },
-    h("span", { class: "xc-model-name" }, m.name, m.route === current ? h("span", { class: "xc-model-current" }, "Current") : null), h("span", { class: "xc-model-route" }, m.route))));
+    h("span", { class: "xc-model-name" }, m.name, m.route === current ? h("span", { class: "xc-model-current" }, "Current") : null),
+    h("span", { class: "xc-model-route" }, m.route),
+    m.group === "available" ? h("span", { class: "xc-model-tag" }, "available") : null)));
     search.setAttribute("aria-activedescendant", visible.length ? id + "-" + active : "");
     element.setAttribute("aria-busy", pending || loading ? "true" : "false");
     apply.disabled = pending || loading || !visible.length;
@@ -63,7 +65,8 @@ export function createModelPicker({ label = "Model", rows, selected = "", applyL
       const name = [m.name, m.label, m.model].find(value => typeof value === "string" && value)
         || m.route.split(":").slice(1).join(":") || m.route;
       const text = [m.route, name, m.provider || "", m.id || ""].join(" ").toLocaleLowerCase();
-      unique.set(m.route, { route: m.route, name, search: text, compact: compact(text) });
+      // The caller says which list a row came from, so a route that no role uses yet still says "available".
+      unique.set(m.route, { route: m.route, name, search: text, compact: compact(text), group: m.group === "available" ? "available" : "" });
     }
     models = [...unique.values()]; loading = false; error = "";
     active = Math.max(0, models.findIndex(m => m.route === current)); draw();
