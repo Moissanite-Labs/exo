@@ -6258,3 +6258,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 literal GH_HOST routing amendment — 2026-10-29 (#566)
+
+A literal GH_HOST prefix on a known gh outbound command with a bare -R owner/name gains the actual host-prefixed target beside the old GitHub reading. Explicit issue/repository URL hosts retain precedence. Dynamic/exported host state, GH_REPO and GH_CONFIG_DIR behavior remain open.
