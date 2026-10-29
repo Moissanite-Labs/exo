@@ -6303,3 +6303,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+### D-012 amendment, 2026-10-29: stale consolidation targets
+
+Runs refresh cached nodes before allocating targets. Acceptance refuses a create proposal whose target path is already taken, preserving the other writer's node. This does not claim an atomic cross-process compare-and-write or solve the other audit #54 findings.

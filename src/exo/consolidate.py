@@ -871,6 +871,7 @@ class _Run:
     def __init__(self, store: PrincipalStore, ledger: Ledger, reflector: Reflector | None, now: str | None,
                  author: str | None, dry_run: bool):
         self.store, self.ledger = store, ledger
+        store.refresh()  # another process may have created nodes since this store was cached
         self.reflector = reflector or RuleReflector()
         self.now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         self.author = author or (ledger.author or DEFAULT_AUTHOR)
@@ -1277,6 +1278,8 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
         return _accept_skill(store, ledger, st, p, status, author)
     path = store.nodes_dir / f"{p.node_id}.md"
     store.refresh()  # a long-lived store (the learner's) may predate nodes written since: lint and link against disk
+    if p.action == "create" and path.exists():
+        raise ConsolidateError(f"node {p.node_id} already exists; create a fresh proposal")
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)

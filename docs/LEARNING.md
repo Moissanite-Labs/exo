@@ -148,3 +148,5 @@ never writes to the house pack, and nothing learned on one install flows back in
 - Config: the `learn` table in `config.json` (defaults in `src/exo/learn/runtime.py`).
 - Tests: `tests/learn/`.
 - What was learned since a date: `exo.learn.learned_since`, used by the brief.
+
+Consolidation refreshes its cached principal store when a run starts. Accepting a create proposal refuses a target path that another writer has since taken; it does not append that proposal to an unrelated existing node. Propose again to select a fresh target. This is a sequential collision check, not a cross-process filesystem transaction; post-write indexing rollback and the other desktop audit #54 findings remain open.
