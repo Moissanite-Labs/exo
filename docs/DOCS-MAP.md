@@ -14,6 +14,7 @@ this map names does not exist. The full rule, with steps, is in `docs/DEVELOPER-
 
 | Layer | Reader | Depth | Where |
 |---|---|---|---|
+| D-040 anchor batching review (#256) | `docs/ANCHOR-BATCHING-REVIEW.md`, `tests/security/test_anchor_batching_counterexample.py` | n/a (writer unchanged) | n/a (review evidence only) | n/a |
 | Whitepaper | A smart person who is not an expert | Why Exo exists and how it works, with no code. | `docs/WHITEPAPER.md`, `site/whitepaper` |
 | User guide | Someone using Exo | Tasks and commands. What to type, what you will see. | `docs/USER-GUIDE.md` |
 | Developer guide | Someone extending Exo | How to add a tool, plugin, seat, skill or command, test it and land it. | `docs/DEVELOPER-GUIDE.md` |
