@@ -288,6 +288,8 @@ version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new parts 
 
 The whitepaper pass is separate. It batches these per wave, and each batch is a new version (`docs/VERSIONING.md` §3).
 
+| D-013 bounded context memoization (#262, #259) | `src/exo/core/text_cache.py`, `tests/core/test_context_cache.py`, `DECISIONS.md` D-013 | n/a (no visible behavior change) | n/a (internal cache only) | n/a |
+
 ## Open gaps
 
 Technical docs filled so far: `docs/LEARNING.md` (D-012), `docs/SCHEDULE.md` (scheduled jobs), `docs/HANDOFF.md`

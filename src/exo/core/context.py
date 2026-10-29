@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
+from exo.core.text_cache import TextCache
 from exo.core.types import ContentPart, Message, Provider
 from exo.turn_settle import settle_for_turn, thread_tail
 
@@ -386,7 +387,7 @@ class TreeContext:
         self._import_open = asyncio.Event()
         self._import_open.set()
         self._tasks: dict[str, dict[str, asyncio.Task]] = {}  # session -> node id -> task
-        self._verbatim_cache: dict[str, str] = {}  # skipped node id -> its verbatim text
+        self._verbatim_cache = TextCache()  # evicted text is rebuilt from durable messages
         self.on_event: Callable[[Any, str], Awaitable[Any]] | None = None
         # Optional hooks (sync or async). on_pre_compress(session, messages) may return extra text that
         # is fed into the leaf summary prompt; on_compacted(session, node) fires after a node is summarized.
@@ -539,12 +540,14 @@ class TreeContext:
         """What a node puts in the view: its summary, or its messages verbatim when it was skipped."""
         if node.status == "done":
             return provenance.defuse_pins(node.text)  # a node stored before #302 may hold a live block (#322)
-        if node.id not in self._verbatim_cache:
+        text = self._verbatim_cache.get(node.id)
+        if text is None:
             if node.level and node.status == "skipped":  # a merge left as is: its two children, not the raw span
-                self._verbatim_cache[node.id] = "\n\n".join(self._body(c) for c in self._children(node))
+                text = "\n\n".join(self._body(c) for c in self._children(node))
             else:
-                self._verbatim_cache[node.id] = self._verbatim(node)
-        return self._verbatim_cache[node.id]
+                text = self._verbatim(node)
+            self._verbatim_cache.put(node.id, text)
+        return text
 
     def _children(self, node: SummaryNode) -> tuple[SummaryNode, SummaryNode]:
         by_key = {(n.level, n.index): n for n in self.store.summaries(node.session)}
