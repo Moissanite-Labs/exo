@@ -6303,3 +6303,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-038 mutable tilde names amendment — 2026-10-29 (#571)
+
+A variable-name word starting with an unquoted mutable `~-`/`~+` expansion is
+unreadable, as a name spliced from a variable is. Nameref targets retain their raw
+assignment value so this rule distinguishes unquoted expansion from quoted
+literal text. Default behavior asks; no process environment is consulted or
+mutated during classification. An inert Bash control confirms `OLDPWD=PATH;
+unset ~-` really unsets PATH. The 14,155 by 88 harvested policy differential
+against080e87ba reports no lowerings or errors.
