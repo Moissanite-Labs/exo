@@ -31,3 +31,10 @@ def test_plain_backtick_and_dollar_substitution_controls():
     policy = gate.normalize_policies({'gates': {'deny': ['delete']}})
     for command in ['echo `rm -rf /srv/data`', 'echo $(r\\\nm -rf /srv/data)']:
         assert gate.decide(gate.classify({'tool': 'bash', 'args': {'command': command}}), policy).outcome == 'deny'
+
+
+def test_legacy_opaque_denial_and_reservation_are_not_lost():
+    c = gate.classify({'tool': 'bash', 'args': {'command': 'echo `r\\\nm -rf /srv/data`'}})
+    assert gate.decide(c, gate.normalize_policies({'gates': {'deny': ['opaque_exec']}})).outcome == 'deny'
+    d = gate.decide(c, gate.normalize_policies({'gates': {'reserved': ['opaque_exec']}}))
+    assert ('opaque_exec', '') in d.reserved
