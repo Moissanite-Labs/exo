@@ -86,10 +86,14 @@ def _floor(c: gate.Classification, main: bool = False) -> str:
     a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
     ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any.
     A line with a quoted prefix assignment (#471) was read by main as its reading as before (``before``), so with
-    ``main`` that reading's is taken, and without it that reading and its split readings count too."""
+    ``main`` that reading's is taken, and without it that reading and its split readings count too. Where a ${..}
+    word or a $(( is also read as before #143 (``flat``, #158), main read the line that way, so with ``main`` that
+    reading's category is taken: a secret or store write only bash's reading of a word finds asks at the floor after
+    the hold, as one in any other reading does (``gate.no_grant``)."""
     if main:
         m = c.before if c.before is not None else c
-        rs = m.split_readings[:1] or [m]
+        r = (m.split_readings[:1] or [m])[0]
+        rs = [r.flat if r.flat is not None else r]
     else:
         rs = [c, *c.split_readings] + ([c.before, *c.before.split_readings] if c.before is not None else [])
     return next((r.category for r in rs if r.category in perm.FLOOR), "")

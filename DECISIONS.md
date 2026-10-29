@@ -3559,6 +3559,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   17,950 pairs tightened on 353 actions) and an aimed corpus that adds a combination corpus harvested from main's
   #591, #491 and hook tests, with this PR's word forms around them and inside `env -S` texts and sudo stdin
   (31,670 actions x 151 policies, 4,782,170 pairs, 993,319 tightened on 13,337 actions).
+  *Re-checked 2026-10-28 (on the merge of main 34b5b495, #546 for #471):* main reads a call with a quoted prefix
+  assignment both ways: after the prefix, and as before #471 with the quoted word the program
+  (`Classification.before`, made by `classify` around main's `env -S` loop `_split_reading`), and decide,
+  `readings`, `binds_exact`, `no_grant`, `call_approvers`, the store scan and the hook's bypass floor read both.
+  The layers nest: `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (this PR's two ways)
+  -> `_classify_read` (budgets, the #584 joined reading, the gh and #491 sudo floors, D-074's `ordinary`, #515's
+  camelCase floor). So `before` is main's own reading of the call, `env -S` readings and all, and every reading
+  either side makes, the reading as before #143 of each `env -S` reading of `before` included, is listed by
+  `readings`. `readings` walks the `ordinary`, `before` and `split_readings` of every reading (main walked the
+  call's); `binds_exact` keeps this PR's per-reading test and adds main's `unknown program` signal to it, and since
+  `before`'s readings are listed, a line binds wherever main's recursion into `before` bound it. The reading as
+  before #143 is now named on the reading it ends (`Classification.flat`, popped from `as_dict`), and the exo-gate
+  hook's bypass floor takes main's own reading first: behind a quoted prefix `before`, its first split reading,
+  and that reading's `flat` where its words were read both ways. Taking bash's reading there instead, as the
+  isolated head did, asked at the floor for 60 of 908 hook probe lines main held (a post that breaks the posting
+  rules beside a secret or store write only bash's reading of a word finds); they are held again, and the
+  secret still asks at the floor through `no_grant` once the post is fixed. Rows in
+  `tests/security/test_gate_parameter_expansion_quoted_prefix.py` pin the composition (a word behind, inside and
+  around a quoted prefix, in an `env -S` text and in a sudo shell's stdin; each line at least as with a plain
+  prefix and with the word quoted whole; a word in an arithmetic `$((` too), and
+  `plugins/exo-gate/tests/test_bypass.py` its bypass floor and hold. `scripts/gate_diff.py` of main 34b5b495
+  against this tree lowers nothing: the built-in corpus (1,210,616 pairs, no variants, 20,428 tightened on 433
+  actions) and an aimed corpus of the 4,190 composition lines and 1,200 arithmetic-word lines under 112 policies
+  (603,680 pairs, 29,281 tightened on 3,018 actions); the hook in bypass decides none of the 908 hook probe lines
+  lower than main 34b5b495 (158 stricter).
 
   *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
   command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the

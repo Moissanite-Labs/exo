@@ -163,6 +163,10 @@ class Classification:
     # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
     # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The same call read with the lexer as before #143 (_flat_words), where its reading of a ${..} word or a $(( may
+    # differ (_classify_reading): the reading that ends the ``also`` chain above, named here so the exo-gate hook's
+    # bypass floor takes main's own reading of the call first, as main does. None where it was not made.
+    flat: "Classification | None" = field(default=None, repr=False, compare=False)
     # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
     # as before, and keeps the stricter outcome. None on any other result.
     displaced: "Classification | None" = field(default=None, repr=False, compare=False)
@@ -193,6 +197,7 @@ class Classification:
         d.pop("own_signals")
         d.pop("before")
         d.pop("also")
+        d.pop("flat")
         if d["alt_targets"]:
             d["alt_targets"] = [redact_userinfo(t) for t in d["alt_targets"]]
         else:
@@ -8801,7 +8806,7 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
         last = c
         while last.also is not None:
             last = last.also
-        last.also = before
+        last.also = c.flat = before
     return c
 
 

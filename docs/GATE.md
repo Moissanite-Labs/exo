@@ -1825,7 +1825,10 @@ gate does not read:
   quoted word the program) with its first split reading, so `X='a b' env -S "gh auth token"; gh pr
   comment 5 --repo octo/demo --body "hello"` is held, as on main f28934a3, and `X='a b' env -S "gh
   auth token"` alone asks at the floor, where main read an unknown program and bypass allowed
-  it. A call with an `env -S` text costs up to four readings, each linear in the text, and a
+  it. Where a `${..}` word or a `$((` is read both ways (#158, "Shell parameter expansion"),
+  main's own reading is the reading as before #143 (`Classification.flat`) of that one, so a
+  secret only bash's reading of a word finds is held beside a post that breaks the rules, as on
+  main, and asks at the floor otherwise. A call with an `env -S` text costs up to four readings, each linear in the text, and a
   spelling main missed is read in full (a 40 KB `env --split="..."` text of 20,000 words takes
   3.7-4.4 s of CPU here, 0.06 s on main 58503282). A spelling main missed is not read with #634's
   leading words, so where env refuses its own text (`env --split "'X=a b' gh auth token \d"`, an
@@ -2779,7 +2782,22 @@ each:
 `env --split='echo ${v:-$(git push --force origin main)}'`, `env -S 'cat ${v:-<(rm -rf ./work)}'`
 and `sudo -i <<< 'echo ${v:-$(git push --force origin main)}'` deny under a deny on the command's
 category, and a store write in such a word is answered by the principal only. A text main does not
-read (`env -S 'sudo -s'` fed a stdin) still asks, as on main. So
+read (`env -S 'sudo -s'` fed a stdin) still asks, as on main. Since main 34b5b495 (#546, #471)
+they compose with the quoted prefix reading too: classify reads a call with a quoted prefix
+assignment both ways (after the prefix, and as before #471 with the quoted word the program,
+`Classification.before`), each of those with main's `env -S` readings, and each of those both
+ways for its words, so `before` is main's own reading of the call and the reading as before #143
+(`Classification.flat`, the end of its `also` chain) is there for each reading.
+`gate.readings` lists the `ordinary`, `before` and `split_readings` of every reading. So
+`X='a b' echo ${v:-$(rm -rf /srv/data)}`, `echo ${v:-$(X='a b' rm -rf /srv/data)}`,
+`X='a b' env -S "echo \${v:-\$(rm -rf /srv/data)}"` and the same word in a `sudo -s` shell's stdin
+behind or inside a quoted prefix deny under `deny: [delete]` (main 34b5b495 asks or allows: it
+reads no command in the word), a store write in such a word is answered by the principal only, and
+each line decides at least as it does with a plain prefix (`X=ab`) and with the word quoted whole.
+The hook's bypass floor takes main's own reading first, as main does: behind a quoted prefix
+`before`, its first split reading, and that reading's `flat` reading where the words were read
+both ways; so `echo ${v:-$(gh auth token)}; gh pr comment 5 --repo octo/demo --body "hello"` is
+held, as on main, and the secret asks at the floor once the post is fixed. So
 `echo ${v:-$(cat <<'EOF '`, a line `hi`, a line `EOF ` (with its space), a push and a line `)}` is
 denied under a push deny: the body ends on `EOF ` and the push after it runs, where before #333 the
 body ran on to the end of the text and hid it. A part bash's reading adds can lead the

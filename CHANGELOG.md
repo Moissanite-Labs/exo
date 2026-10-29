@@ -85,6 +85,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `sudo -i <<< 'echo ${v:-$(git push --force origin main)}'` deny under `categories: {force_push: deny}` (main
   f28934a3: ask), and a store write in such a word is answered by the principal only. `gate.readings` lists the
   `ordinary` and `split_readings` of every reading, and `binds_exact` binds a line with either in any reading.
+  On main 34b5b495 (#546, #471) the quoted prefix reading composes with both: classify reads a quoted prefix
+  assignment both ways (`Classification.before` is main's own reading, the quoted word the program), each with
+  main's `env -S` readings, and each of those both ways for its words, the reading as before #143 named
+  `Classification.flat`. So `X='a b' echo ${v:-$(rm -rf /srv/data)}` and the same word in an `env -S` text or a
+  `sudo -s` shell's stdin behind a quoted prefix deny under `deny: [delete]` (main 34b5b495: ask), and
+  `echo ${v:-$(X='a b' rm -rf /srv/data)}` denies under `categories: {delete: deny}` (main: allow); a store write
+  in such a word is answered by the principal only. The exo-gate hook's bypass floor takes main's own reading
+  first, `flat` where a word was read both ways, so a secret only bash's reading of a word finds is held beside
+  a post that breaks the posting rules, as on main (the isolated head asked at the floor there). A word in an
+  arithmetic `$((` behind or inside a quoted prefix is read the same way (`X='a b' echo $(( ${v:-$(rm -rf
+  /srv/data)} ))`). Against main 34b5b495, `scripts/gate_diff.py` lowers 0 of 1,210,616 pairs on the built-in
+  corpus without variants (20,428 tightened on 433 actions) and 0 of 603,680 pairs on an aimed corpus of 5,390
+  quoted-prefix and parameter-word lines under 112 policies (29,281 tightened on 3,018 actions), and the hook in
+  bypass decides none of 908 such lines lower (158 stricter). Tests:
+  `tests/security/test_gate_parameter_expansion_quoted_prefix.py`, `plugins/exo-gate/tests/test_bypass.py`.
   `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
