@@ -298,7 +298,10 @@ the "Layout" button under the thread list or `/layout inverse|classic`; the choi
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
+height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
+pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
+its bounded height when the chat column scrolls.
 
 ## Cost and jobs (D-032)
 
@@ -321,6 +324,12 @@ need the page token: `exo web` prints a link with `#token=...`; the page moves i
 tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
 routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider
 is ready, the Chat view shows one quiet line with a link to this tab.
+
+When the model list cannot be fetched the tab says why: a core that never answered, one that answered and
+refused this page, or one whose own call failed. The reply is still 200 with both lists present, plus
+`error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
+the "Try again" button appears only for the transport class, because a refusal would answer the same way.
+A failed retry keeps the last good list, so the default picker stays usable.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.

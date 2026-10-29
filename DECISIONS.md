@@ -207,6 +207,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
+- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
@@ -457,6 +458,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   provider time to first token is measured at the loop, not inside each provider.
 
 ## D-026 (2026-10-12) Peers and one ingress path
+- **Amendment 2026-10-28 (#638):** peer presence must be a JSON object with an integer pid; boolean,
+  floating-point and string pids are invalid. Invalid records are skipped and normal discovery prunes
+  them without blocking other peers. Unknown signed fields remain in the original verification document.
 - **Why:** A watched two Claude Code sessions avoid a file collision by messaging each other and asked for it in
   Exo, and for Hermes agents too (docs/PEERS.md).
 - **Decision:** anything outside the principal's keyboard goes through one path, `Ingress(source, sender, trust,
@@ -1307,6 +1311,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
   globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`
@@ -3822,6 +3827,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_loop_reading` to patch).
   *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
   no other change.
+- *Amendment 2026-10-28 (issue #857, a #479 follow-up):* the loop's first command counts too. For `while` and
+  `until` it is the condition's, which bash runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil
+  gates.yaml); do sleep 1; done` the `cp` runs in the original folder on the first pass and in the store from the
+  second (bash 5.2 writes the policy file; the same with `until ! cd`, backticks, `pushd`, a `< <(..)` on the `cd`
+  and a `cd` inside an `if` in the condition). `_loop_spans` took a loop only when its `cd` sat after the loop's
+  first command (`bisect_right`), so these six lines were allowed reads on main 1401ff81 under every policy, and
+  the exo-gate hook allowed them in every mode, `deny: [store_write]` included. It now takes the first command too
+  (`bisect_left`); a `for` or `select` header holds no `cd`, so only `while` and `until` change. The rows are
+  `store_write`, ask the principal alone and deny under `deny: [store_write]`, read as the #479 rows are. A
+  condition's `cd` into a descriptor folder names that folder when the loop holds no other store `cd`, so `while cd
+  /dev/fd < <(cp /tmp/evil 3); do :; done` is a `store_write` on `/dev/fd` that `deny: [target:/dev*]` denies; when
+  the body holds a `cd` of its own, the body's names the second pass, as on main, since that pass starts where the
+  last `cd` left it (reviews of #858: taking the condition's folder first dropped main's reading of `while cd
+  /dev/fd; do cp /tmp/evil 3; cd /proc/self/fd; done`, deny to ask under `deny: [target:/proc*]`). A
+  condition's `cd` into the store with nothing that writes, a condition's `cd` into a plain folder, and a closer's
+  `< <(..)` (bash runs it once, before the first pass) keep main's reading. Differential (main's `scripts/gate_diff.py`, main 938b027a
+  against this change): the built-in corpus with variants, the 4,804 condition lines below and 6,240 lines that
+  mix a condition `cd` and a body `cd` into the store, `/dev/fd`, `/proc/self/fd` or `/dev/fd/3` (`while`, `until`,
+  `while !`, `{ }` and `for`; `cd`, `builtin cd`, `cd -P`, `pushd`; `< <(..)`, `<<< "$(..)"` and `$( )`; `cp`,
+  `rm -rf` and `git push` bodies), under the 88 built-in policies and seven more that keep `/dev*`, `/proc*` and
+  `*store*` target rules apart, lower 0 of 10,616,630 pairs and tighten 282,981 on 3,337 actions. The first draft
+  of the descriptor rule, which took the condition's folder before the body's, lowered 4,992 pairs on 2,048 of the
+  mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
+  and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
+  `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 10 of its tests fail without the change).
+  *Revisit if:* the same as #479's.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -3981,6 +4012,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
+- *Amendment 2026-10-28 (desktop audit #53):* the bus channel skips encrypted envelopes sealed to another seat and unreadable encrypted bodies before session allocation or core ingress. The inbox cursor still advances; reader tools retain their placeholders. A core-call failure still retries the envelope.
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
   consolidation and `principal_said` checked the kind, not the author, so an agent-written "always force push to
   main" became a belief proposal that promotion rule 1 would accept. (b) Per-turn capture got bare role and content,
@@ -4485,7 +4517,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
-  the busy wire remains visible. This changes no command, telemetry, activity state or permission.
+  the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
+  and the log retains space to scroll independently. Narrow screens retain their responsive log height, and the
+  slash-command menu remains readable. This changes no command, telemetry, activity state or permission.
 - **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
   prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
   that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
@@ -5834,6 +5868,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
 
+## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
+- **Status:** Accepted, effective for the next release.
+- **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
+- **Why:** the route answered `"core unreachable (<ExceptionName>)"` for every failure, including a core that answered and refused the caller. That reads as a broken connection, so the page could only offer a retry that changes nothing, and an exception class name was the whole diagnosis. Issue #756 is the same defect on the chat side: guidance must follow the failure class, not the fact of a failure.
+- **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
+- **Rejected:** a 503 or 502 status for the models route. The page calls it on every load and treats a non-200 as "no models", which hides the reason; a 200 with an error field lets the caller decide. Also rejected: retrying inside the route. The route runs on the request, and a retry decision belongs to the person reading the sentence.
+- **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/COMMANDS.md` unchanged, `CHANGELOG.md`. No settings change, no new key handling.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).
 - **Decision:** the one dim guidance line reads the recorded model error text. An authentication or permission failure ("HTTP 401", "Incorrect API key", "invalid x-api-key", "authentication", "permission denied") may send the reader to the Providers page. A transport failure (`ReadError`, `ReadTimeout`, `ConnectError`, "stream ended without a response", network and unreachable wording) says the model could not be reached and offers no key advice. Text that reads as neither gets a general line pointing at `/trace`. No text at all (an older core, or a boolean flag) gets the general line too.
