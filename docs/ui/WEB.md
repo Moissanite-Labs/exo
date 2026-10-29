@@ -13,6 +13,21 @@ Navigation links support browser Back and Forward. The keyboard skip link moves 
 content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
 “Connected” describes the event connection, while the conversation reports its own work state.
 
+## Native display preferences
+
+An installed desktop host may inject `window.__exoDesktopPrefs` before scripts run. The shared web client
+validates its display choices and gives them priority over browser storage left behind on a reused loopback
+port. Browser-only sessions retain their current storage behavior. The host owns persistence and its seat/core
+scope; this bridge does not open a file or infer a seat from conversation data.
+
+Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scroll` fraction cross
+`window.webkit.messageHandlers.exoDesktop.postMessage`. Thread IDs accept letters, digits, underscores and
+hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
+No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
+Open request takes priority over the restored view/thread. A saved thread absent from the loaded list leaves
+the chooser open. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+saved-thread response from changing a newer selection, and unmount cancels restoration.
+
 ## Conversation drafts and unconfirmed sends (D-045)
 
 Each conversation keeps its own unsent text and selection while the page is open. Switching threads or

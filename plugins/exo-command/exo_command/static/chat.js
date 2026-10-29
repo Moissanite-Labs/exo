@@ -1,3 +1,4 @@
+import { desktopPreference, hasDesktopPreferences, saveDesktopPreferences } from "./desktop_prefs.js";
 // The chat view: sessions on the left, a terminal-like transcript in the middle with approval cards and a
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
@@ -23,13 +24,18 @@ function draft(id) {
 
 export function mount(root) {
   let mounted = true, navigation = 0, homeRevision = 0;
+  const savedThread = desktopPreference("thread"), savedScroll = desktopPreference("scroll");
+  let pendingReading = null, transcriptLoaded = false;
+  function saveReading() {
+    if (mounted && current && !loading && transcriptLoaded) saveDesktopPreferences({ thread: current, scroll: logEl.scrollHeight > logEl.clientHeight ? Math.min(1, Math.max(0, logEl.scrollTop / (logEl.scrollHeight - logEl.clientHeight))) : 0 });
+  }
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
-  let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
+  let layout = desktopPreference("layout") || getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
   const listEl = h("div", { class: "xc-sessions", id: "xc-conversation-list" });
   let threadQuery = "", threadFilter = "all";
@@ -84,7 +90,8 @@ export function mount(root) {
   const logEl = h("div", { class: "xc-log", id: "xc-transcript", role: "log", "aria-label": "Conversation messages", "aria-live": "polite", tabindex: "0" });
   const latestBtn = h("button", { class: "xc-btn xc-latest", type: "button", hidden: true, "aria-controls": "xc-transcript",
     onclick: () => { home(); logEl.focus(); } }, "Show latest messages");
-  logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); });
+  for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) logEl.addEventListener(kind, () => { pendingReading = null; }, { passive: true });
+  logEl.addEventListener("scroll", () => { ++homeRevision; updateLatest(); saveReading(); });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
@@ -158,7 +165,8 @@ export function mount(root) {
   }
   function switchLayout(v) {
     if (!LAYOUTS.includes(v)) return;
-    layout = v; setLayout(v); arrange(); drawLog();
+    pendingReading = null;
+    layout = v; setLayout(v); saveDesktopPreferences({ layout: v, scroll: null }); arrange(); drawLog();
   }
   arrange();
   const narrowThreads = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
@@ -598,8 +606,12 @@ export function mount(root) {
     return opened;
   }
 
-  async function open(id) {
+  async function open(id, restoreScroll = null) {
+    saveReading();
+    if (typeof restoreScroll !== "number") saveDesktopPreferences({ thread: id, scroll: null });
+    transcriptLoaded = false;
     saveDraft(); ++navigation; lastThread = id;
+    pendingReading = typeof restoreScroll === "number" ? { id, fraction: restoreScroll, navigation } : null;
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
@@ -611,6 +623,7 @@ export function mount(root) {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
+      transcriptLoaded = true;
       dropSteers(id, had, d.steers);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
@@ -626,6 +639,15 @@ export function mount(root) {
     const buffered = pending; pending = [];
     buffered.forEach(handle);
     syncApprovals();
+    restoreReading(id, generation);
+  }
+
+  function restoreReading(id, generation) {
+    if (!pendingReading || !transcriptLoaded || !mounted || current !== id || pendingReading.id !== id || pendingReading.navigation !== navigation || snapshotGeneration !== generation) return;
+    ++homeRevision;
+    logEl.scrollTop = pendingReading.fraction * Math.max(0, logEl.scrollHeight - logEl.clientHeight);
+    pendingReading = null;
+    updateLatest(); saveReading();
   }
 
   async function recover() {
@@ -638,6 +660,7 @@ export function mount(root) {
       if (asked > listShown) { listShown = asked; sessions = freshSessions; }
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
+        transcriptLoaded = true;
         dropSteers(id, had, d.steers);
         loadedSeq = Math.min(cutoff, d.seq || 0);
         busy = sessions.some((s) => s.id === id && s.status === "live");
@@ -647,9 +670,12 @@ export function mount(root) {
     } catch (e) { fail(e); }
     finally {
       if (id === current && generation === snapshotGeneration) {
+        const reading = hasDesktopPreferences() && !pendingReading && !nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight) ? logEl.scrollTop : null;
         loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
         const buffered = pending; pending = []; buffered.forEach(handle);
         syncApprovals(); loadContext();
+        if (reading !== null) { ++homeRevision; logEl.scrollTop = reading; updateLatest(); saveReading(); }
+        restoreReading(id, generation);
       }
     }
   }
@@ -906,12 +932,22 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { saveReading(); if (hasDesktopPreferences()) window.removeEventListener("pagehide", saveReading); if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
   restoreDraft();
-  refreshSessions().then(() => { if (mounted && !current && (asked || (!draft(null).text && !draft(null).pending && sessions.length))) open(asked || (sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id)); });
+  if (hasDesktopPreferences()) window.addEventListener("pagehide", saveReading);
+  const startingNavigation = navigation;
+  refreshSessions().then(() => {
+    if (!mounted || current || navigation !== startingNavigation) return;
+    if (asked) { open(asked); return; }
+    if (draft(null).text || draft(null).pending) return;
+    if (hasDesktopPreferences()) {
+      if (savedThread && sessions.some(s => s.id === savedThread)) open(savedThread, savedScroll);
+      else saveDesktopPreferences({ thread: null, scroll: null });
+    } else if (sessions.length) open(sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id);
+  });
   return off;
 }
 
