@@ -2965,12 +2965,14 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 A loop body runs again after its own `cd` (#479, #480): in `for i in 1 2; do cp /tmp/evil gates.yaml;
 cd ~/.exo/policies; done` the `cp` rewrites the policy file on the second pass. When a `for`, `select`, `while`
 or `until` body (a `coproc` one too), nested loops and the loop's condition included, holds a `cd` or `pushd`
-into the store or a descriptor folder after its first command, the call is read a second time with that folder
+into the store or a descriptor folder, the call is read a second time with that folder
 entered where the outermost such loop starts (named by the loop's first descriptor `cd`, if any), and the
 commands and substitutions of the loop on that reading are parts of a second reading beside the first
 (`gate.readings`). That reading leads when it is more severe, so the issue's rows are `store_write`: they ask,
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no
-line decides lower than it did. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
+line decides lower than it did. The loop's first command counts too (#857): for `while` and `until` it is the
+condition's, which runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1;
+done` the `cp` runs in the store from the second pass and the line is a `store_write`. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
 in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++))
 { ..; }`) and runs it once per pass in the same shell, so such a loop is read again as a `do ..; done` one is; a
 `{ ..; }` group that is no loop's body runs once and is not. A `for ((..))` header is found from its own `((..))`
