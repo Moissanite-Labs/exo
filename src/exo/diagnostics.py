@@ -85,7 +85,7 @@ def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool
     head = [f"running on: {eng.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
             f"by {served}); chain: {', '.join(r.ref for r in eng.router.chain('main')) or '-'}",
             f"harness {eng.findings.version}; {eng.findings.summary()}"]
-    open_rows = [r for r in eng.findings.list() if r["status"] in ("open", "reopened")][:5]
+    open_rows = [r for r in eng.findings.list() if r["status"] in ("open", "triaged", "reopened")][:5]
     if open_rows:
         head.append("open findings: " + ", ".join(f"{r['id']} {r['title'][:60]}" for r in open_rows))
     if not session:

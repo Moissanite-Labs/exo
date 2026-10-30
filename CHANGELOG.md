@@ -69,6 +69,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   bound). Test-only.
 
 ### Added
+
+- Findings can record owners, triaged/closed dispositions and transition history, with one durable local retest request per exact fix marker; automatic routed notifications remain open (refs #684).
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store

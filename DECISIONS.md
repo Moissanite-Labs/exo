@@ -472,6 +472,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** pricing (`cost_usd` stays null for models missing from the catalog) is a separate fix; a
   provider time to first token is measured at the loop, not inside each provider.
 
+
+- **Amendment 2026-10-29 (#684):** findings gain a data owner, triaged and explicitly closed dispositions,
+  transition timestamps/history, and an atomic local retest request when a caller marks a fix. Requests dedup
+  by finding and exact fix marker, preserve the first filing session for new rows, and acknowledgement means
+  receipt only. Fixed/verified/reopened and existing quiet verification remain. No external delivery or
+  automatic landed-commit verification is implied; routed seat notifications remain a follow-up. Commands,
+  legacy limits and the local queue contract are in `docs/TRACE.md`.
+
 ## D-026 (2026-10-12) Peers and one ingress path
 - **Amendment 2026-10-28 (#638):** peer presence must be a JSON object with an integer pid; boolean,
   floating-point and string pids are invalid. Invalid records are skipped and normal discovery prunes
