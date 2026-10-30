@@ -9,16 +9,23 @@ from pathlib import Path
 import pytest
 
 
-def _capped_parse(text):
+def _capped_parse(text, manifest_path=None):
     # Linux has a hard address-space limit. macOS rejects RLIMIT_AS; sample the
     # child's RSS and kill it above the cap. Neither path invokes a shell.
     code = """import json, sys
 try:
     from exo.gate import parse_yaml, PolicyError
+    from exo.core.plugins import PluginError, read_manifest
     try:
-        print(json.dumps(['value', parse_yaml(sys.stdin.read())]))
+        if len(sys.argv) > 1:
+            read_manifest(sys.argv[1])
+            print(json.dumps(['manifest_ok']))
+        else:
+            print(json.dumps(['value', parse_yaml(sys.stdin.read())]))
     except PolicyError:
         print(json.dumps(['policy_error']))
+    except PluginError as e:
+        print(json.dumps(['plugin_error', str(e)]))
 except MemoryError:
     sys.exit(3)
 """
@@ -26,7 +33,8 @@ except MemoryError:
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
 
-    proc = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    argv = [sys.executable, "-c", code] + ([str(manifest_path)] if manifest_path is not None else [])
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, preexec_fn=cap if sys.platform.startswith("linux") else None)
     try:
         proc.stdin.write(text)
@@ -59,6 +67,7 @@ def test_malformed_yaml_is_bounded_and_is_a_policy_error(text):
     ("x: [a, b]", {"x": ["a", "b"]}),
     ("x: {a: 1}", {"x": {"a": 1}}),
     ("x: {a: }", {"x": {"a": None}}),
+    ("x: {a: ], b: 1}", {"x": {"a": None, "], b": 1}}),
     ("x: [[], {a: [1, true]}, 'a,b']", {"x": [[], {"a": [1, True]}, "a,b"]}),
 ])
 def test_valid_flow_values_are_preserved(text, expected):
@@ -75,8 +84,6 @@ def test_seeded_flow_mutations_finish_within_caps():
 
 
 def test_malformed_plugin_manifest_is_a_plugin_error(tmp_path: Path):
-    from exo.core.plugins import PluginError, read_manifest
-
     (tmp_path / "plugin.yaml").write_text("name: sample\nx: [}")
-    with pytest.raises(PluginError, match="unclosed or mismatched flow collection"):
-        read_manifest(tmp_path)
+    result = _capped_parse("", tmp_path)
+    assert result[0] == "plugin_error" and "unclosed or mismatched flow collection" in result[1]

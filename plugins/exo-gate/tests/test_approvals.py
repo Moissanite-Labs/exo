@@ -1034,3 +1034,18 @@ def test_footer_exposures_limits_the_footer_to_public():
     assert "missing footer: > Automated." not in gate.decide(c, pol).violations
     c.exposure = "public"
     assert "missing footer: > Automated." in gate.decide(c, pol).violations
+
+
+@pytest.mark.parametrize("filename", ["gates.yaml", "budget.yaml", "approvals.yaml"])
+def test_map_value_starting_with_closer_keeps_existing_deny(keyed_store, filename):
+    store, key = keyed_store
+    policies = store / "policies"
+    gates = "deny:\n  - command: '^rm '\n"
+    if filename == "gates.yaml":
+        gates += "note: {x: ], y: 1}\n"
+    else:
+        (policies / filename).write_text("note: {x: ], y: 1}\n")
+    (policies / "gates.yaml").write_text(gates)
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "terminal", {"command": "rm -rf build"})
+    assert result and result["action"] == "block", result

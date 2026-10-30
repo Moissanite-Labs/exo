@@ -66,6 +66,9 @@ which 1d2f32ac asked for without a binding.
 
 Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
 still falls back to the defaults alone: `policy error, defaults used: <message>`.
+Malformed flow collections that used to hang, and JSON decoding, index or recursion errors in the YAML reader that
+used to cause an error and ask on every call, now use that same fallback. Reads can therefore be allowed by the
+defaults instead of asking, and configured rules are not applied until the file is corrected.
 
 ### A pattern that does not compile refuses the policy (#466)
 

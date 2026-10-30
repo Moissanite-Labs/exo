@@ -10409,7 +10409,7 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
             j = i + 1
             while j < len(s) and s[j] in " \t":
                 j += 1
-            if j < len(s) and s[j] in "},":
+            if j < len(s) and s[j] in "]},":
                 v, i = None, j
             else:
                 v, i = _flow(s, i + 1)
@@ -10459,7 +10459,7 @@ def parse_yaml(text: str) -> Any:
     try:
         val, i = _block(lines, 0, lines[0][0], raw)
     except (json.JSONDecodeError, IndexError, RecursionError) as e:
-        raise PolicyError("malformed YAML") from e
+        raise PolicyError(f"malformed YAML: {e}") from e
     if i != len(lines):
         raise PolicyError(f"unexpected indentation at line {lines[i][2] + 1}: {lines[i][1]!r}")
     return val

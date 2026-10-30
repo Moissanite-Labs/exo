@@ -8,6 +8,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
+  error fallback. Those formerly failing files use defaults alone until corrected, which can allow reads that formerly
+  asked on the error path (#981).
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
