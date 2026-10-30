@@ -153,9 +153,10 @@ def page():
 def open_chat(srv, b, layout):
     b.goto(srv.url())
     b.eval(f'localStorage.setItem("xc-layout", "{layout}")')
-    b.goto(srv.url())
+    b.reload()   # a second goto() would keep the document and remount the view later (see Browser.reload)
     b.wait("document.querySelectorAll('.xc-msg').length > 20")
     b.wait("(()=>{const l=document.querySelector('.xc-log');return l.scrollHeight > l.clientHeight})()")
+    b.settle()   # the stream's start-up catch-up has redrawn the transcript, so the geometry below is final
     b.eval("new Promise((r) => setTimeout(r, 700))")   # the fade-in and the frame callback have run
     return b.eval(GEOMETRY)
 
@@ -258,7 +259,7 @@ def test_status_instruments_and_notices_fit_after_window_and_pane_resize(page, l
         cell('findings', '2', 'xc-opt'), cell('cost', 'unknown'), wire, notice);
     })()''')
     for width, pane in [(2000, None), (1460, None), (1460, 320), (900, None), (360, None), (2000, None)]:
-        b.call("Emulation.setDeviceMetricsOverride", width=width, height=1000, deviceScaleFactor=1, mobile=False)
+        b.resize(width, 1000)
         b.eval(f"document.querySelector('.xc-chat').style.gridTemplateColumns = {json.dumps('224px 320px 340px' if pane else '')}")
         got = b.eval('''(() => {
           const strip = document.querySelector('.xc-strip'), box = strip.getBoundingClientRect();

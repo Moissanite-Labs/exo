@@ -429,6 +429,12 @@ export function mount(root) {
     home();
     scheduleHome();   // finish initial positioning only if no newer reading, layout or navigation intent won
   }
+  // A recovered snapshot redraws every item of the open conversation. A reader at the newest messages stays there;
+  // one who scrolled away keeps their place, as with new output (keepReading).
+  function redrawLog() {
+    if (!logEl.childElementCount || nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) { drawLog(); return; }
+    keepReading(() => { logEl.replaceChildren(...ordered(items, layout).map(itemEl)); drawHero(); }, layout === "inverse");
+  }
 
   function itemEl(it) {
     let el;
@@ -710,12 +716,11 @@ export function mount(root) {
     }
     finally {
       if (id === current && generation === snapshotGeneration) {
-        const reading = hasDesktopPreferences() && !pendingReading && !nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight) ? logEl.scrollTop : null;
-        loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
+        loading = false; drawSessions(); redrawLog(); drawStatus(); drawSide();
         const buffered = pending; pending = []; buffered.forEach(handle);
         syncApprovals(); loadContext();
-        if (reading !== null) { ++homeRevision; logEl.scrollTop = reading; updateLatest(); saveReading(); }
         restoreReading(id, generation);
+        saveReading();   // the host stores the place redrawLog kept or restoreReading set
         finishInitialSelection(listReady);
         recoverIfNeeded();
       }
