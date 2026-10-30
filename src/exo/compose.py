@@ -15,6 +15,7 @@ from pathlib import Path
 from exo import peers
 from exo.config import Config, ConfigError
 from exo.core.engine import SYSTEM_PROMPT
+from exo.core import group_host as _group_host
 from exo.application import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.seats import SeatError
@@ -37,10 +38,18 @@ def fitting_peers_dir(env: Mapping[str, str] | None = None) -> Path | None:
     return short
 
 
-def create(seat: str | None = None) -> CoreEngine:
+def create(seat: str | None = None, *,
+           group_host: _group_host.GroupHost | None = None) -> CoreEngine:
     """Factory for ``exo serve`` (``--engine exo.compose:create``): reads ``$EXO_HOME/config.json``.
 
-    ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
+    ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``.
+
+    ``group_host`` is a trusted Python caller's explicit opt-in (docs/SWARM-COMPOSITION.md): it is never
+    read from config, a protocol command or a model tool. When given, its owner must equal the engine's
+    agent (the seat name, or "default" without a seat) and its GroupStore must wrap the composed engine's
+    own session store; both are validated BEFORE the engine is constructed, so a mismatch raises
+    ``HostError`` and nothing is created. A valid host is bound as ``eng._group_host`` and awaited in
+    ``CoreEngine.close`` ahead of the existing teardown."""
     cfg = Config.load()
     from exo.work_checkpoint import CheckpointConfig
     checkpoint_config = CheckpointConfig(cfg.get("work_checkpoint"))
@@ -66,6 +75,8 @@ def create(seat: str | None = None) -> CoreEngine:
         raise ValueError("model-spend policy principal does not match the configured principal")
     if st and st.principal and not os.environ.get("EXO_PRINCIPAL"):
         os.environ["EXO_PRINCIPAL"] = st.principal
+    if group_host is not None:  # validate the injected trusted host before any engine exists to clean up
+        _validate_group_host(group_host, cfg.home, st.name if st else "default")
     plugin_config = {name: dict(values) for name, values in (cfg.data.get("plugin_config") or {}).items()}
     if st is not None:
         memory = plugin_config.setdefault("exo-memory", {})
@@ -115,6 +126,8 @@ def create(seat: str | None = None) -> CoreEngine:
                       attach_scheduler=Scheduler,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
+    if group_host is not None:
+        eng._group_host = group_host  # validated above; closed first in CoreEngine.close()
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
     if eng.peers is not None:
         eng.peers.autostart = True
@@ -128,3 +141,20 @@ def create(seat: str | None = None) -> CoreEngine:
         from exo import learn
         learn.attach(eng)
     return eng
+
+
+def _validate_group_host(host: _group_host.GroupHost, home: Path, agent: str) -> None:
+    """Fail closed unless ``host`` belongs to this engine's agent and its store wraps this home's
+    session database. Runs before any engine is constructed, so a mismatch creates nothing."""
+    GroupHost, HostError = _group_host.GroupHost, _group_host.HostError
+    if not isinstance(host, GroupHost):
+        raise HostError("group_host must be a GroupHost built by the trusted caller")
+    if host.owner != agent:
+        raise HostError(f"group host owner {host.owner!r} is not this engine's agent {agent!r}")
+    groups = host._groups  # the injected GroupStore; the host exposes no public store accessor
+    store = getattr(groups, "sessions", None)
+    if store is None:
+        raise HostError("group host store does not wrap a session store")
+    expected = str(Path(home) / "sessions.sqlite")
+    if getattr(store, "path", None) != expected:
+        raise HostError(f"group host store {getattr(store, 'path', None)!r} is not {expected!r}")
