@@ -29,6 +29,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
     (`test_loaded_search_filters_...` could count the start-up snapshot read as the filter's).
   - `test_expanded_status_keeps_composer_and_transcript_reachable` read the layout before the page closed the
     conversation list for a narrow window, one frame after the resize. It now waits for that frame.
+  - `test_appearance_controls_persist_choice_and_do_not_change_route_or_draft` reloaded with `location.reload()` and
+    then waited for a condition the old page still met. Its next read could run on the new page before the app had
+    built the Appearance control (`Cannot read properties of null`). It now reloads with the browser helper, which
+    returns once the old page is gone.
   - A test browser's start-up commands wait up to 90 s for Chrome's first tab, instead of 30 s.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
