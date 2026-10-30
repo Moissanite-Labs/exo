@@ -16,6 +16,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
   web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
   names the Chrome binary and version it drove.
+- Web chat keeps a reader's place when the event stream catches up. On load and after a reconnect, the page reads the
+  conversation again and redraws it. That redraw moved a reader who had scrolled back to the newest message. It now
+  keeps their place, as new output does, and a reader at the newest message stays there.
+- Tests: more of the timing and browser tests that failed on GitHub's hosted runners, unrelated to the PRs they ran
+  on, no longer fail on a slow runner (`docs/DEVELOPER-GUIDE.md` §7 "Timing and browser tests on hosted runners").
+  - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) built the tool registry
+    inside its timed call. The first build imports the built-in tools, and beside 8 to 10 busy loops that took the
+    call past its 3 s wall-clock bound. The registry is now built before the clock starts. The 3 s bound is
+    unchanged, and so is the 0.5 s bound on the event loop's largest gap between ticks (#907, the entry above).
+  - The chat tests that set a layout loaded the page a second time with `goto()`. That only changed the part after
+    `#`, so the old view answered until the app replaced it, and a test could run against a view about to vanish
+    (`test_show_latest_...`, `test_appending_inside_a_tall_stream_...`, `test_pending_home_frame_...`). They now
+    reload the page, and wait for start-up to finish before they read a position or count requests
+    (`test_loaded_search_filters_...` could count the start-up snapshot read as the filter's).
+  - `test_expanded_status_keeps_composer_and_transcript_reachable` read the layout before the page closed the
+    conversation list for a narrow window, one frame after the resize. It now waits for that frame.
+  - `test_appearance_controls_persist_choice_and_do_not_change_route_or_draft` reloaded with `location.reload()` and
+    then waited for a condition the old page still met. Its next read could run on the new page before the app had
+    built the Appearance control (`Cannot read properties of null`). It now reloads with the browser helper, which
+    returns once the old page is gone.
+  - A test browser's start-up commands wait up to 90 s for Chrome's first tab, instead of 30 s.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
