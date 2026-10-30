@@ -148,6 +148,41 @@ def test_a_stream_catch_up_keeps_the_reader_where_they_were(layout):
         srv.close()
 
 
+# The first message at least partly in view, and how far its top sits below the top of the transcript's box.
+READING = ("(()=>{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+           "const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.getBoundingClientRect().bottom>top);"
+           "return [m.textContent,m.getBoundingClientRect().top-top];})()")
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_a_catch_up_with_new_messages_keeps_the_message_being_read_in_place(layout):
+    """A catch-up can bring messages that came while the stream was down. The redraw adds them on the newest side
+    (above the reader in the inverse layout, below in classic), and the message the reader was looking at stays
+    where it was on screen."""
+    src = WorkspaceSource(); srv = Served(src)
+    try:
+        with Browser(width=1200, height=900) as b:
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
+            b.wait("document.querySelectorAll('.xc-msg').length>30")
+            b.settle()
+            b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop="
+                   + ('400' if layout == 'inverse' else 'l.scrollHeight-l.clientHeight-400') + ";})()")
+            b.wait("!document.querySelector('.xc-latest').hidden")
+            count = b.eval("document.querySelectorAll('.xc-log .xc-msg').length")
+            text, offset = b.eval(READING)
+            src.pairs += 3   # three exchanges arrive while the stream is down
+            b.eval("import('/static/bus.js').then(bus=>{bus.restart();return true;})")
+            b.settle(syncs=2)
+            assert b.eval("document.querySelectorAll('.xc-log .xc-msg').length") == count + 6
+            moved = b.eval(f"(()=>{{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+                           f"const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.textContent==={json.dumps(text)});"
+                           f"return m.getBoundingClientRect().top-top-({offset});}})()")
+            assert abs(moved) < 2
+            assert not b.eval("document.querySelector('.xc-latest').hidden")
+    finally:
+        srv.close()
+
+
 def test_empty_conversation_asks_for_outcome_and_keeps_route_visible():
     src = WorkspaceSource(pairs=0); srv = Served(src)
     try:
