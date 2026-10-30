@@ -24,6 +24,16 @@ A web UI change in `plugins/exo-command` is shared code even when the desktop pi
 
 The code change is reviewed once upstream. The downstream reviewer checks the combined tree, conflict resolutions and desktop integration. Upstream approval does not prove that native behavior or downstream integration works.
 
+## GitHub collaboration tools (proposed guidance)
+
+For related Exo changes, prefer focused, same-repository [native stacked pull requests](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests) when the dependency chain and its owners make a stack useful. Inventory each existing PR, its author, head, base, review and checks before considering conversion; GitHub may offer a conversion banner for a qualifying chain. A stack does not replace the exact-head independent review or required checks for any layer. Preserve author-owned branches and coordinate before rebasing, retargeting or pushing. Cross-fork stacks are not supported.
+
+The separate `gh stack` extension can rebase and push multiple layers; check local availability and the [management guide](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests) first. Retained GitHub approvals do not by themselves establish current-head review. Verify signatures when required. A selected stack merge can land lower layers too, and partial failures can leave some merged; inspect each outcome before retrying. Follow the applicable merge rules for every layer. No stack conversion, push or merge is authorized merely by this guidance.
+
+For substantial work, keep the plan, acceptance criteria, owner, dependencies, verification and PR links with the issue. GitHub's [issue artifacts](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/using-artifacts-with-issues) are in public preview; `gh issue artifact` requires CLI 2.103.0 or later. Record the artifact URL and version, or link an appropriate plan when the feature is unavailable. Public-issue artifacts are public. Deleting an artifact permanently removes its history; prefer edits or restores.
+
+For visual evidence, GitHub CLI 2.99.0 or later supports repeatable `--attach` on issue and PR writes on GitHub.com; check the [media documentation](https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/) for permissions and limits. Review and redact the file, include descriptive image alt text, and follow existing posting authorization. Local version support does not establish account access.
+
 ## Desktop syncs
 
 A sync PR records the pinned Exo main commit, the desktop main commit it starts from, carried alpha patches, conflict resolutions and verification results. It brings a batch of merged upstream commits into the fork with Git merge history intact. Do not replace the fork tree wholesale or silently drop native files.

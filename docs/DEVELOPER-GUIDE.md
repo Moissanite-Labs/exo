@@ -710,7 +710,7 @@ example with `git filter-repo`), then publish.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.
 
-**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries and verification.
+**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries, verification, and proposed guidance on GitHub stacks, issue plans and media evidence.
 
 **Branch and merge.**
 
