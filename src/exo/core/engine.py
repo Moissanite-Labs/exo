@@ -154,6 +154,7 @@ class CoreRuntime:
         self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
         self.log_view = agentlog.AgentLogView(self.store, self.agent)
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
+        self._group_host: Any = None  # trusted host bound only by compose.create(..., group_host=...); close() awaits it first
         principal_spend = (models or {}).get("spend")
         active_principal = (seat.principal if seat else None) or os.environ.get("EXO_PRINCIPAL")
         if seat and seat.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", seat.principal):
@@ -337,6 +338,9 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        host = self._group_host
+        if host is not None:  # first: a bound trusted host stops before any owner resource is released
+            await host.aclose()  # a failure or caller cancellation propagates; everything below stays available
         self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
