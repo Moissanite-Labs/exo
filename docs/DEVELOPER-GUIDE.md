@@ -650,6 +650,8 @@ these tests so that only the defect they guard against can fail them:
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
+    `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
+    and the next read then lands on the new one before its scripts have run.
   - `resize(width, height)` returns after the page has handled the new size. Layout that a media query's change
     event sets comes one frame after the resize.
   - `settle()` waits until the event stream has caught up and every request the page made is answered. Call it

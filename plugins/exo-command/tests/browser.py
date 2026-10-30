@@ -194,7 +194,10 @@ class Browser:
 
         The page is usable before that. But each catch-up makes the chat view fetch its snapshot again and redraw
         the transcript, so a test that reads a position, an element or a request count right after the first
-        messages appear can read it from the drawing a moment later replaces."""
+        messages appear can read it from the drawing a moment later replaces.
+
+        A request counts as answered once the page reads its body (json, text, arrayBuffer or blob). A request
+        whose body the page never reads keeps the count above zero, and settle() then times out."""
         self.wait("import('/static/bus.js').then(bus => { if (!window.__exoSyncs) { window.__exoSyncs = { n: 0 };"
                   " bus.onState(state => { window.__exoSyncs.n = state.synced; }); } return true; })", timeout)
         quiet = f"window.__exoSyncs.n >= {syncs} && window.__exoRequests === 0"
