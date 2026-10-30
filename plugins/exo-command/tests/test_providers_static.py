@@ -122,12 +122,13 @@ const context = { pill: (text, cls) => [text, cls] };
 vm.createContext(context);
 vm.runInContext(func + "; this.chip = chip;", context);
 const row = { status: "no base_url", needs: "key", key: "found", ready: false, verified: false };
-process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, status: "key found", ready: true })]));
+process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, status: "key found", ready: true }),
+  context.chip({ ...row, status: "configured", needs: "server", ready: true })]));
 '''
     proc = subprocess.run([shutil.which("node"), "-e", script, str(STATIC / "providers.js")],
                           capture_output=True, text=True, timeout=10)
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"]]
+    assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"], ["configured · untested", "known"]]
 
 
 def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps():

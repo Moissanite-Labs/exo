@@ -96,6 +96,31 @@ def test_local_endpoints_and_protocol_auth_are_explicit():
     assert spec["transport"] == "anthropic" and spec["key_env"].endswith("_API_KEY")
 
 
+def test_keyless_custom_endpoint_is_configured_but_not_verified(tmp_path):
+    name, spec = ps.custom_provider("local", "http://127.0.0.1:11434/v1", "openai", "none", "llama")
+    router = Router(catalog={"providers": {name: spec}, "roles": {"main": [name + ":llama"]}},
+                    env={}, key_sources=False)
+    row = ps.rows(router, home=tmp_path, probe_local=False)[0]
+    assert row["ready"] is True and row["status"] == "configured" and row["verified"] is False
+    ps._save_state(tmp_path, name, {"ok": False, "error_class": "network",
+                                     "configuration": ps._custom_status_id(spec)})
+    failed = ps.rows(router, home=tmp_path, probe_local=False)[0]
+    assert failed["ready"] is True and failed["status"] == "failed: network" and not failed["verified"]
+
+
+def test_custom_probe_result_does_not_follow_configuration_edit(tmp_path):
+    name, spec = ps.custom_provider("local", "http://127.0.0.1:11434/v1", "openai", "none", "llama")
+    def router_for(config):
+        return Router(catalog={"providers": {name: config}, "roles": {}}, env={}, key_sources=False)
+    router = router_for(spec)
+    result = ps.test_provider(name, router=router, home=tmp_path, http=lambda *args: (200, {"data": []}))
+    assert result["ok"] and ps.rows(router, home=tmp_path, probe_local=False)[0]["verified"]
+    for field, value in (("base_url", "http://127.0.0.1:9999/v1"), ("setup_model", "other")):
+        changed = router_for({**spec, field: value})
+        row = ps.rows(changed, home=tmp_path, probe_local=False)[0]
+        assert row["status"] == "configured" and not row["verified"] and row["last_test"] is None
+
+
 def test_refusal_or_manual_name_collision_does_not_store_key(tmp_path):
     src = Source()
     src.refuse = True

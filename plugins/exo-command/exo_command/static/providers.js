@@ -16,6 +16,7 @@ function chip(r) {
   if (r.verified) return pill("verified" + (lt.latency_ms != null ? " · " + Math.round(lt.latency_ms) + " ms" : ""), "ok");
   if (st.startsWith("failed")) return pill(st, "fail");
   if (st === "no base_url") return pill(st, "off");  // nothing to call: the router skips it even with a key
+  if (st === "configured") return pill("configured · untested", "known");
   if (r.needs === "key") return pill(r.key === "found" ? "key found" : "no key", r.key === "found" ? "known" : "off");
   if (r.needs === "cli") return pill(r.ready ? "cli installed" : "cli not installed", r.ready ? "known" : "off");
   return pill(r.local ? (r.reachable ? "local · running" : "local · not running") : st, r.reachable ? "ok" : "off");

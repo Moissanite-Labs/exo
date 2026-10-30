@@ -66,8 +66,11 @@ def test_custom_provider_form_persists_and_handles_errors(monkeypatch, tmp_path,
             browser.eval("[...document.querySelectorAll('button')].find(b=>b.textContent==='Edit demo').click()")
             assert browser.eval("document.querySelector('[aria-label=\"Model ID\"]').value") == "model-one"
             browser.eval("document.querySelector('[aria-label=\"Model ID\"]').value='model-two'")
+            browser.eval("document.querySelector('[aria-label=\"Authentication\"]').value='none'")
             browser.eval("document.querySelector('.xc-custom-form').requestSubmit()")
             browser.wait("document.body.textContent.includes('model-two')")
             assert Config.load(home).get("models.providers.custom-demo.setup_model") == "model-two"
+            browser.reload()
+            browser.wait("[...document.querySelectorAll('.xc-prow')].some(r=>r.textContent.includes('custom-demo') && r.textContent.includes('configured · untested'))")
     finally:
         srv.close()
