@@ -6268,6 +6268,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
   - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
 
+- **Amendment 2026-10-29 (#265):** CI keeps a 14-day JUnit artifact per OS/Python cell and prints its 25 slowest tests. This supplies observations before changing test selection, extras or job topology; duplicate plugin execution remains pending measured comparison.
+
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
 - **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.

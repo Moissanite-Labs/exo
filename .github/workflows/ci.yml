@@ -50,7 +50,7 @@ jobs:
       - name: Root suite
         run: |
           ulimit -n 4096
-          uv run pytest -q
+          uv run pytest -q --durations=25 --junitxml=test-results/root.xml
       # Each plugin is its own suite with its own conftest, so each runs from its own folder.
       - name: Plugin suites
         shell: bash
@@ -61,10 +61,18 @@ jobs:
           for d in plugins/*/; do
             if [ -d "$d/tests" ]; then
               echo "::group::$d"
-              (cd "$d" && uv run --project ../.. pytest -q) || status=1
+              (cd "$d" && uv run --project ../.. pytest -q --durations=25 --junitxml="$GITHUB_WORKSPACE/test-results/${d#plugins/}plugin.xml") || status=1
               echo "::endgroup::"
             fi
           done
           exit $status
       - name: Plugins collected together
-        run: uv run pytest plugins -q
+        run: uv run pytest plugins -q --durations=25 --junitxml=test-results/plugins-combined.xml
+      - name: Retain test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ matrix.os }}-py${{ matrix.python }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
