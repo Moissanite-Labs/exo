@@ -50,6 +50,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-016 Agent wire, SYM-2P | `docs/AGENT-WIRE.md` | n/a | §9 "Work with subagents" (the wire, `exo wire`) | WP §16.1 |
 | PR #222 SYM-2P grammar patterns end in `\Z`, not `$`, so an id, ref, hash or timestamp with a trailing newline is refused, in `exo.protocols.sym2p` and the `sym-protocol` skill's validator (D-016) | `docs/AGENT-WIRE.md` §1.1 "How current Exo's copy is", `skills/sym-protocol/SKILL.md`, `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | §5 "Subagents" | §5 (`[models] tier`), §9 "Work with subagents" | WP §8, §13.2, §16.1 |
+| Responses tool continuation repair (D-034 amendment, #993) | `docs/CHATGPT-PROVIDER.md` “Tool continuation and refused requests”, `DECISIONS.md` D-034, `CHANGELOG.md` | n/a (no new setup step) | n/a | n/a |
 | D-018 Provider agnostic, user-chosen models. First-party DeepSeek uses discovered models and tool-history reasoning replay | `docs/PROVIDERS.md` "First-party DeepSeek API" | §1, §3 (`/model`), first-party DeepSeek setup | §5, DeepSeek transport fixtures | WP §13 |
 | D-034 amendment: ChatGPT subscription and direct Meta API providers; native macOS storage for large OAuth bundles and safe callback failures | `docs/CHATGPT-PROVIDER.md`, `docs/PROVIDERS.md` | §1 provider setup | §5 provider credentials | MISSING (next batch) |
 | D-019 Jev default decision model | `docs/PROVIDERS.md` "Providers" | n/a | n/a | WP §14.5 |

@@ -10,6 +10,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
+  missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
+  no longer imply a plan usage limit; provider response text remains private.
 - An identified turn now waits once per thread/tree for overflowing memory upkeep, rather than adding the full summary-settle delay before every model round. Ready summaries and the existing context fallback remain available. This addresses the repeated-wait part of #832.
 - `bash` rejects unknown arguments before execution, so a misspelled `run_in_background` cannot silently run a command in the foreground. Use `background: true` to start a job.
 - Explicit core shutdown now interrupts and drains runtime-owned turns before closing their store. Accepted steers and queued input survive, while new work is refused. An extension that ignores cancellation reports incomplete shutdown instead of writing through a closed store (#873).
