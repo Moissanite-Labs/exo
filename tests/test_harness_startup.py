@@ -1,6 +1,8 @@
 """Failed composition releases resource ownership without running a nested event loop."""
 import asyncio
+import shutil
 import sqlite3
+import tempfile
 
 import pytest
 
@@ -9,6 +11,16 @@ from exo.application import CoreEngine
 from exo.config import Config
 from exo.core import agentlog
 from exo.core.engine import CoreRuntime
+
+
+@pytest.fixture
+def short_peers_dir(monkeypatch):
+    """A started engine binds a Unix socket in the peers folder, and its path must stay under 104 bytes. The suite
+    puts that folder in tmp_path, which on macOS is already about 100 bytes long."""
+    peers = tempfile.mkdtemp(prefix="exop", dir="/tmp")
+    monkeypatch.setenv("EXO_PEERS_DIR", peers)
+    yield peers
+    shutil.rmtree(peers, ignore_errors=True)
 
 
 def setup(tmp_path, monkeypatch, **settings):
@@ -123,7 +135,7 @@ def test_failure_after_writer_claim_releases_lock_and_all_resources(tmp_path, mo
         engine.scheduler.db.execute("SELECT 1")
 
 
-def test_startup_abort_refuses_a_started_engine(tmp_path, monkeypatch):
+def test_startup_abort_refuses_a_started_engine(tmp_path, monkeypatch, short_peers_dir):
     _, marker = setup(tmp_path, monkeypatch)
 
     async def run():
