@@ -296,7 +296,9 @@ not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
-`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`). A call whose arguments did not parse as
+a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
+did not parse").
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
@@ -636,6 +638,37 @@ A newer push to a pull request cancels the pull request's older `ci` and `gate p
 group per pull request, #907); each push to main keeps its own run.
 The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
 The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
+
+**Timing and browser tests on hosted runners.** The hosted runners, the macOS ones most of all, are slow and
+shared. A test that passes on your machine can fail there for reasons that have nothing to do with the code. Write
+these tests so that only the defect they guard against can fail them:
+
+- A loaded runner can keep a process waiting for a CPU for half a second or more. Keep a wall-clock bound well
+  above what the code needs, and keep the test's own setup out of the timed part.
+  `tests/core/tools/test_search_worker.py` bounds the whole call at 3 s for a 1 s search limit. It builds the tool
+  registry before it starts the clock: the first build imports the built-in tools, and inside the timed part it took
+  the call past 3 s beside 8 to 10 busy loops. The test also bounds the event loop's largest gap between 10 ms ticks
+  at 0.5 s, half what a search holding the loop would cost (#907). That bound is a compromise between catching the
+  defect and allowing for a runner's stalls, not a bound well above them: one macOS CI run measured a 0.5625 s gap.
+  A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
+- In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
+  node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
+    changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
+    `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
+    and the next read then lands on the new one before its scripts have run.
+  - `resize(width, height)` returns after the page has handled the new size. Layout that a media query's change
+    event sets comes one frame after the resize.
+  - `settle()` waits until the event stream has caught up and every request the page made is answered. Call it
+    before reading a scroll position, an element or a request count that start-up could still change: each
+    catch-up redraws the transcript.
+- A longer timeout is fine where a test waits for a condition. A bound the test asserts stays as it is unless it was
+  wrong for what the test checks.
+- Before you change what a test measures, run the old and the new test against stand-ins for the defect it guards
+  against (for example a wrapper that blocks or works on the event loop). The new one must fail every stand-in the
+  old one failed.
+- Reproduce on Linux under load: run the test in a loop beside a few busy-loop processes, both from the plugin
+  folder and with `pytest plugins`, as CI runs them.
 
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve

@@ -151,6 +151,16 @@ validation, including foreground/background bash and delegated or scheduled
 turns. Required mode refuses missing executors and unsupported MCP startup.
 The immutable request and trusted host-code boundary are in `docs/EXECUTORS.md`.
 
+## Arguments that did not parse (D-041)
+
+A model can send tool arguments that are not a JSON object: JSON cut short at `max_tokens`, a list, a bare string,
+or text in single quotes. The transport keeps the call and marks its arguments as `BadArguments`, an empty dict that
+carries the reason. The registry answers the call with an error result, such as `Invalid arguments for read_file:
+the arguments are not valid JSON (...)`. It runs neither the pre-tool hooks nor the tool, so no approval card asks
+about a call that cannot run. The model reads the error and can call again. Before exo-desktop #52 such a call ran
+with `{}`, so a tool with nothing required did something the model never asked for. Empty arguments still mean no
+arguments.
+
 ## Result cap (D-041)
 
 Every tool result is cut at 100,000 characters (`MAX_RESULT_CHARS`) with a `[truncated N chars]` note. This now holds
