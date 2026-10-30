@@ -27,7 +27,9 @@ def test_expanded_status_keeps_composer_and_transcript_reachable(page, layout, t
                                      "ts": "2026-10-28T06:00:00Z"})
     b.wait("document.querySelector('.xc-flash')?.textContent.includes('unbroken')")
     for width, height, pane in [(1460, 500, True), (360, 740, False), (1460, 900, True)]:
-        b.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+        # Wait for the page to adapt: below 760 px it closes the conversation list on the media query's change
+        # event, one frame later, and that moves the transcript up by the list's height.
+        b.resize(width, height)
         b.eval("document.querySelector('.xc-chat').style.gridTemplateColumns = " +
                json.dumps("224px 320px 340px" if pane else ""))
         got = b.eval('''(() => {
@@ -71,7 +73,7 @@ def test_mobile_transcript_keeps_height_with_normal_status(page, layout):
     srv, b = page
     open_chat(srv, b, layout)
     for width, height in [(360, 740), (390, 844), (700, 900)]:
-        b.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False)
+        b.resize(width, height)
         log_height = b.eval("document.querySelector('.xc-log').clientHeight")
         assert log_height >= height * 0.6, (width, height, log_height)
 
@@ -81,7 +83,7 @@ def test_mobile_transcript_keeps_height_with_normal_status(page, layout):
 def test_short_window_keeps_slash_menu_visible(page, layout):
     srv, b = page
     open_chat(srv, b, layout)
-    b.call("Emulation.setDeviceMetricsOverride", width=1460, height=500, deviceScaleFactor=1, mobile=False)
+    b.resize(1460, 500)
     b.eval("document.querySelector('.xc-chat').style.gridTemplateColumns = '224px 320px 340px'")
     for seq, kind, body in [
         (1, "turn.started", {"turn_id": "synthetic", "model": "requested"}),
