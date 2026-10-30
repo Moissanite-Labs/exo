@@ -20,7 +20,7 @@ def merge_output_item(previous: dict, current: dict) -> dict:
             raise ValueError('Inconsistent Responses output history')
     if previous.get('arguments') and current.get('arguments') and json.loads(previous['arguments']) != json.loads(current['arguments']):
         raise ValueError('Inconsistent Responses output history')
-    return {**previous, **{key: value for key, value in current.items() if value not in (None, '', [])}}
+    return {**current, **previous, **{key: value for key, value in current.items() if value not in (None, '', [])}}
 
 
 def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict]:

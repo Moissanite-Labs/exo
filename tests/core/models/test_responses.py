@@ -402,3 +402,19 @@ def test_unknown_terminal_code_is_not_copied_to_diagnostic():
                 assert events[-1].kind == 'error' and private_code not in events[-1].error
                 assert ('context limit' in events[-1].error) == (code == 'context_length_exceeded')
     asyncio.run(go())
+
+
+
+def test_streamed_reasoning_preserves_empty_summary_with_partial_terminal_item():
+    async def go():
+        reason = {**REASON, 'summary': []}
+        data = wire({'type': 'response.output_item.done', 'output_index': 0, 'item': reason},
+                    completed([{'type': 'reasoning', 'id': reason['id']}]))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=data))) as client:
+            p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+            events = [e async for e in p.stream([], [], model='fixture')]
+            assert events[-1].kind == 'done'
+            message = from_dict(Message, json.loads(json.dumps(to_dict(events[-1].message))))
+            assert message.meta['responses_output'] == [reason]
+            assert p.build_body([message], [], model='fixture')['input'] == [reason]
+    asyncio.run(go())
