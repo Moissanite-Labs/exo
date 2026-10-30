@@ -46,6 +46,24 @@ def test_missing_native_thread_does_not_silently_open_latest():
             b.wait("document.querySelectorAll('.xc-sess').length>0")
             b.wait("savedPrefs.some(p=>p.thread===null && p.scroll===null)")
             assert not b.eval("!!document.querySelector('.xc-sess.on')")
+            # The chooser stays open once start-up is done: a 404 is not a first launch, so the latest does not open.
+            b.settle()
+            assert not b.eval("!!document.querySelector('.xc-sess.on') || !!document.querySelector('.xc-log .xc-msg')")
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize('prefs', [{}, {'view': 'chat'}, {'thread': None}], ids=['empty', 'view-only', 'thread-null'])
+def test_native_host_without_a_saved_thread_opens_the_latest_conversation(prefs):
+    """A first launch, or a launch after a 404 cleared the pointer, has no saved thread. It opens the latest
+    conversation, as a browser does, and gives the host a pointer to restore next time."""
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            inject(b, prefs)
+            b.goto(srv.url())
+            b.wait("document.querySelector('.xc-sess.on .xc-sess-title')?.textContent==='demo' && document.querySelectorAll('.xc-log .xc-msg').length===120")
+            b.wait("savedPrefs.some(p=>p.thread==='s1' && p.scroll===null)")
     finally:
         srv.close()
 
@@ -388,5 +406,125 @@ def test_queued_recovery_cannot_escape_its_open_owner(action):
                 assert b.eval("document.querySelector('.xc-sess.on').textContent.startsWith('s2')")
             else:
                 assert not b.eval("!!document.querySelector('.xc-log')")
+    finally:
+        srv.close()
+
+
+# Holds every read of s1's transcript until the test calls heldReads[i]().
+HOLD_S1 = ("const realFetch=window.fetch;window.heldReads=[];window.fetch=(url,...args)=>"
+           "new URL(url,location.href).pathname==='/api/chat/sessions/s1'"
+           "?new Promise(resolve=>heldReads.push(()=>realFetch(url,...args).then(resolve))):realFetch(url,...args);")
+SYNCED = ("import('/static/bus.js').then(bus=>{if(!window.syncHook){window.syncHook=true;"
+          "bus.onState(s=>window.observedSynced=s.synced);}return observedSynced;})")
+# The first message at least partly in view, and how far its top sits below the top of the transcript's box.
+READING = ("(()=>{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+           "const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.getBoundingClientRect().bottom>top);"
+           "return [m.textContent,m.getBoundingClientRect().top-top];})()")
+
+
+def hold_recovery_after_first_draw(b):
+    """Review 5710535930's repro. Hold the start-up read of s1 and make the stream catch up while it is held. The
+    catch-up waits for that open, so it reads s1 again after the transcript is drawn. Return once that read is held
+    and the reader has scrolled to the middle."""
+    b.wait("heldReads.length===1")
+    b.wait(SYNCED + ".then(n=>n>=1)")
+    before = b.eval(SYNCED)
+    b.eval("import('/static/bus.js').then(bus=>{bus.restart();return true;})")
+    b.wait(SYNCED + f".then(n=>n>{before})")
+    b.eval("heldReads[0]()")
+    b.wait("heldReads.length===2 && document.querySelectorAll('.xc-log .xc-msg').length>100")
+    b.frames()
+    return b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop=Math.round((l.scrollHeight-l.clientHeight)/2);"
+                  "l.dispatchEvent(new Event('scroll'));return l.scrollTop;})()")
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_deferred_startup_recovery_keeps_a_browser_reader_in_place(layout):
+    """A browser page has no native preferences. The catch-up that waited for the first open redraws the transcript,
+    and a reader who scrolled since the first draw stays where they were."""
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            b.call('Page.addScriptToEvaluateOnNewDocument', source=f"localStorage.setItem('xc-layout',{json.dumps(layout)});" + HOLD_S1)
+            b.goto(srv.url())
+            top = hold_recovery_after_first_draw(b)
+            assert b.eval("window.__exoDesktopPrefs===undefined")
+            b.eval("heldReads[1]()")
+            b.settle()
+            assert b.eval("heldReads.length") == 2   # the held catch-up did read and redraw the transcript
+            assert abs(b.eval("document.querySelector('.xc-log').scrollTop") - top) < 2
+            assert not b.eval("document.querySelector('.xc-latest').hidden")
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_held_recovery_with_new_messages_keeps_the_native_reader_on_their_message(layout):
+    """The catch-up brings messages that came while the stream was down. In the inverse layout they land above the
+    reader. The message being read stays where it was on screen, for a native host as for a browser."""
+    src = ThreadSrc(pairs=60)
+    srv = Served(src)
+    try:
+        with Browser() as b:
+            inject(b, {'view': 'chat', 'thread': 's1', 'layout': layout})
+            b.call('Page.addScriptToEvaluateOnNewDocument', source=HOLD_S1)
+            b.goto(srv.url())
+            hold_recovery_after_first_draw(b)
+            text, offset = b.eval(READING)
+            src.pairs += 3   # three exchanges arrive while the stream is down
+            b.eval("heldReads[1]()")
+            b.settle()
+            assert b.eval("document.querySelectorAll('.xc-log .xc-msg').length") == 126
+            moved = b.eval("(()=>{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+                           f"const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.textContent==={json.dumps(text)});"
+                           f"return m.getBoundingClientRect().top-top-({offset});}})()")
+            assert abs(moved) < 2
+    finally:
+        srv.close()
+
+
+def restored_and_quiet(b, srv, fraction):
+    inject(b, {'view': 'chat', 'thread': 's1', 'layout': 'classic', 'scroll': fraction})
+    b.goto(srv.url())
+    b.wait(f"(()=>{{const l=document.querySelector('.xc-log');return l && l.scrollHeight>l.clientHeight && Math.abs(l.scrollTop/(l.scrollHeight-l.clientHeight)-{fraction})<.02;}})()")
+    b.settle()
+    b.eval("new Promise(r=>setTimeout(r,400))")   # a trailing save from start-up has been sent
+
+
+def test_scrolling_saves_the_reading_position_at_most_every_250_ms():
+    """Each post is a write to the host's preferences. A reader scrolling for 60 frames sends a few posts, not one
+    per frame, and the last one carries where they stopped."""
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            restored_and_quiet(b, srv, .2)
+            before = b.eval("savedPrefs.length")
+            elapsed = b.eval("new Promise(done=>{const l=document.querySelector('.xc-log'),start=performance.now();let n=0;"
+                             "const step=()=>{l.scrollTop+=20;if(++n<60)requestAnimationFrame(step);else done(performance.now()-start);};"
+                             "requestAnimationFrame(step);})")
+            b.eval("new Promise(r=>setTimeout(r,400))")
+            posts = b.eval(f"savedPrefs.slice({before}).filter(p=>Object.hasOwn(p,'scroll'))")
+            final = b.eval("(()=>{const l=document.querySelector('.xc-log');return l.scrollTop/(l.scrollHeight-l.clientHeight);})()")
+            assert 1 <= len(posts) <= elapsed / 250 + 2, (len(posts), elapsed)
+            assert posts[-1]['thread'] == 's1' and abs(posts[-1]['scroll'] - final) < .005
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize('event', ['pagehide', 'visibilitychange'])
+def test_hiding_the_page_sends_the_last_reading_position_at_once(event):
+    """A throttled save waits up to 250 ms. A page that is closing or going to the background sends it at once."""
+    srv = Served(ThreadSrc(pairs=60))
+    hide = ("window.dispatchEvent(new Event('pagehide'))" if event == 'pagehide' else
+            "(Object.defineProperty(document,'visibilityState',{value:'hidden',configurable:true}),document.dispatchEvent(new Event('visibilitychange')))")
+    try:
+        with Browser() as b:
+            restored_and_quiet(b, srv, .2)
+            before = b.eval("savedPrefs.length")
+            got = b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop=Math.round((l.scrollHeight-l.clientHeight)*.7);"
+                         f"l.dispatchEvent(new Event('scroll'));{hide};"
+                         f"return [savedPrefs.slice({before}).filter(p=>Object.hasOwn(p,'scroll')).at(-1)?.scroll ?? null,"
+                         "l.scrollTop/(l.scrollHeight-l.clientHeight)];})()")
+            assert got[0] is not None and abs(got[0] - got[1]) < .005, got
     finally:
         srv.close()

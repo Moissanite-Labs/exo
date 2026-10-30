@@ -33,6 +33,19 @@ waits for an active open to finish; queued recovery belongs to that selection an
 or unmount. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
 saved-thread response from changing a newer selection, and unmount cancels restoration.
 
+A host with no saved thread opens the latest conversation, as a browser does. That covers a first launch and a
+launch after a 404 cleared the pointer. Only the load whose exact read returned 404 leaves the chooser open.
+
+When the stream catches up, the redraw keeps the reader's place in a native page as in a browser ("Reading
+position" under "What is where"). The host then stores that place. While the reader scrolls, the page sends the
+scroll fraction at most once every 250 ms, because each message is a write to the host's preferences. It sends the
+latest fraction at once when the page is hidden or closed (`visibilitychange`, `pagehide`), the conversation
+changes or the view unmounts.
+
+`petMode` comes from the Exopet display control, a `select.xc-pet-mode` that Exopet (#826) adds to the page. The
+page listens for its change event from the start, so a choice made while start-up is loading is saved too. Until
+#826 lands, Exo has no such control and sends no `petMode`.
+
 ## Conversation drafts and unconfirmed sends (D-045)
 
 Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
