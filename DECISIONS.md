@@ -6411,3 +6411,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     command once close has begun. A caller that cancelled its own command still gets `CancelledError`.
   - *Count.* The counted core is 16,370 lines (main `080e87ba`: 15,945), which D-083 reports and does not
     assert. Product imports and private-state reads stay at 39 and 8.
+- **Amendment 2026-10-30 (hosted CI on #500):** the hosted test cells ran this PR's tests for the first time.
+  - *Scheduler cancel on Python 3.11.* close() cancels the scheduler's loop at admission. On Python 3.11,
+    `asyncio.wait_for` drops a cancel when the event it waits on is set in the same pass. The loop then
+    claimed a slot that came due while close stopped transports, and `Scheduler.stop()` could wait for the
+    loop forever. Main has the same loop. It now checks for a cancel after each wait. The test that pins the
+    admission cancel waits for the loop to end, not a fixed time, and a scheduler test pins `stop()`. Both
+    fail on Python 3.11 without the check.

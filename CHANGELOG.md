@@ -433,6 +433,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Harness profiles keep main's continuity checkpoint: `work_checkpoint.enabled` decides in every profile, as
   `work_notes.enabled` does (D-088, `docs/HARNESS.md`, `docs/WORK-CHECKPOINT.md`). A delegated or scheduled
   session takes no checkpoint and opens no write transaction for it.
+- On Python 3.11, the scheduler's timer could miss the cancel from close or `Scheduler.stop()` when a wake came
+  at the same moment (D-088, `docs/SCHEDULE.md`). It then claimed a slot that came due during close, and
+  `stop()` could wait for it forever. The timer now checks for a cancel after each wait.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.

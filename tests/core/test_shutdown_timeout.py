@@ -228,20 +228,26 @@ def test_a_job_that_comes_due_while_close_stops_transports_is_left_for_the_next_
     scheduler.clock = lambda: now[0]
     job = scheduler.add("every 1h", "report")
     scheduler.launch = lambda due: launched.append(due["id"])
-    stop_channels = engine.stop_channels
+    stop_channels, loop = engine.stop_channels, []
+
+    def claimed():
+        return scheduler.get(job["id"])["next_run"] != job["next_run"]
 
     async def due_while_channels_stop():
         now[0] = job["next_run"] + 1  # stop_admission has run: the scheduler's loop must not claim this slot
-        scheduler._wake.set()
-        await asyncio.sleep(0.05)
-        claimed = scheduler.get(job["id"])["next_run"] != job["next_run"]
+        scheduler._wake.set()  # in the same pass as the cancel: Python 3.11's wait_for then drops the cancel
+        deadline = time.monotonic() + 10
+        while not loop[0].done() and not claimed():  # the loop ends, or it claims the slot
+            assert time.monotonic() < deadline, "the scheduler's loop neither ended nor claimed the slot"
+            await asyncio.sleep(0.01)
+        assert loop[0].cancelled() and not claimed()
         await stop_channels()
-        assert not claimed
 
     engine.stop_channels = due_while_channels_stop
 
     async def run():
         scheduler.start()
+        loop.extend(scheduler.tasks())
         await asyncio.sleep(0)
         await engine.close()
         assert launched == []
