@@ -114,8 +114,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that outlives the wait keeps plugin resources, the store and the writer claim in place, and `close()` raises
   `ShutdownTimeout`. exod and the terminal close again until the tool returns. Call `close()` from the engine's
   owner, not from inside a turn or tool. A failed step, or a second Ctrl-C while close stops channels and jobs,
-  no longer skips the steps after it, and background jobs are killed all at once. That second Ctrl-C or SIGTERM
-  is not retried away: exod and the terminal raise it once the wait ends.
+  no longer skips the steps after it, and background jobs are killed all at once. A second Ctrl-C during the
+  wait does not cut it short, so plugin cleanups still run when the work ends in time. That second Ctrl-C or
+  SIGTERM is not retried away: exod and the terminal raise it once the wait ends.
 - A failed startup releases what it opened: the writer lock, the stores, the job worker pool, the scheduler, the
   learner and plugin resources.
 - The harness work's plugin lifecycle and shutdown helpers live in the counted core, as `exo.core.plugin_lifecycle`

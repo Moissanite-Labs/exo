@@ -6418,3 +6418,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     loop forever. Main has the same loop. It now checks for a cancel after each wait. The test that pins the
     admission cancel waits for the loop to end, not a fixed time, and a scheduler test pins `stop()`. Both
     fail on Python 3.11 without the check.
+  - *Tests on macOS.* Six of the new tests failed on the macOS cells, with no code fault. Three built folder
+    trees deeper than macOS's 1,024-byte path limit. One bound the peer socket under a temporary folder too
+    long for a socket. One expected the private-group exception, which macOS never makes: its Python cannot
+    read ACLs. They now use short folders under `/tmp` and state the ACL answer.
+  - *Hard stop during the wait.* A second Ctrl-C or SIGTERM while close waited for running work ended
+    `close()` at once, before plugin cleanups. The owner's close does not retry a hard stop, so those cleanups
+    never ran, and a plugin that owns a subprocess left it running. Main had no cleanup API, so this was not a
+    regression. The wait now runs in its own task under a shield. A cancel of the caller is added to the step
+    errors, and the wait goes on within the same bound. When the work ends in time, the final steps run and
+    the cancel is raised after them. When a tool outlives the bound, `ShutdownTimeout` carries the cancel, and
+    the owner's close raises it, as for a hard stop in the stop steps. This replaces the 2026-10-27 ruling
+    that a hard stop during the wait ends `close()` at once.
+  - *No total bound for the owner's close (kept).* While a sync tool never returns, the owner's close tries
+    again every five seconds. A total deadline would not end the process sooner: the interpreter waits for
+    the worker thread at exit, as on main. It would only skip plugin cleanups. #954 tracks a bound for the
+    stop steps.
+  - *Count.* The counted core is 16,389 lines (main `080e87ba`: 15,945), which D-083 reports and does not
+    assert. Product imports and private-state reads stay at 39 and 8.

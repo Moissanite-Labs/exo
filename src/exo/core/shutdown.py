@@ -2,9 +2,9 @@
 
 ``CoreRuntime.close`` runs in three parts. It refuses new work, and ``stop_admission`` keeps job notices from
 starting turns and cancels owned work, without waiting. The engine then stops channels, peers, background jobs, the scheduler and MCP.
-``drain`` waits, within one bound, for turns, actual synchronous tool workers and learning reviews. The engine
-passes its own tasks in, and loops and the scheduler answer through public methods, so this module reads no other
-module's private state.
+``drain`` waits, within one bound, for turns, actual synchronous tool workers and learning reviews. A second
+Ctrl-C does not cut that wait short. The engine passes its own tasks in, and loops and the scheduler answer
+through public methods, so this module reads no other module's private state.
 
 Python cannot kill a worker thread. A drain that reaches its bound raises ``ShutdownTimeout``. By then jobs and
 transports are stopped. The engine keeps only what a stuck worker can still touch: plugin resources, the session
@@ -68,7 +68,25 @@ async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseExcept
 
     ``errors`` holds the close steps that failed so far. A learner that fails to close is added to it, so close()
     still runs its final steps. Raises ``ShutdownTimeout``, carrying ``errors``, when work is still running at
-    ``SHUTDOWN_TIMEOUT``."""
+    ``SHUTDOWN_TIMEOUT``.
+
+    A hard stop of the caller here (a second Ctrl-C or SIGTERM cancels it) does not cut the wait short. It is added
+    to ``errors``, and the wait goes on within the same bound. So close() still runs plugin cleanups once the work
+    ends, and raises the cancel after them."""
+    waiting = asyncio.ensure_future(_wait(engine, tasks, errors, learner))
+    while not waiting.done():
+        try:
+            await asyncio.shield(waiting)
+        except asyncio.CancelledError as exc:
+            if waiting.cancelled():
+                raise
+            errors.append(exc)
+    if (still := waiting.result()) is not None:
+        raise ShutdownTimeout(still, errors)  # built here, so it also carries a cancel from the last pass
+
+
+async def _wait(engine: Any, tasks: set[asyncio.Future], errors: list[BaseException], learner: Any) -> str | None:
+    """``drain``'s wait. Returns what is still running at the bound, or None once all of it has ended."""
     deadline = time.monotonic() + SHUTDOWN_TIMEOUT
 
     def left() -> float:
@@ -80,25 +98,26 @@ async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseExcept
             if not task.cancelled():
                 task.exception()
         if pending:
-            raise ShutdownTimeout("turns", errors)
+            return "turns"
     # Direct embedded Loop.send callers need not be in engine._tasks. Their
     # session state remains running until their final hooks and writes finish.
     while any(loop.busy() for loop in _loops(engine)):
         if time.monotonic() >= deadline:
-            raise ShutdownTimeout("turns", errors)
+            return "turns"
         await asyncio.sleep(min(0.01, left()))
     workers = dict(engine.registry.workers)  # stop_admission set each one's cancel event
     if workers:
         _, pending = await asyncio.wait(workers, timeout=left())
         if pending:
-            raise ShutdownTimeout("tool workers", errors)
+            return "tool workers"
     if learner is not None:  # reviews read the session store and write the principal store
         reviews = [task for task in learner.tasks.values() if not task.done()]
         for task in reviews:
             task.cancel()
         if reviews and (await asyncio.wait(reviews, timeout=left()))[1]:
-            raise ShutdownTimeout("learning reviews", errors)
+            return "learning reviews"
         try:
             learner.close()
         except BaseException as exc:  # noqa: BLE001 - close() raises it after its final steps
             errors.append(exc)
+    return None

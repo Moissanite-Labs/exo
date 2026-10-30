@@ -939,3 +939,107 @@ def test_a_peers_command_while_close_kills_jobs_is_refused_and_starts_nothing(tm
         assert engine.peers.node is None and engine.peers.starts == 1 and engine.peers.stops == 1
 
     asyncio.run(run())
+
+
+# ---- review of 2026-10-30 (#500): a hard stop during the wait still runs plugin cleanup ----
+
+def _flag_the_wait(monkeypatch):
+    """An event that is set when close() begins its wait for running work."""
+    real, waiting = shutdown._wait, asyncio.Event()
+
+    async def flagged(*args):
+        waiting.set()
+        return await real(*args)
+
+    monkeypatch.setattr(shutdown, "_wait", flagged)
+    return waiting
+
+
+async def _cancel_twice(task):
+    """A second and a third Ctrl-C or SIGTERM. Each cancel reaches the task before the next is sent."""
+    for _ in range(2):
+        task.cancel()
+        await asyncio.sleep(0)  # the task was woken first, so it takes the cancel in this pass
+
+
+def test_two_cancels_while_close_waits_for_a_sync_tool_still_run_plugin_cleanup(tmp_path, monkeypatch):
+    """The review's probe: the cancels land while close() waits for a sync tool. The wait goes on within its
+    bound, so plugin cleanups run once the tool returns, and close() raises the cancel after them."""
+    hold, started, release = _held()
+    engine, order = _engine(tmp_path, hold)
+    engine.claim_writer()
+    waiting = _flag_the_wait(monkeypatch)
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 30.0)  # the tool returns well inside it on a slow host
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        engine.start_turn(session.id, "hold")
+        assert await asyncio.to_thread(started.wait, 5)
+        closing = asyncio.create_task(engine.close())
+        try:
+            await asyncio.wait_for(waiting.wait(), 5)
+            await _cancel_twice(closing)
+            assert not closing.done() and order == []  # still waiting: the tool may use plugin resources
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(closing, 10)
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+        assert not engine.registry.workers
+
+    asyncio.run(run())
+
+
+def test_two_cancels_while_close_waits_for_a_turn_still_run_plugin_cleanup(tmp_path, monkeypatch):
+    """The review's second probe: no worker thread, only a turn that takes a while to unwind."""
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+    engine.claim_writer()
+    waiting = _flag_the_wait(monkeypatch)
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 30.0)
+
+    async def run():
+        engine.loop.provider = provider = _Blocking(stubborn=True)
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        engine.start_turn(session.id, "unwinds slowly")
+        await asyncio.wait_for(provider.entered.wait(), 5)
+        closing = asyncio.create_task(engine.close())
+        try:
+            await asyncio.wait_for(waiting.wait(), 5)
+            await _cancel_twice(closing)
+            assert not closing.done() and order == []
+        finally:
+            provider.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(closing, 10)
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_cancel_while_close_waits_for_a_tool_past_the_bound_is_raised_not_retried(tmp_path, monkeypatch):
+    """When the tool outlives the bound, ShutdownTimeout carries the cancel. The owner's close raises it after one
+    bounded attempt, as for a hard stop in the stop steps, and keeps what the tool can touch for a later close."""
+    hold, started, release = _held()
+    engine, order = _engine(tmp_path, hold)
+    engine.claim_writer()
+    waiting = _flag_the_wait(monkeypatch)
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.5)
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        engine.start_turn(session.id, "hold")
+        assert await asyncio.to_thread(started.wait, 5)
+        try:
+            closing = asyncio.create_task(engine.close())
+            await asyncio.wait_for(waiting.wait(), 5)
+            await _cancel_twice(closing)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(closing, 5)  # a retry would hold close() until the tool returns
+            assert order == [] and engine._writer is not None and engine.store._conn is not None
+        finally:
+            release.set()
+        await asyncio.gather(*list(engine.registry.workers))
+        await engine.close()  # a later close completes
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
