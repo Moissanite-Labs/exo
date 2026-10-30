@@ -4843,6 +4843,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
