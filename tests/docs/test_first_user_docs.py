@@ -98,6 +98,19 @@ def test_quick_start_says_the_repository_is_public_and_an_early_preview():
         assert "git clone https://github.com/Moissanite-Labs/exo " in text, f"{where}: clone the moved repository"
 
 
+def test_no_first_user_page_still_calls_the_repository_private():
+    """The repository moved to Moissanite-Labs and is public (#931). The install guide and every site page agree."""
+    pages = ["docs/INSTALL.md", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "site").rglob("index.html")))]
+    for rel in pages:
+        text = _read(rel)
+        for stale in ("private preview", "on request", "limited during the early build",
+                      'github.com/aska-digital/exo"'):
+            assert stale not in text, f"{rel} still says {stale!r}"
+    install = _read("docs/INSTALL.md")
+    assert "public" in install and "early preview" in install, "INSTALL.md: say the repository is public"
+    assert "git clone https://github.com/Moissanite-Labs/exo " in install, "INSTALL.md: clone the moved repository"
+
+
 def test_readme_opens_with_what_exo_is_today():
     first = " ".join(_read("README.md").split("\n# Exo\n", 1)[1].strip().split("\n\n", 1)[0].split())
     for words in ("coding agent", "terminal", "browser", "memory", "exact text", "cost", "Claude Code login",
