@@ -152,7 +152,8 @@ def test_every_status_and_opcode_is_covered():
     for st in TASK_STATUSES:
         p = Receipt(id="r_1", thread="t", brief="k_1", status=st)
         assert decode(encode(p)).status == st and render(p).split(":")[0].lower() == st
-    used = {int(e[0]) for p in (BRIEF, RECEIPT) for e in parse(encode(p).split("|")[9])}
+    routed = Brief(**{**BRIEF.__dict__, "route": "cheap"})  # the one opcode a default packet omits
+    used = {int(e[0]) for p in (BRIEF, RECEIPT, routed) for e in parse(encode(p).split("|")[9])}
     assert used == set(OPS), set(OPS) - used
     assert {STATES[c] for c in (100, 101)} == {"failed", "cancelled"}
 
@@ -186,3 +187,31 @@ def test_exo_lines_travel_as_bus_bodies():
         bus.wrap(line.replace("(100 1)", "(100 1)(199 2)"))
     broken = json.dumps({"data": line.replace("|100|40|", "|99|40|"), "fmt": "sym2p"}, separators=(",", ":"))
     assert bus.render_body(broken).startswith("[unreadable SYM-2P packet")
+
+
+# --- D02: the named delegation route is carried on the wire, never resolved here -------------------
+
+def test_named_route_roundtrips_on_brief_and_receipt():
+    asked = Brief(**{**BRIEF.__dict__, "route": "cheap"})
+    line = encode(asked)
+    assert '(117 "cheap")' in line and check_line(line) == []
+    assert decode(line) == asked and decode(line).route == "cheap"
+    served = Receipt(**{**RECEIPT.__dict__, "route": "cheap"})
+    rline = encode(served, rcp=True)
+    assert '(117 "cheap")' in rline and check_line(rline) == []
+    assert decode(rline) == served and from_json(to_json(served)) == served
+    assert "requested route cheap" in render(served) and "Model route: cheap.\n" in render(asked)
+
+
+def test_packets_without_a_route_keep_their_old_bytes():
+    # No asked-route expression is written when the field is empty, so a route-less packet is the
+    # same line it was before D02: peers on the older vocabulary read it unchanged.
+    assert encode(BRIEF) == (
+        '2|k_3f9a|s_8e7d|1|4|11|1|0|0|(100 1)(101 "Find callers of \\"load_config\\" \\u007c list file:line")'
+        '(102 "Python repo.\\nTwo lines.")(103 glob grep read_file)(104 12 60000 300)(105 1 2)(106 "/tmp/w")'
+        '(107 "every caller listed")(108 fast)|1|s_8e7d:4|300')
+    assert encode(RECEIPT) == (
+        '2|r_3f9a|s_8e7d|4|1|12|100|40|0|(100 1)(110 "Partial: 2 callers.")(111 1200 80 4200)(112 3100 2 3)'
+        '(113 "a.py" "dir/b c.py")(114 timeout "no result within 300 s")(115 s_1b2c)'
+        '(116 standard "anthropic:claude-sonnet-5-5" 1)|0|k_3f9a:1|0')
+    assert decode(encode(BRIEF)).route == "" and decode(encode(RECEIPT)).route == ""

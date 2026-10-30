@@ -45,6 +45,7 @@ OPS: dict[int, tuple[str, str]] = {
     114: ("error", "ys"),       # code symbol, message
     115: ("child", "t"),        # child session id
     116: ("route", "ysn"),      # tier used, resolved model, escalated (0 or 1)
+    117: ("asked_route", "s"),  # the named delegation route the parent asked for (D02)
 }
 CODE = {name: op for op, (name, _) in OPS.items()}
 SYM = re.compile(r"^(?:\*|[A-Za-z][A-Za-z0-9_./-]*)$")
