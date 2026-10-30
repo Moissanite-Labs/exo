@@ -1293,7 +1293,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)
-    indexed, operation_id = False, secrets.token_hex(16)
+    indexed, sent, operation_id = False, False, secrets.token_hex(16)
     try:
         path.write_text(new_text, encoding="utf-8")   # inside the guard: a write cut short (a full disk) goes back too
         store.reload()
@@ -1311,10 +1311,11 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
             body["conflict_resolved_by"] = "direct accept"
         body.update(_question_of(p))
         refs = [r for r in (st.beliefs[p.id].event_id,) if r]
+        sent = True   # from here an authority may commit the accept, even if the call is cut short
         ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
                            refs=refs, operation_id=operation_id)
     except BaseException as exc:
-        if _accept_may_stand(ledger, p.id, operation_id, exc):
+        if sent and _accept_may_stand(ledger, p.id, operation_id, exc):
             raise   # the authority holds the accept, or may: the node stays with it
         # Nothing is accepted until the ledger says so: put the node back, so a retry does not add the lesson twice.
         _put_back(path, old_text)
@@ -1537,13 +1538,14 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     body.update(_question_of(p))
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
     path.parent.mkdir(parents=True, exist_ok=True)
-    operation_id = secrets.token_hex(16)
+    sent, operation_id = False, secrets.token_hex(16)
     try:
         path.write_text(new, encoding="utf-8")
+        sent = True
         ev = ledger.append("belief_accepted", body, author or ledger.author
                            or "principal", refs=refs, operation_id=operation_id)
     except BaseException as exc:
-        if not _accept_may_stand(ledger, p.id, operation_id, exc):
+        if not (sent and _accept_may_stand(ledger, p.id, operation_id, exc)):
             _put_back(path, old)  # not accepted: a retry must not append the lesson a second time
         raise
     _archive(store.root / "proposals", p.id)
@@ -1559,11 +1561,13 @@ def _accept_may_stand(ledger: Ledger, pid: str, operation_id: str, exc: BaseExce
 
     Only a ledger authority raises these (docs/LEDGER-AUTHORITY.md). ProjectionPending: the authority committed the
     event. AppendOutcomeUnknown: look the operation up and copy what it committed, or else sync and read the ledger.
+    An interrupt (Ctrl-C) during the authority call leaves the outcome unknown too, so it is looked up the same way.
     If neither answers, the outcome stays unknown and the file stays: a lesson twice can be fixed, a lost one cannot."""
     from .ledger_authority import AppendOutcomeUnknown, ProjectionPending
     if isinstance(exc, ProjectionPending):
         return True
-    if not isinstance(exc, AppendOutcomeUnknown):
+    interrupted = not isinstance(exc, Exception) and ledger.authority is not None
+    if not (interrupted or isinstance(exc, AppendOutcomeUnknown)):
         return False
     try:
         record = ledger.authority.lookup(operation_id)

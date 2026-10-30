@@ -2,6 +2,7 @@
 `belief_accepted` event while the append still raises. The node or skill file stays when the event stands or may
 stand. It goes back only when the authority shows the event never landed. Synthetic keys and disposable stores only."""
 import errno
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,17 @@ def _skill_proposal(store, led):
     (r,) = C.propose_typed(store, led, [{"type": "skill", "skill": "Status Update", "patch": LESSON,
                                          "claim": "Status has a link.", "evidence": [ev["id"]]}], author="exo-learn")
     return r["id"], store.root / "skills" / "status-update" / "SKILL.md"
+
+
+def _accept_another(store, led):
+    """Accept an unrelated lesson, so the ledger holds a `belief_accepted` for some other proposal."""
+    out = led.append("utterance", {"text": "older output", "role": "assistant"}, "agent", session="s0")
+    ev = led.append("verdict", {"verdict": "edit", "target": out["id"], "text": "say the date"}, "principal",
+                    session="s0")
+    (r,) = C.propose_typed(store, led, [{"type": "skill", "skill": "Daily Note", "patch": "Say the date.",
+                                         "claim": "Daily notes say the date.", "evidence": [ev["id"]]}],
+                           author="exo-learn")
+    C.proposal_accept(store, led, r["id"])
 
 
 # Each way the `belief_accepted` append breaks is four flags: the authority commits it, the reply is lost, lookup
@@ -121,6 +133,7 @@ def test_an_accept_the_authority_committed_keeps_its_file(template_store, led, m
 def test_an_accept_the_authority_never_received_puts_the_file_back(template_store, led, monkeypatch, path_kind,
                                                                     how):
     pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, led)
+    _accept_another(template_store, led)   # an accept of another proposal is no proof for this one
     with monkeypatch.context() as mp:
         _accept_through(mp, template_store, led, pid, how)
     assert not path.exists() and not _accepts(led, pid)
@@ -137,3 +150,77 @@ def test_an_accept_nobody_can_confirm_keeps_its_file(template_store, led, monkey
     with monkeypatch.context() as mp:
         _accept_through(mp, template_store, led, pid, "lost request, authority down")
     assert path.is_file() and not _accepts(led, pid)
+
+
+# An interrupt (Ctrl-C) can land while the authority call is in flight. Then the outcome is unknown, as for a lost
+# reply, and the lookup decides. An interrupt before the ledger write, or on a plain ledger, puts the file back.
+
+def _down(*args):
+    raise AuthorityUnavailable("authority unreachable")
+
+
+@pytest.mark.parametrize("path_kind", ["node", "skill"])
+@pytest.mark.parametrize("commits", [True, False], ids=["after the commit", "before the commit"])
+def test_an_interrupted_accept_asks_the_authority(template_store, led, monkeypatch, path_kind, commits):
+    pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, led)
+    real_append = led.authority.append
+
+    def append(operation_id, expected_head, intent):
+        if intent["kind"] == "belief_accepted":
+            if commits:
+                real_append(operation_id, expected_head, intent)
+            raise KeyboardInterrupt
+        return real_append(operation_id, expected_head, intent)
+    with monkeypatch.context() as mp:
+        mp.setattr(led.authority, "append", append)
+        with pytest.raises(KeyboardInterrupt):
+            C.proposal_accept(template_store, led, pid)
+    assert path.is_file() == commits and len(_accepts(led, pid)) == int(commits)
+    if commits:
+        with pytest.raises(C.ConsolidateError, match="already accepted"):
+            C.proposal_accept(template_store, led, pid)
+    else:
+        C.proposal_accept(template_store, led, pid)
+    assert len(_accepts(led, pid)) == 1
+    if path_kind == "skill":
+        assert path.read_text(encoding="utf-8").count(LESSON) == 1
+
+
+@pytest.mark.parametrize("path_kind", ["node", "skill"])
+def test_an_interrupt_before_the_ledger_write_puts_the_file_back(template_store, led, monkeypatch, path_kind):
+    """The interrupt cuts the file write short while the authority is down. The accept never reached the ledger, so
+    the file goes back without asking the authority."""
+    pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, led)
+    real_write = Path.write_text
+
+    def write_text(self, data, *args, **kwargs):
+        if self == path:
+            real_write(self, data[: len(data) // 2], *args, **kwargs)
+            raise KeyboardInterrupt
+        return real_write(self, data, *args, **kwargs)
+    with monkeypatch.context() as mp:
+        mp.setattr(Path, "write_text", write_text)
+        mp.setattr(led.authority, "lookup", _down)
+        mp.setattr(led, "sync_authority", _down)
+        with pytest.raises(KeyboardInterrupt):
+            C.proposal_accept(template_store, led, pid)
+    assert not path.exists() and not _accepts(led, pid)
+
+
+@pytest.mark.parametrize("path_kind", ["node", "skill"])
+def test_an_interrupted_accept_without_an_authority_puts_the_file_back(template_store, signer, monkeypatch,
+                                                                        path_kind):
+    """A plain ledger has nobody to ask, so an interrupt during its write puts the file back like any failure."""
+    with Ledger(template_store.ledger_path, signer) as local:
+        pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, local)
+        real_append = local.append
+
+        def append(kind, *args, **kwargs):
+            if kind == "belief_accepted":
+                raise KeyboardInterrupt
+            return real_append(kind, *args, **kwargs)
+        with monkeypatch.context() as mp:
+            mp.setattr(local, "append", append)
+            with pytest.raises(KeyboardInterrupt):
+                C.proposal_accept(template_store, local, pid)
+        assert not path.exists() and not _accepts(local, pid)
