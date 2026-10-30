@@ -387,6 +387,9 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
+- **Providers** offers a Google AI Studio Gemini key using Google's OpenAI-compatible endpoint and a custom provider form
+  for OpenAI Chat Completions or Anthropic Messages. Custom endpoint settings apply after the core restarts; keys use the
+  existing secret store. Endpoint changes use a separate key reference. See `docs/PROVIDERS.md` for protocol and URL limits.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals

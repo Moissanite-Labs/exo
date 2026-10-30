@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -57,6 +58,44 @@ ERROR_CLASSES = ("no_key", "auth", "billing", "not_found", "rate_limited", "serv
 
 class SetupError(Exception):
     """A setup step failed. The message never holds a key value."""
+
+
+def custom_provider(name: object, endpoint: object, protocol: object, auth: object, model: object) -> tuple[str, dict]:
+    """Validate the supported custom HTTP transports and bind a key name to the endpoint.
+
+    Endpoint changes use a different secret reference, so an existing credential cannot silently follow it.
+    Only non-secret metadata belongs in config.json.
+    """
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", name):
+        raise SetupError("Use a provider name with lowercase letters, numbers, hyphens or underscores.")
+    if protocol not in ("openai", "anthropic") or auth not in ("key", "none"):
+        raise SetupError("Choose a supported protocol and authentication method.")
+    if not isinstance(endpoint, str) or len(endpoint) > 2048 or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in endpoint):
+        raise SetupError("Enter a valid HTTP or HTTPS base URL without spaces.")
+    try:
+        u = urlsplit(endpoint)
+        if u.scheme not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None \
+                or u.query or u.fragment or "\\" in u.netloc or u.netloc.endswith(":"):
+            raise ValueError()
+        _ = u.port
+    except ValueError:
+        raise SetupError("Use an HTTP or HTTPS base URL without credentials, query or fragment.") from None
+    if not isinstance(model, str) or not model or len(model) > 200 - len("custom-") - len(name) - 1 \
+            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in model):
+        raise SetupError("Enter a model ID without spaces.")
+    from .config import ConfigError, check_not_secret
+    try:
+        check_not_secret("models.providers", {"base_url": endpoint, "setup_model": model})
+    except ConfigError:
+        raise SetupError("The URL or model looks like a secret. Put API keys only in the key field.") from None
+    name = "custom-" + name
+    endpoint = endpoint.rstrip("/")
+    spec: dict[str, Any] = {"transport": protocol, "base_url": endpoint, "setup_managed": True,
+                            "setup_model": model, "setup_auth": auth}
+    if auth == "key":
+        digest = hashlib.sha256(f"{name}\0{protocol}\0{endpoint}".encode()).hexdigest()[:32].upper()
+        spec["key_env"] = "EXO_CUSTOM_" + digest + "_API_KEY"
+    return name, spec
 
 
 # --- helpers -----------------------------------------------------------------------------------

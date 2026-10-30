@@ -494,6 +494,13 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-prov-res { font: 12px var(--xc-mono); color: var(--fg-2); overflow-wrap: anywhere; }
 .xc-prov-res.bad { color: var(--xc-errtext); }
 .xc-prov-res.ok { color: var(--cold); }
+.xc-custom { display: grid; gap: 12px; border: 1px solid var(--line); background: var(--bg-2); padding: 18px; }
+.xc-custom h2, .xc-custom p { margin: 0; }
+.xc-custom p { color: var(--fg-2); max-width: 80ch; }
+.xc-custom-entry { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.xc-custom-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+.xc-custom-form label { display: grid; gap: 4px; min-width: 0; }
+.xc-custom-form .xc-btnrow, .xc-custom-form .xc-prov-res { grid-column: 1 / -1; }
 .xc-prov-def { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px solid var(--line); background: var(--bg-2); padding: 12px 14px; }
 .xc-prov-def select { flex: 1 1 280px; max-width: 460px; }
 @media (max-width: 560px) { .xc-prov { padding: 14px 10px 30px; } .xc-prow-act .xc-field { flex-basis: 100%; max-width: none; } .xc-defmark { margin-left: 0; } }

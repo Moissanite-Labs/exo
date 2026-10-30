@@ -36,6 +36,7 @@ export function mount(root) {
 
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
   let data = null, models = null, modelsError = null, err = "", picked = "";
+  let custom = [], customError = "", editing = null;
 
   // D-091: a failed model list says which failure it was. A transport failure can be retried; an authority
   // refusal cannot, so it gets no button. A failed retry keeps the last good list, so the picker stays usable.
@@ -54,6 +55,8 @@ export function mount(root) {
       data = await api("GET", "/api/providers");
       err = "";
     } catch (e) { err = e.message; }
+    try { custom = (await api("GET", "/api/providers/custom")).providers || []; customError = ""; }
+    catch (e) { customError = "Custom provider settings are unavailable. Connect to the core and try again."; }
     await loadModels();
     if (alive) draw();
   }
@@ -107,7 +110,7 @@ export function mount(root) {
     meta.push(["models", r.models != null ? String(r.models) : "n/a"]);
     if (r.serves && r.serves.length) meta.push(["serves", r.serves.join(", ")]);
     const kids = [h("div", { class: "xc-prow-top" },
-      h("div", { class: "xc-prow-id" }, h("span", { class: "xc-prow-name" }, r.provider), r.default ? h("span", { class: "xc-defmark" }, "default") : null),
+      h("div", { class: "xc-prow-id" }, h("span", { class: "xc-prow-name" }, r.provider === "gemini" ? "Google Gemini (AI Studio)" : r.provider), r.default ? h("span", { class: "xc-defmark" }, "default") : null),
       h("div", { class: "xc-prow-st" }, chip(r)),
       h("dl", { class: "xc-prow-meta" }, meta.map((m) => h("div", null, h("dt", null, m[0]), h("dd", null, m[1])))))];
     if (r.needs === "key") {
@@ -121,9 +124,62 @@ export function mount(root) {
     } else {
       kids.push(h("div", { class: "xc-prow-act" }, h("button", { class: "xc-btn", type: "button", onclick: () => test(r) }, "Test")));
     }
+    if (r.provider === "gemini") kids.push(h("p", { class: "xc-prov-res" },
+      "Google AI Studio key; uses Google's OpenAI-compatible Chat Completions API, not Vertex AI or the native Gemini API. Restart an older core to use this preset."));
     const res = results[r.provider];
     if (res) kids.push(h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text));
     return h("div", { class: "xc-prow" + (r.default ? " def" : ""), role: "listitem" }, kids);
+  }
+
+  function customPanel() {
+    const summary = results._custom;
+    const section = h("section", { class: "xc-custom", "aria-label": "Custom providers" },
+      h("h2", null, "Custom providers"),
+      h("p", null, "Configure an OpenAI Chat Completions or Anthropic Messages endpoint. Other protocols are not supported here. Changes take effect after the core restarts."),
+      h("p", null, "For OpenAI-compatible servers include the API base path (such as /v1). For Anthropic Messages use the service root; Exo adds /v1/messages."),
+      h("p", null, "Use HTTPS for remote services: HTTP sends API keys without encryption. Changing the endpoint or protocol uses a different stored key."),
+      h("p", null, "Keys are stored on the web server's machine. A core on another machine needs its own credential. Seat-specific provider overrides can take precedence."));
+    if (customError) section.appendChild(h("div", { class: "xc-warn", role: "status" }, customError));
+    if (summary) section.appendChild(h("div", { class: "xc-prov-res " + summary.cls, role: "status" }, summary.text));
+    for (const p of custom) section.appendChild(h("div", { class: "xc-custom-entry" },
+      h("span", null, p.name + " · " + p.protocol + " · " + p.model),
+      h("button", { class: "xc-btn", type: "button", onclick: () => { editing = { ...p, existing: true }; draw(true); } }, "Edit " + p.name)));
+    if (!editing) {
+      section.appendChild(h("button", { class: "xc-btn", type: "button", disabled: !!customError,
+        onclick: () => { editing = { name: "", endpoint: "", protocol: "openai", auth: "key", model: "" }; draw(true); } }, "Add custom provider"));
+      return section;
+    }
+    const name = h("input", { class: "xc-field", value: editing.name, required: true, disabled: !!editing.existing, "aria-label": "Provider name" });
+    const endpoint = h("input", { class: "xc-field", value: editing.endpoint, type: "url", required: true, "aria-label": "Base URL" });
+    const model = h("input", { class: "xc-field", value: editing.model, required: true, "aria-label": "Model ID" });
+    const protocol = h("select", { class: "xc-field", "aria-label": "Protocol" },
+      h("option", { value: "openai", selected: editing.protocol === "openai" }, "OpenAI Chat Completions (Bearer key)"),
+      h("option", { value: "anthropic", selected: editing.protocol === "anthropic" }, "Anthropic Messages (x-api-key)"));
+    const auth = h("select", { class: "xc-field", "aria-label": "Authentication" },
+      h("option", { value: "key", selected: editing.auth === "key" }, "API key"),
+      h("option", { value: "none", selected: editing.auth === "none" }, "No API key"));
+    const key = h("input", { class: "xc-field", type: "password", autocomplete: "new-password", spellcheck: "false",
+      autocapitalize: "off", "aria-label": "Custom provider API key", placeholder: "Optional; leave blank to keep the current endpoint's key" });
+    const message = h("div", { class: "xc-prov-res bad", role: "status" });
+    const saveButton = h("button", { class: "xc-btn xc-primary", type: "submit" }, "Save provider");
+    const cancelButton = h("button", { class: "xc-btn", type: "button", onclick: () => { key.value = ""; editing = null; draw(true); } }, "Cancel");
+    const field = (label, input) => h("label", null, h("span", null, label), input);
+    const form = h("form", { class: "xc-custom-form", onsubmit: async (e) => {
+      e.preventDefault();
+      const request = { name: name.value, endpoint: endpoint.value, protocol: protocol.value, auth: auth.value, model: model.value, key: key.value };
+      key.value = "";
+      saveButton.disabled = cancelButton.disabled = true;
+      try {
+        const d = await api("POST", "/api/providers/custom", request);
+        editing = null;
+        results._custom = { text: "Saved " + d.provider + ". Restart the core to use these settings." + (d.warning ? " " + d.warning : ""), cls: d.warning ? "bad" : "ok" };
+        await load();
+      } catch (error) { message.replaceChildren(error.message || "Could not save provider."); }
+      finally { request.key = ""; saveButton.disabled = cancelButton.disabled = false; }
+    } }, field("Name", name), field("Base URL", endpoint), field("Protocol", protocol), field("Authentication", auth),
+      field("Model ID", model), field("API key", key), message, h("div", { class: "xc-btnrow" }, saveButton, cancelButton));
+    section.appendChild(form);
+    return section;
   }
 
   async function saveDefault() {
@@ -161,7 +217,8 @@ export function mount(root) {
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 
-  function draw() {
+  function draw(force = false) {
+    if (editing && !force) return;  // keep the user's in-progress fields through background refreshes
     if (err) { body.replaceChildren(errorBox(err)); return; }
     if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
     const rows = data.providers || [];
@@ -181,7 +238,7 @@ export function mount(root) {
         title: "This core knows no model provider yet.",
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
         hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
-      picker()].filter(Boolean));
+      customPanel(), picker()].filter(Boolean));
   }
 
   draw();

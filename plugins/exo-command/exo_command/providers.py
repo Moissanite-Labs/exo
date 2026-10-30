@@ -121,6 +121,10 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
                 return 200, {"models": [], "available": [], "error": redact_secrets(why)[:300],
                              "error_class": kind, "retryable": kind == "transport"}
             return 200, {"models": res.get("models") or [], "available": res.get("available") or []}
+        if parts == ["custom"] and method == "GET":
+            return 200, {"providers": await _custom_list(centre)}
+        if parts == ["custom"] and method == "POST":
+            return 200, await _custom_save(centre, body)
         if parts == ["default"] and method == "POST":
             return 200, await _default(centre, body, router_factory)
         if len(parts) == 2 and method == "POST" and parts[1] in ("key", "remove", "test"):
@@ -154,9 +158,72 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
     except ValueError as e:  # router validation: bad refs, unknown providers
         return 400, {"error": redact_secrets(str(e))[:300]}
     except Exception as e:  # never echo an arbitrary failure message
-        if getattr(e, "code", "") == "forbidden":
+        if getattr(e, "code", "") in ("forbidden", "unauthorized"):
             return 403, {"error": "the core refused this change: principal authority is required"}
+        if getattr(e, "code", "") in ("http_401", "http_403"):
+            return 403, {"error": "the core refused this web client's bearer token"}
         return 500, {"error": "provider setup failed ({})".format(type(e).__name__)}
+
+
+async def _custom_config(centre) -> dict:
+    try:
+        res = await centre.source.call(s.ConfigGet(key="models.providers"))
+    except Exception as e:
+        if getattr(e, "code", "") == "not_found":
+            return {}
+        raise
+    value = res.get("value")
+    return value if isinstance(value, dict) else {}
+
+
+async def _custom_list(centre) -> list[dict[str, str]]:
+    out = []
+    for name, spec in (await _custom_config(centre)).items():
+        if not isinstance(name, str) or not name.startswith("custom-") or not isinstance(spec, dict) \
+                or spec.get("setup_managed") is not True:
+            continue
+        try:
+            _, safe = ps.custom_provider(name[7:], spec.get("base_url"), spec.get("transport"),
+                                         spec.get("setup_auth"), spec.get("setup_model"))
+        except ps.SetupError:
+            continue
+        out.append({"name": name[7:], "endpoint": safe["base_url"], "protocol": safe["transport"],
+                    "auth": safe["setup_auth"], "model": safe["setup_model"]})
+    return sorted(out, key=lambda item: item["name"])
+
+
+async def _custom_save(centre, body: Dict[str, Any]) -> Dict[str, Any]:
+    # A key never crosses the core protocol or enters config.json.
+    value = body.pop("key", "")
+    try:
+        name, spec = ps.custom_provider(body.get("name"), body.get("endpoint"), body.get("protocol"),
+                                        body.get("auth"), body.get("model"))
+        if not isinstance(value, str):
+            raise ps.SetupError("The key must be text.")
+        if value:
+            if spec["setup_auth"] != "key":
+                raise ps.SetupError("Choose API key authentication before entering a key.")
+            value = ps.check_key(value)
+            ps.remember_secret(value)
+        current = await _custom_config(centre)
+        old = current.get(name)
+        if old is not None and (not isinstance(old, dict) or old.get("setup_managed") is not True):
+            raise ps.SetupError("That provider name already belongs to a manually configured provider.")
+        # The core enforces principal authority; never fall back to editing local disk on refusal or outage.
+        await centre.source.call(s.ConfigSet(key="models.providers." + name, value=spec))
+        result: Dict[str, Any] = {"ok": True, "provider": name, "applies": "next start", "key_saved": False}
+        if value:
+            try:
+                router = ps.Router(catalog={"providers": {name: spec}})
+                stored = await asyncio.to_thread(ps.set_key, name, value, router=router)
+                result.update(key_saved=True, stored_in=stored["stored_in"], warning=stored.get("warning", ""))
+            except Exception:
+                result["warning"] = "Settings were saved, but the key could not be stored. Add it again before restarting."
+        elif spec["setup_auth"] == "key":
+            result["warning"] = "No new key was saved. If this endpoint has no saved key, add one before use."
+        return result
+    finally:
+        value = ""
 
 
 async def _default(centre, body: Dict[str, Any], router_factory: Callable[[], Any]) -> Dict[str, Any]:

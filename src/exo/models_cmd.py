@@ -73,6 +73,10 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     cache_dir = Path(home) / 'cache' / 'models'
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
+        manual = spec.get('setup_model') if spec.get('setup_managed') is True else None
+        if isinstance(manual, str) and manual and router._allows(name, 'main') and \
+                (not spec.get('key_env') or st.get('key') == 'yes'):
+            out.append({'route': f'{name}:{manual}', 'provider': name})
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
@@ -96,7 +100,8 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
             except ValueError:
                 ids = cached['ids'] if cached else []
         hide = [h.lower() for h in spec.get('hide_models') or []]
-        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids if not any(h in i.lower() for h in hide)]
+        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                if i != manual and not any(h in i.lower() for h in hide)]
     return out
 
 

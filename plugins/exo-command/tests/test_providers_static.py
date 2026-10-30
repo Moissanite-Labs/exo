@@ -21,7 +21,8 @@ def test_key_field_is_a_password_input_that_is_not_saved():
     assert 'type: "password"' in js
     assert 'autocomplete: "new-password"' in js
     assert 'spellcheck: "false"' in js
-    assert not re.search(r"\bname:\s*\"", js)           # no name attribute for a password manager to key on
+    inputs = re.findall(r'h\("input",\s*\{(.*?)\}', js, re.S)
+    assert inputs and all(not re.search(r'\bname\s*:', attrs) for attrs in inputs if 'type: "password"' in attrs)
 
 
 def test_no_local_storage_anywhere():
