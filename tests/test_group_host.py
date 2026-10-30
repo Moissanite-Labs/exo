@@ -320,3 +320,281 @@ def test_invalid_audience_rejected_before_claim(room):
     assert snap["receipt"] is None and snap["reconciliation_required"] is False
     assert {s.state for s in snap["members"]} == {"idle"}
     assert GroupExecutions(groups).get(group.id, owner="host") is None
+
+
+def test_aclose_plain_callable_factory_backward_compatible(room):
+    """A plain callable factory has no aclose; host close still settles runtimes."""
+    _, _, host, _ = room
+    group = create(host)
+
+    async def scenario():
+        host.start(group.id, audiences=AUDIENCES)
+        await host.aclose()
+        assert host._closed is True
+        assert host._runtimes == {}
+        await host.aclose()  # idempotent: no error, still closed
+
+    asyncio.run(scenario())
+
+
+def test_aclose_awaits_factory_aclose_after_runtime_settlement(room):
+    """Engine release happens only once no runtime can still be running."""
+    _, groups, host, factory = room
+    order = []
+
+    class Factory:
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            order.append("factory_close")
+
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=Factory())
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.wait(group2.id)  # runtime settles before close
+        await host2.aclose()
+        assert host2._closed is True
+
+    asyncio.run(scenario())
+    assert order == ["factory_close"]  # factory closed only after settlement
+
+
+def test_aclose_factory_close_failure_is_retriable(room):
+    """A failed factory close keeps runtimes and does not flip closed."""
+    _, groups, _, factory = room
+    attempts = []
+
+    class Factory:
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError("close failed")
+
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=Factory())
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.wait(group2.id)
+        with pytest.raises(HostError, match="engine factory close failed"):
+            await host2.aclose()
+        assert host2._closed is False  # not closed; runtimes retained for retry
+        assert group2.id in host2._runtimes
+        # Retry: runtimes already settled (wait returns immediately), close succeeds.
+        await host2.aclose()
+        assert host2._closed is True
+        assert host2._runtimes == {}
+
+    asyncio.run(scenario())
+    assert len(attempts) == 2
+
+
+def test_aclose_attempts_all_runtimes_despite_individual_error(room):
+    """A failing runtime must not prevent settling the other runtimes."""
+    _, groups, host, _ = room
+    group = create(host)
+    group2 = host.create(mode="conductor", members=PROFILES, conductor="lead")
+    stopped = []
+
+    class Runtime:
+        def __init__(self, gid):
+            self.gid = gid
+
+        def stop(self):
+            stopped.append(self.gid)
+            if self.gid == group.id:
+                raise RuntimeError("stop failed")
+
+        async def wait(self):
+            return ()
+
+    host._runtimes[group.id] = Runtime(group.id)
+    host._runtimes[group2.id] = Runtime(group2.id)
+
+    async def scenario():
+        with pytest.raises(HostError, match="runtime settlement failed"):
+            await host.aclose()
+        # Both runtimes attempted despite the first raising.
+        assert set(stopped) == {group.id, group2.id}
+        assert host._closed is False  # fail closed: retained for retry
+
+    asyncio.run(scenario())
+
+
+def test_aclose_rejects_new_start_and_create(room):
+    """Once closing begins, no new create/start is accepted."""
+    _, _, host, _ = room
+    group = create(host)
+
+    async def scenario():
+        await host.aclose()  # close with no runtimes: clean, closed
+        assert host._closed is True
+        with pytest.raises(HostError, match="closing or closed"):
+            host.create(mode="conductor", members=PROFILES, conductor="lead")
+        with pytest.raises(HostError, match="closing or closed"):
+            host.start(group.id, audiences=AUDIENCES)
+
+    asyncio.run(scenario())
+
+
+def test_aclose_awaits_active_task_cancellation_before_close(room):
+    """Engines are never released while a runtime task can still be running."""
+    _, groups, host, factory = room
+    settled_before_close = []
+
+    class Factory:
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            # Record whether every member had already settled by close time.
+            settled_before_close.append(
+                all(t.done() for t in host2._runtimes[group2.id]._runner._tasks.values()))
+
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=Factory())
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.aclose()  # stops then awaits full settlement before factory close
+
+    asyncio.run(scenario())
+    assert settled_before_close == [True]
+
+
+def test_aclose_concurrent_callers_share_one_cleanup(room):
+    """Concurrent aclose() calls invoke the factory cleanup exactly once."""
+    _, groups, _, factory = room
+    calls = []
+    gate = asyncio.Event()
+    release = asyncio.Event()
+
+    class Factory:
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            calls.append(True)
+            gate.set()
+            await release.wait()
+
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=Factory())
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.wait(group2.id)
+        t1 = asyncio.create_task(host2.aclose())
+        t2 = asyncio.create_task(host2.aclose())
+        # Deterministic: cleanup is blocked inside the factory close before
+        # we let it finish, so both callers are waiters on the shared task.
+        await gate.wait()
+        release.set()
+        await asyncio.gather(t1, t2)
+        assert host2._closed is True
+        assert host2._cleanup_task is None  # dropped synchronously on success
+
+    asyncio.run(scenario())
+    assert len(calls) == 1  # one shared cleanup across both concurrent callers
+
+
+def test_aclose_cancelled_waiter_cleanup_completes(room):
+    """A cancelled aclose() waiter does not abort the shared cleanup task."""
+    _, groups, _, factory = room
+    order = []
+    gate = asyncio.Event()
+    release = asyncio.Event()
+
+    class Factory:
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            order.append("factory_close_entered")
+            gate.set()
+            await release.wait()
+            order.append("factory_close_done")
+
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=Factory())
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.wait(group2.id)
+        t1 = asyncio.create_task(host2.aclose())
+        await gate.wait()  # shared cleanup is parked inside the factory close
+        t1.cancel()  # caller cancels; shield keeps the cleanup task alive
+        try:
+            await t1
+            raise AssertionError("waiter cancellation must propagate")
+        except asyncio.CancelledError:
+            pass
+        assert host2._closed is False  # cancellation says nothing about cleanup
+        assert host2._cleanup_task is not None  # cleanup still running
+        release.set()  # let the shared cleanup finish
+        # Explicit later aclose() awaits the still-running shared task.
+        await host2.aclose()
+        assert host2._closed is True
+
+    asyncio.run(scenario())
+    # Safe ordering: the factory close completed exactly once, after entry.
+    assert order == ["factory_close_entered", "factory_close_done"]
+
+
+def test_aclose_failed_shared_cleanup_explicit_retry(room):
+    """A failed shared cleanup is dropped; an explicit retry re-attempts it."""
+    _, groups, _, factory = room
+    calls = []
+    gate = asyncio.Event()
+
+    class Factory:
+        def __init__(self):
+            self.fail = True
+
+        def __call__(self, g):
+            return factory(g)
+
+        async def aclose(self):
+            calls.append(True)
+            gate.set()
+            if self.fail:
+                raise RuntimeError("factory close failed once")
+
+    fac = Factory()
+    host2 = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                      engine_factory=fac)
+    group2 = host2.create(mode="conductor", members=PROFILES, conductor="lead")
+
+    async def scenario():
+        host2.start(group2.id, audiences=AUDIENCES)
+        await host2.wait(group2.id)
+        t1 = asyncio.create_task(host2.aclose())
+        t2 = asyncio.create_task(host2.aclose())
+        await gate.wait()  # both callers are waiters on the one shared attempt
+        # The shared failure surfaces in every waiter.
+        for t in (t1, t2):
+            try:
+                await t
+                raise AssertionError("failed shared cleanup must raise")
+            except HostError:
+                pass
+        assert host2._closed is False
+        assert host2._cleanup_task is None  # failed attempt dropped once retrieved
+        assert len(host2._runtimes) == 1  # runtimes retained across the failure
+        fac.fail = False  # explicit retry re-attempts the cleanup
+        await host2.aclose()
+        assert host2._closed is True
+
+    asyncio.run(scenario())
+    assert len(calls) == 2  # exactly one call per attempt: shared, then retry
