@@ -91,7 +91,7 @@ def test_appearance_controls_persist_choice_and_do_not_change_route_or_draft():
                 assert b.eval("location.hash") == "#chat"
                 assert b.eval("[document.querySelector('.xc-input').value,document.querySelector('.xc-input').selectionStart,document.querySelector('.xc-input').selectionEnd]") == ["keep this draft", 2, 6]
             b.eval("document.querySelector('.xc-appearance').value='light';document.querySelector('.xc-appearance').dispatchEvent(new Event('change'))")
-            b.eval("location.reload()")
+            b.reload()
             b.wait("document.documentElement.dataset.theme === 'light' && !!document.querySelector('.xc-appearance')")
             assert b.eval("document.querySelector('.xc-appearance').value") == "light"
             assert b.eval("sessionStorage.getItem('xc-token')") == srv.token
