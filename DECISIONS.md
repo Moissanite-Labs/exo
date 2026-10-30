@@ -4730,6 +4730,21 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
   can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
   the ruling as written until the next compaction.
+  *Amendment 2026-10-28 (exo-desktop #52):* an audit of the model transports found more bugs no test caught. Each
+  got a failing test first. Reasoning settings now stay valid on the wire, because a 400 ends the call with no
+  fallback. OpenAI-compatible transports sent Exo's `max` and `ultra` as `"max"`, which OpenAI and OpenRouter
+  refuse. They send `xhigh` now, the top of that scale. A legacy Anthropic model got a 1,024-token thinking budget
+  even when `max_tokens` was 1,024 or less, and the API wants the budget below `max_tokens`. Thinking stays off
+  there now. `docs/CORE-V2-INTERFACES.md` "Core types", "Reasoning levels". Tool arguments that did not
+  parse as a JSON object became `{}`, so the tool ran with no arguments. A tool with nothing required then did
+  something the model never asked for, and a call cut short at `max_tokens` ran as an empty one. They now arrive
+  as `BadArguments`, an empty dict with the reason. The registry answers that call with an error result before any
+  hook or the tool runs, and the model can call again. An empty dict keeps a replay valid on both wires and keeps
+  `ToolCall`'s fields as they are. `docs/TOOLS.md` "Arguments that did not parse". The flattened prompt of
+  `muse-cli` (D-051) kept only user and assistant text, so a call with no tools but earlier tool rounds in its
+  history lost every tool call and result, and an assistant turn that only called tools. They now go in as text,
+  `[tool call <name>] <arguments>` and `[tool result <name>]` blocks. `docs/PROVIDERS.md` "Use a Muse Code
+  subscription".
   *2026-10-30 note (#537):* Hermes's messaging gateway cuts its transcript on `/undo`, drops the cached agent and
   tells no one. The new agent's engine read the undone ruling back from the pins file, and its block, summaries and
   handoffs carried it again. Each pin now has a lead in the pins file. The lead is a digest of the user and summary

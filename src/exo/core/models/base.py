@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
-from exo.core.types import ContentPart, Message, ProviderEvent, StopReason, ToolCall, ToolSpec, Usage
+from exo.core.types import BadArguments, ContentPart, Message, ProviderEvent, StopReason, ToolCall, ToolSpec, Usage
 
 # HTTP statuses that may succeed on retry or on another route.
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
@@ -105,14 +105,15 @@ class StreamState:
 
 
 def parse_json_args(raw: str) -> dict[str, Any]:
-    """Decode tool arguments; empty -> {}, bad JSON or non-object -> {} (upstream behavior)."""
+    """Decode tool arguments. Empty means no arguments, ``{}``. Bad JSON or a non-object is ``BadArguments``, which
+    the registry refuses, so the call is not run with nothing (upstream returned ``{}``)."""
     if not raw or not raw.strip():
         return {}
     try:
         val = json.loads(raw)
-    except ValueError:
-        return {}
-    return val if isinstance(val, dict) else {}
+    except ValueError as exc:
+        return BadArguments(f"the arguments are not valid JSON ({exc})")
+    return val if isinstance(val, dict) else BadArguments("the arguments must be a JSON object")
 
 
 USER_AGENT = "exo/0.1"  # some providers (OpenCode Go) ask clients to name themselves, not their HTTP library
