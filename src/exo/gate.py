@@ -270,6 +270,34 @@ class _StandIn(str):
 _READER = _StandIn("the reader's own text")
 
 
+class _OwnText(str):
+    """An own text without words the command does not run as written (#458): a here-string, or the program around a
+    command that `find -exec`, `xargs` or `git bisect run` runs. ``whole`` is the text with them, the own text before
+    #458. A rule names it only when it matches both (_names_own), so the own text test is never looser than before."""
+    whole: str
+
+
+def _own_of(bare: str, whole: str) -> str:
+    """``bare`` as an own text that ``whole`` was before (#458), or ``whole`` itself when they are the same."""
+    if bare == whole:
+        return whole
+    t = _OwnText(bare)
+    t.whole = getattr(whole, "whole", whole)
+    return t
+
+
+def _own_key(t: str | None) -> tuple:
+    """An own text for a dict key: two texts alike but for ``whole`` are not the same own text (#458)."""
+    return t, getattr(t, "whole", None)
+
+
+def _names_own(t: str | None, regexes: Iterable[re.Pattern]) -> bool:
+    """Whether a rule's patterns name an own text (#394): one of them matches it, and one matches its ``whole`` too."""
+    regexes = list(regexes)
+    return t is not None and any(rx.search(t) for rx in regexes) and \
+        (not isinstance(t, _OwnText) or any(rx.search(t.whole) for rx in regexes))
+
+
 def _severity(c: Classification) -> tuple:
     return (REVERSIBILITY.index(c.reversibility), EXPOSURE.index(c.exposure), c.third_party,
             c.category not in ("shell", "read", "code", "unknown"))
@@ -1952,16 +1980,34 @@ class _PipeTexts:
     """The pipeline texts that a line's stdin readers carry as their own text (#394, _runs_stdin), each built once.
     Each text holds every command before its reader, so a long pipeline of readers (`x|sh|sh|..`) would hold the
     square of its length. So together they hold at most four times the line's length plus 4 KB, and a reader past
-    that has no own text."""
+    that has no own text. A here-string is left out of every own text (#458, source)."""
 
     def __init__(self, lx: _Lexer) -> None:
         self.lx, self.left = lx, 4 * len(lx.s) + 4096
         self.built: dict[tuple[int, int], str | None] = {}
+        self.stdin: list[tuple[int, int]] = []     # where each here-string, `<<<` and its word, starts and ends
+
+    def source(self, a: int, b: int) -> str:
+        """The line's text from a to b without its here-strings (#458), with the text as written as its ``whole``
+        (_OwnText). A here-string is the command's stdin, as a here-doc body is, so a rule that names only its word
+        names no command."""
+        whole = self.lx._source(a, b)
+        k = bisect.bisect_left(self.stdin, (a,))
+        if k == len(self.stdin) or self.stdin[k][0] >= b:
+            return whole
+        out = []
+        for x, y in self.stdin[k:]:
+            if x >= b:
+                break
+            out.append(self.lx._source(a, x).strip())
+            a = y
+        out.append(self.lx._source(a, b).strip())
+        return _own_of(" ".join(t for t in out if t), whole)
 
     def text(self, a: int, b: int) -> str | None:
         if (a, b) not in self.built:
             fits = b - a <= self.left
-            self.built[(a, b)] = self.lx._source(a, b) if fits else None
+            self.built[(a, b)] = self.source(a, b) if fits else None
             self.left -= b - a if fits else 0
         return self.built[(a, b)]
 
@@ -2004,7 +2050,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
-            cur.own = lx._source(at, o_end)
+            cur.own = pipes.source(at, o_end)
             cur.subs_met = lx.met[o_tok]
             cur.opens = (shut[1], shut_met) if shut is not None else None
             if cur.piped_in and p_at >= 0:
@@ -2068,6 +2114,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             if i + 1 < len(toks) and toks[i + 1][0] == "w":
                 if v == "<<<":
                     cur.herestrings.append(toks[i + 1][1])
+                    pipes.stdin.append((marks[i][0], marks[i + 1][1]))
                 else:
                     cur.redirs.append((v, toks[i + 1][1]))
                 a, o_end, o_tok = marks[i][0], marks[i + 1][1], i + 1
@@ -2877,7 +2924,8 @@ def _run_privileged(c: Classification) -> None:
     _raise_axes(c, reversibility="costly")          # with the part a sudo write copy displaced (#454)
 
     def key(p: Classification) -> tuple:
-        return p.category, p.tool, p.target, p.exposure, p.third_party, p.command, p.own, tuple(p._command_views)
+        return p.category, p.tool, p.target, p.exposure, p.third_party, p.command, _own_key(p.own), \
+            tuple(p._command_views)
     parts, copies = list(_each_part(c))[1:], []
     have = {key(p) for p in parts if p.reversibility == "costly"}
     for p in parts:
@@ -4663,9 +4711,10 @@ def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Cl
     def walk(p: Classification) -> Classification:
         if not held(p):
             return p
-        if (id(p), own) not in done:
-            done[(id(p), own)] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
-        return done[(id(p), own)]
+        key = (id(p), _own_key(own))
+        if key not in done:
+            done[key] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
+        return done[key]
     return walk(c)
 
 
@@ -7157,8 +7206,8 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
 
 def _part_key(p: Classification) -> tuple:
     """What a policy reads of one part, so a loop's second pass (#479) adds only the parts the line does not have."""
-    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, p.own, p.text,
-            p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
+    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, _own_key(p.own),
+            p.text, p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
 
 
 def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
@@ -9726,11 +9775,15 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
 def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
     parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
-    its code). The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516),
-    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as
-    it names the `cd` in the cd form; naming the folder lifts no deny of the part's."""
+    its code). A call with no own text at all (a tool other than a shell or execute_code) is one text too.
+    Nor is a line whose text holds `<<` (#458): a here-string's word and a here-doc's body are stdin, not the
+    command's own text, so a rule that would lower the line must name that text, as on a line of two commands. Where
+    the `<<` starts neither (a quoted `<<`, a shift), the own text is the line's, and the pass decides as before.
+    The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516), so a line
+    with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as it names
+    the `cd` in the cd form; naming the folder lifts no deny of the part's."""
     texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
-    return len(texts) < 2
+    return not texts or (len(texts) < 2 and "<<" not in c.command)
 
 
 def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
@@ -9754,7 +9807,7 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
         # The part alone, without the parts it was built from (each is tested in turn): no rule lowers it here.
         # Parts alike decide alike, so a long line of the same few commands is decided a few times. A gh part is
         # also decided on each other target it may land on (#399), so those are part of what makes parts alike.
-        text = p.own if p.own is not None else p.command
+        text = getattr(p.own, "whole", p.own) if p.own is not None else p.command   # as before #458
         key = (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.tool, p.summary, p.target, p.text,
                p.title, p.text_file, text, tuple(p.signals), tuple(p.alt_targets))
         if key not in alone:
@@ -9767,9 +9820,10 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
         regexes, seen, level = [re.compile(x) for x in patterns], {}, OUTCOMES.index(decision)
 
         def named(t: str | None) -> bool:
-            if t not in seen:
-                seen[t] = t is not None and any(rx.search(t) for rx in regexes)
-            return seen[t]
+            key = _own_key(t)
+            if key not in seen:
+                seen[key] = _names_own(t, regexes)
+            return seen[key]
         return all(named(t) for t in setters) and \
             all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
     return test
@@ -9839,8 +9893,8 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
             if r["decision"] != "deny" and "command" in r["match"] and p.command != c.command and \
                     not _rule_matches({"command": r["match"]["command"]}, c):
                 continue
-            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
-                    p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):
+            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and \
+                    not _names_own(p.own, (re.compile(str(x)) for x in _as_list(r["match"]["command"]))):
                 passed.append(r)
                 continue
             if passed is not None and whole is not None and r["decision"] != "deny" and "command" in r["match"] and \
@@ -9961,7 +10015,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
     folder added is on it. That part carries a `_StandIn` for `cd <folder>` among its setters (#516), so the line
     goes through the own text pass: a rule that names only the command is passed over, and the part's matrix deny
-    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of.
+    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of. A line whose text holds
+    `<<` goes through that pass too (#458): a here-string's word and a here-doc's body are not the command's own text,
+    so a rule that names only them lowers nothing.
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
@@ -10050,7 +10106,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         if not _rule_matches(r["match"], eff):
             continue
         first = first or r
-        if passed is not None and eff.parts and "command" in r["match"] and \
+        if passed is not None and "command" in r["match"] and \
                 (OUTCOMES.index(r["decision"]) < base or names_opaque(r)):
             own = own or _line_own_test(eff, pol, ctx)
             if not own(r["decision"], [str(x) for x in _as_list(r["match"]["command"])]):

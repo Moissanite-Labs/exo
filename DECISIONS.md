@@ -5994,6 +5994,25 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   and checking policy patterns when the policy loads (#466).
   A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
   so `target:*/.exo/keys/*` matches neither.
+  *Amendment 2026-10-30 (issue #458):* text a command does not run as written still named it for a rule that would
+  lower the line. A here-string's word was part of its command's own text, and a line of one command was matched on
+  its whole text, a here-doc body included. So under `categories: {force_push: deny}` and allow rules for `^ls` and
+  `npm test`, `ls; git push --force origin main <<< 'npm test'` was allowed, and so was `rm -rf build <<< 'npm test'`
+  under `categories: {delete: deny}`. Now a here-string, `<<<` and its word, is left out of a part's own text and of a
+  pipeline text, as a here-doc body and a comment already were. The text as written stays its `whole`
+  (`_OwnText`), and a rule names the own text only when it matches both, so an anchored rule for the bare command
+  (`'^rm -rf build$'`) lowers no line it did not lower before. A line whose text holds `<<` is not one text
+  (`_one_text`), so it goes through the #394 test, which now runs on a line with no parts too. Where the `<<` starts
+  no stdin, the own text is the line's, and the line is decided as before. A call with no own text at all, a tool
+  other than a shell, is one text as before. Like #394, this only passes more rules over, and the line is then also
+  decided as before, so no decision is looser. Rejected: dropping the here-string from the own text with no
+  `whole`. Main's `scripts/gate_diff.py` found that draft lowering 20 pairs: under
+  `['^ls', '^rm -rf build$']` it allowed `ls; rm -rf build <<< 'npm test'`, which main asks about or denies.
+  Not done: a line of one command with a comment and no `<<` is still matched on its whole text
+  (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
+  argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches
+  its text still names the command. Rejected: giving the command after `sudo`, `env` or `timeout` its own text. Those
+  prefixes stay part of the simple command as written (#394), so `'^sudo git push'` still names the push it runs.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

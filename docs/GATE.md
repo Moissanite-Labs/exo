@@ -1387,7 +1387,13 @@ gate does not read:
 - How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
   its simple command as written, with its redirections, after leading reserved words such as `then`
   (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
-  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
+  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A here-string,
+  `<<<` and its word, is left out of it (#458), as a comment and a here-doc body are: a
+  here-string and a here-doc body are the command's stdin. So `rm -rf build <<< 'npm test'` has
+  `rm -rf build` as its own text, and a here-doc's command keeps only its operator
+  (`rm -rf build <<EOF`). A pipeline text leaves its here-strings out too. A rule must still
+  match the text as written as well, as before, so `'^rm -rf build$'` does not lower
+  `ls; rm -rf build <<< 'npm test'`. A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
@@ -1465,10 +1471,16 @@ gate does not read:
   (`cat ~/.kube/config`) or a string literal in its code
   (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
   different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. The one exception is the part a
-  shell call's own folder added: it carries the `cd <folder>` stand-in among its setters (#516), so
-  a line with it is not one text, and a rule that would lower the line or lift the part's deny
-  names the folder, as it names the `cd` in the cd form ("The tool's own folder"). A command the gate finds run inside
+  decided as before. An `execute_code` call is one such action. There are two exceptions. A line whose text
+  holds `<<` goes through the own text test (#458), so a rule that names only a here-string or a
+  here-doc body lowers nothing: under `categories: {delete: deny}` and an allow rule for
+  `npm test`, `rm -rf build <<< 'npm test'` is denied. Where the `<<` starts neither (a quoted
+  `<<`, a shift), the own text is the line's and the line is decided as before.
+  And the part a shell call's own folder added carries the `cd <folder>` stand-in among
+  its setters (#516), so a line with it is not one text, and a rule that would lower the line or
+  lift the part's deny names the folder, as it names the `cd` in the cd form ("The tool's own
+  folder"). A line of one command with a comment and no `<<` is still matched on its whole text,
+  comment included (a row of #458 this change leaves open). A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`

@@ -321,6 +321,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
   CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
   `tests/security/test_gate_store_lift_own_text_547.py`.
+
+- Gate: a here-string or a here-doc body no longer names its command for an allow or log rule (#458). Under `categories:
+  {delete: deny}` and an allow rule for `npm test`, `rm -rf build <<< 'npm test'` was allowed by the rule, and so was a
+  here-doc body holding `npm test`. A here-string is now left out of its command's own text, as a here-doc body is, and
+  a line whose text holds `<<` goes through the own text test (#394). A rule must still match the text as written too,
+  so no line is decided lower than before. A rule that names the command too, or a category or tool key, still lowers
+  each. A line of one command with a comment is still matched on its whole text. Tests:
+  `tests/security/test_gate_command_rule_parts.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).

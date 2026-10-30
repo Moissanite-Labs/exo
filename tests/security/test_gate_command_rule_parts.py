@@ -726,6 +726,84 @@ def test_the_own_text_of_what_the_gate_finds_in_code():
     assert outcome(piped, pol(rule("^python3"), categories=OPAQUE_OK)) == "ask"    # main: ask
 
 
+# --- stdin is not own text: a here-string or a here-doc body (#458) ---------------------------------------------------
+# A here-string's word was part of its command's own text, and a line of one command was matched on its whole text, a
+# here-doc body included. So an unanchored allow rule found its text in the stdin and lifted a category deny. Main
+# allowed each line below by the rule, but the last two: a shell reads its stdin as a nested line, whose commands
+# have their own text, so those two were denied on main too and stay denied.
+
+DELETE_DENY = {"delete": "deny"}
+PUSH_DENY = {"force_push": "deny"}
+STDIN_ROWS = [
+    # (line, rules, categories)
+    (f"ls; {PUSH} <<< 'npm test'", [rule("^ls"), rule("npm test")], PUSH_DENY),
+    ("rm -rf build <<< 'npm test'", [rule("npm test")], DELETE_DENY),
+    ("git push <<< 'npm test' --force origin main", [rule("npm test")], PUSH_DENY),
+    ("rm -rf build <<EOF\nnpm test\nEOF", [rule("npm test")], DELETE_DENY),
+    ("rm -rf build <<'EOF'\nnpm test\nEOF", [rule("npm test")], DELETE_DENY),
+    ("rm -rf build <<-EOF\n\tnpm test\n\tEOF", [rule("npm test")], DELETE_DENY),
+    (f"bash <<< 'npm test; {PUSH}'", [rule("npm test")], {**PUSH_DENY, **OPAQUE_OK}),
+    (f"cat <<< 'npm test; {PUSH}' | bash", [rule("npm test")], {**PUSH_DENY, **OPAQUE_OK}),
+]
+
+
+@pytest.mark.parametrize("line, rules, cats", STDIN_ROWS)
+def test_a_rule_that_names_only_stdin_does_not_lift_a_category_deny(line, rules, cats):
+    d = decide(sh(line), pol(*rules, categories=cats))
+    assert (d.outcome, d.rule) == ("deny", "category"), d
+
+
+@pytest.mark.parametrize("line, own", [
+    ("rm -rf build <<< 'npm test'", "rm -rf build"),
+    ("git push <<< 'npm test' --force origin main", "git push --force origin main"),
+    ("cat <<<x >out", "cat >out"),
+    ("rm -rf build <<EOF\nnpm test\nEOF", "rm -rf build <<EOF"),
+])
+def test_a_here_string_is_left_out_of_the_own_text(line, own):
+    assert sh(line).own == own
+    assert [k.own for k in gate._parse(line)[0]] == [own]
+
+
+def test_a_pipeline_text_leaves_its_here_strings_out():
+    line = f"cat <<< 'npm test; {PUSH}' | bash"
+    runs = [p.own for p in gate._each_part(sh(line)) if p.summary == BASH_RUNS]
+    assert runs == ["cat | bash"], runs
+
+
+@pytest.mark.parametrize("line, r, cats, expected", [
+    # a rule that names the command itself still decides it
+    ("rm -rf build <<< 'npm test'", rule("^rm -rf build"), DELETE_DENY, "allow"),
+    ("rm -rf build <<EOF\nnpm test\nEOF", rule("^rm -rf build"), DELETE_DENY, "allow"),
+    (f"ls; {PUSH} <<< 'npm test'", rule(["^ls", "git push --force"]), PUSH_DENY, "allow"),
+    # a `<<` that starts no stdin leaves the line its own text, decided as before
+    ("echo 'a << b'", rule("a << b", "log"), {}, "log"),
+    ("echo $((1 << 2))", rule("1 << 2", "log"), {}, "log"),
+    # a rule that keeps or raises the line still sees the whole line, a deny rule too
+    ("rm -rf build <<< 'npm test'", rule("npm test", "deny"), {}, "deny"),
+])
+def test_a_line_with_stdin_keeps_what_names_its_command(line, r, cats, expected):
+    assert outcome(line, pol(r, categories=cats)) == expected
+
+
+ANCHORED_LIST = rule(["^ls", "^git status", "^rm -rf build$", "^make test$"])
+
+
+@pytest.mark.parametrize("line, cats, expected", [
+    ("ls; rm -rf build <<< 'npm test'", {}, "ask"),
+    ("ls; rm -rf build <<< 'npm test'", DELETE_DENY, "deny"),
+    ("ls; rm -rf build <<< npm\\ test", DELETE_DENY, "deny"),
+    (f"ls; {PUSH} <<< x", PUSH_DENY, "deny"),
+])
+def test_a_rule_that_names_the_command_without_its_here_string_does_not_lower_it(line, cats, expected):
+    # The own text keeps the here-string as its `whole`: a rule must match it too, as before, so an anchored rule for
+    # the bare command does not lower the line. Without that, gate_diff found `ls; rm -rf build <<< 'npm test'`
+    # allowed under this rule list, where main asked or denied.
+    p = pol(ANCHORED_LIST, rule(f"^{PUSH}$"), categories=cats)
+    assert outcome(line, p) == expected                                                        # main: the same
+    own = next(q.own for q in gate._each_part(sh(line)) if q.category in ("delete", "force_push"))
+    assert own.whole == line.split("; ", 1)[1] and own == own.whole.split(" <<<")[0], (own, own.whole)
+
+
 # --- what stays the same --------------------------------------------------------------------------------------------
 
 SINGLE = [
