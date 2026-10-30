@@ -17,10 +17,10 @@ export function workerModels(root) {
     const fallbacks = h("textarea", { class: "xc-field", rows: "2", "aria-label": tier + " fallback models",
       placeholder: "Optional fallback models, one per line", spellcheck: "false", disabled: true });
     fields[tier] = { primary, fallbacks };
-    return h("div", { class: "xc-prow" }, h("h3", null, tier[0].toUpperCase() + tier.slice(1)),
+    return h("div", { class: "xc-worker-tier" }, h("h3", null, tier[0].toUpperCase() + tier.slice(1)),
       h("label", null, "Preferred model", primary), h("label", null, "Fallbacks, in order", fallbacks));
   });
-  root.replaceChildren(h("section", { class: "xc-prov-list", "aria-label": "Worker models" },
+  root.replaceChildren(h("section", { class: "xc-workers", "aria-label": "Worker models" },
     h("h2", null, "Worker models"),
     h("p", null, "Choose models for fast, standard and deep work. Leave a tier empty to inherit its fallback roles."),
     h("form", { onsubmit: submit }, rows, h("div", { class: "xc-prov-def-act" }, save, reload)), catalog, effective, status));

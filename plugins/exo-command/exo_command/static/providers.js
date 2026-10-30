@@ -30,8 +30,12 @@ export function mount(root) {
   const workers = h("div", { class: "xc-prov" });
   const connection = h("section", { class: "xc-prov-connect", "aria-label": "ChatGPT subscription connection" });
   const counts = h("div", { class: "xc-phead-read" });
+  const workerShortcut = h("button", { class: "xc-btn", type: "button", onclick: () => {
+    workers.scrollIntoView({ block: "start" });
+    workers.querySelector("input")?.focus({ preventScroll: true });
+  } }, "Worker models");
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
-    lede: "Where model keys live, which providers answer, and the models for main and worker tasks.", aside: counts }), connection, body, workers));
+    lede: "Where model keys live, which providers answer, and the models for main and worker tasks.", aside: h("div", null, workerShortcut, counts) }), connection, body, workers));
   let alive = true, authTimer = null, authBusy = false, authState = null;
 
   function drawChatGPT(message = "") {
