@@ -774,6 +774,17 @@ export function mount(root) {
       input.value = ""; help.sent(text); rename(current, command.args); return;
     }
     if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
+    if (command && command.name === "approval-authority") {
+      if (!current) { flash("Select a parent thread first"); return; }
+      const action = command.args || "status";
+      if (!["status", "grant", "revoke"].includes(action)) { flash("usage: /approval-authority [status|grant|revoke]"); return; }
+      try {
+        const out = await api("POST", "/api/approval-authority", { session: current, action });
+        push({ kind: "report", id: "authority" + Date.now(), title: "delegated approval authority", text: JSON.stringify(out) });
+        input.value = ""; help.sent(text);
+      } catch (e) { fail(e); }
+      return;
+    }
     if (command && command.name === "permissions") {   // D-065: the mode lives in the core; the banner follows it
       input.value = ""; help.sent(text);
       const mode = command.args === "status" ? "" : command.args;

@@ -821,6 +821,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (the guard walks up looking for `.git`, so a bare or broken repo counts as a repo).
 
 ## D-033 (2026-10-12) Approvals bound to the exact text, who may approve, and an outbound scrub
+- **Amendment 2026-10-30 (delegated approval authority):** an explicit principal-only process-local grant
+  permits one selected parent to review eligible requests in active task descendants. The existing desk
+  checks ancestry, grant generation and exact request/call binding, revalidates trusted gate eligibility,
+  commits signed evidence with the actual agent identity and resolves once. Credential/store floors,
+  reserved controls and explicit human-only policies remain human. No principal impersonation, standing
+  allow or automatic child grant is added. Cooperative delegation yields to the same parent turn and uses
+  runtime-owned, joined child tasks. See `docs/DELEGATED-APPROVAL-AUTHORITY.md` for commands and limits.
 - **Why:** orda's review (P0-4, P0-5). An "always" answer covered any later text under the same rule, was lost
   on restart, and any local client could answer any approval. A public repo once shipped with task ids, profile
   names, model strings and a home path in it (lrn-042); the gate's posting checks were empty by default.

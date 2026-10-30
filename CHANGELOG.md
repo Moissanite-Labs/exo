@@ -70,6 +70,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   bound). Test-only.
 
 ### Added
+- Explicit, ephemeral parent approval authority for eligible active delegated descendants. Human clients
+  grant or revoke it, and the same parent turn can inspect, allow once, deny and wait through the existing
+  desk. Signed audit, exact bindings, human-only exclusions and owned child cleanup are required.
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
