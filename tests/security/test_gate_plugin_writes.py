@@ -382,7 +382,8 @@ def test_a_store_mail_keeps_the_home_path_in_its_heredoc(store, exo_home):
 
 
 def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch):
-    """`deny: [store_write]` refuses every spelling; a `target:` entry matches the path as the call spells it."""
+    """`deny: [store_write]` refuses every spelling; a `target:` entry matches the path as the call spells it, and in
+    its lexical form since the #513 review (#446), so `~/.exo/../.exo` is denied too."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("EXO_HOME", raising=False)
     (tmp_path / ".exo" / "plugins" / "foo").mkdir(parents=True)
@@ -390,7 +391,7 @@ def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch
     for spelled in ("~/.exo", "$HOME/.exo", str(tmp_path / ".exo"), "~/.exo/../.exo"):
         c = gate.classify(_sh(f"cp evil.py {spelled}/plugins/foo/__init__.py"))
         assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
-        assert gate.decide(c, by_target).outcome == ("deny" if spelled == "~/.exo" else "ask"), spelled
+        assert gate.decide(c, by_target).outcome == ("deny" if spelled.startswith("~/") else "ask"), spelled
 
 
 @pytest.mark.parametrize("cmd", [

@@ -1192,6 +1192,56 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#446, D-038 amendment): a secret-store path spelt with a doubled slash, a `.` or a `x/..` between its parts
+  now asks. The shell and the kernel read `~/.kube//config` and `~/.kube/./config` as `~/.kube/config`, but the store
+  list was matched as written, so `cat ~/.kube//config`, `cat ~/.kube/./config` and `read_file ~/.kube//config` were
+  plain reads. The same held for `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.config/gcloud` and the other
+  names with more than one part, for a thread's `/proc/1/task/1//environ` (#313), and for relative Exo-store writes
+  (`echo x > .exo//state/x`). Each shell word and file-tool path is now also matched with `//` and `/./` collapsed and
+  `x/..` resolved, beside the form as written. A backslash between the parts is read the same way, so
+  `echo x > ~/.kube/\config` and `cat < ~/.kube/\config` ask. Their target is the word the shell reads,
+  `~/.kube/config`, as for `cat ~/.kube/\config` on main. A backslash in quotes stays in the name, so
+  `cat "$HOME/.kube/\config"` stays a read. A glob in the `/proc` name itself now counts too:
+  `cat /pro?/self/environ`, `cat /[p]roc/self/environ` and `cat /*/*/environ` ask, and so does a glob after a process's
+  root link, which leads to `/` (`cat /proc/self/root/pro?/1/environ`, `cat /proc/self/root/../pro?/1/environ`), or
+  after its working folder link, which does for pid 1 and most daemons (`cat /proc/1/cwd/pro?/1/environ`). A glob
+  after two leading slashes is read as after one, so `cat /$HOME/.docker/conf*` and
+  `cat /proc/self/root/$HOME/.kube/conf*` ask. This also covers rows 1 and 2 of #476. A `..` after another link is
+  resolved as text, so `~/.kube/link/../config` asks even where the link leads elsewhere (fails closed), and a glob's
+  folder part with a `..` is resolved too, so `cat /dev/fd/../env*` asks. The check reads the word, so `ls /*/bin/*`
+  and `cat /*/src/*` ask, as `ls /proc/bin/*` does. A `target:` entry, in `deny:` or `reserved:`, and a deny or ask
+  rule keyed on `target` also match the target's lexical form, so `cat ~/.kube//config` is denied under
+  `deny: [target:*/.kube/config]`, as its plain spelling is. Where a line's or a file tool's target is a spelling main
+  did not read, main's target, another store on the line, stays a credentials part, so a `target:` entry that named it
+  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. The
+  same holds where main's target on a file tool is a bare name read from the session folder (`id_rsa` with
+  `cwd: ~/.ssh`). A write tool that names its files under another key than `path` (`write_file` with `paths`) keeps
+  main's write part on that store too, so an entry for a `local_write` there still matches. A shell call's own folders
+  work the same way: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, the folder main read first, `~/.ssh`, stays a
+  part, so `deny: [target:*/.ssh*]` denies the call, as on main. The same holds for the folder of a call whose line
+  names a store only in such a spelling (`cat ~/.kube//config` with `cwd: ~/.ssh`), for the folder itself where a word
+  with no name of its own resolves into a store from it (`cat ~/.kube//config keys` with `cwd: ~/.exo` under
+  `deny: [target:*/.exo]`, also beside a later read, as in `cat ~/.kube//config; cd ~/.docker && cat conf*`), for the
+  name such a line reads after a `cd`
+  (`cd ~/.config/gh && cat /pro?/self/environ hosts.yml` under `deny: [target:*hosts.yml]`, and
+  `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json`, whose name #320's expansion forms read, under
+  `deny: [target:config]`), and for the first store beside a `$( )` that reads a store through a redirection with a
+  backslash (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)` under `deny: [target:*/.ssh/*]`). Main's target weighs as
+  main's line did, so a rule on it and `irreversible` still denies
+  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`. On a remote line the host keeps its copy of the
+  line's read, so `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` is denied under
+  `deny: [{category: read, target: prod}]`, as on main. The lexical form is matched in any letter case too (#601), so
+  `cat ~/.KUBE//config` asks, and `ssh prod 'rm -rf ~/.Kube//config'` keeps the host's delete, as its plain spelling
+  does on main. Each other store a line names keeps the part the #609 follow-up gives it, also in these spellings, so
+  `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under `deny: [target:*/.kube/config]`, as its plain spelling is.
+  The line an `env -S` text runs (#591) and what a `sudo -s` or `sudo -i` shell runs (#491) are read the same way, so
+  `sudo -i <<< 'cat ~/.kube//config'` is denied under that entry too. So are the command behind a quoted prefix
+  assignment (#471), a loop body read again after its `cd` into the store (#479) and a `gc.recentObjectsHook` value
+  (#473): `X='a b' cat ~/.kube//config` is denied there as well. So are a command in a `${..}` word (#143), a
+  compound behind `time` or `!` (#853) and a while or until condition's `cd` into the store (#857):
+  `echo ${X:-$(cat ~/.kube//config)}` and `time { cat ~/.kube//config; }` are denied there too. Such a line now
+  takes the store's class, and a few lines decide as main decides the plain spelling, lower than before. The D-038
+  amendment lists the groups.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
   as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was

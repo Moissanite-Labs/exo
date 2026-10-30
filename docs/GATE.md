@@ -714,9 +714,9 @@ walk every file under their path, and since #241 they leave the stores below it 
 search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
-### Other spellings of a store path (#209, #202, #225, #199)
+### Other spellings of a store path (#209, #202, #225, #199, #446)
 
-A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
+A path can reach a store without spelling the store's name. The gate reads five such spellings the way the file
 system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
@@ -776,7 +776,146 @@ system or bash will.
   `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
   `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
   `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read. A thread's
-  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below).
+  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below). Since #446 a glob in the `/proc` name itself
+  counts when it could match `proc`: `cat /pro?/self/environ`, `cat /pro?/self/task/1/environ`,
+  `cat /[p]roc/self/environ`, `cat /p*/self/environ` and `cat /*/*/environ` ask, and so does `cat //proc/self/env*`,
+  with two leading slashes. A process's root link (`/proc/<pid>/root`, also below `task/<tid>`) leads to `/`,
+  so a glob after it is read from `/`: `cat /proc/self/root/pro?/1/environ` and
+  `cat /proc/self/root/proc/self/env*` ask. A `..` right after the link stays at `/`, as the kernel reads it, so
+  `cat /proc/self/root/../pro?/1/environ` asks too. A process's working folder link (`/proc/<pid>/cwd`) is read the
+  same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ` and
+  `cat /proc/*/cwd/pro?/*/environ` ask. Where the folder is not `/`, such a line asks when it need not (fails
+  closed). The kernel reads two leading slashes as one, and so does the glob check, so what follows such a link
+  into a home store is read too: `cat /proc/self/root/$HOME/.kube/conf*`, `cat /proc/self/cwd/$HOME/.kube/conf*`
+  and `cat /$HOME/.docker/conf*` ask (#513 review). `ls /p*/*/status`, `ls /proc/*/root/*` and
+  `ls /proc/self/cwd/*` stay reads. The check reads the word, not the program, so `ls /*/*/*` asks too, as
+  `ls /proc/*/*` already did. So do `ls /*/bin/*`, `ls -l /*/lib/*`, `cat /*/src/*` and `grep -r foo /*/src/*`:
+  a glob top folder, one folder and a glob that could be `environ` read as `/proc/<pid>/<glob>`, and
+  `ls /proc/bin/*` asks on main too. `ls /usr/bin/*`, `ls /*/bin` and
+  `ls /*/bin/python*` stay reads. Past 16 possible links in one word the word counts. So what follows a link is
+  read at most 16 times, and each such read takes the `/proc` step at most once. What follows the links of one
+  word mostly differs only before a `..`. So it is not read again when its lexical form, and its folder's, match
+  what followed an earlier link of the same word, unless it holds a link of its own. The reads after a link look
+  up a run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for
+  that lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
+  `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main, and a line of
+  500 or 2,000 short words with 16 links each about two to five times, by the load on the machine. The cost
+  grows with the line's length, as on main. Another link whose target the gate does not know, such as a folder's
+  descriptor in `/proc/<pid>/fd`, is read as text.
+- **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
+  `a/x/../b` as `a/b` when `x` is a plain folder. A store name with more than one part (`.kube/config`,
+  `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
+  `/proc/<pid>/environ` and its thread form) is matched in that lexical form too, after `~` and `$HOME` are spelt
+  out. So `cat ~/.kube//config`, `cat ~/.kube/./config`, `cat ~/.kube/x/../config`, `sudo cat ~/.kube//config`,
+  `bash -c 'cat ~/.kube//config'` and `read_file ~/.kube//config` ask, as `cat ~/.kube/config` does. The lexical
+  form is matched in any letter case, as the form as written is (#601), so `cat ~/.KUBE//config` asks. An ssh hop
+  keeps the host's copy of a remote command beside `~/.Kube//config` as it does beside `~/.Kube/config`, so
+  `ssh prod 'rm -rf ~/.Kube//config'` is denied under `deny: [{category: delete, target: prod}]`, as on main.
+  Single-folder stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where
+  the lexical one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
+  `~/.kube/x/../config` is a link to another folder, the kernel reads a file beside that folder, and the line asks
+  when it need not (fails closed). A link that leads into a store before a `..` is still resolved (#209). A glob
+  word with an absolute path is read that way too: when its folder part before the glob holds a `..`, that part is
+  also resolved. So `cat /dev/fd/../env*` and `cat /proc/thread-self/../../env*`, which reach the process's own
+  `environ`, ask, and so does `cat /tmp/k/../conf*` where `/tmp/k` links into `~/.kube`. The Exo-store names are
+  read the same way (see "The store is credentials"). So is the line an `env -S` text runs (#591) and what a
+  `sudo -s` or `sudo -i` shell runs (#491): `env -S 'cat ~/.kube//config'` and `sudo -i <<< 'cat ~/.kube//config'`
+  are denied under `deny: [target:*/.kube/config]`, as their plain spellings are. So are the command behind a quoted
+  prefix assignment (#471), a loop body read again after its `cd` into the store (#479) and a
+  `gc.recentObjectsHook` value (#473): `X='a b' cat ~/.kube//config` and
+  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under that entry too. So are a command in a
+  `${..}` word (#143), a compound behind `time` or `!` (#853) and a while or until condition's `cd` into the store
+  (#857): `echo ${X:-$(cat ~/.kube//config)}`, `time { cat ~/.kube//config; }` and
+  `until cd ~/.exo/policies$(cat ~/.kube//config); do sleep 1; done`.
+
+An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decided lower
+than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
+`read` no longer matched it as `credentials`: `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
+`read` asked, as `sudo ssh host cat ~/.kube/config` did on main then. Since #320 a costly copy of each part a
+privileged wrapper runs over ssh sits beside the line, so that rule denies both, here and on main. Since #839 (#547) a
+rule that would lift a part's deny on a line a store write leads must name the whole line. A line that names a secret
+only in an odd spelling was such a line on main, and it is `credentials` now, as its plain spelling is. So under
+`categories: {delete: deny}` and an allow rule on `.*`, `cat ~/.kube//config; cd ~/.exo && rm keys` asks, as
+`cat ~/.kube/config; cd ~/.exo && rm keys` does on main, where main denied the odd spelling. Beside a call's
+folder that names a store, the line's heaviest other command stays a part as well (#320), so under `delete: deny` and
+a rule that allows the rest, `cat ~/.kube//config; rm -rf keys` with `cwd: ~/.ssh` is denied, as on main. A line's
+target is the first store it names, and that can now be a spelling main did not read: an odd spelling, a glob such as
+`/pro?/self/environ`, a word with more than 16 possible links (which counts, fails closed), or a store that a `$( )`
+or `bash -c` on the line reads. Main's target was then another store on the line, and it stays a credentials part of
+the line (#513 review). So a `target:` or
+`reserved:` entry, or a deny rule keyed on `target`, that named it still matches. Under `deny: [target:*/.ssh/*]`,
+`cat ~/.kube//config ~/.ssh/id_rsa`, `cat /pro?/self/environ ~/.ssh/id_rsa` and
+`cat ~/.ssh/id_rsa $(cat ~/.kube//config)` are denied, as on main. So is
+`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`, whose target is the name the shell reads in the `$( )`,
+`~/.kube/config`, which main did not read. So is a file tool with both paths (`read_file`
+with `~/.kube//config` and `~/.ssh/id_rsa`). A file tool's target is the path as given, so main's target can be a
+bare name read from the session folder (#209): with `cwd: ~/.ssh`, `read_file` with
+`paths: [~/.kube//config, id_rsa]` is denied under `deny: [target:*id_rsa*]`, as on main. A write tool that names its
+files under another key than `path`
+(`write_file` with `paths`) has its write part on its target only, and it keeps main's write part on main's target too.
+So under a deny entry for a `local_write` on `*/.ssh/*`, `write_file` with `paths: [~/.kube//config, ~/.ssh/id_rsa]`
+is denied, as on main. The part has no own text, so it only raises, and the target stays the
+first store. It weighs as main's line did: a heavier command deeper in the line is a part with that weight beside it
+(#468), so `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'` is denied under a deny rule on `*/.ssh/*`
+and `irreversible`, as on main. On a remote line, ssh gives the host a copy of the line's first part that has no
+target (#320), and main's target part does not take its place. So `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` is
+denied under `deny: [{category: read, target: prod}]`, as on main. A line main read the same way gets no such part.
+Since the #609 follow-up each other store a line names is a part of its own too ("A glob in a store's folder", below),
+and those stores are read in the spellings #446 reads. So `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under
+`deny: [target:*/.kube/config]`, as its plain spelling is on main. Each word with such a backslash is read as the
+shell reads it, with the line's words spelt once per call, so a line of 1,000 of them costs about three times main.
+The host's copy passes over those parts as well,
+so `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'` is denied under
+`deny: [{category: read, target: prod}]` and under `deny: [target:*/.aws/*]`, as on main. A shell call's own folders
+work the same way (#311, "The tool's own folder"). The read's target is the first folder that names a store,
+and that can be a spelling main did not read. Main's folder then stays a part too (#513 review). So `bash` with
+`cwd: ~/.config//gcloud` and
+`workdir: ~/.ssh` is denied under `deny: [target:*/.ssh*]`, as on main, while `cwd: ~/.config/gcloud` there asks,
+here and on main.
+A call also reads its folders beside a line that reads a store, and each read is a part (#320). So
+`cat ~/.kube//config` with `cwd: ~/.ssh` is denied under `deny: [target:*/.ssh*]`, as `cat ~/.kube/config` there
+is, here and on main.
+A call that was `store_write` because its path goes through a descriptor or process folder
+(`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret. Its store write stays a part
+(#447), so a `store_write` deny, category line or `reserved:` entry still applies to it. A file tool's own class,
+a part's matrix cell and a `cd` folder's target still count, since #467 keeps each as a part.
+A `target:` entry in `deny:` or `reserved:`, and a deny or ask rule keyed on `target`, match the target as written
+and in its lexical form, with a leading `//` read as `/` (#513 review). So `cat ~/.kube//config` under
+`deny: [target:*/.kube/config]` is denied, as its plain spelling is, and so is `cat ~/.kube//config ~/.ssh/id_rsa`
+under `deny: [target:*/.kube/config, target:*/.ssh/*]`. Main denied that line through the ssh key, its target there.
+An allow rule and a scope still read the target as written, so a lexical form only raises a decision. A link before
+a `..` may lead elsewhere, and then the entry matches when it need not (fails closed).
+The target is the first word that names the store. So `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
+word, and `dd if=~/.exo/./state/x.json of=/tmp/a` its `if=` word, as `dd` with the plain path does on main.
+The lexical form keeps the `if=` or `of=`, but since #514 each store path a write names is also a part with the path
+alone. So `deny: [target:~/.exo/*]` denies both lines, here and on main, and a `reserved:` entry like it counts a
+hit. The same holds for a read of the seat key, `dd if=~/.exo//keys/seat.key of=/tmp/a`, as on main for its plain
+path.
+A backslash that the shell drops keeps the target main gives. The gate reads `\` as `/` in the line's text, so the
+text `~/.kube/\config` names the store only in its lexical form. Such a text is the target only when nothing else
+on the line names a store, not even a brace set. So the target of `cat ~/.kube/\config` is the word as the shell
+reads it, `~/.kube/config`, as on main, and `deny: [target:*/.kube/config]` denies it. When nothing else does, the
+text is read as the shell reads the word that holds it, a redirection's target included. Outside quotes `\c` is `c`,
+so `cat < ~/.kube/\config`, `sudo cat < ~/.kube/\config` and `echo x > ~/.kube/\config` name `~/.kube/config`, and
+that deny denies them, as it denies the plain spelling. In quotes, or after `\\`, the shell keeps the backslash and
+reads a file named `\config`. So `cat "$HOME/.kube/\config"` and `cat < "$HOME/.kube/\config"` stay reads, as on
+main. Such a word is still read in its lexical form, with the backslash as a plain character. A `..` takes back a
+folder whose name keeps a backslash, when that folder exists, so `cat "$HOME/.kube/\x/../config"` asks (fails
+closed). Two cases keep the text as the target and ask (fail closed): a word with a space or an operator, which
+another shell may read again (`su -c 'cat ~/.kube/\config'`), and text that no word holds, such as a heredoc body. A
+quoted word with the same text on the line does not change that. A text that names a store as written stays the
+target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps
+`~/.ssh/\id_rsa`, and `deny: [target:*/.ssh/*]` still denies it, while `cat ~/.ssh/\id_rsa` under
+`deny: [target:*/.ssh/id_rsa]` asks.
+
+Beside a store write, a secret makes the call `credentials`, not `store_write`. The outcome stays an ask:
+`cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml` asks. The store write stays a part, so its deny and
+`target:` entries still apply, and only the principal answers the line (#447, "Who may approve"). A file tool that
+writes a store file and names a secret keeps each store file as a `store_write` part too (#447). So `write_file` or
+`apply_patch` on `~/.exo/policies/gates.yaml` with a patch header for `~/.kube//config`, `copy_file` or
+`move_file` from `~/.kube/./config` to it, and `memory` with both paths are denied under `deny: [store_write]`, a
+`store_write: deny` category line or a `target:` entry for the store file, as on main.
+The D-038 amendment (#446) gives the groups and the differential's counts.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
@@ -804,7 +943,8 @@ subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
-`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
+`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`,
+`test_gate_secret_path_spellings.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### A glob in a store's folder (#594, #609)
@@ -935,10 +1075,10 @@ line is `credentials`, not `store_write`: `cat /proc/self/task/1/environ; echo x
 Before #447 a seat that `approvals.yaml` delegates `credentials` to could answer it, as for any secret on the
 line. Now the store write part keeps it with the principal alone ("Who may approve").
 
-Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
-is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
-either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
+Other spellings. Since #446 a doubled slash, a `.` or a `x/..` inside the name and a glob in the `/proc` name
+itself are read too (see "Other spellings of a store path" above). So `cat /proc/self/task//1/environ`,
+`cat /proc/1/task/1//environ`, `cat /proc/1//environ`, `read_file /proc/1/task/1//environ`,
+`cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` ask, whether or not `/proc/self` is a link.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
 
@@ -2235,6 +2375,16 @@ whole line in one pass:
   before, with the host as its target (`ssh host 'cat ~/.exo/$(printf ledger.sqlite)'` is still a
   read of `host` beside the secret), so a reserved or rule entry on it lists it as before.
 
+Since #446 a line can be `credentials` through nothing but a store named in a spelling main did
+not read. The name the check reads as written on such a line is a credentials part, as on any
+secret line above (#320), so under `deny: [target:*hosts.yml]`,
+`cd ~/.config/gh && cat /pro?/self/environ hosts.yml` is denied, as on main (#513 review). The
+expansion forms are read on a line that is no secret line. Main read no secret on such a line, so
+they are read there too, and a name they find is a part: under `deny: [target:config]`,
+`cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json` is denied, as on main. Where main read a
+store, the environment or a secret command on the line (`cat ~/.docker/config.json`, `env`), the
+forms are not read, as on main.
+
 In `$EXO_HOME` (#269). The run folder is not a store folder by its name, since job output in `run/jobs`
 stays readable, so the checks above do not reach it through `..`. On a line that reaches a folder in
 `$EXO_HOME` or in any `.exo`, that folder and each relative name read from it are checked as the paths
@@ -2312,7 +2462,9 @@ in one of three ways:
   glob that could name one). `ls` or `git status` with `~/.ssh` as `cwd` asks, as `cd ~/.ssh && ls`
   does, and so does `cat deploy_key` in `~/link-ssh`, a link to `~/.ssh`. The part's target is the
   folder, where a link leads, so `deny: ["target:*/.ssh"]` denies the call as it denies the `cd`
-  form.
+  form. The first such folder is the target. When it is a spelling main did not read
+  (`~/.config//gcloud`, #446), the folder main read first is a part too, so an entry for it still
+  matches.
 - A relative word resolves into a store from the folder (#209): any word in `~/.exo/keys` or
   `~/.claude`, `.` in `~/.exo/run`, or a link in the folder that leads into a store.
 - The line reads a relative name there as after `cd <folder>` (the #192 check): a store file name, a
@@ -2398,11 +2550,17 @@ beside it when it names another target, as beside a `cd` form's secret line (#32
 `deny: [target:*/.ssh]`, `cat id_rsa` with `~/.ssh` as `cwd` is denied, as
 `cd ~/.ssh && cat id_rsa` is, and so is `cat ${x-.netrc}; echo $(git push --force origin main)`
 with `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`, whose `${x-.netrc}` makes it a secret
-line. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
+line. The same holds for a line that names a store only in a spelling main did not read (#446):
+`cat ~/.kube//config` with `~/.ssh` as `cwd` is denied, as on main (#513 review). A word with no
+name of its own that resolves into a store from the folder (`keys` with `~/.exo` as `cwd`, #209)
+made main's line, read in that folder, a secret line with no target, so main's read of the folder
+took the folder itself as its path. That read stays a part beside such a store too:
+`cat ~/.kube//config keys` with `~/.exo` as `cwd` is denied under `deny: [target:*/.exo]`, as on
+main. So is `cat ~/.kube//config; cd ~/.docker && cat conf*` there, where the bare word is also a
+part with a name, read after the `cd`. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
 `credentials` part beside the write, as a key read after `tar -C` is (#464). So
-`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by
-`deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd` on the line
-is read as before.
+`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by `deny: [credentials]`,
+as its `cd` form is, and only the principal answers it. A `cd` on the line is read as before.
 
 The folder reads a line's names as a `cd` there does, in the same order (#320, "The working folder"
 above): first the words as written, and that name is the part's target, as on main; then
@@ -2906,7 +3064,9 @@ through an expansion, a principal store's `config.json` ask, and the call is als
 Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
 of it (`cp ~/.exo/config.json /tmp/`) asks, as a copy out of `policies/` does. The CLI code that
 writes the file (`exo config set`, onboarding, `exo import-store`) is unchanged: run by the
-principal in a terminal, it is not a tool call.
+principal in a terminal, it is not a tool call. A relative name is also matched with `//` and `/./`
+collapsed and `x/..` resolved (#446), so `echo x > .exo//state/x`, `write_file policies//gates.yaml`
+and `echo x > state/x/../gate-grants.json` are store writes.
 
 The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
 `$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
@@ -2990,9 +3150,10 @@ fails the test is still passed over at each part that a later rule lifts, so the
 the parts times the rules ahead of the one that lifts: on 3,000 `git push` parts followed by a store
 send, with 0, 19 or 99 push rules ahead of one rule that names every command, `decide` takes 0.06,
 0.28 and 0.96 s of CPU (main a1dd4fec: 0.05, 0.10 and 0.12 s). `deny: [store_write]` is the reliable way to refuse
-every write into the folder. A `target:` entry matches the path only as the call spells it:
-`target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
-absolute path and `~/.exo/../.exo/plugins/...` still only ask.
+every write into the folder. A `target:` entry matches the path as the call spells it and in its
+lexical form (#446): `target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y` and
+`cp x ~/.exo/../.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...` and the absolute path still only
+ask.
 
 Known friction (fails closed, no grant). A command that names a path in the folder and is not a
 read command asks the principal, as for the rest of the store. That covers a writing command that

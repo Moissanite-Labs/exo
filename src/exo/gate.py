@@ -141,6 +141,9 @@ class Classification:
     # True on the copy of a secret line's heaviest other command that _shell_call adds beside the folder's read (#320):
     # on main that command is the line, whose own violations are listed outside the cap, so the copy's are too.
     line_copy: bool = field(default=False, repr=False, compare=False)
+    # True on the part that keeps main's target where the line's own is a spelling only #446 reads (_plain_part): main
+    # had that target on the line itself, not on a part, so the ssh hop's copy for the host passes over it (#513).
+    main_target: bool = field(default=False, repr=False, compare=False)
     # True on the credentials part for each store a secret line names past its first (#609 follow-up): it only adds
     # a target for `target:` entries to match, so the checks that ask which part read the line on main pass it over.
     other_store: bool = field(default=False, repr=False, compare=False)
@@ -189,6 +192,7 @@ class Classification:
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
+        d.pop("main_target")
         d.pop("other_store")
         d.pop("_command_views")
         d.pop("own")
@@ -5158,8 +5162,11 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # #320: where an expansion form makes the remote line a secret or store line, the part that decided it
             # before keeps the host as its target, as the remote line itself did (`ssh host 'cat ~/.exo/$(printf
             # ledger.sqlite)'` was a read of host), so a reserved or rule entry on it still lists it. A copy with no
-            # parts and no post, so the posting checks read each post once.
-            kept = [p for p in c.parts if not p.other_store]
+            # parts and no post, so the posting checks read each post once. A part that keeps main's target beside a
+            # target only #446 reads is passed over (_plain_part): main had it on the line, and made the copy as here
+            # (`ssh host 'cat ~/.kube//config ~/.ssh/id_rsa'`, #513). So is a part for a store past the line's first
+            # (``other_store``, #609 follow-up)
+            kept = [p for p in c.parts if not (p.main_target or p.other_store)]
             top = (next((p for cat in ("credentials", "store_write") for p in kept if p.category == cat), None) or
                    _most_severe(kept)) if c.category in ("credentials", "store_write") else None
             if top is not None and not top.target:
@@ -6385,7 +6392,11 @@ def _fn_glob(glob: str) -> str | None:
 
 def _glob_names(glob: str, names) -> list:
     """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything. Names fold
-    case (#601); the names themselves come back as given."""
+    case (#601); the names themselves come back as given. A word with no `*`, `?` or `[` is only itself, so it is
+    compared as text: a line of many such words compiles no pattern each."""
+    if "*" not in glob and "?" not in glob and "[" not in glob:
+        f = _fold(glob)
+        return [n for n in names if _fold(n) == f]
     pat = _fn_glob(glob)
     if pat is None:
         return list(names)
@@ -7278,8 +7289,9 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         out.signals = line.signals + ["secret store"]
         out.parts = list(parts)
         return _weigh(out, combined, cmd)
+    raws = [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]]
     every: list[str] = []
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], every)
+    hit = _shell_credential_hit(cmd, segs, raws, every)
     named = hit if "/" in hit or "." in hit else ""
     # #320: on a line that is already a secret line (an expansion form read as a secret in a nested line, such as an
     # ssh remote command, decides it), the secret the line names is a part beside it when it is another target, as
@@ -7300,6 +7312,17 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             c.parts = [*c.parts, *(replace(seat, summary=f"shell touching {w}"[:120], target=w,
                                            signals=list(seat.signals), parts=[replace(q, target=w) for q in seat.parts])
                                    for w in others[1:])]
+    # #513 review: main's target stays a part, where the target is a spelling only #446 reads: the line's first store,
+    # or a part's, such as a `$( )` the line takes its target from (`cat ~/.kube/config $(cat /pro?/self/environ)`),
+    # also a name the shell reads from a text main did not read, which the line does not spell as the target is spelt
+    # (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`, whose target is `~/.kube/config`). It weighs as main's line did:
+    # a heavier command deeper in the line is a part with that weight beside it (`ssh prod 'rm -rf /'`, #468). It is
+    # added beside a part for the same store past the line's first (``other_store``), which only some checks read
+    if hit and c.category == "credentials" and not (_plain_secret([hit]) and _plain_secret([c.target])
+                                                     and c.target in _expand_text(cmd)):
+        mine = _shell_credential_hit(cmd, segs, raws, plain=True)   # main's target: a path, as ``named`` is above
+        if part := _plain_part(c, mine if "/" in mine or "." in mine else "", "shell touching", cmd):
+            _weigh(part, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
@@ -7311,7 +7334,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     walked: list = []
     first = c.category
     found = _cd_store_read(cmds, subs, False, walked)
-    more = _cd_store_read(cmds, subs, True, walked) if first != "credentials" else ""
+    # #513 review: a line that is credentials only through stores named in spellings main did not read (#446) was no
+    # secret line on main, so main read the forms too, and their name stays a part: `config` beside
+    # `cat ~/.docker//config.json` in `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json`. Only a line with a
+    # folder to enter (``walked`` holds its targets first) can read a name there, so no other line pays for the check
+    more = _cd_store_read(cmds, subs, True, walked) if first != "credentials" or walked and walked[0] and \
+        _no_plain_store([p for p in _each_part(c) if p.category == "credentials"], cmd) else ""
     if found and (first != "credentials" or found != c.target):
         c = secret(c, found, found, c.category in ("store_write", "credentials"))
     if more and more != found:
@@ -7462,7 +7490,8 @@ def _fold_made(t: str) -> bool:
     as written. The ssh hop keeps the host beside the line's own action then (review of #635): the fold-made part
     took the line's category, and the alt target's decision — the copy of the action on the host — with it. A name
     an expansion form made a store of folds the same way in either spelling, so this is False there and the hop
-    keeps the reading both spellings share."""
+    keeps the reading both spellings share. Each spelling is read in its lexical form too (#446), as the store checks
+    read it, so `~/.Kube//config` is fold-made as `~/.Kube/config` is (#513)."""
     if not t:
         return False
     f = _fold(t)
@@ -7470,8 +7499,8 @@ def _fold_made(t: str) -> bool:
         return False
     token = _case_off.set(True)
     try:
-        plain = _store_word(t, ancestors=True) or bool(_SENSITIVE_PATH.search(t))
-        folded = _store_word(f, ancestors=True) or bool(_SENSITIVE_PATH.search(f))
+        plain = _store_word(t, ancestors=True) or any(map(_SENSITIVE_PATH.search, _lexical(t)))
+        folded = _store_word(f, ancestors=True) or any(map(_SENSITIVE_PATH.search, _lexical(f)))
     finally:
         _case_off.reset(token)
     return not plain and folded
@@ -7594,9 +7623,10 @@ def _dynamic_secret_paths() -> list[str]:
     return paths
 
 
-def _is_run_dir(path: str, real: str = "") -> bool:
+def _is_run_dir(path: str, real: str = "", lexical: bool = False) -> bool:
     """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`. An
-    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
+    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it), or with
+    ``lexical`` from its lexical form, once per classify call (_resolved)."""
     raw = path.replace("\\", "/")
     path = os.path.normpath(raw)
     if _RUN_DIR.search(_fold(path)):
@@ -7604,12 +7634,22 @@ def _is_run_dir(path: str, real: str = "") -> bool:
     if not path.startswith("/"):
         return False
     try:
-        cands = {c for c in (path, real or os.path.realpath(raw)) if _fold(c).endswith("/run")}
+        cands = {c for c in (path, real or (_resolved(path) if lexical else os.path.realpath(raw)))
+                 if _fold(c).endswith("/run")}
         homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
     except (OSError, ValueError):
         return False
     return any(re.fullmatch(re.escape(_fold(h)) + r"(/principals/[^/]+)?/run", _fold(c))
                for c in cands for h in homes)
+
+
+def _resolved(path: str) -> str:
+    """os.path.realpath of the normalized absolute ``path``, looked up once per classify call (_call_memo)."""
+    memo = _call_memo.get()
+    seen: dict[str, str] = {} if memo is None else memo.setdefault("resolved", {})
+    if path not in seen:
+        seen[path] = os.path.realpath(path)
+    return seen[path]
 
 
 def _run_secrets() -> list[str]:
@@ -7896,22 +7936,36 @@ def _real(path: str, memo: dict[str, str]) -> str:
     return memo[path]
 
 
-def is_sensitive_path(path: str) -> bool:
+def _lexical(path: str) -> list[str]:
+    """``path`` as written and, when it differs, as the kernel reads it before any link: `//` and `/./` collapsed and
+    `x/..` resolved (#446). The store names match either form, so `~/.kube//config`, `~/.kube/./config` and
+    `~/.kube/x/../config` are `~/.kube/config`. A link before a `..` may lead elsewhere; then the lexical form asks
+    when it need not, which fails closed. The callers spell out `~` and `$HOME` first."""
+    norm = os.path.normpath(path)
+    return [path] if norm == path else [path, norm]
+
+
+def is_sensitive_path(path: str, plain: bool = False) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
     stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file. A
-    brace set counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    brace set counts when the path or any word bash expands it to names a store, or when it expands past the cap.
+    With ``plain``, only as main read it before #446 (_plain_secret)."""
     words = _brace_words(str(path or ""))
-    return words is None or _sensitive_words(words)
+    return words is None or _sensitive_words(words, lexical=not plain)
 
 
-def _sensitive_words(words: list[str]) -> bool:
+def _sensitive_words(words: list[str], lexical: bool = True) -> bool:
     """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
     as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
     the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
-    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
+    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads.
+    Without ``lexical``, a name is matched only as written (_shell_credential_hit)."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
-    if any(_sensitive_re().search(_fold(w.replace("\\", "/"))) for w in words if not _fold(w).endswith(".pub")):
+    # by name: each word as written and in its lexical form (#446), so `~/.kube//config` is `~/.kube/config`, and
+    # in either letter case (#601)
+    if any(_sensitive_re().search(_fold(f)) for w in words
+           for f in _lexical(w.replace("\\", "/"))[:2 if lexical else 1] if not _fold(f).endswith(".pub")):
         return True
     scope = _scope.get() or _Scope()
     if scope.roots is None:
@@ -8028,28 +8082,113 @@ def holds_secret_store(folder: str) -> bool:
                                             for f in forms for x in stores for s in _path_forms(x))
 
 
-def _glob_hits_secret(tok: str) -> bool:
+def _glob_hits_secret(tok: str, plain: bool = False) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
     component needs three literal characters, or the directory must itself be a secret store. Brace sets
-    are expanded first, as bash does; a hit on the word or on any word it expands to counts."""
+    are expanded first, as bash does; a hit on the word or on any word it expands to counts. With ``plain``, as main
+    read it before #446 (_glob_words)."""
     words = _brace_words(tok)
-    return words is None or _glob_words(words)
+    return words is None or _glob_words(words, plain=plain)
 
 
-def _glob_words(words: list[str]) -> bool:
-    """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
+def _glob_words(words: list[str], plain: bool = False) -> bool:
+    """_glob_hits_secret for any of ``words``, which are already brace-expanded. An absolute word whose folder part
+    before the glob holds a `..` is also read with that part resolved, as a word without a glob is (#209): a link
+    before the `..` leads elsewhere, so `/dev/fd/../env*` and `/proc/thread-self/../../env*` are a process's own
+    `/proc/<pid>/env*` (#446). With ``plain``, a word is read as before #446, without these steps (_plain_secret)."""
     words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
     if not words:
         return False
+    for w in [] if plain else list(words):
+        lit = re.split(r"[*?\[]", w, maxsplit=1)[0].rpartition("/")[0]
+        if lit[:1] == "/" and ".." in lit.split("/"):
+            try:
+                real = os.path.realpath(lit)
+            except (OSError, ValueError):
+                continue
+            if real != os.path.normpath(lit):
+                words.append(real.rstrip("/") + w[len(lit):])
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
     secrets = _run_secrets()
     runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
-    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
+    return any(_glob_word(w, home, samples, secrets, runs, plain=plain) for w in words)
+
+
+def _plain_secret(words: list[str]) -> bool:
+    """Whether ``words``, already brace-expanded, name a secret store as main read them before #446: a name as
+    written, and a glob without the #446 steps. A line or call whose target is a spelling only #446 reads keeps the
+    first such word, main's target, as a part (_plain_part)."""
+    return _sensitive_words(words, lexical=False) or _glob_words(words, plain=True)
+
+
+def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> Classification | None:
+    """#513 review: give ``c``, a credentials line or call, a credentials part with ``target``, main's target, when it
+    is another path. A line's target is the first store it names, and since #446 that may be a spelling main did not
+    read (`~/.kube//config`, `/pro?/self/environ`, a word with more than 16 links), or a later word than main's (a
+    text with a backslash yields to the word the shell reads, so `~/.docker//config.json` after `~/.kube/\\config`
+    came first). Main's target was then another store on the line (`~/.ssh/id_rsa` in
+    `cat ~/.kube//config ~/.ssh/id_rsa`), and a `target:` entry, in `deny:` or `reserved:`, or a deny rule keyed on
+    `target`, that named it no longer matched. The part has no own text, as a part _weigh makes, so it only raises:
+    such an entry or rule still matches the line, as on main (D-075, #191). A file tool's target is the path as given,
+    also a bare name read from the session folder (`id_rsa` in `~/.ssh`), so the caller passes only a target main
+    gave the line or call. The part made, or None."""
+    if not (target and target != c.target):
+        return None
+    part = _make("credentials", summary=f"{summary} {target}"[:120], target=target, command=cmd,
+                 reversibility=c.reversibility, own=None, signals=["secret store"], main_target=True)
+    c.parts = [*c.parts, part]
+    return part
 
 
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
+
+
+def _root_links(path: str) -> Iterator[str]:
+    """What follows each process root link in the absolute ``path`` (`/proc/<pid>/root`, a thread's
+    `task/<tid>/root`, a glob that could be `proc`, `task` or `root` too), spelt from `/`, where the link leads (#446).
+    A process's working folder link (`cwd`) counts too: for pid 1 and most daemons it is `/`. The parts up to the
+    link are walked as the kernel walks them (`//`, `.` and `..`); what follows is left as written, since `..` right
+    after the link stays at `/`: `/proc/self/root/../pro?/1/environ` is `/pro?/1/environ`. A link with nothing left
+    below it once its `..` parts are taken back (`/proc/self/root/..`) is skipped. Five parts down no link can be, so
+    the walk skips to the next `..` there."""
+    if path[:1] != "/":
+        return
+    parts, up, last = path.split("/"), 0, 0
+    at: list[str] = []
+    for j in range(len(parts) - 1, 0, -1):   # `last`: the last part no `..` after it takes back
+        if parts[j] == "..":
+            up += 1
+        elif parts[j] not in ("", "."):
+            if not up:
+                last = j
+                break
+            up -= 1
+    i, deep = 1, 0                           # `deep`: the parts below the first five, where no link can be
+    while i < last:
+        s = parts[i]
+        if s == "..":
+            if deep:
+                deep -= 1
+            else:
+                del at[-1:]
+        elif s in ("", "."):
+            pass
+        elif len(at) < 5:
+            at.append(s)
+            if (len(at) == 3 or len(at) == 5 and _glob_names(at[2], ("task",))) and _glob_names(at[0], ("proc",)) \
+                    and _glob_names(s, ("root", "cwd")):
+                yield "/" + "/".join(parts[i + 1:])
+        else:                                # five parts down: up to the next `..` no link can follow, so skip there
+            try:
+                j = parts.index("..", i, last)
+            except ValueError:
+                j = last
+            seg = parts[i:j]
+            deep, i = deep + len(seg) - seg.count("") - seg.count("."), j
+            continue
+        i += 1
 
 
 def _glob_part(g: str, s: str) -> bool:
@@ -8119,16 +8258,47 @@ def _glob_folder_hit(d: str, home: str, samples: tuple[str, ...]) -> tuple[bool,
     return hit, False
 
 
-def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
-    raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
-    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str], hop: bool = True,
+               plain: bool = False) -> bool:
+    raw, written = tok.rpartition("/")[0], tok           # its folder as written: a link resolves before its `..`
+    # run/./*, run//* and run/jobs/../* are run/*. normpath keeps exactly two leading slashes, which the kernel reads
+    # as one: `/$HOME/.kube/conf*`, and the rest after a root link, `/proc/self/root/$HOME/...` (#513 review). With
+    # ``plain`` the word is read as before #446: no such slash, `/proc` glob or link step (_plain_secret)
+    tok = os.path.normpath(tok) if plain else re.sub(r"^//+", "/", os.path.normpath(tok))
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
     if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
+    # #446: a top folder that could be /proc (`/pro?`, `/[p]roc`, `/p*`) is it
+    top, _, rest = tok.lstrip("/").partition("/")
+    if not plain and tok[:1] == "/" and rest and f"/proc/{rest}" != tok and _glob_names(top, ("proc",)) and \
+            _glob_word(f"/proc/{rest}", home, samples, secrets, runs, hop):
+        return True
+    # A process's root link (`/proc/self/root`, `/proc/1/root`, a thread's `task/<tid>/root`) leads to `/`, and so may
+    # its `cwd`, so `/proc/self/root/pro?/1/environ`, `/proc/1/cwd/pro?/1/environ` and
+    # `/proc/self/root/../pro?/1/environ` are read from there. One such step: a second link after it counts (fails
+    # closed), so `/*/*/*/...` is not read again at each third part, and past 16 links (`/proc/1/*/../*/../x`) the
+    # word counts. So what follows a link is read at most 16 times, each read with one `/proc` step at most. The reads
+    # after a link look up a run folder in its lexical form, once per call (_resolved): the rests of one word mostly
+    # differ only before a `..`, and looking each up as written made a 100 KB word with 16 links cost 10 times what it
+    # costs on main (#513 review). So a link before a `..` there is not followed (main reads nothing after the link)
+    read: set[tuple[str, str]] = set()
+    for n, rest in enumerate(() if plain else _root_links(written)):
+        if not hop or n >= 16:
+            return True
+        # The rests of one word mostly differ only before a `..`: `/proc/1/*/../*/../*/x*` gives `/../*/../*/x*`,
+        # `/../*/x*` and `/x*`, and the first two are both `/*/x*`. A rest whose lexical form, and its folder's, was
+        # read before for this word decides as that one did, unless it holds a link of its own, so it is skipped.
+        # Reading each again cost 8 times main on a line of many short words (#513 review)
+        form = (os.path.normpath(rest), os.path.normpath(rest.rpartition("/")[0].replace("\\", "/")))
+        if form in read and next(_root_links(rest), None) is None:
+            continue
+        read.add(form)
+        if _glob_word(rest, home, samples, secrets, runs, False):
+            return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
-    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
+    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw), lexical=not hop)
     if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
         runs = runs + [d_abs]
     keys = "agent-" in _fold(tok) or ".principal" in _fold(tok)
@@ -8164,7 +8334,7 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
         if any(_glob_rx(ftok).match(_fold(x)) for x in secrets if keys or x.startswith("exod.")):
             return True
     tail = re.split(r"[*?\[\]]", ftok)[-1]   # literal: narrow first; a wildcard part's own tail as bash reads it
-    xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
+    xs = [x for x in itertools.chain(samples, _SENSITIVE_SAMPLES)
           if _fold(x).endswith(tail) and (_fold(x).startswith(fhead) if fhead.startswith("/") else fhead in _fold(x))]
     if not xs:
         return False
@@ -8422,8 +8592,9 @@ def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> b
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(_fold(p)) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
-        return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
+    if any(_STORE_NAMES.search(_fold(f)) for f in _lexical(p)) or _fd_path(p) or \
+            ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+        return True                     # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
         return bool(_CONFIG_NAME.search(_fold(os.path.normpath(p)))) and _config_on() or \
             from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
@@ -8531,14 +8702,16 @@ _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 @_brace_budget
-def args_sensitive(args: Mapping) -> str:
-    """The first path-like tool argument that names a secret store, or ''."""
+def args_sensitive(args: Mapping, plain: bool = False) -> str:
+    """The first path-like tool argument that names a secret store, or ''. With ``plain``, the first that names one as
+    main read it before #446 (_plain_secret)."""
     for k in _PATH_ARG_KEYS:
         v = args.get(k)
         for item in (v if isinstance(v, (list, tuple)) else [v]):
             if isinstance(item, str) and item:
                 words = _brace_words(item)         # expanded once for both checks
-                if words is None or _sensitive_words(words) or _glob_words(words):
+                if words is None or (_plain_secret(words) if plain else
+                                     _sensitive_words(words) or _glob_words(words)):
                     return item
     return ""
 
@@ -8578,12 +8751,13 @@ def _env_dump(argv: list[str]) -> bool:
 
 
 def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None,
-                          every: list[str] | None = None) -> str:
+                          every: list[str] | None = None, plain: bool = False) -> str:
     """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
     in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
     or a bare environment dump. '' if nothing. With ``every``, each path, and each word of a brace set, that
     touches a store is added to it, the first one too; the result stays the first, a Keychain or environment
-    dump hit too, and the paths after such a hit are still listed (#609 follow-up)."""
+    dump hit too, and the paths after such a hit are still listed (#609 follow-up). With ``plain``, what main read
+    before #446 (_plain_secret)."""
     text = _expand_text(cmd)
     first = ("keychain access" if _KEYCHAIN.search(text) else "provider key route" if _PROVIDER_ROUTE.search(text)
              else "secret environment variable" if _SECRET_VAR.search(text) else "")
@@ -8602,13 +8776,23 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
             first = "keychain access"
         if first and every is None:
             return first
+    hits = _plain_secret if plain else (lambda ws: _sensitive_words(ws) or _glob_words(ws))
+    late: list[str] = []
     for p in pieces if every is None else dict.fromkeys(pieces):     # each word once when every one is listed
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
-        if p and (_sensitive_words([p]) or _glob_words([p])):
-            if every is None:
-                return p
-            first = first or p
-            every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
+        if not p or not hits([p]):
+            continue
+        # #446: a piece with a backslash that names a store only in its lexical form (`$HOME/.kube/\config`, where
+        # `\c` is `c`) is the target only when nothing else hits, not even a brace set below, so the dequoted word
+        # (`~/.kube/config`) names it and a `target:` entry for the store still matches, as on main. A piece that
+        # names a store as written stays the target.
+        if "\\" in p and not (_sensitive_words([p], lexical=False) or _glob_words([p])):
+            late.append(p)
+            continue
+        if every is None:
+            return p
+        first = first or p
+        every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
@@ -8624,13 +8808,55 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if found:
             groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
-    if words and (_sensitive_words(words) or _glob_words(words)):
-        hit = next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
+    if words and hits(words):
+        hit = next((raw for raw, ws in groups.items() if hits(ws)), "brace set")
         if every is None:
             return hit
-        every += [_expand_text(w) for w in words if _sensitive_words([w]) or _glob_words([w])]
-        return first or hit
-    return first
+        every += [_expand_text(w) for w in words if hits([w])]
+        first = first or hit
+    spelt: list = []
+
+    def holders(piece: str) -> tuple[list[str], int]:
+        # The words whose text, as the line spells it, holds ``piece`` (each once, in the line's order), and the copies
+        # of it all the words hold. Since #706 every such piece is read, not only the first. Each word is spelt once for
+        # all of them, and a piece is found by one search of the joined texts. Spelling every word again for each piece
+        # took 16.7 s on a line of 1,000 such pieces, where main takes 0.12 s (#513).
+        if not spelt:
+            each = {raw: _expand_text(raw) for raw in raws or []}
+            spelt.extend([each, list(each), "\0".join(each.values()), "\0".join(each[raw] for raw in raws or []),
+                          list(itertools.accumulate((len(t) + 1 for t in each.values()), initial=0))])
+        each, words, joined, copies, starts = spelt
+        if "\0" in piece:           # a piece a join could make up across two words: word by word
+            return [w for w, t in each.items() if piece in t], sum(each[raw].count(piece) for raw in raws or [])
+        found, at = [], joined.find(piece)
+        while at >= 0:              # a match holds no "\0", so it lies in one word: on to the next word
+            i = bisect.bisect_right(starts, at) - 1
+            found.append(words[i])
+            at = joined.find(piece, starts[i + 1])
+        return found, copies.count(piece)
+
+    def shell_reads(piece: str) -> str:
+        # #513, third review: such a piece is read as the shell reads the word that holds it. Unquoted, `\c` is `c`, so
+        # the input redirection `cat < ~/.kube/\config`, which no word of the command holds, names `~/.kube/config`,
+        # and a `target:` entry for it matches. In quotes or after `\\` the backslash stays in the name, so
+        # `cat "$HOME/.kube/\config"` names no store, as on main. Such a name is still read in its lexical form, with
+        # the backslash as a plain character: the kernel walks `"$HOME/.kube/\x/../config"` back to the kube config
+        # when the `\x` folder exists. Text no word holds (a heredoc body), or a word with a space or an operator that
+        # another shell may read again (`su -c '...'`), keeps the piece as the target (fails closed). The line's
+        # copies of the piece are counted, so a quoted word with the same text beside a heredoc body
+        # (`bash -s "$HOME/.kube/\config" <<'X'`) does not stand in for the body.
+        found, held = holders(piece)
+        read = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for raw in found for d in _dequote(raw)]
+        if not read or held < text.count(piece) or any(re.search(r"[\s<>;|&()`]", d) for d in read):
+            return piece
+        return next((d for d in read if _sensitive_words([d, os.path.normpath(d)] if "\\" in d else [d],
+                                                         lexical="\\" not in d) or _glob_words([d])), "")
+
+    names = [shell_reads(p) for p in (late if every is not None else late[:1])]
+    hit = first or (names[0] if names else "")
+    if every is not None:       # each other name the shell reads in such a piece is a store the line names, listed too
+        every += [_expand_text(n) for n in names if n and n != hit]
+    return hit
 
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
@@ -8875,6 +9101,23 @@ def _shell_call(cmd: str) -> Classification:
             c = _line_alone(cmd, scope, {k: v for k, v in seen.items() if k[:1] == ("parse",)})
             c.also = whole
         found = _tool_folder_read(cmd, folders, read)  # a store write stays the line's result, as for `tar -C` (#464)
+        if found:
+            # #513 review: main's target stays a part, where the folder or the word main read a store by is a spelling
+            # only #446 reads (`~/.config//gcloud` beside `~/.ssh`): the folders are read again as main read them,
+            # with main's `read`, the first credentials part main read (`keys` in `~/.exo` beside `cat ~/.kube//config`)
+            plain_read = next((p for p in _each_part(whole) if p.category == "credentials" and (
+                is_sensitive_path(p.target, True) or _glob_hits_secret(p.target, True) or not (
+                    is_sensitive_path(p.target) or _glob_hits_secret(p.target)))), None)
+            # Where main read a secret on the line, its read is the line, the first part main read. A word with no name
+            # of its own (`keys` in `~/.exo`) made it a secret line with no target and gets no part (_plain_part), so
+            # its path is the folder as written, also beside a later part main read (`cd ~/.docker && cat conf*`). A
+            # line with no secret read here has none as main read it either, and one whose first read main made too
+            # needs no second reading
+            if read is not None and plain_read is not read and (said := _plain_hit(cmd)):
+                plain_read = _make("credentials", summary=f"shell touching {said}"[:120],
+                                   target=said if "/" in said or "." in said else "")
+            found += [f for f in _tool_folder_read(cmd, folders, plain_read, plain=True)
+                      if f[1] not in {t for _, t, _ in found}]
     finally:
         _shell_seen.reset(memo)
         _scope.reset(token)
@@ -8903,6 +9146,27 @@ def _shell_call(cmd: str) -> Classification:
     return c
 
 
+def _no_plain_store(secrets: list[Classification], cmd: str) -> bool:
+    """#513 review: whether main read no store on the line ``cmd``, whose credentials parts are ``secrets``, and so read
+    the relative names after a `cd` in #320's forms too (_cd_store_read). Each part names a store path, and the line
+    names none as main read it before #446 (_shell_credential_hit with ``plain``): `cat ~/.kube//config`, or
+    `cat < ~/.kube/\\config`, which main did not read. A store, the environment or a secret command (`ssh-keygen`) main
+    read on the line makes it a secret line there. The line is read first: where main read a store on it, no part
+    needs a store test of its own, and a part's glob is tried before its path (test_work_is_linear: a `cd` into a
+    deep glob costs no path test)."""
+    if _plain_hit(cmd):
+        return False
+    return all(_glob_hits_secret(p.target) or is_sensitive_path(p.target) for p in secrets)
+
+
+def _plain_hit(cmd: str) -> str:
+    """What on the line ``cmd`` touches a secret store as main read it before #446 (_shell_credential_hit with
+    ``plain``), in the folders of the scope it is read in, or ''."""
+    cmds, _, _ = _parse(cmd)
+    return _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                                 [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
+
+
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
     """classify_shell(cmd) in ``scope`` with budgets and a memo of its own, as a call of its own; ``parsed`` holds
     the line's parses already made. _brace_budget makes the budgets, so they have as many pools as a call's."""
@@ -8916,8 +9180,8 @@ def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
         _brace_left.reset(left)
 
 
-def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
-                      read: Classification | None) -> list[tuple[str, str, str]]:
+def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...], read: Classification | None,
+                      plain: bool = False) -> list[tuple[str, str, str]]:
     """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target, cd)], or
     []. In this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name
     one); a relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the
@@ -8927,7 +9191,9 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
     beside its joined path, and the third word is the `cd` the part's stand-in setter names (#516): `cd <folder>`,
     the folder as the call spells it, said once.
     A folder in a repo's own .claude worktrees, commands, agents or skills is the repo's, not a store (_repo_claude),
-    so only a word that resolves into a store counts there."""
+    so only a word that resolves into a store counts there. With ``plain``, a folder or path names a store only as
+    main read it before #446 (_plain_secret), which gives main's target: a word with no name of its own (`ls keys`
+    in `~/.exo`) has the folder as written for its path."""
     spell = dict(folders)                       # the folder as the call spells it, for the part's `cd` (#516)
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
     for f in spell:
@@ -8941,7 +9207,7 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
         linked = [real] if real and real != os.path.normpath(x) else []      # where a link leads, first
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
-        if is_sensitive_path(g) or _glob_hits_secret(g):
+        if is_sensitive_path(g, plain) or _glob_hits_secret(g, plain):
             return [(f"shell runs in {f}", g, f"cd {spell[f]}")]
     out: list[tuple[str, str, str]] = []
     if read is not None:                        # the target: the name in the folder it resolves into a store from
@@ -8950,7 +9216,7 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
         linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
         cds = [f"cd {raw}" for _, raw in folders]
         out.append((f"{read.summary} in {where}",
-                    next((p for p in linked + paths if is_sensitive_path(p)), paths[0]),
+                    next((p for p in linked + paths if is_sensitive_path(p, plain)), paths[0]),
                     cds[0] if len(cds) == 1 else " or ".join(cds)))
     cmds, subs, _ = _parse(cmd or "")           # #320: also beside ``read``, which only its forms may have made
     walked: list = []
@@ -9295,6 +9561,12 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if cat != "local_write":
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths)
                         if (cat == "credentials" or p != path) and is_store_path(p, from_cwd=True)]
+        if cat == "credentials":
+            # #513 review: main's target stays a part. Where no `path` or patch header named the files (`paths`), main's
+            # write part (#448) was on its target too, so a `local_write` entry for it still matches
+            mine = next((p for p in paths if is_sensitive_path(p, plain=True)), "") or args_sensitive(args, plain=True)
+            if _plain_part(c, mine, "write") and not paths:
+                c.parts.append(_make("local_write", summary=f"write {mine}", target=mine, link=mine))
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -9374,6 +9646,8 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         # target, as they all are beside a secret (#447): a target entry on any of them matches, whatever path
         # the scan met first. The first path is the call's own target, as before.
         c.parts += [_store_part(p, f"{tool} {p}") for p in (stores if secret else stores[1:])]
+        if secret:
+            _plain_part(c, args_sensitive(args, plain=True), tool)      # #513 review: main's target stays a part
         # Keep the complete unsplit reading, including argument checks and outbound metadata. New name words
         # must not lower an old secret/store floor, category policy or posting rule (#515).
         if not legacy_name and tool not in TOOLS and _CAMEL.search(tool):
@@ -9507,6 +9781,20 @@ def _glob_any(value: str, patterns: Iterable[str]) -> bool:
     return bool(v) and any(fnmatch.fnmatchcase(v, str(p).lower()) for p in patterns)
 
 
+def _target_glob(target: str, patterns: Iterable[str], veto: bool) -> bool:
+    """Whether a `target` pattern matches the target as written or, for a deny, ask or reserved entry (``veto``), in
+    its lexical form: `//` and `/./` collapsed and `x/..` resolved, as the kernel reads the path before any link, and a
+    leading `//` read as `/` (#513 review). An odd spelling of a store is the line's target where it is the first store
+    (#446), so `cat ~/.kube//config ~/.ssh/id_rsa` meets `deny: [target:*/.kube/config]` as its plain spelling does.
+    An allow rule and a scope still read the target as written, so this only raises a decision."""
+    patterns = list(patterns)
+    if _glob_any(target, patterns):
+        return True
+    if not veto or not target:          # no target is no path: normpath would make it `.`
+        return False
+    return _glob_any(re.sub(r"^//+", "/", os.path.normpath(target)), patterns)
+
+
 def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
@@ -9612,7 +9900,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
             return False
         if k == "tool" and not _glob_any(c.tool, _as_list(want)):
             return False
-        if k == "target" and not _glob_any(c.target, _as_list(want)):
+        if k == "target" and not _target_glob(c.target, _as_list(want), veto):
             return False
         if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
             return False
@@ -9645,7 +9933,7 @@ def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bo
         kind, _, val = s.partition(":")
         if kind == "tool" and _glob_any(c.tool, [val.strip()]):
             return s
-        if kind == "target" and _glob_any(c.target, [val.strip()]):
+        if kind == "target" and _target_glob(c.target, [val.strip()], True):
             return s
         if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True, line=line):
             return s
@@ -9820,9 +10108,9 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
             break
         if first is not None:
             out, why, step = first["decision"], first["reason"], "rule"
-        if out != "deny":
-            veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
-                         and _rule_matches(r["match"], p, veto=True, line=line)), None)
+        if out != "deny":   # a deny rule keyed on `target` also sees the part's lexical target (#513 review)
+            veto = next((r for r in rules if r["decision"] == "deny" and ("command" in r["match"] or "target" in
+                         r["match"]) and _rule_matches(r["match"], p, veto=True, line=line)), None)
             if veto is None:
                 continue
             why, step = veto["reason"], "rule"
@@ -10048,11 +10336,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             if rule == "matrix":
                 rule = step
 
-    # A deny or ask rule keyed on `command:` also sees the literal-word view (#136), and can only raise.
-    # A rule the command text matched was settled by the first-match pass above, whatever its place
-    # in the list, so this never changes an outcome the view did not add to.
+    # A deny or ask rule keyed on `command:` also sees the literal-word view (#136), and one keyed on `target` the
+    # target's lexical form (#513 review), and can only raise. A rule the command text matched was settled by the
+    # first-match pass above, whatever its place in the list, so this never changes an outcome the view did not add to.
     for r in gates.get("rules") or []:
-        if r["decision"] in ("ask", "deny") and "command" in r["match"] \
+        if r["decision"] in ("ask", "deny") and ("command" in r["match"] or "target" in r["match"]) \
                 and not _rule_matches(r["match"], eff) and _rule_matches(r["match"], eff, veto=True):
             bump(r["decision"], r["reason"], "rule")
 

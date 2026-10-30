@@ -3003,6 +3003,477 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this one reports 348 pairs (`_exo_relative`'s "too many to resolve" returns made `""`), 808,963 (`binds_exact`
   returning False) and 27,985 (`body_unseen` dropped, `decide`'s own reading kept); for `NO_GRANT = ()` 222 against
   350,322, and for a `decide` that says `"Ask"` 11,530 against 625,921.
+  *Amendment 2026-10-22 (issue #446, follow-up to #130 and #199):* the shell and the kernel read `a//b` and `a/./b` as
+  `a/b`, but the secret-store list was matched against the text as written. A store name with more than one part missed
+  when a doubled slash, a `.` or a `x/..` stood between its parts, so `cat ~/.kube//config`, `cat ~/.kube/./config` and
+  `read_file ~/.kube//config` were plain reads. Single-folder stores (`~/.ssh//id_rsa`) matched already. The relative
+  Exo-store names missed the same way (`echo x > .exo//state/x`), since #130 normalised only absolute store paths. Each
+  word and file-tool path is now also matched in its lexical form (`os.path.normpath`, after `~` and `$HOME` are spelt
+  out), for the secret stores and the Exo-store names alike. The form as written still counts, so `cat ~/.ssh/../notes`
+  asks as before. The lexical form follows no link. When `x` in `~/.kube/x/../config` is a link, the kernel reads a file
+  beside its target, and the line asks when it need not (fails closed). A link that leads into a store before a `..` is
+  still resolved (#209), and since this change an absolute glob word's folder part before the glob is resolved too when
+  it holds a `..`: `cat /dev/fd/../env*` and `cat /proc/thread-self/../../env*` read the process's own environment and
+  ask, where main allowed them. The #199 glob check now also reads a glob in the `/proc` name itself (`/pro?`,
+  `/[p]roc`, `/p*`) and a leading `//proc` as `/proc`, so `cat /pro?/self/environ` and `cat /*/*/environ` ask, while
+  `ls /p*/*/status` stays a read. The check reads the word, not the program, so `ls /*/*/*` asks, as `ls /proc/*/*`
+  already did, and so do `ls /*/bin/*` and `cat /*/src/*`, as `ls /proc/bin/*` does. A process's root link
+  (`/proc/<pid>/root`, also below `task/<tid>`) leads to `/`, so a glob after it is read from `/` too:
+  `cat /proc/self/root/pro?/1/environ` and `cat /proc/self/root/proc/self/env*` ask (main allowed both), while
+  `ls /proc/*/root/*` stays a read. A `..` right after the link stays at `/`, as the kernel reads it. So the parts up to
+  the link are walked as the kernel walks them, and what follows is read from `/` as written:
+  `cat /proc/self/root/../pro?/1/environ` asks. This also closes the two limits the #313 amendment lists
+  (`cat /proc/1/task/1//environ`, `read_file /proc/1/task/1//environ` and `cat /pro?/self/task/1/environ` ask), the
+  numeric rows added to #446 later (`cat /proc/1/task//1/environ`, `cat /*/*/*/*/environ`), and rows 1 and 2 of #476
+  (`cat //proc/self/*/*/environ`, `cat /proc/self/root/p*/1/environ`). A process's working folder link
+  (`/proc/<pid>/cwd`) is read the same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ`
+  and `cat /proc/*/cwd/pro?/*/environ` ask, where main allowed them. Where the folder is not `/`, such a line asks when
+  it need not (fails closed). Past 16 possible links in one word the word counts. So what follows a link is read at most
+  16 times, and each such read takes the `/proc` step at most once. The reads after a link look up a run folder in the
+  lexical form of what follows, once per classify call, so a `..` there is read as text for that lookup. The #513 review
+  found that looking each one up as written cost about ten times main on a long word. A 100 KB word of `/proc/1/*`,
+  fifteen `/../*` steps, a long folder path and a glob took 8.6 s here, against 0.9 s on main. It now takes 1.6 s. The
+  re-review found a line of many short words still slow, since what followed each link was read again: 500 words of
+  `/proc/1/*`, fifteen `/../*` steps and a short tail took 1.5 s, against 0.18 s on main (CPU time). What follows a
+  link is now read again only when its lexical form or its folder's differs from what followed an earlier link of the
+  same word, or when it holds a link of its own, and the line takes 0.44 s. Left out: another link whose target the
+  gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, and `ps e` (row 3 of #476), which is left to
+  #476. A glob in a link's own part before a `..` (`cat /dev/f?/../env*`) is not resolved, since only the literal
+  folder before the first glob is. A glob below a `cwd` link into a home store (`cat /proc/self/cwd/.kube/conf*`) is
+  read from `/` only. A link before a `..` after a `/proc` link is not followed for the run folder, for cost:
+  `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads, while `cat <link>/../exod*` asks. All
+  three read on main too.
+  *Lowered lines.* On main an odd spelling kept its own class, and any deny that class drew. It now takes the store's
+  class, so it decides as main decides the same action spelt plainly, and some lines decide lower than before. The #423
+  differential of main (5a9dc394) against the change ran 57,260 actions under 87 policies and found 42 lowered pairs on
+  27 actions (28 outcomes, 4 reserved hits, 10 violations), all from the new test rows and the forms built from them.
+  Four focused runs added their own lines under the same policies. The first had 1,570 lines: odd spellings of other
+  store names, quoted and continued spellings, `..` after a root link, wrappers such as `less`, `awk`, `dd`, `sudo -E`,
+  `env -u`, `zsh -c`, `eval`, `ssh -t`, `rsync`, `gh gist create` and `git add`, redirections, functions, `case` and
+  `select` bodies and `cd` chains, store writes with `install`, `dd`, `ln`, `curl -o` and `python3 -c`, file-tool and
+  unknown-tool calls, and everyday paths with `//`, `./` and `..`. With their forms that is 19,400 actions, and it
+  found 243 lowered pairs on 205 actions (218 outcomes, 25 reserved hits). The second had 6,839 lines: the `/proc` root
+  and `cwd` links under each pid spelling and each spelling of `/proc`, the numeric `/proc/<pid>/environ` forms behind
+  17 readers and wrappers, each multi-part store and Exo-store name with six odd spellings under 34 readers and writers
+  and five file tools, a glob after `/dev/fd/..` or `/proc/thread-self/../..`, and everyday paths. With their forms
+  that is 94,445 actions, and it found 42 lowered pairs on 28 actions (35 outcomes, 7 reserved hits). The third had
+  966 lines: each odd spelling beside a `cd` into the store with a write, force push or delete in a `$( )`, backticks
+  or `<( )` (#465), in the `cd` folder, in the substitution and on the line around it. With their forms that is 1,932
+  actions, and it found no lowered pair. The fourth had 1,462 lines from the #513 review: a `.` or `..` before a
+  `/proc` link behind 16 wrappers and compounds, `/*/<name>/*` words, 2 KB words with 16 links, eight file tools that
+  write a store file and name a secret in each spelling, and posts whose body a heredoc holds. With their forms that
+  is 9,000 actions, and it found 1,223 lowered pairs on 392 actions (749 outcomes, 314 reserved hits, 160
+  violations). Each lowered pair decides as main decides the plain spelling (no `//`, `/./` or `x/..`, `/proc` for a
+  glob that could be it, `/` for a root link, the resolved folder for a link before a `..`): same class, outcome,
+  reserved hits and violations, 42 of 42, 243 of 243, 42 of 42 and 1,223 of 1,223. For 16 pairs of the fourth run the
+  plain spelling names `/proc` (`ls /proc/bin/*` for `ls /*/bin/*`) or keeps the link, as group 3 does.
+  Five groups, all from how the gate already handles any secret store. The counts are for the built-in run, then the
+  first, second and fourth focused runs.
+  (1) 21, 180, 21 and 44 pairs: a rule that matched the line as a `read` no longer matches it as `credentials`. So
+  `sudo ssh host cat ~/.kube//config` under a rule that denies a costly `read` asks, as the plain spelling does, and so
+  does `sudo ssh host ls /*/bin/*`, as `sudo ssh host ls /proc/bin/*` does on main. A shell line keeps the read as a
+  part (D-075), so a `read` deny still denies `cat ~/.kube//config`. (2) 4, 24, 0 and 0 pairs: a line's target is the
+  first store it names. So a `target:` entry, in `deny:` or `reserved:`, or a rule keyed on `target`, for a second
+  store on the line no longer matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`
+  asks, as `cat ~/.kube/config; cat ~/.ssh/id_rsa` does). (3) 3, 39, 21 and 2 pairs: a call was `store_write` because
+  its path goes through a descriptor or process folder (`/proc/<pid>/root`, `/dev/fd`), which the gate cannot resolve
+  (#217). Once the path names a secret it is `credentials`, so a `store_write` deny, category line or `reserved` entry
+  no longer applies. An example is a tool the gate does not know, `cat` with path `/proc/self/root/*/1/environ` or
+  `/dev/fd/../env*`, under `deny: [store_write]`. It asks, as `/proc/self/root/proc/1/environ` and `/proc/self/env*`
+  do on main. (4) 4, 0, 0 and 1,017 pairs: a file tool that writes a store file and names a secret is `credentials`,
+  not `store_write`. So `write_file`, `patch`, `edit_file` or `apply_patch` on `~/.exo/policies/gates.yaml` with a
+  patch header for `~/.kube//config`, `copy_file` or `move_file` between it and `~/.kube/x/../config`, and `memory` or
+  a tool the gate does not know with both paths ask where main denied them under `deny: [store_write]` or a
+  `store_write: deny` category line. A `reserved: [store_write]` entry no longer matches them, and a `target:` entry
+  for the store file no longer matches `copy_file` or `move_file`. Main decides the plain spelling the same way: its
+  file-tool branch of `classify()` takes a secret before a store path (#447, #489). (5) 10, 0, 0 and 160 pairs: since
+  #396 the posting checks read every post, so a post beside the read keeps its violations. `gh api` that reads its
+  body from stdin (`--input -`, or a field such as `-F body=@-`) is the exception: its body is only the line's heredoc,
+  and the line's text takes the heredoc only when the line is outbound. So
+  `cat ~/.kube//config; gh api repos/a/b/issues/3/comments --input - <<EOF` loses the forbidden word in its body, as the
+  plain spelling does on main. It keeps its unread-body violation and still asks. In 160 built-in pairs, 336 of the
+  second focused run and 5,264 of the fourth a violation is only reworded, named after its post
+  (`GitHub PR comment on #3: forbidden word: secret`).
+  The differential does not count one more change, because the outcome stays an ask. On a shell line beside a store
+  write the line is `credentials`, not `store_write`, and the store write stays a part, so its deny and `target:`
+  entries still apply. But a seat that `approvals.yaml` delegates `credentials` to may answer what only the principal
+  answered (`cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml`), as on main with `cat ~/.kube/config` (#447).
+  That holds for shell lines only: a file tool decides lower (group 4). A first run, before #467 (the D-075 amendment
+  for #464 and #448), found three more groups: a file tool's own class, a part's matrix cell, and the folder a `cd`
+  entered as a target. Since #467 each of them stays a part, so those lines no longer decide lower.
+  *A backslash after a slash (#513 re-review).* The gate reads `\` as `/` in a line's text, so with the lexical form
+  the text `~/.kube/\config` names `.kube/config`. It became the line's target, where on main the word the shell reads
+  (`~/.kube/config`) was. So under `deny: [target:*/.kube/config, target:*/hosts.yml]`, `cat ~/.kube/\config`,
+  `cat ~/.config/gh/\hosts.yml` and `cp /tmp/a ~/.kube/\config` asked where main denied them, and a `target:` entry
+  in `reserved:` lost its hit. Such a text is now the target only when nothing else on the line names a store, a
+  brace set included, so these lines decide as on main. A text that names a store as written (`~/.ssh/\id_rsa`) stays
+  the target, as on main. Rejected: putting every text with a backslash last. Then `cat ~/.ssh/\id_rsa ~/.kube/config`
+  takes the second store as its target, and `deny: [target:*/.ssh/*]` asks where main denies. A differential of main
+  (d79639f1) against this change ran the built-in set, 66,655 actions under 87 policies, and found the 42 lowered
+  pairs of the five groups above (21, 4, 3, 4 and 10), each deciding as main decides the plain spelling. A focused
+  run of 21,979 actions put a backslash before or inside each part of each store and Exo-store name, in reads,
+  writes, redirections, sends, file tools, wrappers, compounds and heredocs, beside words of up to 17 links. Under
+  144 policies, with a `target:`, `reserved:` and rule entry for each name, it found 350 lowered pairs on 49
+  actions, each deciding as main decides the plain spelling: 336 in group 4 (`copy_file` from `~/.kube/\config` to
+  `gates.yaml`, where a file tool reads `\` as `/`) and 14 in group 1. It also changed the target of three `dd`
+  lines (`dd if=/tmp/a of=~/.exo/\/policies/\/gates.yaml` and the like), with no decision changed under those
+  policies. A `dd` operand that names an Exo-store path in an odd spelling, with a backslash or without one, now
+  names its `if=` or `of=` word (`of=~/.exo/./plugins/p/x.py`, `if=~/.exo/./state/x.json`), as main does for the
+  plain spelling (`of=~/.exo/policies/gates.yaml`), where main took the path itself for the odd one. The `store_write`
+  part beside a secret does the same (`dd if=~/.exo//keys/seat.key of=/tmp/a`). So under `deny: [target:~/.exo/*]`
+  or `reserved: [target:~/.exo/*]`, which read the target as written, such a line asks with no hit, as the plain
+  spelling does on main, where main denied the odd spelling or counted a hit. That is group 2's rule: the target is
+  the first word that names the store. An independent re-check (main d79639f1 against 158e4ebc) ran 31,641 focused
+  actions under 157 policies, `target:~/*` and `target:~/.exo/*` among them. It found 290 lowered pairs on 117
+  actions: 160 in group 1, 60 in group 4, 6 in group 2 (`cat ~/.kube/./\config ~/.config/gh/\hosts.yml` takes the
+  first store as its target) and 64 such `dd` pairs on 32 actions. Each decides as main decides the plain spelling.
+  A differential of the change before and after the step that reads what follows a link once per lexical
+  form (7f9a5199 against 393fd3cf) ran the built-in set and the focused runs of the #513 reviews, 139,068 actions
+  under 87 policies, and found no pair or target that changed.
+  `tests/security/test_gate_secret_path_spellings.py` pins the five groups against the plain spelling. A differential
+  of this change before and after the #513 review fixes (ca8966a3 against e2b4a315) ran the built-in set and the four
+  focused runs, 181,641 actions under 87 policies, and found no pair that changed. Rejected: the resolved form alone,
+  which follows the gate's view of the file system. In executor or broker mode that view may differ from the
+  worker's, and the lexical form fails closed where the two disagree. Follow-ups: `target:` entries on every part, a
+  store write that keeps the principal's answer beside a secret (#447), and the cases left out above.
+  *2026-10-25 (#513, third review):* (a) A text with a backslash that names a store only in its lexical form is now
+  read as the shell reads the word that holds it, a redirection's target included. No word of `cat < ~/.kube/\config`
+  holds the redirection's target, so the text `$HOME/.kube/\config` was the target, and `deny: [target:*/.kube/config]`
+  asked where it denies the plain spelling. Main allowed the line as a read. The target is now `~/.kube/config`, and
+  the line decides as the plain spelling does, behind `sudo` and in `bash -c` too. Two pinned results change, both up.
+  `echo x > ~/.kube/\config` takes `~/.kube/config` as its target, so `reserved: [target:*/.kube/config]` hits the
+  line as well as the write part, two hits where it had one, as for the plain spelling. And
+  `cat < "$HOME"/.kube/\config`, whose backslash is outside the quotes, goes from ask to deny under that `target:`
+  entry, as the plain spelling does. In quotes, or after `\\`, the shell keeps the backslash and reads a file named
+  `\config`. So `cat "$HOME/.kube/\config"`, `cat < "$HOME/.kube/\config"` and `cat ~/.kube/\\config` go back from
+  `credentials` ask to main's read allow, and `echo x > "$HOME/.kube/\config"` to main's `local_write` allow. That is
+  lower than the earlier rounds of #513 and the same as main: the earlier ask was an over-ask. A word with a space or
+  an operator, which another shell may read again (`su -c 'cat ~/.kube/\config'`), and text that no word holds (a
+  heredoc body) keep the text as the target and still ask (fails closed). (b) Group 2 holds a seat key read.
+  `dd if=~/.exo//keys/seat.key of=/tmp/a` under `deny: [target:~/.exo/*]` is denied on main, whose `store_write`
+  part named the path itself. It asks here, since that part now names the `if=` word, as main does for the plain
+  spelling: `dd if=~/.exo/keys/seat.key of=/tmp/a` asks on main, while `cp ~/.exo/keys/seat.key /tmp/a` denies. So
+  this copies a gap main has for the plain spelling instead of closing it. Group 2 also holds a word with more than
+  16 possible links, which counts as a store (fails closed). As a line's first store it is the target, so
+  `ls /proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`, then `; cat ~/.kube/config`, asks under
+  `deny: [target:*/.kube/config]`, where main denies. Such a word has no plain spelling. #568 tracks the
+  fix for both: take a `dd` operand's path without its `if=` or `of=` as the target, and report each store a line
+  names as a target.
+  (c) A word counts past 16 possible links: a test pins a word with 16 as a read and one with 17 as an ask, under
+  the default policy and a `target:` entry. (d) The once-per-call lookup of the folder after the links (`_resolved`)
+  is worth about a quarter of the time of one 100 KB word with 16 links (1.55 s with it, 2.04 s without, the
+  review's figures), and nothing on a line of many words whose folders differ. It saves most where words share that
+  folder: 20 words with 16 links each and a `/usr/lib` tail look `/usr/lib` up once, where they did 40 times. A test
+  counts those lookups. (e) A differential of main (d79639f1) against this round ran under the 87 built-in policies
+  and 72 more: a `target:`, `reserved:` and rule entry for each of 22 store, Exo-store and folder names,
+  `target:~/*` and `target:~/.exo/*` among them. The built-in set, 67,212 actions, lowered 431 pairs on 84 actions.
+  Under the 87 built-in policies that is the 42 pairs on 27 actions of the five groups (21, 4, 3, 4 and 10), as
+  before. The other 389 are the same groups under the added entries: 21 in group 1, 354 in group 2 (342 on 57 `dd`
+  lines, 114 of them on 19 seat key lines, and 12 on two-store lines), 3 in group 3 and 11 in group 4. A focused run
+  of 19,340 lines put a backslash after a slash in 12 store and Exo-store names, in reads, writes and input and output
+  redirections, under five quotings, behind 14 wrappers, in compounds, `$( )` and heredocs. It also held `dd`
+  operands in odd spellings, the seat key among them, and words with 15, 16 and 17 links. It lowered 1,182 pairs on
+  129 actions, all in group 2: 182 on 29 `dd` lines and 1,000 on 100 lines whose first store is a word with links.
+  902 of them decide as main decides the plain spelling. The other 280 are words with 17 links and a tail that names
+  no store, which have no plain spelling. The same run with c4bdbd2a as the base lowered 164,742 pairs on 1,176
+  actions. Each is a backslash the shell keeps, in quotes or after `\\`, going back to main's decision, and none of
+  them is below main. No run had a classify or decide error.
+  *2026-10-25 (#513, fourth review, and the merge of main edeb4f89):* (f) A check of (a) found two lines it let back to
+  main's result, where the earlier rounds asked. A word in quotes keeps its backslash, but the kernel walks `\x/..` back
+  to the folder when `\x` exists, as it walks `x/..`. So such a word is also read in its lexical form, with the
+  backslash as a plain character, and `cat "$HOME/.kube/\x/../config"` asks. And a quoted word with the same text as a
+  heredoc body stood in for the body (`bash -s "$HOME/.kube/\config" <<'X'` with `cat < ~/.kube/\config` in it). The
+  line's copies of the text are now counted, and the text stays the target when the words hold fewer of them. Main reads
+  both lines as a read or `opaque_exec`, so neither was below main. (g) A `target:` entry in `deny:` or `reserved:`, and
+  a deny or ask rule keyed on `target`, now also match the target's lexical form: `//` and `/./` collapsed, `x/..`
+  resolved and a leading `//` read as `/`. The fourth review found that group 2 lowered a line below main and below its
+  plain spelling when an entry names each of two stores. `cat ~/.kube//config ~/.ssh/id_rsa` under
+  `deny: [target:*/.kube/config, target:*/.ssh/*]` was denied on main, through the ssh key, its target there. It asked
+  here, since the odd first store is the target and the entry read it as written. It is denied again, as its plain
+  spelling is, and so is `cat ~/.kube//config` under `deny: [target:*/.kube/config]`, which main allowed as a read. A
+  rule keyed on `target` sees the lexical form only through the steps that can only raise: the line's veto pass, as for
+  a `command` view (#136), and a part's deny veto (#191). An allow rule and a scope read the target as written, so the
+  lexical form never lowers a decision. A link before a `..` may lead elsewhere, and then the entry matches when it need
+  not (fails closed). This is the lexical form of #522's proposal. Its other two forms, the target with each `\` dropped
+  and the value of a `key=value` operand, stay with #522, which proposes them in a comment. Group 2 keeps three shapes,
+  which #568 tracks.
+  One is an entry for the second store alone: `cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`.
+  One is a `dd` operand, whose lexical form keeps its `if=` or `of=`. And one is a first store that is a word with
+  links. (h) `normpath` keeps exactly two leading slashes, which the kernel reads as one. So what follows a root link
+  into a home store (`cat /proc/self/root/$HOME/.kube/conf*`, whose rest is `//<home>/...`) and
+  `cat /$HOME/.docker/conf*` missed the home store samples. The glob check now reads them as one slash, and these lines
+  ask, where main and the earlier rounds allowed them. (i) Main merged #447 (#489) since (e). A store write beside a
+  secret now keeps the line with the principal alone, and a file tool keeps each store file it writes as a `store_write`
+  part. So the change the differential did not count is gone, and so are groups 3 and 4: a `store_write` deny, category
+  line or `reserved:` entry, and a `target:` entry for the store file, apply to those lines again, as on main. (j) A
+  differential of main edeb4f89 against this round ran under the 87 built-in policies and 92 more: the 72 of (e), a
+  deny, reserved and rule entry for each of five pairs of stores, an ask rule and two allow rules on a target, a private
+  scope and `target:` entries anchored at `/`. The built-in set, 75,359 actions, lowered 1,808 pairs on 181 actions,
+  each deciding as main decides the plain spelling. Under the 87 built-in policies that is 233 pairs on 124 actions: 21
+  in group 1, 202 in group 2 and 10 in group 5. Of group 2's, 198 pairs on 99 actions are this round's new test rows and
+  their forms under a `target:` entry for the ssh key alone. Without them it is 35 pairs on 25 actions (21, 4, 0, 0 and
+  10 in groups 1 to 5), against 42 on 27 in (e). The other 1,575 pairs are 21 in group 1 and 1,554 in group 2: lines
+  with an entry for the second store alone, and `dd` lines, 114 pairs of them on 19 seat key lines. A focused run of
+  20,855 actions held the corpus of (e) and 1,549 lines from this review. It put an odd first store before a second
+  store in 9 shapes, with 5 spellings of 6 store names, a glob after a root or `cwd` link or `/$HOME` under 12 prefixes
+  and 8 tails, and plain writes to targets spelt with `//`, `/./` or `x/..`. It lowered 4,098 pairs on 297 actions, all
+  in group 2: 206 on 29 `dd` lines, 2,752 on 208 lines with an entry for the second store alone, and 1,140 on 60 lines
+  whose first store is a word with links. 2,978 of them decide as main decides the plain spelling. The other 1,120 are
+  on words with links, which have no plain spelling. Outside the `dd` lines, no lowered pair in either run is on a line
+  whose target an entry of its policy names, as written or in its lexical form. The same corpora with this branch before
+  this round's gate changes as the base lowered no pair and tightened 22,503 pairs on 1,297 actions. No run had a
+  classify or decide error.
+  *2026-10-25 (#513, fifth round, an independent check of the fourth):* (k) Group 2 also held lines below main and below
+  the plain spelling where an entry named the store main took as the target. A glob first store, which no lexical form
+  helps: `cat /pro?/self/environ ~/.ssh/id_rsa` under `deny: [target:/proc/*/environ, target:*/.ssh/*]` asked, where
+  main and `cat /proc/self/environ ~/.ssh/id_rsa` deny. A text with a backslash yields to the word the shell reads, and
+  the words come after every text piece, so an odd second store came first: `cat ~/.kube/\config ~/.docker//config.json`
+  asked under `deny: [target:*/.kube/config]`. A nested line (`$( )`, backticks, `<( )`, `bash -c`, a heredoc) gives the
+  line its target even after a plain store: `cat ~/.ssh/id_rsa $(cat ~/.kube//config)` asked under
+  `deny: [target:*/.ssh/*]`. File tools held the same shape: `read_file`, `copy_file`, `grep` or an unknown tool with
+  `~/.kube//config` and `~/.ssh/id_rsa`. Where a line's or a file tool's target is a spelling main did not read, main's
+  target now stays a credentials part: the first store main read, as written, and a glob read without the #446 steps.
+  The part has no own text, like the part `_weigh` adds for a heavier command, so it only raises: an entry or deny rule
+  that matched main's target matches the part (D-075, #191). The target itself does not change, and a line main read the
+  same way gets no part. This also closes two of the three shapes (g) left: an entry for the second store alone, and a
+  first store that is a word with links. Group 2 then held the `dd` operand, which #568 tracks, and a shell call's own
+  folders, which the sixth round found and (m) closes. (l) The drafter ran
+  a differential of main edeb4f89 against this change under the 87 built-in policies and 106 more: the 92 of (j), a
+  deny, reserved and rule entry for four more pairs of stores (`/proc/*/environ` or `/proc/*` with the ssh keys, and the
+  kube and docker configs both ways), `target:/proc/*/environ` alone, and a mapping entry on the ssh keys. The built-in
+  set, 75,599 actions, lowered 394 pairs on 80 actions. Under the 87 built-in policies that is 31 pairs on 23 actions,
+  which a reviewer's own run matched: 21 in group 1 and 10 in group 5, with no pair in group 2, against 233 in (j). The
+  other 363 are 21 in group 1 and 342 on 57 `dd` actions. No reviewer has rerun the 106 more yet. A focused run of
+  25,981 actions held the corpora of (j) and 5,191 lines from this check: 26 first stores in lexical, glob, linked and
+  backslash spellings and plain controls, beside 9 second stores, in 15 line shapes and 7 file tools. It lowered 198
+  pairs on 33 actions, all `dd` lines under `target:~/.exo/*` and `target:~/*` entries. Each lowered pair in both runs
+  decides as main decides the plain spelling. The same corpora with this branch before this change (882e79d8) as the
+  base lowered no pair and tightened 26,870 pairs on 2,412 actions, each from ask to deny. No run had a classify or
+  decide error.
+  *2026-10-25 (#513, sixth round):* (m) A shell call's own folders held the same shape. A call's read of a store from
+  its `cwd` or `workdir` (#311) takes the first folder that names a store, and since #446 that can be a spelling main
+  did not read. So `bash` with `cwd: ~/.config//gcloud` and `workdir: ~/.exo/keys` asked under
+  `deny: [target:*/.exo/*]`, where main denied it through the second folder, its target there. The same call with
+  `workdir: ~/.ssh` asked under `deny: [target:*/.ssh*]`, and a `reserved:` entry like it lost its hit. It held for each
+  shell tool name, for the `/./` and `x/..` spellings, and for a glob main did not read (`/pro?/self/environ`). It also
+  held for a plain folder that main read a store in by a relative name beside a later odd folder: `cat config` with
+  `~/.kube`, and `ls keys` with `~/.exo`, where `keys` resolves into the key store. The folders are now also read as
+  main read them, and where that gives another target, that target is a second credentials part, weighed as the first
+  one is. So these calls decide as on main. A call main read the same way gets no second part: with
+  `cwd: ~/.config/gcloud` and `workdir: ~/.ssh` the target is the gcloud folder, here and on main.
+  Group 2 then held the `dd` operand, which #568 tracks, and a store folder beside a line that names a store only in
+  a spelling main did not read, which (o) closes. (n) The drafter ran a differential of main edeb4f89
+  against this change under the 87 built-in policies and 128 more: the 106 of (l), a deny, reserved and rule entry for
+  five store folders spelt as a folder target (`*/.ssh*`) and for two store files read by a relative name, and a rule
+  on the ssh folder and an irreversible line. The built-in set, 75,784 actions, lowered 394 pairs on 80 actions, the
+  same pairs as in (l). Under the 87 built-in policies that is 31 pairs on 23 actions, 21 in group 1 and 10 in group 5.
+  The other 363 are 21 in group 1 and 342 on 57 `dd` actions. A focused run of 33,914 actions held the corpora of (l)
+  and 7,933 calls from this review. They give a shell call two folder arguments in both orders: each of six store
+  folders, plain and in five odd spellings, beside each other, under seven shell tool names and both keys. They also
+  hold a store folder beside a folder the line reads a store in by a relative name, glob folders, `$HOME` spellings, a
+  session folder, and `cd` and `pushd` forms. It lowered 198 pairs on 33 actions, the `dd` pairs of (l). The same
+  corpora with this branch before this round (0b35021a) as the base lowered no pair and tightened 2,105 pairs on 356
+  actions, each from ask to deny. No run had a classify or decide error.
+  *2026-10-26 (#513, sixth round, an independent check):* (o) A store folder beside a line that names a store only in
+  a spelling main did not read held the same shape. Such a line is credentials on its own, so its call kept the line's
+  result and read no folder (#311). Main read no store on the line, so it read the call's `cwd` or `workdir`, and the
+  call's target was that folder. So `cat ~/.kube//config` with `cwd: ~/.ssh` asked under `deny: [target:*/.ssh*]`,
+  where main denied it, and `git status && cat ~/.docker//config.json` with `cwd: ~/.exo/keys` asked under gate_diff's
+  `deny_target_store`. It held for each shell tool name, for a glob or a `/proc` link main did not read, and for a
+  redirection with a backslash (`cat < ~/.kube/\config`), which the shell reads as the kube config. The line itself
+  held it too: a line that enters a store folder reads a relative name there (D-038, #192) only when it is not
+  credentials already, so `cd ~/.config/gh && cat /pro?/self/environ hosts.yml` took the glob as its target, where main
+  took `hosts.yml`, and asked under `deny: [target:*hosts.yml]`. Where each credentials part of the line names a store
+  path and the line names no store as main read it, the call now also reads its folders as main did, and the line
+  reads the names after its `cd`. Each read is a credentials part, weighed as main's was. A line on which main read a
+  store, the environment or a secret command (`cat ~/.kube/config`, `env`, `ssh-keygen`) reads neither, as on main.
+  The check of (k) missed one shape too: it took a target that names a store as written for one main read. A nested
+  redirection with a backslash gives the line the name the shell reads, so `cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`
+  took `~/.kube/config` as its target, where main took `~/.ssh/id_rsa`, and asked under `deny: [target:*/.ssh/*]`. The
+  check now also asks that the line spell the target, so main's target is a part again. Group 2 now holds only the
+  `dd` operand, which #568 tracks. (p) The check ran its own differential of main 358c3a39 against this round's head,
+  merged with it at 2d2bab32. Main 358c3a39 holds #409 (#330), whose gate changes are in other functions. 9bb58909
+  only reorders a check and decides the same. The run used the 87 built-in policies and 223 more: the 128 of (n), and
+  a `target:` entry in `deny:` and in `reserved:`, a deny rule and an ask rule for each of 23 store folders, files and
+  names, two rules and a mapping entry. The built-in set, 77,197 actions, lowered the same 394 pairs on 80 actions as
+  (n), 31 on 23 under the 87 built-in policies. A focused run of 88,300 actions held the corpora of (n), 31,417 calls
+  and lines from this check's first pass, 18,836 from its second and 4,556 from its third. The first pass gave each
+  shell tool name a line that names a store only #446 reads, beside each store folder, plain and odd, as `cwd`,
+  `workdir` or both. It also held code tools, file tools, ssh and nested lines, and `cd`, `pushd`, `tar -C` and
+  `git -C` lines. The second mixes such a store, in a call with a folder, with relative reads and store writes, a
+  delete, a force push, a post, secret commands, nested lines and `cd` forms. It also puts a nested redirection with a
+  backslash beside nine first stores. The third puts #409's rebinds (`hash -p`, `BASH_CMDS`, `BASH_ALIASES`) beside a
+  store path in each spelling. It also holds relative names that resolve into a store from a folder that is no store,
+  and folders given relatively, through a link, as `$HOME` text or with a trailing slash. It lowered 1,633 pairs on
+  1,252 actions. 198 are the `dd` pairs of (l). The other 1,435 are on calls whose folder is a store and whose line
+  mixes such a store with a delete, a force push or a post. 1,163 are group 1, with a category line in place of the
+  rule. Under gate_diff's `order_ask_under_category_deny` (`delete: deny`, `force_push: deny` and a rule that allows
+  the rest), `cat ~/.kube//config; rm -rf keys` with `cwd: ~/.ssh` was denied on main by its `delete` line, which the
+  rule did not lower beside the folder's part (#394). Here the line is `credentials` and asks, as
+  `cat ~/.kube/config; rm -rf keys` does there on main. 272 are group 5. A post with a forbidden word on such a line,
+  with `cwd: ~/.exo/keys`, lists the word once, named after its post. Main listed it in both wordings, once for each
+  reading of the call (#311). Each of the 1,435 decides as main decides the plain spelling, and each held at 0b35021a
+  too. Both sets with 0b35021a, merged with main 358c3a39, as the base lowered no pair. No run had a classify or
+  decide error.
+  *2026-10-26 (#513, sixth round, the merge of main 66c4ec6d):* (q) Main merged #320 (#309, #341), which reads a
+  shell call's folders and the names after a `cd` beside every secret line too, and makes each read with another
+  target a credentials part. So the checks of (o) for those two reads give way to main's: the folder in
+  `cat ~/.kube//config` with `cwd: ~/.ssh`, and `hosts.yml` in `cd ~/.config/gh && cat /pro?/self/environ hosts.yml`,
+  are parts as main makes them. The folder pass of (m) keeps its second reading of the folders, as main read them
+  before #446, beside main's list. #320 reads the names after a `cd` in its expansion forms (`cd ~/.k$(:)ube`,
+  `${x-hosts.yml}`) only on a line that is no secret line. A line that is credentials only through a store named in a
+  spelling main did not read was none on main, so main read those forms there, and their name was the target:
+  `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json` asked under `deny: [target:config]`, where main denies it.
+  Such a line now reads the forms too, and their name is a part. A line on which main read a store, the environment or
+  a secret command does not, as on main. Three tests pinned main 2923f8b9's result for a secret line beside a folder,
+  after a `cd` and beside a nested secret. They now pin main 66c4ec6d's, which denies under an entry for that target.
+  The check also found that the part of (k), main's target beside a target main did not read, took the line's own
+  weight. Main's line took the weight of a heavier command deeper in it as a part beside it (#468), so
+  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'` asked under a deny rule on `*/.ssh/*` and
+  `irreversible`, where main denies it. It held at 0b35021a too. The part now weighs as main's line did.
+  *2026-10-26 (#513, sixth round, the merges of main df4195ab and 5a5a535d):* (r) The check found two more shapes of
+  (k) on file tools. A write tool (`write_file`, `edit_file`, `patch`, `apply_patch`) has a `local_write` part for each
+  file it writes (#448). Where no `path`, `file_path` or patch header names the files (`paths`, `files`, `source` and
+  `destination`), main's write part was on main's target, and here it was only on the odd spelling. So `write_file`
+  with `paths: [~/.kube//config, ~/.ssh/id_rsa]` asked under a deny entry for a `local_write` on `*/.ssh/*`, where main
+  denies it, and a `reserved:` entry like it lost its hit. Main's target now keeps its write part there. A file tool's
+  target is also the path as given, so main's target can be a bare name that names a store from the session folder
+  (#209): `id_rsa` with `cwd: ~/.ssh`, or `keys` with `cwd: ~/.exo`. The part of (k) was made only for a target with a
+  `/` or a `.`, as main's target on a shell line is. So `read_file` with `paths: [~/.kube//config, id_rsa]` in
+  `~/.ssh` asked under `deny: [target:*id_rsa*]`, where main denies it. A file tool's part now takes any target main
+  gave the call. Both held at 0b35021a, merged with each main. (s) The check's focused differential found one more
+  on a shell call's folders. A word with no name of its own that resolves into a store from the call's folder (`keys`
+  with `cwd: ~/.exo`, #209) made main's line, read in that folder, a secret line with no target. Main's read of the
+  folder then took the folder itself as its path, `~/.exo`. Beside a store only #446 reads
+  (`cat ~/.kube//config keys`), the bare word gets no part of its own, as on a shell line main's target is a path, so
+  the folder pass of (m) had no read main made to start from, and that read was lost. The call asked under
+  `deny: [target:*/.exo]`, where main denies it, and a `reserved:` entry on credentials or on `*/.exo*` listed one hit
+  fewer. Where the call's reading has no credentials part main read, the folder pass now takes main's read of the
+  line, with no target for a bare word, so its path is the folder as written, as on main. It held at 0b35021a too.
+  Group 2 again holds only the `dd` operand, which #568 tracks.
+  *2026-10-27 (#513, sixth round, the merges of main 6054da56 and 15e60ddb):* (t) Main merged #514 (#611), which makes
+  each store path a write names a part of its own, with the path alone. So the `dd` operand now decides as main
+  decides it: `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` and `dd if=~/.exo//keys/seat.key of=/tmp/a` are denied under
+  `deny: [target:~/.exo/*]`, here and on main, and a `reserved:` entry like it counts a hit. Main now denies the plain
+  lines #568 tracks too, so group 2 is empty. The folder pass of (s) now reads main's line again only where the call's
+  reading has a credentials part. #446 only adds reads, so a line with no secret read here had none on main either,
+  and the decisions do not change. A call such as `cat` with 2,000 file names and `cwd: ~/.ssh` no longer parses its
+  line a second time, and costs what it costs on main: 0.094 s against 0.093 s (CPU time, best of five).
+  (u) The check's differential after the merge of main 15e60ddb found one more shape of (s). The bare word main read
+  first can also be a part with a name of its own: `conf*` in `cat ~/.kube//config; cd ~/.docker && cat conf*`, which
+  the line reads after its `cd` (D-038), or `keys` in `cat ~/.docker/./config.json; cd ~/.exo && rm keys`. With
+  `cwd: ~/.exo`, the folder pass of (s) took that part as main's read, so its path was the name in the folder
+  (`~/.exo/conf*`). Main's read was the line, with no target, and its path the folder as written. The call asked
+  under `deny: [target:*/.exo]`, where main denies it, and a `reserved:` entry like it listed one hit fewer. Where
+  main read a secret on the line and the call's first credentials part is one main did not read, the folder pass now
+  takes main's read of the line, as main made it. It held at 0b35021a too.
+  *2026-10-27 (#513, sixth round, the merge of main e0968a2b):* (v) Main merged #635 (#601), which matches the store
+  names in any letter case, and #620 (#516), whose part for a shell call's own folder names the `cd` it stands for.
+  The lexical form folds case too, so `cat ~/.KUBE//config` asks. The reading as main read it (``plain``) is main's
+  own, so it folds case as well, and the folder pass's parts name their `cd` as main's do. (w) The check found one
+  more shape of (k). On a remote line, ssh gives the host a copy of the line's first part when that part has no target
+  (#320), so an entry on the host's read sees it. Main's target part has a target, and the hop took that part, so it
+  made no copy. `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` asked under `deny: [{category: read, target: prod}]`,
+  where main denies it, and `reserved: [target:prod]` listed one hit fewer. mosh, a `$( )` and a second hop did the
+  same. The hop now passes over main's target part. It held at 0b35021a too. (x) The check's differential found where
+  #601 and #446 meet on a remote line. #601 keeps the line's own action on the host beside a path that is a store only
+  by its letter case, so main denies `ssh prod 'rm -rf ~/.Kube/config'` under
+  `deny: [{category: delete, target: prod}]`. That test read the store names as written, so `~/.Kube//config`, a
+  store only in another case and in its lexical form, kept no copy for the host, and the line asked where main denies
+  both it and its plain spelling. The test now reads each spelling in its lexical form too. (y) The check ran main's
+  script (e0968a2b) on main e0968a2b against d6f10f70, under the 88 built-in policies and 335 more: this round's
+  entries on each store folder, file and name, entries on a remote host's actions, and #516's allow rules. The
+  built-in set, 85,852 actions, lowered 81 pairs on 17 actions, all `ssh prod 'rm -rf ~/.kube//config'` in the forms
+  the script makes of this round's test rows. Under the 88 built-in policies alone that is 17 pairs on 17 actions,
+  against 31 on 23 in (n). A focused run of 24,438 calls held 16,614 new ones (a store spelt oddly
+  and in another case at once, in lines and in a call's own folders, beside #516's rules), 1,053 remote lines and the
+  7,868 calls of the check's run before. It lowered 38 pairs on 12 actions. The check's earlier corpora lowered none on
+  15,824 actions, and 123 pairs on 122 of 35,329, each a reserved hit. Each lowered pair decides as main decides the
+  plain spelling (group 1). No run had a classify or decide error. The many-short-words cost is now 3.6 to 4.6 times
+  main's CPU time (best of three, main and this branch in turn), against 3.3 to 3.4 before the merge, since #601 folds
+  each name these reads match.
+  *2026-10-28 (#513, the merge of main eb0ba7e2):* (z) Main merged #706 (the #609 follow-up), which gives each store a
+  secret line names past its first a credentials part of its own (`other_store`), so a `target:` entry, a `reserved:`
+  entry or a rule on any of them matches. Main now denies the plain lines of group 2 under an entry for the second
+  store (`cat ~/.kube/config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`), and the merge denies the odd ones
+  too. Both parts are kept: main's for each later store, read in the lexical form, and this branch's for main's
+  target. The ssh hop's copy for the host passes over both. A text with a backslash that names a store only in its
+  lexical form is listed by the name the shell reads, unless that name is the line's target. So
+  `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under `deny: [target:*/.kube/config]`, as its plain spelling is on
+  main, where main asks. Main also lists a line's own store again where the target is the word as written and its
+  list spells `~` out, or where the store is in a quoted `bash -c` text: `cat ~/.kube/\config` and
+  `bash -c 'cat < ~/.kube/config'` count two `credentials` hits under `reserved: [target:*/.kube/config]`, where
+  `cat ~/.kube/config` counts one. The merge keeps main's count, and the tests compare those lines by the categories
+  they hit. Main's script (eb0ba7e2) compared main eb0ba7e2 with the merge under the 88 built-in policies, on the
+  built-in set with its variants (88,591 actions). It lowered 17 pairs on 17 actions. Each is
+  `ssh prod 'rm -rf ~/.kube//config'` in a form the script makes, and each loses the host's `delete` hit under
+  `reserved: [delete, force_push]`, as main's plain spelling does (group 1). Neither tree had a classify or decide
+  error. The many-short-words cost is 3.1 to 3.8 times main's CPU time at the merge, and 3.0 to 3.9 times the merge
+  base's at 76f33d16 (best of three, the four trees in turn). So the cost is this branch's own, and the merge adds
+  none.
+  *2026-10-28 (#513, the merge of main f28934a3):* (aa) Main merged #707 (the #634 follow-up), which reads an `env -S`
+  text as the line env runs and keeps main's earlier readings of it in `split_readings`, and #718 and #799 (#491),
+  which read the stdin and the command of a `sudo -s` or `sudo -i` shell and read the call as before at the end of its
+  floors. `src/exo/gate.py` merged with no conflict, and this branch's change to it is the same as against main
+  eb0ba7e2. Each new reading reads its text as a shell line, so the lexical form, main's target part, each other
+  store's part and the hop's copy hold there as on the line itself. `env -S 'cat ~/.kube//config'`,
+  `sudo -i <<< 'cat ~/.kube//config'` and `sudo -s cat ~/.kube//config` are denied under
+  `deny: [target:*/.kube/config]`, as their plain spellings are, where main asks or allows. A shell call's folders
+  work as before: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, `sudo -s <<< 'ls'` is denied under
+  `deny: [target:*/.ssh*]`, as on main. Main's script (f28934a3) compared main f28934a3 with the merge under the 88
+  built-in policies, on the built-in set with its variants (92,171 actions). It lowered the 17 pairs of the merge
+  before, on 17 actions. A set of 855 calls that wrap this branch's rows in each spelling of `env -S` and each form of
+  a sudo shell, under the built-in and 62 aimed policies, lowered 105 pairs on 21 actions. Each lowered pair is a
+  remote delete of the kube config in an odd spelling, `ssh prod 'rm -rf ~/.kube//config'` in some form (once
+  `~/.Kube//config` with a second operand). It loses the host's `delete` as main's plain spelling does (group 1).
+  Neither tree had a classify or decide error. The many-short-words cost is 2.6 to 4.0 times main's CPU time at the
+  merge (best of three, main and the merge in turn), as before the merge.
+  *2026-10-28 (#513, an independent check of the merges):* (bb) Since #706 a line lists each store it names, so each
+  text with a backslash that names a store only in its lexical form is read as the shell reads it (z), not only the
+  first. Each such read spelt every word of the line out again, so the work grew with the square of the line. A line
+  of 1,000 such words (`cat ~/.kube/x0/../\config ~/.kube/x1/../\config ...`) took 16.7 s at the merge, where main
+  takes 0.12 s and 76f33d16 0.2 s. The words are now spelt once per call, and each text is found in their joined
+  text. That line takes 0.32 s, about three times main. No decision changes: 25,536 probe rows on the code the merges
+  touched, 204 rows aimed at such words and the reviews' 33 rows decide the same before and after it. The cost in (z)
+  and (aa) is the line of short words with links, which this does not change. The merge of main 0d077c8d brought no
+  gate code.
+  *2026-10-29 (#513, the merge of main a1dd4fec):* (cc) Main merged #546 (#471), which reads the command behind a
+  quoted prefix assignment and keeps the call read as before in `before`, #838 (#479), which reads a loop body that
+  enters the store again after its `cd`, and #775 (#473), which reads a `gc.recentObjectsHook` value as a shell
+  command. `src/exo/gate.py` merged with no conflict, and this branch's change to it is the same as against main
+  0d077c8d. Each new reading reads its text as a shell line, so the lexical form, main's target part, each other
+  store's part and the hop's copy hold there too. `X='a b' cat ~/.kube//config`,
+  `for i in 1 2; do cat ~/.kube//config; cd ~/.exo/policies; done` and
+  `git -c gc.recentObjectsHook='cat ~/.kube//config' gc` are denied under `deny: [target:*/.kube/config]`, as their
+  plain spellings are, where main asks or, for the loop, allows. Main's script (a1dd4fec) compared main a1dd4fec with
+  the merge under the 88 built-in policies, on the built-in set with its variants (95,143 actions). It lowered the 17
+  pairs of the merges before, on 17 actions, and the 855 calls of (aa) the same 105 pairs. A quoted prefix before a
+  remote delete (`X='a b' ssh prod "rm -rf ~/.kube//config"`) loses the host's `delete` as main's plain spelling does
+  (group 1). Neither tree had a classify or decide error.
+  *2026-10-29 (#513, the merge of main 080e87ba):* (dd) Main merged #158 (#143, #553), which reads a command in a
+  `${..}` word, in a backquote there and in a `$((` it reads as a subshell, and keeps the call read as before #143 in
+  `flat`, #862 (#853), which reads a compound behind `time`, `time -p` or `!` without them, #858 (#857), which reads
+  again a while or until condition whose first command is the `cd` into the store, and #839 (#547), which asks a rule
+  that lifts a part's deny on a store line to name every command on it. `src/exo/gate.py` merged with no conflict,
+  and this branch's change to it is the same as against main a1dd4fec. Each new reading reads its text as a shell
+  line, so the lexical form, main's target part, each other store's part and the hop's copy hold there too.
+  `echo ${X:-$(cat ~/.kube//config)}`, `time { cat ~/.kube//config; }` and
+  `until cd ~/.exo/policies$(cat ~/.kube//config); do sleep 1; done` are denied under
+  `deny: [target:*/.kube/config]`, as their plain spellings are, where main allows or asks. Under a matrix that
+  denies the irreversible cells and one allow rule that names both commands,
+  `git push --force origin main && gh gist create ~/.kube//config` is denied, as its plain spelling is, where main
+  allows it. Main's script (080e87ba) compared main 080e87ba with the merge and its tests under the 88 built-in
+  policies, on the built-in set with its variants (97,090 actions). It lowered 22 pairs on 22 actions. 17 are the
+  pairs of the merges before (group 1), and a remote delete in a `${..}` word or behind `time`
+  (`time { ssh prod 'rm -rf ~/.kube//config'; }`) loses the host's `delete` the same way, as main's plain spelling
+  does. The other 5 are a new group, (6), and 3 of them are this branch's own tests for it. Since #839 a rule that
+  would lift a part's deny on a line a store write leads must name the whole line. A line that names a secret only in
+  an odd spelling was such a line on main. Here it is `credentials`, as its plain spelling is on main, where the rule
+  lifts that deny and the line asks. So under `categories: {delete: deny}` and an allow rule on `.*`,
+  `cat ~/.docker/./config.json; cd ~/.exo && rm keys` asks, as `cat ~/.docker/config.json; cd ~/.exo && rm keys`
+  does on main, where main denied the odd spelling. The store line alone is denied on both. A follow-up issue tracks
+  main's side. On the 855 calls of (aa) it lowered the same 105 pairs as before. Neither tree had a classify or decide
+  error.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and

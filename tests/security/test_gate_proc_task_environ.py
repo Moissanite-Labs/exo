@@ -2,8 +2,6 @@
 /proc/<pid>/environ, so it is a secret store too.
 
 Every check classifies; nothing is run."""
-import os
-
 import pytest
 
 from exo import gate
@@ -35,11 +33,11 @@ def env(tmp_path, monkeypatch):
     "cat '/proc/self/task/1/environ'",
     'cat "/proc/self/task/"*/environ',
     "cat /proc/self/ta\\sk/1/environ",
-    # The gate resolves /proc/self, a link on Linux, and the resolved path has no doubled slash. Where /proc/self
-    # is not a link, the row is matched as written and reads.
-    pytest.param("cat /proc/self/task//1/environ",
-                 marks=pytest.mark.skipif(not os.path.islink("/proc/self"),
-                                          reason="needs /proc/self to be a link, as on Linux")),
+    # A doubled slash was the #446 gap: where no link resolved it, the row was matched as written and read. Since
+    # #446 the name is also matched with `//` collapsed, so these ask whether or not /proc/self is a link.
+    "cat /proc/self/task//1/environ",
+    "cat /proc/1/task//1/environ",
+    "cat /proc/1//environ",
     "cd /proc/self/task/1 && cat environ",
 ])
 def test_a_task_environ_read_asks(line):
