@@ -337,15 +337,19 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 - The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
   source names (`ghe.corp/pub/repo#5`), as above.
 - The repo `GH_REPO` names (#566). gh reads `GH_REPO` as `-R` when the line gives none. So each
-  value the line sets for it is read as `-R` is, on each reading with no `-R`: a prefix
-  assignment (`GH_REPO=pub/repo gh pr comment 5`, also through `env`), and a value set earlier on
-  the line (`export GH_REPO=pub/repo; gh pr comment 5`). A bare assignment counts too, since gh
-  sees it when the variable was exported before the line. gh api fills `{owner}` and `{repo}` in
-  its endpoint from it, so `repos/{owner}/{repo}/issues/5/comments` reads as `pub/repo` too. The
+  value the line sets for it is read as `-R` is, on each reading with no `-R`: a prefix assignment
+  (`GH_REPO=pub/repo gh pr comment 5`, also through `env`), and a value set earlier on the line
+  (`export GH_REPO=pub/repo; gh pr comment 5`). A bare assignment counts too, since gh sees it
+  when the variable was exported before the line. So does an export or assignment in a compound,
+  or before a nested line that inherits it: `{ export GH_REPO=pub/repo; gh pr comment 5; }`,
+  `export GH_REPO=pub/repo; x=$(gh pr comment 5)` and `bash -c`. The gate keeps the last four
+  values the line set, so a long line stays linear. gh api fills `{owner}` and `{repo}` in its
+  endpoint from it, so `repos/{owner}/{repo}/issues/5/comments` reads as `pub/repo` too. The
   line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5` still
   asks as on a repo the line does not name. A value from an expansion adds nothing, as that
-  reading already stands. Not read here: a value an outer command passes into a nested shell
-  (`GH_REPO=pub/repo bash -c '..'`), and `GH_HOST`, which names gh's host.
+  reading already stands, and so does a value past the four. Not read here: a prefix assignment on
+  a command that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`), and `GH_HOST`, which
+  names gh's host.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,

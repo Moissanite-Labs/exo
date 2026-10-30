@@ -38,6 +38,14 @@ POSTS = [
     "GH_REPO=pub/repo gh pr close 5 --comment ok",
     "GH_REPO=pub/repo gh issue create -t t -b ok",
     "export GH_REPO=pub/repo; true; gh pr comment 5 --body ok",
+    # set in a compound, or around a nested line that inherits it
+    "{ export GH_REPO=pub/repo; gh pr comment 5 --body ok; }",
+    "if true; then export GH_REPO=pub/repo; fi; gh pr comment 5 --body ok",
+    "{ GH_REPO=pub/repo; }; gh pr comment 5 --body ok",
+    "export GH_REPO=pub/repo; x=$(gh pr comment 5 --body ok)",
+    "export GH_REPO=pub/repo; echo \"$(gh issue comment 5 --body ok)\"",
+    "export GH_REPO=pub/repo; bash -c 'gh pr comment 5 --body ok'",
+    "export GH_REPO=other/one; if true; then export GH_REPO=pub/repo; fi; x=$(gh pr comment 5 --body ok)",
 ]
 ON_PUB = POSTS + ["GH_REPO=pub/repo gh pr merge 5 --squash"]
 
@@ -54,6 +62,16 @@ def test_the_gh_repo_value_is_another_target_and_the_line_still_asks(line):
     c, d = run(line, INTERNAL)
     assert any(t.startswith("pub/repo") for t in c.alt_targets), (line, c.target, c.alt_targets)
     assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
+
+
+def test_a_line_keeps_only_the_last_few_gh_repo_values():
+    # each gh command reads the last _GH_REPO_KEPT values the line set before it, so a long line stays linear
+    sets = "".join(f"{{ export GH_REPO=o/r{i}; }}; " for i in range(gate._GH_REPO_KEPT + 3))
+    c = gate.classify({"tool": "bash", "args": {"command": sets + "x=$(gh pr comment 5 --body ok)"}})
+    targets = {t for r in gate.readings(c) for p in gate._each_part(r) for t in [p.target, *p.alt_targets]}
+    last = gate._GH_REPO_KEPT + 2
+    assert {f"o/r{i}#5" for i in range(last - gate._GH_REPO_KEPT + 1, last + 1)} <= targets, targets
+    assert "o/r0#5" not in targets, targets
 
 
 def test_an_internal_gh_repo_value_lowers_nothing():

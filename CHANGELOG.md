@@ -18,7 +18,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate: a gh command reads `GH_REPO` as its repo, and `GH_CONFIG_DIR` asks (#566, D-038 amendment).
   `GH_REPO=pub/repo gh pr comment 5`, or an `export GH_REPO=pub/repo` earlier on the line, posts on `pub/repo#5`,
   but the gate read a repo the line does not name, so a `target:` deny or rule on `pub/*` never saw it. Each value
-  the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays.
+  the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays. An
+  export in a `{ }` group or an `if`, or before a `$( )` or `bash -c`, counts too.
   `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
 - Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
   Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other

@@ -104,3 +104,18 @@ def test_a_gh_line_of_many_url_operands_is_linear(cmd):
     took = time.process_time() - t
     assert took < BOUND, took
     assert d.outcome == "deny", d       # a deny on one far target still reaches the line
+
+
+def test_a_long_line_of_gh_repo_values_and_gh_commands_is_linear():
+    """#566: each gh command reads the GH_REPO values the line set before it, in a compound too, each one another
+    target with a copy of the action. Only the last few count, so a line of many values and many gh commands stays
+    linear, and a deny on a value deep in the line still reaches it."""
+    unit = "{ export GH_REPO=o/r1234; gh pr comment 1234 -b x; }; "
+    cmd = "".join(f"{{ export GH_REPO=o/r{i}; gh pr comment {i} -b x; }}; " for i in range(_times(unit)))
+    c = _timed(cmd, SLACK)
+    t = time.process_time()
+    d = gate.decide(c, gate.normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]},
+                                                          "deny": ["target:o/r1500#*"]}}))
+    took = time.process_time() - t
+    assert took < BOUND, took
+    assert d.outcome == "deny", d

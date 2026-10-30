@@ -3512,7 +3512,9 @@ def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str |
     """The GH_REPO values gh may read on command k (#566): an assignment before its program word
     (`GH_REPO=pub/repo gh ..`, also through env or sudo), and the value the line set before k
     (`export GH_REPO=pub/repo; gh ..`, ``literals``, #579). A bare assignment counts too: gh sees it when the
-    variable was exported before the line. None stands for a value the gate cannot read."""
+    variable was exported before the line. So does each value the line set before k in a compound or around a
+    nested line (`{ export GH_REPO=pub/repo; gh ..; }`, `export GH_REPO=pub/repo; x=$(gh ..)`, _GH_REPO_SET).
+    None stands for a value the gate cannot read."""
     out: list[str | None] = []
     for w in k.words:
         if w is program:
@@ -3522,7 +3524,30 @@ def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str |
             out.append(None if _expands(w) else value)
     if "GH_REPO" in literals:
         out.append(literals["GH_REPO"])
+    if (memo := _call_memo.get()) is not None:
+        out += memo.get(_GH_REPO_SET, {})
     return tuple(dict.fromkeys(out))
+
+
+# The mark in _call_memo for the GH_REPO values the line set so far, in a compound or a nested line too (#566): the
+# last _GH_REPO_KEPT of them, the latest last. bash keeps the latest, and a branch may leave an earlier one, so a gh
+# command reads each. The bound keeps a long line of values and gh commands linear: a value past it, as a value the
+# gate cannot read, adds no reading, and the line's own reading, a repo it does not name, still decides.
+_GH_REPO_SET = ("gh", "GH_REPO")
+_GH_REPO_KEPT = 4
+
+
+def _gh_repo_sets(k: "_Cmd") -> list[str]:
+    """The GH_REPO values command k sets for the commands after it (#566), each one the gate can read: a bare
+    assignment's, and an argument of export or its kind, past the words that open a compound (`{ export
+    GH_REPO=pub/repo; ..; }`, `then`)."""
+    words = list(itertools.dropwhile(lambda w: not w.quoted and w.text in _OPENERS, k.words))
+    if words and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS:
+        words = words[1:]
+    elif not all(_ASSIGN.fullmatch(w.text) for w in words):
+        return []
+    return [value for w in words for name, eq, value in [w.text.partition("=")]
+            if eq and name == "GH_REPO" and value and not _expands(w)]
 
 
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
@@ -6976,10 +7001,12 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
 
 
 def _budgets() -> tuple:
-    """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend."""
+    """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend, and
+    the GH_REPO values the line set so far (_GH_REPO_SET), which a gh command in it reads (#566)."""
     left, memo = _brace_left.get(), _call_memo.get()
     return (None if left is None else tuple(left),
-            None if memo is None else tuple(memo.get(k, [_EXO_PARTS])[0] for k in ("exo_parts", "exo_parts_written")))
+            None if memo is None else tuple(memo.get(k, [_EXO_PARTS])[0] for k in ("exo_parts", "exo_parts_written")),
+            None if memo is None else tuple(memo.get(_GH_REPO_SET, {})))
 
 
 def _own_copy(c: Classification) -> Classification:
@@ -7067,6 +7094,13 @@ def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot:
     got = _classify_simple(k, cmd, depth, ctx, piped)
     if late:
         ctx["literals"].update(own)
+    if (memo := _call_memo.get()) is not None and (values := _gh_repo_sets(k)):
+        kept = memo.setdefault(_GH_REPO_SET, {})        # what a gh after it reads as GH_REPO (#566)
+        for v in values:
+            kept.pop(v, None)
+            kept[v] = None
+        while len(kept) > _GH_REPO_KEPT:
+            del kept[next(iter(kept))]
     if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
         got = _given_stdin(got, _stdin_own(k), ctx)
     return got

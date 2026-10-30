@@ -1344,15 +1344,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - *Amendment 2026-10-30 (issue #566):* gh reads `GH_REPO` as `-R` when the line gives none, and `GH_CONFIG_DIR`
   picks its config. The gate read neither. `GH_REPO=pub/repo gh pr comment 5` posts on `pub/repo#5`, but the gate
   read the target as `#5`, a repo the line does not name: the line asked as public with a third party, yet a
-  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix
-  assignment (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read
-  as `-R` is, on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). gh api's `{owner}` and `{repo}` are
-  filled from it. The line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5`
+  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix assignment
+  (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read as `-R` is,
+  on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). An export or a bare assignment in a compound, or
+  before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
+  `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
+  four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
+  linear. A value past the four adds no reading, as a value the gate cannot read. gh api's `{owner}` and `{repo}`
+  are filled from it. The line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5`
   still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that change which config files are used
   (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and `editor` commands. So it asks, as
-  `opaque_exec` named in the summary. Left open: `GH_HOST`, which picks gh's host, and a value an outer command
-  passes into a nested shell (`GH_REPO=pub/repo bash -c '..'`), whose gh still asks as on a repo the line does not
-  name. Tests: `tests/security/test_gate_gh_repo_env_566.py`, and the three #566 rows of
+  `opaque_exec` named in the summary. Left open: `GH_HOST`, which picks gh's host, and a prefix assignment on a
+  command that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`), whose gh still asks as on a repo the line
+  does not name. Tests: `tests/security/test_gate_gh_repo_env_566.py`, the GH_REPO row of
+  `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
   `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
 - *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL
   operand on another instance is another target (#399), with a copy of the action among the line's parts. `decide`
