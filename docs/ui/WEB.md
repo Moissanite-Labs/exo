@@ -226,7 +226,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   thread existed cannot hide that thread once a newer list shows it (#859).
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
-  readers already at the newest item continue following it. The transcript is keyboard focusable.
+  readers already at the newest item continue following it. So does the redraw each time the event stream catches
+  up, on load and after a reconnect, when the page reads the conversation again. Before, that redraw moved the
+  reader back to the newest item. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -310,7 +312,9 @@ the "Layout" button under the thread list or `/layout inverse|classic`; the choi
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
+DevTools (`tests/browser.py`, skipped when Chrome is missing). The driver turns off Chrome's throttling of background
+timers and frames, and the suite's summary line names the Chrome binary and version it drove, so a CI log shows which
+build a layout failure came from (#907). When a wrapped status and composer exceed the available
 height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
 pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
 its bounded height when the chat column scrolls.

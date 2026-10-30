@@ -5,9 +5,38 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
+
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
+- Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
+  pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
+  start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
+  web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
+  names the Chrome binary and version it drove.
+- Web chat keeps a reader's place when the event stream catches up. On load and after a reconnect, the page reads the
+  conversation again and redraws it. That redraw moved a reader who had scrolled back to the newest message. It now
+  keeps their place, as new output does, and a reader at the newest message stays there.
+- Tests: more of the timing and browser tests that failed on GitHub's hosted runners, unrelated to the PRs they ran
+  on, no longer fail on a slow runner (`docs/DEVELOPER-GUIDE.md` §7 "Timing and browser tests on hosted runners").
+  - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) built the tool registry
+    inside its timed call. The first build imports the built-in tools, and beside 8 to 10 busy loops that took the
+    call past its 3 s wall-clock bound. The registry is now built before the clock starts. The 3 s bound is
+    unchanged, and so is the 0.5 s bound on the event loop's largest gap between ticks (#907, the entry above).
+  - The chat tests that set a layout loaded the page a second time with `goto()`. That only changed the part after
+    `#`, so the old view answered until the app replaced it, and a test could run against a view about to vanish
+    (`test_show_latest_...`, `test_appending_inside_a_tall_stream_...`, `test_pending_home_frame_...`). They now
+    reload the page, and wait for start-up to finish before they read a position or count requests
+    (`test_loaded_search_filters_...` could count the start-up snapshot read as the filter's).
+  - `test_expanded_status_keeps_composer_and_transcript_reachable` read the layout before the page closed the
+    conversation list for a narrow window, one frame after the resize. It now waits for that frame.
+  - `test_appearance_controls_persist_choice_and_do_not_change_route_or_draft` reloaded with `location.reload()` and
+    then waited for a condition the old page still met. Its next read could run on the new page before the app had
+    built the Appearance control (`Cannot read properties of null`). It now reloads with the browser helper, which
+    returns once the old page is gone.
+  - A test browser's start-up commands wait up to 90 s for Chrome's first tab, instead of 30 s.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
@@ -31,6 +60,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- `scripts/gate_diff.py` no longer reports "0 lowered" for three kinds of looser gate: one that fails open once a
+  shared classify budget is spent (six long budget lines now run with the harvest, also under `--no-variants`), one
+  whose `decide` returns an outcome the hook runs but does not know (`"Ask"`, `"block"`: ranked as allow in the head),
+  and one that drops a hook check after `decide` at the same outcome (`no_grant`, `body_unseen`, `binds_exact`, a
+  reserved hit on another part). The summary counts each (#551).
 - A provider spend limit (HTTP 402) now says so instead of blaming the key, and a call whose route stopped on it
   carries the cost `+` mark, because that route's work is not billed in this turn. `trace` reports
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
@@ -50,12 +84,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
   array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
   `parse_json` takes the first brace or bracket that decodes.
+- `test_a_setup_state_is_not_a_harness_error` failed on a loaded machine: it slept a fixed 0.2 s after `TurnSend`,
+  but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
+  was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
+  bound). Test-only.
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
-  still takes the write lock briefly for its schema check (#797, refs #684).
+  still takes the write lock briefly for its schema check (#797, refs #684). `docs/COMMANDS.md` lists it with
+  the other `exo findings` commands.
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
@@ -78,6 +117,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
+  run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
+- `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
+  each add a bullet here no longer conflict. For a branch cut before this, run
+  `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"` once per clone.
 - Chat status instruments wrap within the conversation width. Model names, values and full-row notices
   remain readable when the window or conversation pane narrows, in both layouts.
 - Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings
@@ -216,6 +260,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
   `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
+- A `max` or `ultra` reasoning level on an OpenAI-compatible route goes out as `xhigh`, not `max`, which
+  OpenAI and OpenRouter refuse with a 400. A legacy Anthropic model with `max_tokens` of 1,024 or less runs
+  without thinking instead of failing on a budget that cannot fit (exo-desktop #52).
+
+- A tool call whose arguments are not a JSON object, such as JSON cut short at `max_tokens`, gets an error
+  result that names the problem. It used to run the tool with no arguments (exo-desktop #52).
+
+- `muse-cli` keeps earlier tool calls and results in its flattened prompt, as text. It used to drop them, and
+  an assistant turn that only called tools (exo-desktop #52).
+
 - Accepting a lesson is all or nothing. When the node or skill file write stops partway (a full disk), or indexing
   or the ledger write fails after it, the file goes back to what it was. A retry then adds the lesson once, not
   twice (exo-desktop #54).
@@ -346,6 +400,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   restart environments as read-only mappings; nine resolved diagnostics are removed (#710).
 
 - Repeated corrections and rulings no longer reinforce rejected beliefs. New agreeing evidence creates a separate proposal for review while preserving the rejection (desktop audit #54).
+
+- Consolidation matches a correction or ruling against active beliefs only, so a rejected belief that matches
+  better no longer hides an active one (#861, after #770). A ruling that contradicts an accepted guarded belief
+  raises the conflict question and is held, where since #770 it became an unheld proposal that rule 1 accepted
+  beside the belief it contradicts; one that agrees with an open proposal reinforces it instead of opening a second
+  one. A reviewer taste or fact lesson whose evidence is all held already by the rejected beliefs it agrees with,
+  one or several together, is skipped again, as before #770: it is not proposed, raises no conflict question (even
+  one the principal already answered) and reinforces no other belief. A reviewer skill lesson is not checked and is
+  still proposed. New evidence after a rejection is still proposed. The rule of three still counts a
+  rejected belief as known (docs/LEARNING.md "Signals in", DECISIONS.md D-012 amendment 2026-10-29).
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).

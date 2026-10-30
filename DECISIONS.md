@@ -207,7 +207,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
-- *Amendment 2026-10-28 (desktop audit #54):* agreeing signals reinforce only active beliefs. Evidence agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
   proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
   taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
@@ -248,6 +247,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
   budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
   accepted candidate made 256 calls, 173 before (+48%).
+- **Amendment 2026-10-28 (#770, exo-desktop #54):** agreeing signals reinforce only active beliefs. Evidence
+  agreeing with a rejected belief creates a separate proposal for review, leaving the earlier rejection intact.
+- **Amendment 2026-10-29 (#861):** the 2026-10-28 amendment covers corrections and rulings, and reviewer taste and
+  fact lessons (`propose_typed`). The match that chooses between reinforcing, the conflict rule and a new proposal
+  reads active beliefs only (proposed, held, accepted), so a rejected belief that matches better no longer hides an
+  active one:
+  a ruling that contradicts an accepted belief goes through the conflict rule (a held proposal and a question when
+  that belief is guarded), and one that agrees with an open proposal reinforces it. A reviewer taste or fact lesson
+  whose evidence is all held already by the rejected beliefs it agrees with, alone or together, teaches nothing
+  again: it is not proposed, raises no conflict question and reinforces no other belief, since the principal
+  already ruled on that evidence. A reviewer skill lesson is not checked and is proposed as before. New evidence,
+  alone or beside the rejected evidence, is matched as usual. The rule of three still counts a rejected belief
+  that agrees as known, so repeating an instruction in chat does not re-raise a rejected lesson; a new correction
+  or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
+  ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
+  held (rule 3).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -2969,6 +2984,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  2026-10-28 (#551): three gaps of the comparator are closed, so "0 lowered" means more. (1) No test line reached the
+  gate's shared fail-closed budgets of one classify call, so a head that failed open once one was spent showed 0
+  lowered. Six budget lines now run with the harvest, also under `--no-variants`: past `_exo_relative`'s 64 store
+  folders, past its join budget `_EXO_PARTS` (many names, the stress tests' `_NEAR_CAP` line, and two `<( )` each
+  under it alone), and past `_BRACE_BUDGET` for a read and a write. Each asks on main only because its budget is
+  spent, which a test checks by lifting the budget. The brace budget's share for a repeated store spelling is left
+  out (past it a repeat counts as the hit it had), and so is its Exo-store share alone (no line found spends it
+  without the secret-store share). (2) An outcome not in `gate.OUTCOMES` (`"Ask"`, `"block"`) ranked as ask, but the
+  hook runs any outcome but ask or deny: it now ranks as allow in the head and as ask in the base, and the summary
+  counts such pairs. (3) At the same outcome below deny a pair is also lower when the head loses one of the hook's
+  checks after `decide` that depend only on the call and the decision: `no_grant`, `body_unseen`, `binds_exact`, or
+  a reserved hit on another part than the line's own (`_grant_for`). A check a tree's gate lacks is not held; one that
+  raises is the hook's error card (a decide error, once-only, so neither a check nor a reserved hit is lost). The
+  script marks the card's pairs in their flags (`error_card`), which no gate decision carries, so a decision whose rule
+  is `"error"` is compared like any other. These are no longer among the
+  hook steps left out; standing grants themselves, who may answer, the risk floor, the required executor, observe
+  and bypass modes, a policy changed mid-session and the decision model still are. Chosen over listing budgets as
+  left out: the linear-time PRs change exactly these paths. Main 7cc2eb14 against itself with the new script, built-in
+  corpus `--no-variants`: 12,666 actions x 88 policies, 1,114,608 pairs, 0 lowered (139.8 s, against 130.4 s for
+  main's script on its 12,660 actions). Against mutants of main on that corpus, main's script reports 0 lowered where
+  this one reports 348 pairs (`_exo_relative`'s "too many to resolve" returns made `""`), 808,963 (`binds_exact`
+  returning False) and 27,985 (`body_unseen` dropped, `decide`'s own reading kept); for `NO_GRANT = ()` 222 against
+  350,322, and for a `decide` that says `"Ask"` 11,530 against 625,921.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
@@ -4190,6 +4228,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
+
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+
+The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
@@ -4687,11 +4731,34 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
   can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
   the ruling as written until the next compaction.
+  *Amendment 2026-10-28 (exo-desktop #52):* an audit of the model transports found more bugs no test caught. Each
+  got a failing test first. Reasoning settings now stay valid on the wire, because a 400 ends the call with no
+  fallback. OpenAI-compatible transports sent Exo's `max` and `ultra` as `"max"`, which OpenAI and OpenRouter
+  refuse. They send `xhigh` now, the top of that scale. A legacy Anthropic model got a 1,024-token thinking budget
+  even when `max_tokens` was 1,024 or less, and the API wants the budget below `max_tokens`. Thinking stays off
+  there now. `docs/CORE-V2-INTERFACES.md` "Core types", "Reasoning levels". Tool arguments that did not
+  parse as a JSON object became `{}`, so the tool ran with no arguments. A tool with nothing required then did
+  something the model never asked for, and a call cut short at `max_tokens` ran as an empty one. They now arrive
+  as `BadArguments`, an empty dict with the reason. The registry answers that call with an error result before any
+  hook or the tool runs, and the model can call again. An empty dict keeps a replay valid on both wires and keeps
+  `ToolCall`'s fields as they are. `docs/TOOLS.md` "Arguments that did not parse". The flattened prompt of
+  `muse-cli` (D-051) kept only user and assistant text, so a call with no tools but earlier tool rounds in its
+  history lost every tool call and result, and an assistant turn that only called tools. They now go in as text,
+  `[tool call <name>] <arguments>` and `[tool result <name>]` blocks. `docs/PROVIDERS.md` "Use a Muse Code
+  subscription".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
   process-tree sibling, so it skips where `/proc` is unavailable. The existing SIGHUP guard stays. The cleanup
   signal-handler test still runs where SIGHUP is available; gate-diff runtime and gate policy are unchanged.
+- **Amendment 2026-10-29 (#907): a newer push to a pull request cancels its older CI run.** Hosted Actions run
+  again since the repository move, and agents push several times to one pull request. Every push started the
+  full matrix, two macOS jobs of about 30 minutes among it, and the older run kept its runners after a newer push
+  replaced it. At 17:15 UTC on 2026-10-29, 71 `ci` runs were queued, the oldest for 3 hours 20 minutes, and 29
+  of them belonged to a pull request with a newer queued run. `ci.yml` and `gate-preflight.yml` now have a
+  `concurrency` group per pull request with `cancel-in-progress`. A push to main gets a group of its own commit,
+  so main keeps one run per merge and never cancels one. Rejected for now: skipping the test matrix on draft
+  pull requests, which would cut more but changes what a draft's author can rely on.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
@@ -6212,6 +6279,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
 - **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
 - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
+- **Amendment 2026-10-29 (#842): `CHANGELOG.md` merges with git's union driver.** Nearly every PR adds a bullet near the top of `[Unreleased]`, so each merge to main conflicts with every open PR that also touched it. Its author has to merge main by hand and push again, which stales the review of the exact head. A one-line `.gitattributes` (`CHANGELOG.md merge=union`) keeps both sides' lines instead. Measured on main `50e2560b` over 98 open PRs: 85 conflicted with main, 46 of them in `CHANGELOG.md` and 19 in `CHANGELOG.md` alone. With the attribute, `CHANGELOG.md` conflicted in none, and 19 more PRs merged cleanly. None of the 46 deletes or edits a changelog line, so union only has to keep two sets of added lines, and it does: every line each side added is in the result.
+  - **Not extended to** `DECISIONS.md` or `docs/DOCS-MAP.md`. Two branches that edit the same row, or both add a `D-NNN` heading, must conflict; union would keep both silently (#648).
+  - **Limit:** git reads the attribute from the checked-out branch, so a branch cut before it lands still conflicts on `git merge main` until its clone adds the line to `$(git rev-parse --git-common-dir)/info/attributes`, the form that also works in a linked worktree (developer guide section 8). A rebase or cherry-pick onto main needs no step. In a bare repository `git merge-tree` reads attributes from HEAD, so GitHub's mergeability check and merge button likely apply union too; a changelog-only PR such as #424 will confirm it once this lands.
+  - **Limit:** after a release cut, an open PR's entry that sits where the new `## [X.Y.Z]` heading goes merges into the released section with no conflict, and nothing repeats, so `tests/test_merge_attributes.py` does not see it. The release steps (developer guide section 8, "Cutting a release") say each open PR checks which heading its entries are under after it merges main.
+  - **Limit:** union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk, and union keeps both sides' copy of that hunk with the lines between. When both sides add under one heading and under the next one just below it, an entry can move to the next heading and the lines between repeat, with no conflict. `tests/test_merge_attributes.py` makes the repeat visible: it fails when a version section of `CHANGELOG.md` holds a bullet twice or a `###` heading with nothing under it. Main has neither today. Where an entry sits stays a reviewer's check.
+  - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
+  - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
