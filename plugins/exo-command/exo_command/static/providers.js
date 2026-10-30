@@ -26,8 +26,13 @@ export function mount(root) {
   const body = h("div", { class: "xc-prov" });
   const workers = h("div", { class: "xc-prov" });
   const counts = h("div", { class: "xc-phead-read" });
+  const workerShortcut = h("button", { class: "xc-btn", type: "button", onclick: () => {
+    workers.scrollIntoView({ block: "start" });
+    workers.querySelector("input")?.focus({ preventScroll: true });
+  } }, "Worker models");
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
-    lede: "Where model keys live, which providers answer, and the models for main and worker tasks.", aside: counts }), body, workers));
+    lede: "Where model keys live, which providers answer, and the models for main and worker tasks.",
+    aside: h("div", null, workerShortcut, counts) }), body, workers));
   let alive = true;
 
   if (!sessionStorage.getItem("xc-token")) {

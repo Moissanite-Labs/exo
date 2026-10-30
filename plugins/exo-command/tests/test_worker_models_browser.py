@@ -41,6 +41,8 @@ def test_worker_editor_keeps_failed_draft_and_applies_explicit_routes():
             browser.goto(srv.url('providers'))
             browser.wait("!!document.querySelector('[aria-label=\"fast preferred model\"]:not(:disabled)')")
             browser.wait("document.querySelectorAll('#worker-model-catalog option').length > 0")
+            browser.eval("[...document.querySelectorAll('button')].find(b=>b.textContent==='Worker models').click()")
+            browser.wait("document.activeElement.getAttribute('aria-label')==='fast preferred model'")
             browser.eval("document.querySelector('[aria-label=\"fast preferred model\"]').value='fake:new'")
             browser.eval("document.querySelector('[aria-label=\"fast fallback models\"]').value='fake:backup'")
             browser.eval("document.querySelector('[aria-label=\"Worker models\"] form').requestSubmit()")
@@ -54,5 +56,8 @@ def test_worker_editor_keeps_failed_draft_and_applies_explicit_routes():
             browser.wait("document.querySelector('[aria-label=\"Worker models\"]').textContent.includes('Saved and applied')")
             assert src.saved == [{'roles': {'fast': ['fake:new', 'fake:backup'], 'standard': [], 'deep': []}, 'revision': 'v2'}]
             assert src.sent() == []
+            browser.call('Emulation.setDeviceMetricsOverride', width=480, height=900, deviceScaleFactor=1, mobile=False)
+            browser.wait("(()=>{const s=document.querySelector('.xc-workers');return s.scrollWidth<=s.clientWidth;})()")
+            browser.call('Emulation.setDeviceMetricsOverride', width=1440, height=900, deviceScaleFactor=1, mobile=False)
     finally:
         srv.close()
