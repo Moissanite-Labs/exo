@@ -4224,6 +4224,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
+
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+
+The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
