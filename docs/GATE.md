@@ -69,6 +69,7 @@ still falls back to the defaults alone: `policy error, defaults used: <message>`
 Malformed flow collections that used to hang, and JSON decoding, index or recursion errors in the YAML reader that
 used to cause an error and ask on every call, now use that same fallback. Reads can therefore be allowed by the
 defaults instead of asking, and configured rules are not applied until the file is corrected.
+A YAML integer exceeding Python's conversion limit still raises an error and makes the hook ask on each call.
 
 ### A pattern that does not compile refuses the policy (#466)
 

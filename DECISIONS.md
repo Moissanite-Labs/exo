@@ -1326,6 +1326,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
+  flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
+  `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
+  (`note: {a:`), or a list nested past the recursion limit could instead raise outside the policy-error path and
+  make every hook call ask. These cases now use the existing policy-error fallback: the defaults alone, with a
+  warning, until the file is corrected. This can lower `ls -la`, `git status` and `cat README.md` from ask to allow;
+  a configured deny such as `deny: [{command: '^cat '}]` is also absent during fallback. That loss of the configured
+  policy is the existing fallback's explicit tradeoff, not a claim that the affected read is safe under that policy.
+  The change replaces an indefinite hang or exception on every call with the documented, visible fallback; it does
+  not change valid policies. This applies when the malformed input occurs in any file the policy loader reads.
+  A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error/ask path.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
