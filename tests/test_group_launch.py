@@ -10,6 +10,7 @@ import json
 import pytest
 
 from exo.core.group_composition import GroupPlugins
+from exo.core.group_host import ConversationOptions
 from exo.core.sessions import SessionStore
 from exo.group_launch import LaunchError, create
 
@@ -313,3 +314,82 @@ def test_aclose_store_close_error_does_not_mask_cancellation(home, monkeypatch):
 
     asyncio.run(attempt())
     assert launch.closed  # full cleanup still ran despite the broken store close
+
+
+def test_default_mode_conductor_is_first_member(home):
+    launch = create(profiles=PROFILES)
+    try:
+        assert launch.group.mode == "conductor"
+        assert launch.group.conductor == "lead"  # explicit default: the first profile
+        assert {m.profile for m in launch.group.members} == set(PROFILES)
+        assert launch.group.owner == "default"
+    finally:
+        if launch.engine._writer is not None:
+            asyncio.run(launch.aclose())
+
+
+def test_socratic_mode_saves_no_conductor(home):
+    launch = create(profiles=PROFILES, mode="socratic")
+    try:
+        assert launch.group.mode == "socratic"
+        assert launch.group.conductor is None
+        members = drive(launch)
+        assert set(members) == set(PROFILES)
+    finally:
+        if launch.members:
+            asyncio.run(launch.aclose())
+
+
+def test_explicit_conductor_member_accepted(home):
+    launch = create(profiles=PROFILES, conductor="one")
+    try:
+        assert launch.group.mode == "conductor"
+        assert launch.group.conductor == "one"
+        members = drive(launch)
+        assert set(members) == set(PROFILES)
+    finally:
+        if launch.members:
+            asyncio.run(launch.aclose())
+
+
+def test_bad_mode_and_conductor_rejected_before_allocation(home):
+    bad = [
+        dict(mode="bogus"),  # unknown mode
+        dict(mode="socratic", conductor="lead"),  # socratic groups have no conductor
+        dict(conductor="ghost"),  # non-member conductor
+        dict(conductor="Bad Seat"),  # not a valid profile ID
+        dict(conductor=7),  # not a string
+    ]
+    for kwargs in bad:
+        with pytest.raises(LaunchError):
+            create(profiles=PROFILES, **kwargs)
+    assert not (home / "sessions.sqlite").exists()  # nothing allocated
+
+
+def test_start_conversation_forwards_options_without_audiences(home, monkeypatch):
+    launch = create(profiles=PROFILES)
+    calls = []
+
+    def fake_host_start(group_id, **kwargs):
+        calls.append((group_id, kwargs))
+        return ("status",)
+
+    try:
+        monkeypatch.setattr(launch.host, "start", fake_host_start)
+        options = ConversationOptions(max_turns=5, idle_timeout=3.0)
+        status = launch.start(conversation=options)
+        assert status == ("status",)
+        assert len(calls) == 1
+        group_id, kwargs = calls[0]
+        assert group_id == launch.group.id
+        assert kwargs == {"conversation": options}  # no audiences passed
+        # the default one-shot start still passes the derived audiences
+        launch.start()
+        assert len(calls) == 2
+        assert calls[1][1].keys() == {"audiences"}
+        assert calls[1][1]["audiences"] == {"lead": ["one"], "one": ["lead"]}
+        with pytest.raises(LaunchError, match="ConversationOptions"):
+            launch.start(conversation=object())
+    finally:
+        if launch.engine._writer is not None:
+            asyncio.run(launch.aclose())

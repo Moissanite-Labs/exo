@@ -21,6 +21,12 @@ await launch.aclose()          # host + owner engine + session store, every part
 - `plugins`: an optional `exo.core.group_composition.GroupPlugins`. `None` means the
   empty profile — no folders, nothing enabled — so plugins are disabled by default.
   Anything that is not a `GroupPlugins` is rejected.
+- `mode`: `"conductor"` (default) or `"socratic"`. Conductor mode requires a
+  conductor; `"socratic"` has none, and an explicit conductor is rejected.
+- `conductor`: the member profile that is the group hub (conductor mode only).
+  Defaults to the first profile in `profiles`; it must be a valid member profile ID.
+  The mode/conductor pair is validated before the config is read or anything is
+  allocated.
 
 ## Guarantees
 
@@ -56,7 +62,11 @@ await launch.aclose()          # host + owner engine + session store, every part
 ## Shape
 
 `create` returns a `GroupLaunch`: `.engine` (the owner `CoreEngine`, with the host
-injected), `.host` (the `GroupHost`), `.group` (the stored `SavedGroup`, conductor
-mode, first profile as conductor), `.members` (member engines, empty until
-`start()`), `.start()`, `.wait()` and `aclose()`. `LaunchError` marks any launch
-input or close failure; underlying failures chain from it.
+injected), `.host` (the `GroupHost`), `.group` (the stored `SavedGroup`, in the
+requested `mode`, with the resolved conductor), `.members` (member engines, empty
+until `start()`), `.start()`, `.wait()` and `aclose()`. `start()` runs the one-shot
+adapter with audiences derived from the stored mode; pass a `ConversationOptions`
+to start the bounded reactive conversation instead (the options are forwarded to
+the host without `audiences`, which the host derives from the stored mode).
+`LaunchError` marks any launch input or close failure; underlying failures chain
+from it.
