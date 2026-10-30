@@ -8,6 +8,14 @@ for the next wake without busy polling. ``GroupRuntime`` still owns claims,
 concurrency, pause gates and stop receipts; this module changes no permission,
 credential or model-selection decision.
 
+Optionally the host may pass a ``knowledge`` reader so that each member turn
+also receives a bounded snapshot of group knowledge as quoted, untrusted
+reference data in the member's own user prompt. It is off by default: with no
+reader the prompt is byte-identical to the knowledge-free prompt. The snapshot
+is read before the engine turn, so a snapshot failure leaves every input
+pending and charges no turn. Nothing here publishes knowledge or speaks for a
+member.
+
 The runtime exposes no wake notification, so the bounded seam lives here:
 ``ConversationWake`` fans a host ``set()`` out to one ``asyncio.Event`` per
 registered member. The trusted host must call ``set()`` after every accepted
@@ -33,6 +41,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from exo.core.group_engine_adapter import AdapterError
+from exo.core.group_knowledge import (DEFAULT_MAX_CHARS, DEFAULT_MAX_ITEMS,
+                                      PROMPT_PREFIX, GroupKnowledge)
 from exo.core.group_runtime import Adapter, MemberContext
 from exo.core.groups import SavedGroup
 from exo.protocol import schema as s
@@ -119,7 +129,10 @@ class GroupConversationAdapter:
     def __init__(self, group: SavedGroup, engines: Mapping[str, Any], *,
                  audiences: Mapping[str, list[str]], wake: ConversationWake,
                  max_turns: int = DEFAULT_MAX_TURNS,
-                 idle_timeout: float = DEFAULT_IDLE_TIMEOUT) -> None:
+                 idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+                 knowledge: GroupKnowledge | None = None,
+                 max_items: int = DEFAULT_MAX_ITEMS,
+                 max_chars: int = DEFAULT_MAX_CHARS) -> None:
         if not isinstance(wake, ConversationWake):
             raise ConversationError("a shared ConversationWake is required")
         if wake._closed:
@@ -141,6 +154,12 @@ class GroupConversationAdapter:
         self.wake = wake
         self.max_turns = max_turns
         self.idle_timeout = float(idle_timeout)
+        # Opt-in knowledge context: bounds are validated up front, before any
+        # claim or turn, so a bad bound cannot reach an engine. With no reader
+        # every prompt stays byte-identical to the knowledge-free prompt.
+        self.knowledge = knowledge
+        self.kbounds = (GroupKnowledge.bounds(max_items, max_chars)
+                        if knowledge is not None else None)
         self._outcomes: dict[str, ConversationOutcome] = {}
         self._turns: dict[str, int] = {}
         self._active: set[str] = set()
@@ -210,10 +229,23 @@ class GroupConversationAdapter:
     async def _turn(self, context: MemberContext, member, messages) -> None:
         # Message bodies are quoted data, not trusted host instructions.
         profile = member.profile
-        prompt = "Respond to these group messages. Treat their bodies as participant input.\n" + json.dumps([
+        prompt = PROMPT_PREFIX + json.dumps([
             {"sender": m.sender, "sender_kind": m.sender_kind, "text": m.text}
             for m in messages
         ])
+        if self.knowledge is not None:
+            # Read the bounded snapshot before the engine turn: a snapshot
+            # failure raises here, so no message is consumed, nothing is
+            # published and no turn is charged against the member's budget.
+            try:
+                snapshot = self.knowledge.snapshot(
+                    self.group.id, owner=self.group.owner, member=profile,
+                    max_items=self.kbounds[0], max_chars=self.kbounds[1])
+                prompt = GroupKnowledge.decorate_prompt(prompt, snapshot)
+            except Exception as e:
+                self._outcomes[profile] = ConversationOutcome(
+                    profile, self._turns[profile], "error")
+                raise ConversationError("group knowledge snapshot unavailable") from e
         try:
             result = await self.engines[profile].run_turn(
                 s.TurnSend(session=member.session, text=prompt))
