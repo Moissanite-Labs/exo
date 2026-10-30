@@ -336,6 +336,16 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
 - The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
   source names (`ghe.corp/pub/repo#5`), as above.
+- The repo `GH_REPO` names (#566). gh reads `GH_REPO` as `-R` when the line gives none. So each
+  value the line sets for it is read as `-R` is, on each reading with no `-R`: a prefix
+  assignment (`GH_REPO=pub/repo gh pr comment 5`, also through `env`), and a value set earlier on
+  the line (`export GH_REPO=pub/repo; gh pr comment 5`). A bare assignment counts too, since gh
+  sees it when the variable was exported before the line. gh api fills `{owner}` and `{repo}` in
+  its endpoint from it, so `repos/{owner}/{repo}/issues/5/comments` reads as `pub/repo` too. The
+  line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5` still
+  asks as on a repo the line does not name. A value from an expansion adds nothing, as that
+  reading already stands. Not read here: a value an outer command passes into a nested shell
+  (`GH_REPO=pub/repo bash -c '..'`), and `GH_HOST`, which names gh's host.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
@@ -1629,7 +1639,8 @@ gate does not read:
   `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
   `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
   `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
-  and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  and `~/.exo`), `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` (gh's hosts, tokens and settings, its pager
+  and editor commands among them, #566), `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
   `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,

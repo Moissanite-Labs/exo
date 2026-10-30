@@ -15,6 +15,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Gate: a gh command reads `GH_REPO` as its repo, and `GH_CONFIG_DIR` asks (#566, D-038 amendment).
+  `GH_REPO=pub/repo gh pr comment 5`, or an `export GH_REPO=pub/repo` earlier on the line, posts on `pub/repo#5`,
+  but the gate read a repo the line does not name, so a `target:` deny or rule on `pub/*` never saw it. Each value
+  the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays.
+  `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
 - Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
   Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other
   one: a 100 KB line took 290 s of CPU inside the hook. Past eight other targets, the line on most of them is now

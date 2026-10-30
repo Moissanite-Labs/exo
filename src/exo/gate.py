@@ -2357,7 +2357,8 @@ _EXEC_ENV_OPAQUE = {
     **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
         DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
         OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
-    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
+    # GH_CONFIG_DIR picks gh's hosts, tokens and settings, its pager and editor commands too (#566)
+    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME GH_CONFIG_DIR BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
         RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
     "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
@@ -3295,13 +3296,20 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
 
     An operand from an expansion (an index in ``dynamic``) may be a URL for any repo, so the empty target, a repo
     the line does not name, is a reading too. So is an operand that names a repo on another instance
-    (_gh_elsewhere)."""
+    (_gh_elsewhere).
+
+    gh reads GH_REPO as `-R` when the line gives none (#566). Each value the line sets for it (_gh_env_repo) is a
+    reading too, of each parse with no `-R`, read as `-R` is. So is the endpoint of gh api with its `{owner}` and
+    `{repo}` filled from it."""
     group, verb = (argv + ["", ""])[1:3]
+    env = [v for v in _gh_env_repo.get() if v]
     if group == "api":
         ops = _gh_api_operands(argv)
-        target, link = _gh_api_target(argv[ops[0]] if ops else "")
+        endpoint = argv[ops[0]] if ops else ""
+        target, link = _gh_api_target(endpoint)
         old = _gh_api_target(next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), ""))
-        return target, link, _gh_others(target, [old] + [("", "")] * any(i in dynamic for i in ops))
+        return target, link, _gh_others(target, [old] + _gh_api_env(endpoint, env) +
+                                        [("", "")] * any(i in dynamic for i in ops))
     if (group, verb) in _GH_TAKES:
         parses = [_gh_operands(argv, *_gh_options(group, _GH_TAKES[(group, verb)]))]
         sure = set(parses[0][1])
@@ -3309,14 +3317,15 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
         longs = tuple(a for a in argv[3:] if a.startswith("--") and len(a) > 2 and "=" not in a)
         parses = [_gh_operands(argv, "", ()), _gh_operands(argv, _GH_ANY_SHORT, longs)]
         sure = set(parses[0][1]) & set(parses[1][1])
+    by_env = [(v, o) for v in env for r, o in parses if not r]
     # A `-R` on another instance names a repo the scopes may not mean: its value as written is a reading too.
-    raw = [_gh_read(group, r, [argv[i] for i in o], verb=verb) for r, o in parses if r and not _gh_repo(r)[1]]
+    raw = [_gh_read(group, r, [argv[i] for i in o], verb=verb) for r, o in parses + by_env if r and not _gh_repo(r)[1]]
     parses = [(_gh_repo(r)[0], o) for r, o in parses]
     repo, ops = parses[0]
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))],
                             verb=verb)
     readings = [_gh_read(group, r, [argv[i] for i in o], url, verb=verb)
-                for r, o in parses for url in (True, False) if url or r]
+                for r, o in parses + [(_gh_repo(v)[0], o) for v, o in by_env] for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
     readings += [r for _, o in parses for r in _gh_elsewhere(group, verb, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
@@ -3325,6 +3334,19 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)], verb=verb),
                  _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], before=True)]     # as before #399
     return target, link, _gh_others(target, readings)
+
+
+def _gh_api_env(endpoint: str, values: list[str]) -> list[tuple[str, str]]:
+    """The readings of a gh api endpoint whose `{owner}` and `{repo}` gh fills from GH_REPO (#566): the endpoint
+    filled from each value, read as `-R` reads a repo (_gh_repo_parts), and a value on another instance as written,
+    as a `-R` on another instance is. gh refuses a value it cannot read as a repo, so that one adds nothing."""
+    out: list[tuple[str, str]] = []
+    for v in values if "{owner}" in endpoint or "{repo}" in endpoint else []:
+        if (parts := _gh_repo_parts(v)) is not None:
+            owner, name = parts[1].split("/")
+            out.append(_gh_api_target(endpoint.replace("{owner}", owner).replace("{repo}", name)))
+            out += [(v, "")] * (not _gh_on_github(parts[0]))
+    return out
 
 
 def _gh_others(target: str, readings: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -3481,6 +3503,26 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset, split: frozenset = froze
 # first `-X` word as written, as before #399.
 _gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
 _GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the call needs a floor
+# Set while classify reads a gh command: the GH_REPO values it may run with (_gh_env_repos, #566).
+_gh_env_repo: contextvars.ContextVar[tuple[str | None, ...]] = contextvars.ContextVar("exo_gate_gh_env_repo",
+                                                                                       default=())
+
+
+def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str | None, ...]:
+    """The GH_REPO values gh may read on command k (#566): an assignment before its program word
+    (`GH_REPO=pub/repo gh ..`, also through env or sudo), and the value the line set before k
+    (`export GH_REPO=pub/repo; gh ..`, ``literals``, #579). A bare assignment counts too: gh sees it when the
+    variable was exported before the line. None stands for a value the gate cannot read."""
+    out: list[str | None] = []
+    for w in k.words:
+        if w is program:
+            break
+        name, eq, value = w.text.partition("=")
+        if eq and name == "GH_REPO":
+            out.append(None if _expands(w) else value)
+    if "GH_REPO" in literals:
+        out.append(literals["GH_REPO"])
+    return tuple(dict.fromkeys(out))
 
 
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
@@ -5109,7 +5151,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "gh":
         # A word bash splits is a word from an expansion here, also `$(cat <<'EOF' .. EOF)` outside quotes (#399).
         dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
-        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn, frozenset(i for i in dyn if _gh_splits(words[i])))]
+        token = _gh_env_repo.set(_gh_env_repos(k, p, ctx.get("literals") or {}))
+        try:
+            return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn,
+                                 frozenset(i for i in dyn if _gh_splits(words[i])))]
+        finally:
+            _gh_env_repo.reset(token)
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),
                                k.piped_in or _own_stdin(k))]
