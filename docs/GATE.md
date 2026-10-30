@@ -3110,9 +3110,9 @@ reads main d800f33c's case-sensitive names. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
-it, #209, #311). `sudo -s` or `sudo -i` (`--shell`, `--login`) with no command runs a shell on its
-stdin, and that stdin is not read: `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
-`sudo -s <<< 'rm -rf /srv/data'` are a `read`, for every store path and every command alike.
+it, #209, #311). The stdin of a `sudo -s` or `sudo -i` shell is no longer a limit here: since
+#718 (#491) the gate reads it, so `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a store write
+and a stdin it cannot read asks.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
