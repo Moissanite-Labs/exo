@@ -5,7 +5,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
-- Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
+- Gate: invariant gh field parsing (#550, partial scope). The #550 entry under Fixed closes the rest.
 
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
