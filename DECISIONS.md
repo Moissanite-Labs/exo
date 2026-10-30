@@ -260,6 +260,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
   held (rule 3).
 
+- **Amendment 2026-10-29 (#264):** review signal selection explicitly handles an absent learning runtime. It yields no signals and keeps the existing skill-only context behavior. The pinned type baseline shrinks by six diagnostics without changing compiler targets or settings. Other type/error ratchets remain separate work.
+
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
   optchat-memory). The wave 1 loop builds each turn as a fresh model call from the summary tree plus the

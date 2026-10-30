@@ -9,6 +9,16 @@ from exo.learn.review import parse_json, review, run_review
 from conftest import feedback, new_session
 
 
+def test_disabled_runtime_has_no_signals_but_retains_skill_context():
+    from types import SimpleNamespace
+    from exo.learn.review import _touched, new_signals
+
+    skills = SimpleNamespace(listing=lambda: [{"name": "writing", "description": "plain prose"}])
+    lr = SimpleNamespace(runtime=None, engine=SimpleNamespace(skills=skills))
+    assert new_signals(lr) == []
+    assert _touched(lr, []) == "- skill writing: plain prose"
+
+
 def test_parse_json_keeps_a_value_with_trailing_braces():
     text = 'Here is the review: {"proposals": []} } thanks }'
     assert parse_json(text) == {"proposals": []}
