@@ -36,7 +36,7 @@ CLIENT_ID = "exo-tui"
 LOST = "connection_lost"  # post's code for a command whose reply never came or that never went out (D-060: not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
-ROUND_LIMIT_NOTE = ("The limit counts tool rounds, not time. A turn can continue after this window closes; "
+ROUND_LIMIT_NOTE = ("The core /limits policy may override this window choice. The limit counts tool rounds, not time. A turn can continue after this window closes; "
                     "reopen its thread and use /stop to interrupt it.")
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
@@ -58,7 +58,7 @@ COMMANDS = {
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "stop": ("session", "stop the running turn (what was done is kept); /stop <task> stops a running subagent"),
     "limits": ("session", "principal core-wide round and worker deadline controls: /limits [rounds|worker-timeout default|off|number]"),
-    "rounds": ("session", "tool-round limit for new turns in this window: /rounds [default|off|number]"),
+    "rounds": ("session", "window tool-round choice for new turns: /rounds [default|off|number]"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
@@ -376,7 +376,7 @@ class ExoApp(App):
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
         perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
-        rounds = "" if self.max_rounds is None else f"rounds: {'unlimited' if self.max_rounds == 0 else self.max_rounds} · "
+        rounds = "" if self.max_rounds is None else f"window rounds: {'unlimited' if self.max_rounds == 0 else self.max_rounds} · "
         return f"{perm}{rounds}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
@@ -1376,7 +1376,7 @@ class ExoApp(App):
                 self.note("usage: /rounds [default|off|nonnegative number]", "warn")
                 return
             mode = "default" if self.max_rounds is None else "unlimited" if self.max_rounds == 0 else str(self.max_rounds)
-            self.note(f"tool-round limit for new turns in this window: {mode}. "
+            self.note(f"window tool-round choice for new turns: {mode}. "
                       + ROUND_LIMIT_NOTE)
             self.refresh_status()
         elif name in ("tasks", "open", "steer"):

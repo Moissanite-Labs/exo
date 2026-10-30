@@ -21,7 +21,7 @@ The optional suffix `all` is accepted after a field and value, for example `/lim
 
 Without an override, main turns retain the existing default of 24 rounds and workers retain their configured round cap and 900-second deadline. These are defaults, not a new policy to overwrite existing configuration.
 
-A core rounds override takes precedence over `/rounds` or `--max-rounds` in a window. Clearing it restores those window/per-turn choices. `/rounds` itself still changes only that window. It does not configure workers.
+A core rounds override takes precedence over `/rounds` or `--max-rounds` in a window. Clearing it restores those window/per-turn choices. `/rounds` itself still changes only that window. It does not configure workers. The terminal labels its local choice as `window rounds`; both clients explain that the core policy may override it. Use `/limits` to read the core policy.
 
 The server takes an immutable rounds snapshot when a main turn is admitted. A delegated worker takes its own snapshot after its concurrency wait, immediately before its loop is created. A queued worker therefore uses the policy in effect when it starts. A policy change never extends or shortens a running worker's timer or mutates a running turn's loop.
 
