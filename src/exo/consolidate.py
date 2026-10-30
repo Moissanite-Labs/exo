@@ -70,6 +70,7 @@ import difflib
 import hashlib
 import json
 import re
+import secrets
 import shutil
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -1274,7 +1275,8 @@ def _question_of(p: Proposal) -> dict:
 def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: str | None = None,
                     now: str | None = None) -> dict:
     """Write the proposal into its node (create or append), lint it, then log `belief_accepted`.
-    The node file is restored if the edit would add lint errors, or if indexing or the ledger write fails."""
+    The node file is restored if the edit would add lint errors, or if indexing or the ledger write fails. It stays
+    when a ledger authority holds the accept or may hold it (`_accept_may_stand`)."""
     st = load_state(ledger)
     p = _find(st, pid)
     status = _status(st, p.id)
@@ -1291,7 +1293,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)
-    indexed = False
+    indexed, operation_id = False, secrets.token_hex(16)
     try:
         path.write_text(new_text, encoding="utf-8")   # inside the guard: a write cut short (a full disk) goes back too
         store.reload()
@@ -1310,8 +1312,10 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
         body.update(_question_of(p))
         refs = [r for r in (st.beliefs[p.id].event_id,) if r]
         ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
-                           refs=refs)
-    except BaseException:
+                           refs=refs, operation_id=operation_id)
+    except BaseException as exc:
+        if _accept_may_stand(ledger, p.id, operation_id, exc):
+            raise   # the authority holds the accept, or may: the node stays with it
         # Nothing is accepted until the ledger says so: put the node back, so a retry does not add the lesson twice.
         _put_back(path, old_text)
         store.reload()
@@ -1533,18 +1537,46 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     body.update(_question_of(p))
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
     path.parent.mkdir(parents=True, exist_ok=True)
+    operation_id = secrets.token_hex(16)
     try:
         path.write_text(new, encoding="utf-8")
         ev = ledger.append("belief_accepted", body, author or ledger.author
-                           or "principal", refs=refs)
-    except BaseException:
-        _put_back(path, old)  # not accepted: a retry must not append the lesson a second time
+                           or "principal", refs=refs, operation_id=operation_id)
+    except BaseException as exc:
+        if not _accept_may_stand(ledger, p.id, operation_id, exc):
+            _put_back(path, old)  # not accepted: a retry must not append the lesson a second time
         raise
     _archive(store.root / "proposals", p.id)
     _save_undo(store.root, p.id, path, old, new)
     commit = _git_commit(store.root, path, f"skill {p.target}: lesson {p.id}")
     return {"proposal_id": p.id, "node_id": p.node_id, "event": ev["id"], "action": body["action"],
             "commit": commit}
+
+
+def _accept_may_stand(ledger: Ledger, pid: str, operation_id: str, exc: BaseException) -> bool:
+    """True when the `belief_accepted` append for `pid` raised `exc` but the event stands or may stand, so the accept
+    keeps its file. Any other failure puts the file back.
+
+    Only a ledger authority raises these (docs/LEDGER-AUTHORITY.md). ProjectionPending: the authority committed the
+    event. AppendOutcomeUnknown: look the operation up and copy what it committed, or else sync and read the ledger.
+    If neither answers, the outcome stays unknown and the file stays: a lesson twice can be fixed, a lost one cannot."""
+    from .ledger_authority import AppendOutcomeUnknown, ProjectionPending
+    if isinstance(exc, ProjectionPending):
+        return True
+    if not isinstance(exc, AppendOutcomeUnknown):
+        return False
+    try:
+        record = ledger.authority.lookup(operation_id)
+    except Exception:   # the lookup cannot answer: sync, then read the ledger
+        try:
+            ledger.sync_authority()
+        except Exception:
+            return True
+        return any(e["body"].get("proposal_id") == pid for e in ledger.iter(kind="belief_accepted"))
+    if record is not None:
+        with contextlib.suppress(Exception):
+            ledger.sync_authority()   # repair the local copy, so a retry sees the accept
+    return record is not None
 
 
 def _put_back(path: Path, before: str | None) -> None:
