@@ -19,7 +19,8 @@ read keeps the last good text. A few shorter spellings are accepted (top-level `
 does not read are ignored.
 
 When supplied, the top-level `plugins` value or `[plugins] enabled` must be a list; an invalid value stops the
-seat from loading. An empty list enables no plugins, while an omitted value uses the config.json default.
+seat from loading, including JSON null. An empty list enables no plugins; an omitted value or a `[plugins]` table
+without `enabled` uses the config.json default.
 
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name

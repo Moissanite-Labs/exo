@@ -4606,6 +4606,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   of order, and a test fails on any `with umask(...)` block in `src` or `plugins` that awaits or yields.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
+- *Amendment 2026-10-30 (#988):* A seat's top-level `plugins` or `[plugins] enabled` must be a list when supplied.
+  A non-list, including JSON null, stops the seat with `SeatError` instead of being treated as omitted and falling
+  back to `core_plugins` or all plugins. Omitted selections and a table without `enabled` retain that default; an
+  empty list selects none. This changes previously accepted invalid files so they cannot silently widen selection.
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
 - **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an
   interrupt does. A stream that closes cleanly without a finish event or stop reason is the retryable error
