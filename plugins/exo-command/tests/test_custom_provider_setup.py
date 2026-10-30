@@ -76,7 +76,7 @@ def test_save_edit_and_endpoint_change_do_not_forward_old_key(tmp_path):
 
 
 @pytest.mark.parametrize("change", [
-    {"name": "bad.name"}, {"endpoint": "file:///tmp/a"}, {"endpoint": "https://user:secret@example.test/v1"},
+    {"name": "bad.name"}, {"endpoint": "file:///tmp/a"}, {"endpoint": "https://user:secret@127.0.0.1/v1"},
     {"endpoint": "https://example.test/v1?key=secret"}, {"endpoint": "https://example.test/v1#secret"},
     {"endpoint": "https://example.test:99999/v1"}, {"protocol": "unknown"}, {"auth": "custom-header"},
     {"model": "bad model"}, {"model": "x" * 200}, {"model": "model\x7f"},
