@@ -1,6 +1,6 @@
-import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
 // Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
+import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
 import { h, token, redeem } from "./dom.js";
 import { getAppearance, applyAppearance, setAppearance } from "./appearance.js";
 import * as bus from "./bus.js";

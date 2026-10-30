@@ -1,6 +1,6 @@
-import { desktopPreference, hasDesktopPreferences, saveDesktopPreferences } from "./desktop_prefs.js";
 // The chat view: sessions on the left, a terminal-like transcript in the middle with approval cards and a
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
+import { desktopPreference, hasDesktopPreferences, saveDesktopPreferences } from "./desktop_prefs.js";
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
 import { renderMarkdown } from "./markdown.js";
@@ -26,9 +26,16 @@ export function mount(root) {
   let mounted = true, navigation = 0, homeRevision = 0;
   const savedThread = desktopPreference("thread"), savedScroll = desktopPreference("scroll");
   let pendingReading = null, transcriptLoaded = false, initialSelectionPending = true, initialReadingAllowed = true, nativeRestoreId = null, recoveryWanted = null;
+  // Each post is a write to the host's preferences: send the place at most every 250 ms while the reader scrolls.
+  let readingTimer = 0;
   function saveReading() {
+    if (hasDesktopPreferences() && !readingTimer) readingTimer = setTimeout(flushReading, 250);
+  }
+  function flushReading() {
+    clearTimeout(readingTimer); readingTimer = 0;
     if (mounted && current && !loading && transcriptLoaded) saveDesktopPreferences({ thread: current, scroll: logEl.scrollHeight > logEl.clientHeight ? Math.min(1, Math.max(0, logEl.scrollTop / (logEl.scrollHeight - logEl.clientHeight))) : 0 });
   }
+  function flushHiddenReading() { if (document.visibilityState === "hidden") flushReading(); }
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
@@ -624,7 +631,7 @@ export function mount(root) {
   }
 
   async function open(id, restoreScroll = null, restoringNative = false) {
-    saveReading(); recoveryWanted = null;
+    flushReading(); recoveryWanted = null;
     if (!restoringNative && typeof restoreScroll !== "number") saveDesktopPreferences({ thread: id, scroll: null });
     transcriptLoaded = false; nativeRestoreId = restoringNative ? id : null;
     saveDraft(); ++navigation; lastThread = id;
@@ -983,12 +990,12 @@ export function mount(root) {
       else recover();
     }
   });
-  const off = () => { recoveryWanted = null; saveReading(); if (hasDesktopPreferences()) window.removeEventListener("pagehide", saveReading); if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
   restoreDraft();
-  if (hasDesktopPreferences()) window.addEventListener("pagehide", saveReading);
+  if (hasDesktopPreferences()) { window.addEventListener("pagehide", flushReading); document.addEventListener("visibilitychange", flushHiddenReading); }
   const startingNavigation = navigation;
   function finishInitialSelection(listReady) {
     // A failed read is not evidence that the saved conversation disappeared. A later reconnect may retry.
@@ -997,10 +1004,10 @@ export function mount(root) {
     if (!listReady) return;
     initialSelectionPending = false;
     if (draft(null).text || draft(null).pending) return;
-    if (hasDesktopPreferences() && savedThread) {
+    if (savedThread) {
       // The list is bounded. Use normal open buffering; only an exact 404 disproves the saved pointer.
       open(savedThread, initialReadingAllowed ? savedScroll : null, true);
-    } else if (!hasDesktopPreferences() && sessions.length) open(sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id);
+    } else if (sessions.length) open(sessions.some(s => s.id === lastThread) ? lastThread : sessions[0].id);   // a browser, or a host with no saved thread
   }
   refreshSessions().then(finishInitialSelection);
   return off;
