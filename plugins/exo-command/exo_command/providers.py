@@ -123,6 +123,24 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
             if not isinstance(output, dict) or output.get("supported") is not True:
                 return 409, {"error": "This core does not support ChatGPT connections. Upgrade the core first."}
             return 200, output
+        if parts == ["workers"] and method in ("GET", "POST"):
+            try:
+                command = s.CommandRun(name="worker_models", args="" if method == "GET" else json.dumps(body))
+                return 200, (await centre.source.call(command))["output"]
+            except Exception as e:
+                code = getattr(e, "code", "")
+                status = {"forbidden": 403, "conflict": 409, "bad_model": 400, "bad_request": 400,
+                          "unsupported": 501, "not_found": 501}.get(code, 503)
+                # The transport's message can include private details. Fixed copy
+                # leaves draft values in the form and never claims a failed save.
+                text = {"conflict": "Settings changed. Reload before saving again.",
+                        "forbidden": "Principal authority is required.",
+                        "bad_model": "Check model references, duplicate routes and provider role restrictions.",
+                        "bad_request": "A profile or delegate override prevents editing these worker tiers.",
+                        "unsupported": "Worker model controls require a newer core.",
+                        "not_found": "Worker model controls require a newer core."}.get(
+                            code, "Worker settings could not be confirmed. Reload to check the current routes.")
+                return status, {"error": text}
         if not parts and method == "GET":
             router = await asyncio.to_thread(router_factory)
             table = await asyncio.to_thread(ps.rows, router)
