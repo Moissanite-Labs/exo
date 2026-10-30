@@ -4163,6 +4163,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
 
+**D-070 amendment (2026-10-30):** The principal may set ephemeral core-wide tool-round and delegated-worker wall limits through `/limits`. New turns and newly started workers snapshot the policy. Existing work keeps its admitted limits. Defaults and window-local `/rounds` remain available, with an explicit core rounds override taking precedence. Token, depth, concurrency, permission and spending limits remain independent. See `docs/RUN-LIMITS.md`.
+
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
 - **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with
   `git verify-commit` (SSH signatures) against `$EXO_HOME/update/allowed_signers`, then merge exactly that sha. The

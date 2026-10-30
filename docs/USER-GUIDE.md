@@ -74,6 +74,8 @@ picks the seat, `--title TEXT` names a new thread.
 `--max-rounds 0` removes the tool-round cap for new turns sent from this window; a positive number sets a limit.
 This counts tool rounds rather than elapsed time: a large finite limit can also allow a long-running turn.
 `/rounds` works in both the terminal and web composer. It changes the setting for later turns without changing a turn already running.
+
+`/limits` shows the connected core's controls for all conversations and delegated workers. A principal can use `/limits rounds off` or `/limits rounds 60`, and `/limits worker-timeout 15m`, `1h`, `off` or `default`. A core rounds override takes precedence over a window choice. `/limits default` clears both overrides. Running work keeps its admitted limits. The policy resets on core restart. Token budgets, permissions and other safety limits stay in effect. See [Run limits](RUN-LIMITS.md).
 Each web page keeps its own setting until reload; it is not saved to the session. Only a principal connection
 may request an override. A turn with no limit can keep running after its window closes; reopen its thread and use
 `/stop` to interrupt it. Scheduled runs, wakes and delegated children keep their existing limits.

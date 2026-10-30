@@ -5,6 +5,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Principal `/limits` controls set ephemeral core-wide rounds and worker wall deadlines for new work. Existing running work and independent safety limits remain unchanged.
+
 ### Fixed
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or

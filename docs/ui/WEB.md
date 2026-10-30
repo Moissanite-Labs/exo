@@ -343,3 +343,8 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+
+### Core-wide run limits
+
+The composer routes `/limits` to the connected core, after a capability probe, and displays its scope and effective limits as a report. It never sends this command as a model turn. The core requires principal authority for changes. Existing `/rounds` remains window-local. See [Run limits](../RUN-LIMITS.md).

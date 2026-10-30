@@ -57,6 +57,7 @@ COMMANDS = {
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "stop": ("session", "stop the running turn (what was done is kept); /stop <task> stops a running subagent"),
+    "limits": ("session", "principal core-wide round and worker deadline controls: /limits [rounds|worker-timeout default|off|number]"),
     "rounds": ("session", "tool-round limit for new turns in this window: /rounds [default|off|number]"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
@@ -1351,6 +1352,18 @@ class ExoApp(App):
             await self.subagent("stop", args)
         elif name == "stop":
             self.stop_turn()
+        elif name == "limits":
+            probe = await self.post(s.CommandRun(name="limits", args="json", session=self.session))
+            state = (probe.result or {}).get("output") if probe.ok else None
+            if not isinstance(state, dict) or state.get("supported") is not True:
+                self.note("This core does not support /limits. Upgrade the core first.", "warn")
+                return
+            if args.strip() not in ("", "status", "json"):
+                changed = await self.post(s.CommandRun(name="limits", args=args.strip(), session=self.session))
+                if not changed.ok:
+                    return
+                state = changed.result.get("output") or {}
+            self.note(state.get("text", "Core run-limit status unavailable."))
         elif name == "rounds":
             value = args.strip().lower()
             if value == "default":
