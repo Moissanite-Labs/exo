@@ -48,7 +48,7 @@ def test_explicit_boot_limit_explains_that_rounds_do_not_bound_time(tmp_path, li
         async with app.run_test(size=(120, 40)):
             await asyncio.wait_for(app.ready.wait(), 5)
             assert ROUND_LIMIT_NOTE in app.transcript_text()
-            assert ('rounds: unlimited' if limit == 0 else f'rounds: {limit}') in app.status_text()
+            assert ('window rounds: unlimited' if limit == 0 else f'window rounds: {limit}') in app.status_text()
     asyncio.run(go())
 
 

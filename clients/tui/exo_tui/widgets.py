@@ -488,7 +488,7 @@ class StatusStrip(Widget):
             sep()
         if d.get("rounds") is not None:
             value = "unlimited" if d["rounds"] == 0 else str(d["rounds"])
-            t.append(f"rounds: {value}", style=rich_style("accent2", "bold"))
+            t.append(f"window rounds: {value}", style=rich_style("accent2", "bold"))
             sep()
         label("MODEL")
         fell = bool(d["requested"] and d["model"] and d["requested"] != d["model"])

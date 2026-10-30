@@ -38,3 +38,24 @@ def test_old_core_probe_cannot_mutate_or_send_as_chat(tmp_path):
             assert 'does not support /limits' in app.transcript_text()
             assert not any(isinstance(x,s.TurnSend) for x in app.sent)
     asyncio.run(go())
+
+
+def test_window_unlimited_label_does_not_claim_to_override_core_limit(tmp_path):
+    from exo_tui.widgets import StatusStrip
+
+    async def go():
+        eng = make_engine(tmp_path)
+        app = ExoApp(FakeServerClient(eng), seat='tester')
+        async with app.run_test(size=(120, 40)):
+            await asyncio.wait_for(app.ready.wait(), 5)
+            await app.slash('rounds', 'off')
+            await app.slash('limits', 'rounds 100')
+            assert app.max_rounds == 0
+            assert eng.run_limits.snapshot().rounds_for(24, app.max_rounds) == 100
+            assert 'window rounds: unlimited' in app.status_text()
+            assert 'window rounds: unlimited' in app.query_one(StatusStrip).render().plain
+            assert 'core /limits policy may override this window choice' in app.transcript_text()
+            await app.slash('limits', '')
+            assert '100' in app.transcript_text()
+            assert not any(isinstance(x, s.TurnSend) for x in app.sent)
+    asyncio.run(go())
