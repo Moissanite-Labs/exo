@@ -11,6 +11,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
+- "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
+  "Try again" if it failed again, or on the model select if it worked.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The

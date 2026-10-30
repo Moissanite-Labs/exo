@@ -45,3 +45,50 @@ def test_cached_model_error_has_retry_only_when_allowed(monkeypatch, retryable):
                 assert len(reads) == before + 1
     finally:
         srv.close()
+
+
+@pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'), reason='Chrome/websockets missing')
+@pytest.mark.parametrize('recovers', [True, False], ids=['retry-succeeds', 'retry-fails'])
+@pytest.mark.parametrize('cached', [True, False], ids=['cached-list', 'no-list'])
+def test_keyboard_retry_keeps_focus_in_the_picker(monkeypatch, cached, recovers):
+    """Space on Try again redraws the picker. Focus lands on the model select after a success, on Try again after a failure."""
+    reads = []
+    failing = [not cached]
+
+    async def handle(centre, method, path, body, router_factory=None):
+        if path == '/api/providers':
+            return 200, {'providers': [{'provider': 'demo', 'needs': 'none', 'ready': True}], 'ready': True, 'store': 'environment'}
+        if path == '/api/providers/models':
+            reads.append(path)
+            if failing[0]:
+                return 200, {'error': 'Synthetic model-list failure', 'retryable': True, 'error_class': 'transport'}
+            return 200, {'models': [{'route': 'demo:first'}], 'available': [{'route': 'demo:recovered'}] if len(reads) > 1 else []}
+        return 200, {'ok': True}
+
+    monkeypatch.setattr(providers, 'handle', handle)
+    srv = Served(ThreadSrc(pairs=0))
+    retry = "[...document.querySelectorAll('button')].find(b=>b.textContent==='Try again')"
+    try:
+        with Browser() as b:
+            b.goto(srv.url('providers'))
+            if cached:
+                b.wait("document.querySelector('select[aria-label=\"Default model\"]')?.value === 'demo:first'")
+                failing[0] = True
+                b.eval("[...document.querySelectorAll('button')].find(b=>b.textContent==='Test').click()")
+            b.wait(f"!!{retry}")
+            b.eval(f"window.oldRetry = {retry}; window.oldRetry.focus()")
+            assert b.eval("document.activeElement === window.oldRetry")
+            failing[0] = not recovers
+            before = len(reads)
+            b.press(' ', 'Space', 32)
+            if recovers:
+                b.wait("!!document.querySelector('option[value=\"demo:recovered\"]')")
+                want = "document.querySelector('select[aria-label=\"Default model\"]')"
+            else:
+                b.wait(f"(() => {{ const t = {retry}; return !!t && t !== window.oldRetry; }})()")
+                want = retry
+            # The tag name of whatever holds focus instead, so a failure says where focus went (BODY when lost).
+            assert b.eval(f"document.activeElement === {want} || document.activeElement.tagName") is True
+            assert len(reads) == before + 1
+    finally:
+        srv.close()

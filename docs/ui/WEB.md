@@ -346,7 +346,9 @@ file. A core's own failure is shown in its own words, with no exception class na
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
 A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
-"Try again" control beside that cached list; a successful refresh clears the warning.
+"Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
+section, so focus then moves to "Try again" if the retry failed again, or to the model select if it worked.
+Focus moved out of the Providers panel while the retry ran stays where it is.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.
