@@ -152,6 +152,30 @@
       "count": 1
     },
     {
+      "path": "plugins/exo-command/exo_command/api.py",
+      "message": "Incompatible return value type (got \"Any | None\", expected \"str\")",
+      "code": "return-value",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/projects.py",
+      "message": "Name \"groups\" already defined on line <line>",
+      "code": "no-redef",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/server.py",
+      "message": "List item 0 has incompatible type \"None\"; expected \"str\"",
+      "code": "list-item",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/service.py",
+      "message": "Argument \"decision\" to \"ApprovalRespond\" has incompatible type \"str\"; expected \"Literal['allow', 'deny', 'allow_always']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
       "path": "src/exo/ask.py",
       "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"Any | None\"; expected \"str\"",
       "code": "arg-type",
