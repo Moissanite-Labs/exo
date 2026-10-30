@@ -267,6 +267,7 @@ class ExoApp(App):
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
         self._loading = False
+        self.follow_end = True  # classic: the newest line stays in view as the transcript grows, until the reader scrolls up
 
     # ------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -298,6 +299,7 @@ class ExoApp(App):
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
         self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
+        self.watch(self.transcript, "virtual_size", self.follow_latest, init=False)
         self.refresh_status()
         if self.boot_anim:
             self.boot_screen = BootScreen()
@@ -346,9 +348,26 @@ class ExoApp(App):
         return kids[::-1] if self.inverse else kids
 
     def to_latest(self) -> None:
-        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts."""
+        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts.
+
+        Classic also keeps following the bottom (follow_latest): blocks paint in on_mount, so a slow terminal can lay
+        a long thread out in more than one step, and the first scroll lands short of the end (#1023)."""
         tr = self.transcript
-        tr.call_after_refresh(tr.scroll_home if self.inverse else tr.scroll_end, animate=False)
+        self.follow_end = True
+        if self.inverse:
+            tr.call_after_refresh(tr.scroll_home, animate=False)
+        else:
+            tr.call_after_refresh(self.follow_now)
+
+    def follow_latest(self) -> None:
+        """The transcript's content changed size: in classic, stay at the bottom unless the reader scrolled up."""
+        if self.follow_end and not self.inverse:
+            self.transcript.call_after_refresh(self.follow_now)
+
+    def follow_now(self) -> None:
+        """After the layout, ask again: a reader who scrolled up in the meantime keeps the place they chose."""
+        if self.follow_end and not self.inverse:
+            self.transcript.scroll_end(animate=False, immediate=True)
 
     def transcript_text(self) -> str:
         old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]  # history not mounted yet
@@ -878,6 +897,7 @@ class ExoApp(App):
                 self.update_earlier_row()
                 return
             anchor = next((w for w in tr.children if w is not self.earlier_row), None)
+            self.follow_end = False  # the reader asked for older lines: the view goes to them, not to the bottom
             await tr.mount(*widgets, before=anchor if anchor is not None else 0)
             self.update_earlier_row()
             if anchor is not None:  # keep what the reader was looking at in place
@@ -886,6 +906,7 @@ class ExoApp(App):
             self._loading = False
 
     def watch_transcript_scroll(self, old: float, new: float) -> None:
+        self.follow_end = new >= self.transcript.max_scroll_y  # scrolled up: leave the reader there; back down: follow
         if not self.older:
             return
         if self.inverse:  # the oldest end is the bottom
