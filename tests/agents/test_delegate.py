@@ -379,3 +379,37 @@ def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
     assert "queued" in tool_text(eng, sid).lower()
     eng.agents.__init__(eng)  # a restart keeps the remote task queued
     assert eng.agents.list(sid)[0]["status"] == "queued"
+
+
+def test_runtime_close_finishes_children_and_receipts_before_store_close(tmp_path):
+    async def main():
+        hold, entered = asyncio.Event(), asyncio.Event()
+        eng, fake = engine(tmp_path, [('PARENT', [tool_turn('delegate', {'tasks': [{'goal': 'HOLD-1'},
+                                                                                 {'goal': 'HOLD-2'}]}), 'unused']),
+                                      ('HOLD', [hold])])
+        original_stream = fake.stream
+        seen = 0
+        async def stream(messages, tools, **opts):
+            nonlocal seen
+            if 'HOLD' in next((m.text() for m in reversed(messages) if m.role == 'user'), ''):
+                seen += 1
+                if seen == 2: entered.set()
+            async for event in original_stream(messages, tools, **opts):
+                yield event
+        fake.stream = stream
+        snapshot = {}
+        original_close = eng.store.close
+        def close_store():
+            snapshot['active'] = fake.active
+            snapshot['receipts'] = [e.body.status for e in task_events(eng)
+                                    if e.body.status not in ('queued', 'running')]
+            original_close()
+        eng.store.close = close_store
+        sid = eng.store.create_session(agent=eng.agent).id
+        eng.start_turn(sid, 'PARENT go')
+        await asyncio.wait_for(entered.wait(), 2)
+        assert fake.active == 2
+        await asyncio.wait_for(eng.close(), 3)
+        assert snapshot == {'active': 0, 'receipts': ['cancelled', 'cancelled']}
+        assert not eng.agents.loops and not eng._tasks
+    asyncio.run(main())
