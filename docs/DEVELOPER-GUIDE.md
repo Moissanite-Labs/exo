@@ -638,13 +638,14 @@ The cleanup signal-handler test does not need `/proc` and still runs where SIGHU
 shared. A test that passes on your machine can fail there for reasons that have nothing to do with the code. Write
 these tests so that only the defect they guard against can fail them:
 
-- A loaded runner can keep a process waiting for a CPU for half a second. Keep a wall-clock bound well above what
-  the code needs, and keep the test's own setup out of the timed part. `tests/core/tools/test_search_worker.py`
-  bounds the whole call at 3 s for a 1 s search limit, and the event loop's largest gap between 10 ms ticks at
-  0.5 s, half what a search holding the loop would cost (#907). It builds the tool registry before it starts the
-  clock: the first build imports the built-in tools, and inside the timed part it took the call past 3 s beside 8
-  to 10 busy loops. A count or CPU time cannot be inflated by a slow runner, but check that it still catches the defect: a
-  stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
+- A loaded runner can keep a process waiting for a CPU for half a second or more. Keep a wall-clock bound well
+  above what the code needs, and keep the test's own setup out of the timed part.
+  `tests/core/tools/test_search_worker.py` bounds the whole call at 3 s for a 1 s search limit. It builds the tool
+  registry before it starts the clock: the first build imports the built-in tools, and inside the timed part it took
+  the call past 3 s beside 8 to 10 busy loops. The test also bounds the event loop's largest gap between 10 ms ticks
+  at 0.5 s, half what a search holding the loop would cost (#907). That bound is a compromise between catching the
+  defect and allowing for a runner's stalls, not a bound well above them: one macOS CI run measured a 0.5625 s gap.
+  A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
