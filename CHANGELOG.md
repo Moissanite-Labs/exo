@@ -10,6 +10,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Explicit, ephemeral parent approval authority for eligible active delegated descendants. Human clients
+  grant or revoke it, and the same parent turn can inspect, allow once, deny and wait through the existing
+  desk. Signed audit, exact bindings, human-only exclusions and owned child cleanup are required.
 - Principal `/limits` controls set ephemeral core-wide rounds and worker wall deadlines for new work. Existing running work and independent safety limits remain unchanged.
 
 ### Fixed

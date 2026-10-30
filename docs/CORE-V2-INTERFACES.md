@@ -162,3 +162,8 @@ Events (21): the 20 from 5.2 plus `taste.updated` (D-012 inline taste).
 `context.py` W1-C, `src/exo/core/plugins.py`, `slots.py`, `hooks.py`, `src/exo/upstream.py`,
 `PROVENANCE.toml` W1-D, `src/exo/protocol/` (not `schema.py`) and `src/exo/server/` W1-E.
 `types.py` and `schema.py` belong to the lead. Hermes notice: `LICENSES/hermes-agent-MIT.txt`.
+
+
+`CoreRuntime.track_owned_task(task)` registers a trusted continuation for shutdown draining before the store
+closes. Delegation registers child tasks and their gather through this seam. Parent completion and cancellation
+join their invocation. This is an internal Python lifecycle API, not a protocol command or model authority.

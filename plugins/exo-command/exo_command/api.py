@@ -128,6 +128,7 @@ def _route(method: str, p: list, key: str):
         "complete/commands": (_complete_commands, None),
         "complete/files": (_complete_files, None),
         "permissions": (_permissions, _permissions_set),
+        "approval-authority": (None, _approval_authority),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
     }
@@ -247,6 +248,22 @@ async def _ui_respond(c, p, q, body):
     return res
 
 
+async def _approval_authority(c, p, q, body):
+    session = _str(body, "session", required=True, limit=120)
+    action = _choice(body, "action", ("status", "grant", "revoke"))
+    try:
+        status = (await c.source.call(s.CommandRun(name="approval-authority", args="status", session=session))).get("output")
+    except SourceError as exc:
+        if exc.code in ("not_found", "unknown_command", "unsupported"):
+            raise BadRequest("Selected core does not support delegated approval authority") from None
+        raise
+    if not isinstance(status, dict) or status.get("supports_delegated_approval") is not True:
+        raise BadRequest("Selected core does not support delegated approval authority")
+    if action != "status":
+        return (await c.source.call(s.CommandRun(name="approval-authority", args=action, session=session))).get("output") or {}
+    return status
+
+
 async def _permissions(c, p, q, body):
     """The permission mode for the banner. A core without the gate (or an older one) reads as ask."""
     try:
@@ -334,7 +351,7 @@ async def _schedule_edit(c, p, q, body):
 
 
 # ---------------------------------------------------------------- completion (D-037)
-WEB_COMMANDS = {"limits": "core-wide rounds and delegated-worker deadline: rounds|worker-timeout default|off|number", "rounds": "tool-round limit for new turns in this window: default|off|number", "context": "what the next model call carries, part by part",
+WEB_COMMANDS = {"approval-authority": "status, grant or revoke parent delegated approval authority", "limits": "core-wide rounds and delegated-worker deadline: rounds|worker-timeout default|off|number", "rounds": "tool-round limit for new turns in this window: default|off|number", "context": "what the next model call carries, part by part",
                 "model": "pick or set the shared main model; default <ref> saves the default",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",

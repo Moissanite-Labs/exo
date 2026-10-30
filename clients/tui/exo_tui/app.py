@@ -68,6 +68,7 @@ COMMANDS = {
     "providers": ("model", "set up model providers: add or replace a key, test it, remove it, pick the default"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
+    "approval-authority": ("tools", "status, grant or revoke parent approval authority for active delegated descendants"),
     "tasks": ("tools", "list the subagents this session handed work to, with their status"),
     "open": ("tools", "watch a subagent's session: /open <task> (a task id, a prefix of it, or its session id)"),
     "steer": ("tools", "send a note to a running subagent: /steer <task> <text> (the parent's receipt records it)"),
@@ -1387,6 +1388,21 @@ class ExoApp(App):
     async def slash(self, name: str, args: str) -> None:
         if not self.busy:
             self.hint_budget = 1
+        if name == "approval-authority":
+            if not self.session or args.strip() not in ("", "status", "grant", "revoke"):
+                self.note("Select a parent thread. usage: /approval-authority [status|grant|revoke]", "warn")
+                return
+            status = await self.post(s.CommandRun(name=name, args="status", session=self.session))
+            output = status.result.get("output") if status.ok else None
+            if not isinstance(output, dict) or output.get("supports_delegated_approval") is not True:
+                self.note("Selected core does not support delegated approval authority", "warn")
+                return
+            if args.strip() in ("grant", "revoke"):
+                status = await self.post(s.CommandRun(name=name, args=args.strip(), session=self.session))
+                output = status.result.get("output") if status.ok else None
+            if output:
+                self.note(json.dumps(output))
+            return
         known = {n for n in LOCAL_COMMANDS} | {c["name"] for c in self.commands}
         if name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
             guess = cm.closest(name, known)

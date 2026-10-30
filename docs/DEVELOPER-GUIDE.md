@@ -259,7 +259,7 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 
 **Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
-`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
+`on_turn_start`, `on_turn_end`, `delegated_approval_validate` and `delegated_approval_audit`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
 `turn_id`, `author` (who started the turn, D-040: `principal` or `principal:<label>`, `local`, `peer:<name>`,
 `bus:<seat>`, `job`, `schedule`, `delegate`, `system`; empty from an older caller), `risk` and `cwd`, the
@@ -1056,3 +1056,8 @@ provider's effort mapping. See [First-party DeepSeek API](PROVIDERS.md#first-par
 ### Core-wide run-limit controls (D-070 amendment)
 
 The principal-only `limits` built-in updates a process-local policy. Main turns snapshot it at admission, and delegated workers snapshot it at actual startup after concurrency waiting. Status is read-only. Both clients probe support before changing it. Round and worker wall limits are independent of tokens, permissions and spending. See [Run limits](RUN-LIMITS.md) for precedence and fake-provider tests.
+
+The delegated-approval hooks form an explicit security capability. Only registered `exo-gate` callbacks
+are used. Validation rechecks the gate request identity, current policy and exact binding before inspection
+and decision. Audit must commit a signed event before resolution, including without a required executor.
+Unknown or missing callbacks withhold delegation. These hooks do not change principal authentication.

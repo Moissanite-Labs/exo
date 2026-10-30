@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 VALID_HOOKS: frozenset[str] = frozenset({
     "pre_tool_call", "post_tool_call", "transform_tool_result", "post_approval_response",
-    "on_turn_start", "on_turn_end",
+    "on_turn_start", "on_turn_end", "delegated_approval_audit", "delegated_approval_validate",
 })
 
 # These names occur in Hermes plugin contracts or older Exo declarations, but Exo has no
@@ -129,7 +129,7 @@ class HookRegistry:
         return out
 
     async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
-                    _isolate_arguments: bool = False,
+                    _isolate_arguments: bool = False, _with_plugins: bool = False,
                     **kwargs: Any) -> list[Any]:
         """Like ``fire``; the engine can require a trusted security hook to succeed."""
         out = []
@@ -144,12 +144,28 @@ class HookRegistry:
                 if e.plugin in _fail_closed_plugins:
                     raise HookError("required security hook failed") from None
                 if name == "pre_tool_call" and not _fail_closed_plugins:  # required mode: only the gate fails closed
-                    out.append({"action": "block", "message": "Tool approval hook failed; repair or reinstall "
-                                f"{e.plugin or 'the gate plugin'} before retrying."})
+                    blocked = {"action": "block", "message": "Tool approval hook failed; repair or reinstall "
+                               f"{e.plugin or 'the gate plugin'} before retrying."}
+                    out.append((e.plugin, blocked) if _with_plugins else blocked)
                 continue
             if r is not None:
-                out.append(r)
+                out.append((e.plugin, r) if _with_plugins else r)
         return out
+
+    def fire_trusted(self, name: str, *, plugin: str, **kwargs: Any) -> Any:
+        """A security capability has exactly one named owner and never falls back to other plugins."""
+        entries = [entry for entry in self.entries(name) if entry.plugin == plugin]
+        if len(entries) != 1:
+            raise HookError("trusted security capability unavailable")
+        try:
+            result = entries[0].callback(**accepted(entries[0].callback, kwargs))
+            if inspect.isawaitable(result):
+                if hasattr(result, "close"):
+                    result.close()
+                raise HookError("security capability must complete synchronously")
+            return result
+        except Exception:
+            raise HookError("trusted security capability failed") from None
 
     def first(self, name: str, **kwargs: Any) -> Any:
         """First non-None result, or None."""

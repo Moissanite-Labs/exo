@@ -5923,7 +5923,7 @@ TOOLS: dict[str, str] = {
         "vision_analyze", "video_analyze", "read_terminal", "read_window_below", "x_search", "clarify",
         "show_tip", "gui_tour", "focus_pane", "desktop_preview", "drive_preview", "feishu_doc_read",
         "setup_choose", "browser_vault_list", "todo_list", "list_dir", "grep", "glob",
-        "skill", "memory_zoom", "exo_trace", "ui")},  # Exo's own read-only tools: load a skill, zoom, trace, a panel
+        "skill", "memory_zoom", "exo_trace", "ui", "delegation_review")},  # Internal tools; delegation_review is a separately checked capability, not general read authority.
     **{t: "local_write" for t in ("write_file", "patch", "apply_patch", "memory", "skill_manage", "apply_layout",
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
@@ -8962,6 +8962,7 @@ def normalize_approvals(raw: Mapping | None) -> dict:
         raise PolicyError("approvals.approvers must be a mapping of category: [approvers]")
     if table.get("default") is not None:
         out["default"] = _approver_list(table["default"], "approvals.approvers.default")
+    out["delegation_human_only_default"] = raw.get("delegation_human_only_default") is True
     cats = table.get("categories")
     if cats is None:
         cats = {k: v for k, v in table.items() if k != "default"}
@@ -8981,6 +8982,8 @@ def normalize_approvals(raw: Mapping | None) -> dict:
         for e in lst:
             if e.startswith("role:") and e[5:] not in out["roles"]:
                 raise PolicyError(f"approvals: {e} is not defined under roles")
+    if table.get("default") is not None:
+        out["delegation_human_only_default"] |= approvers_for("", {"default": out["default"], "roles": out["roles"]}) == ["principal"]
     always = raw.get("always") or {}
     if not isinstance(always, Mapping):
         raise PolicyError("approvals.always must be a mapping")

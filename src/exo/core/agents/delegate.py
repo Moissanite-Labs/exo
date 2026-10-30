@@ -34,6 +34,8 @@ from exo.protocol import schema as s
 from exo.wire import Brief, Receipt, encode, render, sign
 from exo.wire.grammar import SYM
 
+STOP_GRACE = 5.0  # explicit stop cleanup only; worker timeout remains its separate configured limit
+
 ROLES = ("builder", "scout", "verifier", "critic")
 READ_ONLY = {"scout", "critic"}  # low-risk tools only
 ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "critic": "deep"}
@@ -41,7 +43,7 @@ ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "c
 # interaction (no ui panels), no shared memory writes, no outward messages, no scheduling in the parent's name.
 BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui",
                            "exo_harness_report", "exo_trace", "peers", "peer_send",
-                           "jobs", "job_output", "job_kill"})  # jobs belong to the main agent's threads (D-032)  # peers are the main agent's (D-026); self-observation is the main agent's job (D-025)
+                           "jobs", "job_output", "job_kill", "delegation_review"})  # jobs belong to the main agent's threads (D-032)  # peers are the main agent's (D-026); self-observation is the main agent's job (D-025)
 BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
@@ -89,7 +91,9 @@ SPEC = ToolSpec(
                  "`goal`, or several independent ones in `tasks` to run them in parallel. Use it for work that "
                  "would flood your context or that splits into independent parts, not for one or two tool calls. "
                  "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
-                 "is retried once one tier up."),
+                 "is retried once one tier up. With explicit parent approval authority, this call may yield pending "
+                 "approval metadata. Use delegation_review to answer or wait, and join before finishing; "
+                 "unfinished owned children are stopped when your turn ends."),
     parameters={"type": "object", "properties": {
         **_ITEM, "tasks": {"type": "array", "items": {"type": "object", "properties": _ITEM, "required": ["goal"]},
                            "description": "Several independent tasks, run in parallel."}}})
@@ -118,6 +122,8 @@ class _Bus:
         self.d = d
 
     async def emit(self, body: Any, session: str | None = None) -> s.Event:
+        if isinstance(body, s.TurnCompleted) and session:
+            await self.d.close_reviews(session)
         ev = self.d.engine.hub.publish(body, session)
         lim = self.d.limits.max_tokens
         if isinstance(body, s.UsageUpdated) and session in self.d.loops and lim:
@@ -144,6 +150,7 @@ class Delegator:
         self.over: set[str] = set()           # children stopped for their token budget
         self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
+        self.review_invocations: dict[str, dict] = {}
         engine.store._q(TABLE)
 
     def fail_stale(self) -> None:
@@ -156,6 +163,70 @@ class Delegator:
 
     def install(self) -> None:
         self.engine.registry.register(SPEC, self.tool, replace=True)
+        self.engine.registry.register(ToolSpec(name="delegation_review", toolset="delegation", risk="low",
+            description="Inspect, allow once, deny, or wait for owned delegated work under an explicit human grant. Never grants authority.",
+            parameters={"type": "object", "properties": {"action": {"enum": ["inspect", "wait", "allow", "deny"]},
+                "invocation": {"type": "string"}, "generation": {"type": "string"},
+                "request_id": {"type": "string"}, "binding": {"type": "string"}},
+                "required": ["action", "invocation", "generation"], "additionalProperties": False}), self.review_tool, replace=True)
+
+    async def close_reviews(self, parent: str) -> None:
+        owned = [(key, row) for key, row in self.review_invocations.items() if row["parent"] == parent]
+        for _, row in owned:
+            for task in (row["task"], *row["runs"]):
+                if not task.done():
+                    task.cancel()
+        if owned:
+            results = await asyncio.gather(*(task for _, row in owned for task in (row["task"], *row["runs"])), return_exceptions=True)
+        for key, _ in owned:
+            self.review_invocations.pop(key, None)
+        if owned and any(isinstance(result, Exception) for result in results):
+            raise RuntimeError("Delegated cleanup incomplete")
+
+    async def _review_wait(self, key: str) -> dict:
+        row, desk = self.review_invocations[key], self.engine.approvals
+        while True:
+            desk.delegation_changed.clear()
+            if row["task"].done():
+                receipts = row["task"].result()
+                return {"invocation": key, "generation": row["generation"], "status": "done",
+                        "receipts": [render(receipt) for receipt in receipts]}
+            current_grant = desk.delegation_grants.get(row["parent"])
+            if row["generation"] is None and current_grant:
+                row["generation"] = current_grant
+            if row["generation"] is not None and current_grant != row["generation"]:
+                return {"invocation": key, "generation": row["generation"], "status": "authority_revoked"}
+            pending = desk.delegated_listing(row["parent"], row["generation"]) if row["generation"] else []
+            if pending:
+                return {"invocation": key, "generation": row["generation"], "status": "approval_pending", "pending": pending}
+            changed = asyncio.create_task(desk.delegation_changed.wait())
+            try:
+                await asyncio.wait((row["task"], changed), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
+
+    async def review_tool(self, args: dict, ctx: ToolContext) -> str:
+        key = args.get("invocation")
+        row = self.review_invocations.get(key)
+        if (row is None or row["parent"] != ctx.session or row["turn_id"] != ctx.meta.get("turn_id")
+                or row["generation"] != args.get("generation")):
+            raise ToolError("No matching owned delegation invocation")
+        desk = self.engine.approvals
+        pending = desk.delegated_listing(row["parent"], row["generation"])
+        action = args.get("action")
+        if action in ("allow", "deny"):
+            desk.respond_delegated(row["parent"], row["generation"], args.get("request_id", ""),
+                                   args.get("binding", ""), action,
+                                   {"author": ctx.meta.get("author", "unknown"), "turn_id": ctx.meta.get("turn_id", ""),
+                                    "call_id": ctx.call_id})
+            return json.dumps({"decision": action, "request_id": args.get("request_id")})
+        if action == "wait":
+            return json.dumps(await self._review_wait(key))
+        if action != "inspect":
+            raise ToolError("Use inspect, wait, allow or deny")
+        return json.dumps({"invocation": key, "generation": row["generation"], "pending": pending,
+                           "status": "done" if row["task"].done() else "running"})
 
     # ------------------------------------------------------------ queries
 
@@ -179,6 +250,8 @@ class Delegator:
     # ------------------------------------------------------------ the tool
 
     async def tool(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        if not self.engine.accepting_work:
+            raise ToolError("The core is shutting down")
         parent, lim = ctx.session or "", self.limits
         depth = self.depth(parent)
         if depth >= lim.max_depth:
@@ -195,12 +268,29 @@ class Delegator:
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
         runs = [asyncio.ensure_future(self._remote(parent, b, str(it["seat"])) if it.get("seat")
                                       else self._attempts(parent, b)) for b, it in zip(briefs, items)]
+        for run in runs:
+            self.engine.track_owned_task(run)
+        async def owned():
+            try:
+                return await asyncio.gather(*runs)
+            except asyncio.CancelledError:
+                for task in runs:
+                    task.cancel()
+                await asyncio.gather(*runs, return_exceptions=True)
+                raise
+        task = asyncio.create_task(owned())
+        self.engine.track_owned_task(task)
+        key = s.new_id("review")
+        self.review_invocations[key] = {"parent": parent, "generation": None, "task": task,
+                                        "turn_id": ctx.meta.get("turn_id", ""), "runs": runs}
         try:
-            receipts = await asyncio.gather(*runs)
-        except asyncio.CancelledError:
-            for t in runs:
-                t.cancel()
-            await asyncio.gather(*runs, return_exceptions=True)
+            result = await self._review_wait(key)
+            if self.review_invocations[key]["generation"] is not None:
+                return json.dumps(result)
+            receipts = task.result()
+            self.review_invocations.pop(key, None)
+        except BaseException:
+            await self.close_reviews(parent)
             raise
         n = len(briefs)
         return "\n\n".join((f"Task {i + 1} of {n}: {b.goal[:100]}\n" if n > 1 else "") + render(r)
@@ -326,10 +416,12 @@ class Delegator:
     async def _stop(self, loop: Loop, sid: str, turn: asyncio.Future) -> Any:
         loop.interrupt(sid)
         try:
-            return await asyncio.wait_for(turn, 5)
-        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-            turn.cancel()
-            return None
+            done, _ = await asyncio.wait({turn}, timeout=STOP_GRACE)
+            if done:
+                return turn.result()
+        except (asyncio.CancelledError, Exception):
+            pass
+        return await self.engine.cancel_owned_task(turn)
 
     async def run(self, parent: str, b: Brief, escalated: bool = False) -> Receipt:
         db, line, t0 = self.engine.store, encode(b), time.monotonic()
@@ -359,15 +451,24 @@ class Delegator:
                 db._q("UPDATE tasks SET child=?, status='running', updated=? WHERE id=?", (sid, s.now_ts(), b.id))
                 self._emit(parent, b, "running", sid, line)
                 turn = asyncio.ensure_future(loop.send(sid, render(b), meta={"author": "delegate"}))  # D-040
+                self.engine.track_owned_task(turn)
                 try:
                     result = await asyncio.wait_for(asyncio.shield(turn), b.timeout_s or None)
                 except asyncio.TimeoutError:
                     code, why = "timeout", f"no result within {b.timeout_s} s"
-                    result = await self._stop(loop, sid, turn)
+                    try:
+                        result = await self._stop(loop, sid, turn)
+                    except RuntimeError:
+                        code, why = "error", "Delegated cleanup incomplete; the child turn remains active"
+                        raise
         except asyncio.CancelledError:
             code, why = "cancelled", "the parent stopped"
             if loop is not None and turn is not None:
-                result = await self._stop(loop, sid, turn)
+                try:
+                    result = await self._stop(loop, sid, turn)
+                except RuntimeError:
+                    code, why = "error", "Delegated cleanup incomplete; the child turn remains active"
+                    raise
             raise
         finally:
             r = self._receipt(b, sid, loop, result, code, why, t0)

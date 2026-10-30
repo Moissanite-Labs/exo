@@ -435,6 +435,43 @@ class Gate:
             return "floor"
         return "hold" if d.violations else "allow"
 
+    @staticmethod
+    def delegation_eligible(c, d, pol, changed, args) -> bool:
+        return d.outcome != "deny" and (not gate.no_grant(c) and not gate.body_unseen(c)
+                          and not d.violations and not d.reserved and not gate.args_sensitive(args)
+                          and not any((policy.get("approvals") or {}).get("delegation_human_only_default") for policy in (pol, changed or {}))
+                          and not any(p.category in gate.PRINCIPAL_ONLY for p in _every_part(c))
+                          and not any((p.category in ((policy.get("approvals") or {}).get("categories") or {})
+                                       and gate.approvers_for(p.category, policy.get("approvals")) == ["principal"])
+                                      for policy in (pol, changed or {}) for p in _every_part(c)))
+
+    def delegated_approval_validate(self, context: dict | None = None) -> bool:
+        try:
+            context = context or {}
+            pending = self._pending.get(context.get("approval_key"))
+            if pending is None or pending.call_id != context.get("tool_call_id"):
+                raise ValueError()
+            c, d = self._rules(context["tool"], context["args"], self._risk(context["tool"], context["risk"]), context["cwd"])
+            if not self.delegation_eligible(c, d, self.policies(), self.changed_policies(), context["args"]):
+                raise ValueError()
+            if context.get("binding") and context["binding"] != gate.approval_binding(c, context["args"]):
+                raise ValueError()
+            return True
+        except Exception:
+            return False
+
+    def delegated_approval_audit(self, body: dict, session: str, context: dict | None = None) -> str:
+        # This capability always requires committed signed evidence, even without a required executor.
+        try:
+            if body.get("phase") == "delegation_decision" and not self.delegated_approval_validate(context):
+                raise ValueError()
+            eid = self.sink.append({"gate": PLUGIN_ID, **body}, session=session)
+            if not isinstance(eid, str) or not eid:
+                raise ValueError()
+            return eid
+        except Exception:
+            raise GateAuditError("Signed delegation approval audit unavailable") from None
+
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
             eid = self.sink.append(body, **kwargs)
@@ -837,7 +874,8 @@ class Gate:
             approval_key = "a_" + secrets.token_hex(16)
             result = {"action": "approve", "message": msg, "rule_key": key, "approval_key": approval_key,
                       "approvers": approvers,
-                      "persist": True}
+                      "persist": True,
+                      "delegation_eligible": self.delegation_eligible(c, d, pol, changed, args)}
             if binding:
                 result["binding"] = binding
             if once:
@@ -1076,6 +1114,8 @@ def register(ctx) -> Gate:
         g.start_from_seat()
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
+    ctx.register_hook("delegated_approval_audit", g.delegated_approval_audit)
+    ctx.register_hook("delegated_approval_validate", g.delegated_approval_validate)
     reg_cmd = getattr(ctx, "register_command", None)
     if reg_cmd is not None:  # reached through command.run: no new protocol command (D-033)
         try:

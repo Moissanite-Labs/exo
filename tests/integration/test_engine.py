@@ -93,7 +93,7 @@ def test_plugin_hooks_block_approve_and_plugin_tools(tmp_path):
     assert "asked" in res[1] and res[2] == "transformed"
     assert {"approval": "once"} in seen
     assert seen[0]["session_id"] and seen[0]["tool_call_id"]
-    assert set(fired) == set(VALID_HOOKS)
+    assert set(fired) == set(VALID_HOOKS) - {"delegated_approval_validate", "delegated_approval_audit"}  # explicit capability only
 
 
 def test_context_slot_adapter_sees_turns(tmp_path):

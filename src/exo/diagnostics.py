@@ -196,6 +196,12 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
             except (ValueError, TypeError):
                 raise CommandFailed("bad_request", "usage: /limits rounds|worker-timeout default|off|nonnegative-integer [all], or /limits default") from None
         return eng.run_limits.status(eng.loop.max_iterations, eng.agents.limits.max_turns, eng.agents.limits.timeout_s)
+    if b.name == "approval-authority":
+        from exo.principal import require_principal
+        require_principal("manage delegated approval authority")
+        if not b.session or (info := eng.store.get_session(b.session)) is None or info.agent != eng.agent:
+            raise CommandFailed("bad_request", "Select an existing parent session")
+        return eng.approvals.delegation_command(b.session, b.args.strip() or "status")
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
             raise CommandFailed("bad_request", "usage: /context [json]")

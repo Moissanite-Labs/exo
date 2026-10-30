@@ -307,7 +307,7 @@ def test_default_supported_hooks_match_core_fire_sites():
         for call in ast.walk(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
-        and call.func.attr in {"fire", "afire"}
+        and call.func.attr in {"fire", "afire", "fire_trusted"}
         and call.args
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)

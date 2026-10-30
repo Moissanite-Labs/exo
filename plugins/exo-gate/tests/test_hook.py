@@ -51,9 +51,11 @@ def call(ctx, tool, args, **kw):
                           task_id="", **kw))
 
 
-def test_register_wires_both_hooks(keyed_store):
-    _, ctx = make_gate(*keyed_store)
-    assert set(ctx.hooks) == {"pre_tool_call", "post_approval_response"}
+def test_register_wires_gate_and_delegation_capability_hooks(keyed_store):
+    g, ctx = make_gate(*keyed_store)
+    assert set(ctx.hooks) == {"pre_tool_call", "post_approval_response", "delegated_approval_validate", "delegated_approval_audit"}
+    assert ctx.hooks["delegated_approval_validate"][0].__self__ is g
+    assert ctx.hooks["delegated_approval_audit"][0].__self__ is g
 
 
 def test_allow_returns_none_and_records(keyed_store):

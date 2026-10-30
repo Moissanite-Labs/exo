@@ -12,6 +12,7 @@
                                            flags pass through: exo --resume, exo --seat NAME, exo --no-intro
   exo --skip-permissions                   the terminal client with permissions bypass for this run of the
                                            core: no approval asks except Exo's own records and secrets (D-065)
+  exo approval-authority status|grant|revoke --socket PATH --session ID   manage parent approval authority
   exo resume [flags]                       reopen the last session; same as `exo --resume`
   exo tui [--resume] [--session ID] ...     the terminal client (pip install 'exo[tui]')
   exo update [--dry-run]                   upgrade Exo in place, print old -> new, quick self-check
@@ -472,6 +473,9 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == 'github-auth':
         from .github_auth_cmd import main as github_auth_main
         return github_auth_main(args[1:])
+    if args and args[0] == 'approval-authority':
+        from .delegation_cmd import main as delegation_main
+        return delegation_main(args[1:])
     if args and args[0] == 'providers':  # its own quiet parser: an error must never echo a pasted key
         from .providers_cmd import main as providers_main
         return providers_main(args[1:])

@@ -302,3 +302,10 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 ## Core-wide run limits
 
 `/limits [rounds|worker-timeout default|off|number]` controls new work on the connected core through the principal-only `limits` built-in. Worker deadlines also accept `15m` or `1h`. `/limits default` clears both ephemeral overrides. Running work keeps its admitted limits. Clients probe support before mutations. See [Run limits](RUN-LIMITS.md).
+## Delegated approval authority
+
+`/approval-authority status|grant|revoke` selects the terminal or web Chat conversation as the parent.
+`exo approval-authority status|grant|revoke --socket PATH --session PARENT_ID` uses an existing core.
+All management requires the principal, and clients probe support before mutation. The model-only
+`delegation_review` tool can inspect, allow once, deny or wait for its owned invocation. It cannot grant
+itself authority. See [the capability contract](DELEGATED-APPROVAL-AUTHORITY.md).
