@@ -194,7 +194,9 @@ Limits, stated plainly:
   A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
   without tools. Its catalog limits it to `aux`; it does not make the main model ready for first run.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
-  is flattened into one prompt, and no token counts come back (usage shows as unknown).
+  is flattened into one prompt, and no token counts come back (usage shows as unknown). Earlier tool rounds stay
+  in that prompt as text: each call as `[tool call <name>] <arguments>` under its assistant turn, and each result
+  as a `[tool result <name>]` block, marked `, error` when it failed. Before exo-desktop #52 they were dropped.
 - **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
   access (`OSStatus -67068`). Exo checks signing with `codesign -dv` only when the configured command is a native
   Mach-O binary. The vendor's `muse` command may be a shell launcher: shell scripts cannot be code-signed, and
