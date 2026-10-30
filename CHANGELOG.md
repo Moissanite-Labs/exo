@@ -93,6 +93,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
   was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
   bound). Test-only.
+- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is not a list no longer loads. A string such
+  as `toolsets = "fs"` read as no list, and the seat got every toolset (exo-desktop #52, D-041 amendment).
+- Two folder plugins whose names differ only in punctuation, such as `a-b` and `a_b`, no longer share one module.
+  The second replaced the first's package, so the first plugin's later relative imports ran the second's files.
+  The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
+- `exo findings fix ID` reads `ID` as text. The id went into a SQL `LIKE` as a pattern, so `%` or `_` matched
+  other ids: `exo findings fix % --in SHA` marked the only finding fixed (exo-desktop #52).
+- A finished subagent stays locked when a context note or `/compact` writes its session's meta at the same time.
+  Each writer read the whole meta and wrote it back, so the lock, or another writer's key, could be lost. Meta
+  writes now keep the keys they do not set, in one transaction (exo-desktop #52, D-041 amendment).
+- A provider with several `key_env` names keeps each key's credential id when another key is added or removed. A
+  call that ran across the change skipped the new key as the one that had failed and sent the failed key again.
+  A 501 (`muse-cli` asked to carry tools) falls back without cooling `muse-cli`, so the next call without tools
+  still reaches it (exo-desktop #52, D-041 amendment).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
@@ -1228,6 +1242,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Peers (exo-desktop #52, D-026 amendment): a peer or bus message that names a session lands only in one that
+  exists, is not a subagent and is not finished. A crafted `to_session` used to reach a locked child, a running
+  subagent or an id that does not exist: the message was queued or held there, or it started a turn. Any other
+  name now gets a denied receipt before the policy runs. A held message whose session finished before you
+  allowed it is denied too. The warning for such a message that tries to approve something now shows in a live
+  session, not in the one it named. Tests: `tests/peers/test_explicit_session.py`. **Docs:** `docs/PEERS.md`,
+  `DECISIONS.md`, `docs/DOCS-MAP.md`.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
   as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was

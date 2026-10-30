@@ -305,8 +305,11 @@ class Router:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
-            keys = [k for e in envs if (k := self._key(e))] if envs else [None]
+            # One place per key_env name, so a key keeps its id when another comes or goes (exo-desktop #52).
+            keys = [self._key(e) for e in envs] if envs else [None]
             for i, key in enumerate(keys):
+                if envs and not key:  # this name has no key now
+                    continue
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
                                  headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
@@ -353,6 +356,8 @@ class Router:
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
                        sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
+        if status == 501:  # the transport cannot carry this request (muse-cli with tools): the key and model are fine
+            return Cooldown()
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
