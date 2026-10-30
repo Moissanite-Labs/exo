@@ -1127,6 +1127,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-29 (#993):** Responses continuation combines completed streamed items with terminal
+  output without dropping tool calls when that output is partial. Missing calls in prior saved replay are
+  reconstructed from recorded calls for request construction only. Opaque reasoning stays scoped to its
+  provider, model and authorization. Inconsistent call identities fail closed. HTTP refusal hints use fixed
+  recognized-code messages and do not infer a usage limit from an unknown refusal.
 - **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
   connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
   only status crosses the web boundary. The application supplies credential callbacks to the core router,

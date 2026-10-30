@@ -73,3 +73,15 @@ References: [registration and sign-in](https://developers.openai.com/siwc/token-
 [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference),
 [errors](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery), and
 [preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+## Tool continuation and refused requests
+
+Responses tool continuations retain completed streamed reasoning, message and function-call items even
+when the terminal output list is missing or partial (#993). Existing saved messages with incomplete replay
+metadata supply missing calls from their recorded tool calls. Exo does not rewrite the saved history.
+Opaque items remain restricted to the same provider, model and selected authorization scope. Conflicting
+call identities are refused rather than pairing a tool result with different arguments.
+
+An HTTP refusal alone does not establish a plan usage limit. Exo shows usage or context hints only for
+recognized error codes and keeps unknown provider response text out of the diagnostic. This repair does
+not retry failed calls automatically or change model routes, permissions or account settings.
