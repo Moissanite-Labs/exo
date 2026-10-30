@@ -4740,15 +4740,17 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   with its lead before the turn's own message, no principal message holds the pin, and no summary row comes after
   the lead. An undo keeps the rows before the undone turn, so it passes. A transcript cut short at its start does
   not start with the lead, so it drops nothing. A compaction that folded the pin's message leaves a summary row
-  after the lead, so that pin stays too. The drop is an undo's: logged as counts, its digests kept out of every
-  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  after the lead, so that pin stays too. So does a pin a summary row in the transcript carries (the fold ties of
+  #389). That covers a folded ruling the principal said again: its lead moves to the later message, and an undo
+  of that message alone leaves the summary row before the lead. The drop is an undo's: logged as counts, its
+  digests kept out of every later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
   transcript lacks it, since a transcript cut short lacks it too (the controls from #817). The check also settles
   an undo before the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next
   turn of a new engine. Not covered now, five cases. A pin said in the session's first message has no lead, so an
   unreported undo of every turn keeps it. An unreported undo waits for a new engine: while the same engine runs the
   session, only a notice drops pins. A compaction between the undo and the new engine's first request keeps the
-  pins too: its summary row replaces part of their leads or comes after them. A lead noted before a compaction changed the rows before the
-  pin stays old until the next request notes it again. A summary row and a handoff file written before the drop
+  pins too: its summary row replaces part of their leads or comes after them. A lead noted before a compaction
+  changed the rows before the pin stays old until the next request notes it again. A summary row and a handoff file written before the drop
   keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI

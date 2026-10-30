@@ -292,9 +292,10 @@ of the user and summary rows before the first principal message that holds it, i
 host's transcript (`conversation_messages`). Each request that sends a transcript notes the leads of the pins it
 holds. The first turn of a session that an engine runs for a host that sends `incoming_message` checks the pins.
 A pin goes when the transcript starts with its lead before the turn's own message, no principal message holds it,
-and no summary row comes after the lead. An undo keeps the rows before the undone turn, so it passes. A transcript
-cut short at its start, a pin said in the session's first message (it has no lead) and a pin a summary row after
-its lead may have folded all stay. The core sends no `incoming_message`, so its requests never check: it reports
+no summary row comes after the lead, and no summary row carries it. An undo keeps the rows before the undone turn,
+so it passes. A transcript cut short at its start, a pin said in the session's first message (it has no lead) and
+a pin a summary row after its lead may have folded all stay. So does a folded pin the principal said again: its
+lead moves to the later message, but the summary row before it still carries the pin. The core sends no `incoming_message`, so its requests never check: it reports
 every undo itself. The same check settles an undo before the engine has seen a turn of that session.
 
 Some cases are not covered. An undo no one reports waits for a new engine: while one engine runs the session, only

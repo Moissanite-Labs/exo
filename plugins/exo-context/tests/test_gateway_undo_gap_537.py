@@ -190,6 +190,31 @@ def test_a_gateway_undo_after_a_compaction_drops_the_tail_ruling_and_keeps_the_f
     assert gw.file()['ruling'] == [NOTE]
 
 
+class Headless:
+    """A host summary that keeps no head row: the summary row opens the transcript."""
+
+    def compress(self, messages, **kwargs):
+        summary = {'role': 'user', '_compressed_summary': True,
+                   'content': f'[CONTEXT COMPACTION] {len(messages) - 1} earlier rows.\n\n' + END_LINE}
+        return [summary, messages[-1]]
+
+
+@pytest.mark.parametrize('inner, again', [(Paraphrase(), f'As I said: {RULING}'), (Headless(), RULING)])
+def test_a_folded_ruling_said_again_stays_after_an_undo_of_the_repeat(inner, again):
+    """A compaction folds the ruling, and the principal says it again later. The pin's lead moves to that later
+    message, so the summary row now comes before the lead. A gateway undo of the later turn leaves the summary row,
+    which still carries the ruling, so the pin stays. Only a pin said in the undone turn alone goes."""
+    gw = Gateway('gw-again-folded-537', inner=inner)
+    for text in ('start the importer', RULING, 'now the parser'):
+        gw.turn(text)
+    gw.compress()
+    for text in ('and the writer', again):
+        gw.turn(text)
+    gw.undo(1)
+    gw.turn('next step')
+    assert gw.file()['ruling'] == [RULING]
+
+
 def test_a_summary_row_after_the_lead_keeps_the_ruling():
     """A compaction may have folded the ruling's message into a summary row after its lead, even one that carries
     none of this engine's blocks (a stock summary), so the pin stays."""

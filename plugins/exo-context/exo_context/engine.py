@@ -604,10 +604,12 @@ class ExoContextEngine(ContextEngine):
         transcript on ``/undo``, builds a new agent and tells no one, so the pins file still holds the undone pins. A
         pin goes only when the host's transcript (``conversation_messages``) starts with the pin's lead (the user and
         summary rows before its message, noted by ``_note_reach``) before the turn's own message, holds the pin in no
-        principal message any more, and has no summary row after the lead, where a compaction may have folded the
-        pin. So a transcript cut short at its start, a pin with no lead (one said in the session's first message, or
-        never seen in a host's transcript) and a pin a compaction may have folded all stay. The drop is an undo's:
-        logged as counts, its digests kept out of every later carry (#592)."""
+        principal message any more, has no summary row after the lead, where a compaction may have folded the pin,
+        and has no summary row that carries the pin (``_folded``). That last test is for a pin a compaction folded
+        and the principal then said again: its lead moved to the later message, so an undo of that message alone
+        leaves the summary row before the lead. So a transcript cut short at its start, a pin with no lead (one said
+        in the session's first message, or never seen in a host's transcript) and a pin a compaction may have folded
+        all stay. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592)."""
         sid, live = self._x_session_id, kwargs.get('conversation_messages')
         if not sid or sid in self._x_ran or kwargs.get('incoming_message') is None or not isinstance(live, list):
             return
@@ -624,11 +626,12 @@ class ExoContextEngine(ContextEngine):
         for i in range(end + 1):  # where each lead ends, before the turn's own message
             if leads[i]:
                 at.setdefault(leads[i], i)
-        now = _holder(rows)
+        now, folded = _holder(rows), self._folded(sid, rows)
 
         def undone(kind: str, text: str) -> bool:
             i = at.get(reach.get(_pin_digest(kind, text), ''))
-            return i is not None and not now(kind, text) and not any(_summary_row(m) for m in rows[i:])
+            return (i is not None and not now(kind, text) and not folded(kind, text)
+                    and not any(_summary_row(m) for m in rows[i:]))
         kept = {k: [t for t in items if not undone(k, t)] for k, items in pins.items()}
         if kept != pins:
             self._rewound(sid, pins, kept, None, set())
