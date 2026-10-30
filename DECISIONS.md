@@ -269,6 +269,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   code or prompt text from it until the licence is known.
 - **Rejected:** recall as an add-on to a growing transcript (the Hermes model; it degrades on long sessions).
 
+- **Amendment 2026-10-29 (#262, #259):** skipped-node rendered text uses a separate bounded LRU helper. It retains at most 256 entries and 1,048,576 characters per context engine. Larger values are returned intact but not cached. Eviction changes only recomputation; messages, summaries, context budgets and public imports are unchanged. Repeated summary queries and delta transactions remain separate work.
+
 ## D-014 (2026-10-12) One surface: terminal feel, app power summoned by the model
 - **A's idea (verbatim in `~/hafiz/nodes/work/exo.md`):** "the core typing and chat area feels just like a
   terminal but all the extra ui elements can be intelligently pulled up by the model when
