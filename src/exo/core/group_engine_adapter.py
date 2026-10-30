@@ -87,8 +87,11 @@ class GroupEngineAdapter:
                 prompt = GroupKnowledge.decorate_prompt(prompt, snapshot)
             except Exception as e:
                 raise AdapterError("group knowledge snapshot unavailable") from e
-        result = await self.engines[member.profile].run_turn(
-            s.TurnSend(session=member.session, text=prompt))
+        # Only the engine turn is bounded, never the message/consume bookkeeping;
+        # the runtime re-checks pause/stop after granting the permit.
+        async with context.turn_slot():
+            result = await self.engines[member.profile].run_turn(
+                s.TurnSend(session=member.session, text=prompt))
         if result.stop_reason == "interrupted":
             raise asyncio.CancelledError
         if result.stop_reason != "end" or result.error:

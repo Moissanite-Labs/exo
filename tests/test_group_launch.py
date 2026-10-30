@@ -382,12 +382,22 @@ def test_start_conversation_forwards_options_without_audiences(home, monkeypatch
         assert len(calls) == 1
         group_id, kwargs = calls[0]
         assert group_id == launch.group.id
-        assert kwargs == {"conversation": options}  # no audiences passed
+        # no audiences passed; the turn bound is forwarded explicitly as None
+        # (full overlap) rather than being left implicit.
+        assert kwargs == {"conversation": options, "max_concurrent": None}
         # the default one-shot start still passes the derived audiences
         launch.start()
         assert len(calls) == 2
-        assert calls[1][1].keys() == {"audiences"}
+        assert calls[1][1].keys() == {"audiences", "max_concurrent"}
         assert calls[1][1]["audiences"] == {"lead": ["one"], "one": ["lead"]}
+        assert calls[1][1]["max_concurrent"] is None
+        # An explicit bound is forwarded verbatim for BOTH start kinds; the
+        # host/runtime does the strict validation, never the launcher.
+        launch.start(conversation=options, max_concurrent=1)
+        launch.start(max_concurrent=1)
+        assert calls[2][1] == {"conversation": options, "max_concurrent": 1}
+        assert calls[3][1] == {"audiences": {"lead": ["one"], "one": ["lead"]},
+                              "max_concurrent": 1}
         with pytest.raises(LaunchError, match="ConversationOptions"):
             launch.start(conversation=object())
     finally:

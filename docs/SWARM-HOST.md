@@ -100,3 +100,30 @@ wait.
 - `reconciliation_required`: `True` when the durable claim is still `active`
   but no local runtime exists. A prior process claimed execution and may
   still hold it, so no start may be attempted until the receipt is reconciled.
+
+## Turn concurrency
+
+`start` and the `conversation=ConversationOptions(...)` opt-in accept an
+optional host turn-concurrency bound. `max_concurrent=None` (the default)
+keeps full member concurrency. A strict `int` in `1..member count` (inclusive)
+bounds how many members may be inside an actual engine turn at once, never the
+member loops themselves. Bounds are validated **before** the engine factory is
+invoked or any durable claim exists. A `bool` is rejected even though it is an
+`int` subclass, and an out-of-range value raises `HostError`.
+
+For a conversation start the `ConversationOptions.max_concurrent` field takes
+precedence when set (not `None`), otherwise the `start` `max_concurrent`
+kwarg is used as the fallback.
+
+The limit is runtime-owned and shared per group across every adapter (one-shot
+and reactive). It wraps only `engine.run_turn` via `turn_slot`, never a whole
+conversation loop, so every member still starts, keeps its claim and observes
+pause/stop between turns. A member waiting for a turn permit reports state
+`queued` rather than `running`, a pause requested while queued prevents the turn
+until resume, a stop requested while queued prevents it permanently, and
+cancellation in the queue or inside the turn releases the permit so peers stay
+unblocked.
+
+This is a turn-concurrency bound only. It is not a spend or token limit, not an
+OS sandbox, and it does not constrain what happens inside engine tools. The
+installed code is unchanged by this documentation-only slice.

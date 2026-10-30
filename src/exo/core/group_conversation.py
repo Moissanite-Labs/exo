@@ -246,17 +246,22 @@ class GroupConversationAdapter:
                 self._outcomes[profile] = ConversationOutcome(
                     profile, self._turns[profile], "error")
                 raise ConversationError("group knowledge snapshot unavailable") from e
-        try:
-            result = await self.engines[profile].run_turn(
-                s.TurnSend(session=member.session, text=prompt))
-        except asyncio.CancelledError:
-            self._outcomes[profile] = ConversationOutcome(profile, self._turns[profile], "cancelled")
-            raise
-        except BaseException as e:
-            # Isolate provider failures: leave every input unconsumed, record
-            # the reason and fail this member without retrying anything.
-            self._outcomes[profile] = ConversationOutcome(profile, self._turns[profile], "error")
-            raise ConversationError("member turn raised") from e
+        # Only the engine turn is bounded, never the publish/consume
+        # bookkeeping and never the whole reactive loop: the runtime
+        # re-checks pause/stop after granting the permit, so a pause requested
+        # while this member queued keeps the turn from starting.
+        async with context.turn_slot():
+            try:
+                result = await self.engines[profile].run_turn(
+                    s.TurnSend(session=member.session, text=prompt))
+            except asyncio.CancelledError:
+                self._outcomes[profile] = ConversationOutcome(profile, self._turns[profile], "cancelled")
+                raise
+            except BaseException as e:
+                # Isolate provider failures: leave every input unconsumed, record
+                # the reason and fail this member without retrying anything.
+                self._outcomes[profile] = ConversationOutcome(profile, self._turns[profile], "error")
+                raise ConversationError("member turn raised") from e
         if result.stop_reason == "interrupted":
             self._outcomes[profile] = ConversationOutcome(profile, self._turns[profile], "cancelled")
             raise asyncio.CancelledError
@@ -297,7 +302,8 @@ class GroupConversationAdapter:
 
 
 def start_conversation(messages, group: SavedGroup, *, owner: str, adapters,
-                       wake: ConversationWake, prompt: str | None = None):
+                       wake: ConversationWake, prompt: str | None = None,
+                       max_concurrent: int | None = None):
     """Start a reactive ``GroupRuntime`` for a conversation adapter.
 
     The host supplies the already-validated ``adapters.adapters()`` mapping and
@@ -307,10 +313,18 @@ def start_conversation(messages, group: SavedGroup, *, owner: str, adapters,
     go idle after the budget, so there is no self-trigger loop. The wake is
     set once after start so initial mailbox input is picked up immediately;
     the host must call ``wake.set()`` after every later accepted send.
+
+    ``max_concurrent`` is an explicit host turn-concurrency bound passed
+    through to ``GroupRuntime``: ``None`` (the default) keeps full member
+    concurrency, otherwise a strict ``int`` in ``1..member count`` bounds how
+    many members may be inside an actual engine turn at once (every loop
+    still runs; only ``run_turn`` is serialized). The bound is validated
+    before the runtime is constructed or any claim is taken.
     """
     from exo.core.group_runtime import GroupRuntime
 
-    runtime = GroupRuntime(messages, group.id, owner=owner, adapters=adapters)
+    runtime = GroupRuntime(messages, group.id, owner=owner, adapters=adapters,
+                           max_concurrent=max_concurrent)
     if prompt is not None:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ConversationError("initial prompt must be explicit non-empty host text")

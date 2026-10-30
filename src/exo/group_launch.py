@@ -192,7 +192,8 @@ class GroupLaunch:
         """Whether the host has fully settled its shared cleanup (store may close)."""
         return self.host._closed  # noqa: SLF001 - same-package launcher
 
-    def start(self, *, conversation: ConversationOptions | None = None) -> tuple:
+    def start(self, *, conversation: ConversationOptions | None = None,
+              max_concurrent: int | None = None) -> tuple:
         """Bind the member engines via the host factory and start the run once.
 
         The default (``conversation=None``) is the one-shot ``GroupEngineAdapter``
@@ -202,12 +203,24 @@ class GroupLaunch:
         *without* ``audiences`` (the host derives them from the stored mode and
         rejects caller-supplied audiences for a conversation start). Bounds are
         validated by the host before the factory is invoked or any claim exists.
+
+        ``max_concurrent`` is an explicit turn-concurrency bound forwarded to
+        ``GroupHost.start`` for both start kinds: ``None`` (the default)
+        preserves full member concurrency; a strict ``int`` in ``1..member
+        count`` bounds how many members may be inside an actual engine turn at
+        once — never the loops, which keep pause/stop responsiveness. For a
+        conversation start the ``ConversationOptions.max_concurrent`` field is
+        the more specific declaration and wins when set; the start-level
+        ``max_concurrent`` is the fallback.
         """
         if conversation is None:
-            return self.host.start(self.group.id, audiences=_audiences_for(self.group))
+            return self.host.start(self.group.id,
+                                   audiences=_audiences_for(self.group),
+                                   max_concurrent=max_concurrent)
         if not isinstance(conversation, ConversationOptions):
             raise LaunchError("conversation must be a ConversationOptions instance or None")
-        return self.host.start(self.group.id, conversation=conversation)
+        return self.host.start(self.group.id, conversation=conversation,
+                               max_concurrent=max_concurrent)
 
     async def wait(self) -> tuple:
         """Await the group's settlement."""
