@@ -21,6 +21,10 @@ The argument is one JSON object after the subcommand name:
 /group pause {"id": "<group>", "member": "one"}
 /group resume {"id": "<group>"}
 /group stop {"id": "<group>"}
+/group knowledge_publish {"id": "<group>", "key": "plan", "text": "...", "sources": ["session:s-1"], "expected_revision": 0}
+/group knowledge_read {"id": "<group>", "member": "lead", "key": "plan"}
+/group knowledge_list {"id": "<group>", "member": "lead", "limit": 100}
+/group knowledge_history {"id": "<group>", "member": "lead", "key": "plan", "limit": 100}
 ```
 
 - `list` — this seat's groups (no fields).
@@ -48,6 +52,51 @@ The argument is one JSON object after the subcommand name:
 - `pause` / `resume` / `stop` — group-wide or member-scoped hooks via
   `member`; `stop` is immediate, not graceful. Host rejections surface
   as `bad_request` with the host's reason.
+
+## Shared knowledge (M02–M04)
+
+`knowledge_publish` / `knowledge_read` / `knowledge_list` /
+`knowledge_history` are the human control surface for
+`exo.core.group_knowledge.GroupKnowledge` (see `docs/SWARM-KNOWLEDGE.md`).
+They are additional subcommands of the existing `group` command; no new
+protocol command is added.
+
+- `knowledge_publish` — owner-only, always as this engine's seat
+  (`eng.agent`). Required `key` (matching
+  `^[a-z0-9][a-z0-9_.-]{0,127}$`), `text` (non-empty, ≤ 100,000
+  characters), and `sources` (a non-empty list of 1–50 unique, non-blank
+  reference strings) are validated by the knowledge module. `sources`
+  must be a JSON array of strings — a bare string is rejected. `text`
+  is stored as given, so no session, memory or mail content is ever
+  collected automatically. `expected_revision` is optional and defaults
+  to `0` (a new key); it must be a nonnegative integer (bools are not
+  integers) and equal the current revision, otherwise the publish is
+  refused as `bad_request` and nothing is written. There is no
+  `publisher` field: a caller cannot publish as another profile.
+- `knowledge_read` — one current item, or `"item": null` for a missing
+  key. Requires an explicit `member`; membership is validated against
+  the stored group by `GroupKnowledge`, so an unknown profile fails
+  closed.
+- `knowledge_list` — the group's current keys in key order; `limit` is a
+  positive integer (≤ 1000, default 100) and `total` reports the full
+  count.
+- `knowledge_history` — every preserved revision of one key, oldest
+  first, with the newest `limit` entries returned and `total` reporting
+  the full count.
+
+These are **human owner views of a member's perspective, not member
+reads**: the owner supplies which member view to inspect, and the
+response carries `"view": "human_owner_view"` so it is never mistaken
+for that member's own retrieval. Owner authority here is metadata
+authority — it is not permission to impersonate a member, and these
+subcommands expose no member-side tool. Automatic member retrieval of
+group knowledge remains an open item: nothing here pushes or delivers
+knowledge to a running member, so members still learn of it only
+through their own explicit reads outside this slice.
+
+Malformed arguments (unknown fields, wrong types, bad keys, empty
+sources, stale revisions) fail with `bad_request` before or at the
+store, following the same conventions as the other subcommands.
 
 ## Fail-closed injection prerequisite
 
