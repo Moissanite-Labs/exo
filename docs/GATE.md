@@ -3532,8 +3532,10 @@ subject are read once per line, with the body and the title. `decide` reads the 
 part, the copies on its other targets among them. Past eight other targets (`_ALTS_IN_FULL`), it reads the line on
 most of them without the copies (`_without_copies`). A copy is a part on its own target with the line's own text,
 so the line on its own target already meets each deny, reserved entry and posting finding it brings. What the
-posting rules list of the copies turns only on the exposure of the line's own target, so the line on the first
-other target of each exposure not met yet keeps the copies, at most one per exposure. The outcome, the exposure,
+posting rules list of the copies turns only on how the policy reads the line's own target: its exposure and third
+party after the scopes, and which target patterns of the policy match it. A rule on some targets can pick the
+line's `$".."` reading, whose own post the posting rules skip, and the copies then list their findings. So the
+line on the first other target of each such reading keeps the copies. The outcome, the exposure,
 the third party, the reserved hits and the findings stay the same, and the work grows with the number of URL
 operands, not with its square. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`.
 It now takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:

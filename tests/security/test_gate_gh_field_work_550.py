@@ -92,3 +92,26 @@ def test_past_eight_other_targets_each_decides_as_with_every_part(monkeypatch, l
     assert (lean.outcome, lean.exposure, lean.third_party) == (full.outcome, full.exposure, full.third_party)
     assert sorted(lean.reserved) == sorted(full.reserved)
     assert not Counter(full.violations) - Counter(lean.violations), (lean.violations, full.violations)
+    assert (lean, lean.hidden) == (full, full.hidden)
+
+
+MIXED = ' '.join(f'https://{host}/pull/{i}' for i, host in
+                 enumerate(['ghe.corp/o/r', 'ghe.other/x/y', 'git.example/a/b'] * 4, start=2))
+
+
+@pytest.mark.parametrize('line', [f'gh pr comment {MIXED} -b $"Zork"', f'gh pr close {MIXED} -c $"Zork"'])
+def test_a_rule_on_some_other_targets_keeps_their_copies(monkeypatch, line):
+    """A `$".."` word is also read as opaque_exec (#136), whose own post the posting rules skip, so its copies list
+    their findings. A rule that denies that reading on some other targets only picks it there, at the exposure the
+    line has on its own target too. So the targets a pattern of the policy matches keep the copies as well, and the
+    finding a copy lists there stays listed (#550)."""
+    c = gate.classify({'tool': 'bash', 'args': {'command': line}})
+    assert len(c.alt_targets) > gate._ALTS_IN_FULL
+    pol = gate.normalize_policies({'gates': {'rules': [{'match': {'target': 'git.example/*',
+                                                                  'category': 'opaque_exec'}, 'decision': 'deny'}]},
+                                   'posting': {'forbid_words': ['Zork']}})
+    lean = gate.decide(c, pol)
+    monkeypatch.setattr(gate, '_ALTS_IN_FULL', 10 ** 6)
+    full = gate.decide(c, pol)
+    assert full.outcome == 'deny' and any(v.endswith(': forbidden word: Zork') for v in full.violations)
+    assert (lean, lean.hidden) == (full, full.hidden)

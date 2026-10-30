@@ -10010,17 +10010,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         # _ALTS_IN_FULL other targets, the line on most of them is decided without the copies of a gh action on its
         # other targets (#550). With them each target cost a pass over every copy, and a line of many URL operands
         # took seconds. Each copy is a part on its own target with the line's own text, so the first decision met it
-        # already and the outcome is the same. What the posting rules list of the copies turns only on the exposure
-        # of the line's own target, so the first other target of each exposure not met yet keeps the copies.
+        # already and the outcome is the same. What the posting rules list of the copies turns only on how the
+        # policy reads the line's own target (_alt_key), so the first other target of each such reading keeps them.
         base = replace(c, alt_targets=[])
         others = [replace(base, target=t) for t in c.alt_targets]
         if len(others) > _ALTS_IN_FULL:
-            lean, scopes = _without_copies(base), pol["gates"].get("scopes") or {}
-            met = {apply_scopes(base, scopes)[0]}
+            lean, scopes, globs = _without_copies(base), pol["gates"].get("scopes") or {}, _target_globs(pol["gates"])
+            met = {_alt_key(base, scopes, globs)}
             for n, one in enumerate(others):
-                exposure = apply_scopes(one, scopes)[0]
-                others[n] = one if exposure not in met else replace(lean, target=one.target)
-                met.add(exposure)
+                key = _alt_key(one, scopes, globs)
+                others[n] = one if key not in met else replace(lean, target=one.target)
+                met.add(key)
         return _strictest([decide(base, pol, ctx)] + [decide(one, pol, ctx) for one in others],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
     if c.displaced is not None:
@@ -10068,6 +10068,27 @@ def _without_copies(c: Classification) -> Classification:
             seen[id(p)] = p if same else replace(p, parts=kids)
         return seen[id(p)]
     return walk(c)
+
+
+def _target_globs(gates: Mapping) -> list:
+    """Each target pattern of the policy's rules and of its deny and reserved entries (#550)."""
+    out: list = []
+    for r in gates.get("rules") or []:
+        out += _as_list(r["match"].get("target", []))
+    for e in [*(gates.get("deny") or []), *(gates.get("reserved") or [])]:
+        if isinstance(e, Mapping):
+            out += _as_list((e["match"] if isinstance(e.get("match"), Mapping) else e).get("target", []))
+        elif (s := str(e).strip()).partition(":")[0] == "target":
+            out.append(s.partition(":")[2].strip())
+    return out
+
+
+def _alt_key(c: Classification, scopes: Mapping, globs: list) -> tuple:
+    """How the policy reads the line's own target (#550): its exposure and third party after the scopes, and which
+    target patterns match it. Nothing else decide reads turns on that target, so the line decides alike on two
+    targets of one key. A rule on one target can pick a reading of the line whose own post the posting rules skip (a
+    `$".."` word read as opaque_exec), and its copies then list their findings: the key keeps such a target apart."""
+    return apply_scopes(c, scopes), tuple(_glob_any(c.target, [g]) for g in globs)
 
 
 def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | None) -> Decision:

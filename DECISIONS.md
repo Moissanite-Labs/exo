@@ -1362,13 +1362,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   own text, so the own text test (#394) reads the same texts, and every raise a copy brings (a deny or reserved
   entry, a cell or rule that denies it alone, a posting finding) is met on the line's own target. So the outcome,
   the exposure, the third party and the reserved hits stay the same. What the posting rules list of the copies
-  turns only on the exposure of the line's own target. So the line on the first other target of each exposure not
-  met yet keeps the copies too, at most one per exposure, and every finding is listed as often as before. Up to
+  turns only on how the policy reads the line's own target (`_alt_key`): its exposure and third party after the
+  scopes, and which target patterns of the rules and of the deny and reserved entries match it. A rule on some
+  targets can pick the line's `$".."` reading (#136), whose own post the posting rules skip, and the copies then
+  list their findings. So the line on the first other target of each such reading not met yet keeps the copies
+  too, and every finding is listed as often as before. The policy's target patterns bound how many there are. Up to
   eight other targets the decision is as before, word for word, so no line gh accepts changes. A close's or
   reopen's comment and a merge's subject are read once per line too, as #920 reads the body and the title.
   Rejected: a cap on URL operands that fails closed past it. A deny on a target past the cap would then only ask,
   and #920's test keeps every target. Rejected too: no copies on any other target. On a line whose targets differ
-  in exposure it listed a finding once where main listed it under a copy's name too. Tests:
+  in exposure it listed a finding once where main listed it under a copy's name too. Rejected as well: one
+  target of each exposure. With a deny rule on `git.example/*` that the `$".."` reading meets, it dropped a copy's
+  finding there, at an equal deny. Tests:
   `tests/security/test_gate_gh_field_work_550.py`,
   `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
   `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
