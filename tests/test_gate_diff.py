@@ -26,6 +26,17 @@ ROOM = "    room, seen, listed = max(_LISTED_VIOLATIONS - len(violations), 0), [
 ONCE = "    named, held = [list(t) for t in zip(*dict.fromkeys(zip(named, held)))] or [[], []]\n"
 
 
+def _function_entry_patch(name: str, statement: str) -> tuple[str, str]:
+    """Mutate the public function entry, not a nested helper's implementation."""
+    text = (ROOT / "src" / "exo" / "gate.py").read_text(encoding="utf-8")
+    function = next(node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name == name)
+    first = function.body[1 if ast.get_docstring(function) is not None else 0]
+    lines = text.splitlines(keepends=True)
+    anchor = "".join(lines[function.lineno - 1:first.lineno - 1])
+    assert anchor and text.count(anchor) == 1
+    return anchor, anchor + " " * first.col_offset + statement + "\n"
+
+
 def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None,
           more: tuple[tuple[str, str], ...] = ()) -> Path:
     tree = tmp_path / name
@@ -950,7 +961,7 @@ HOOK_LOOSENINGS = {
     "decide says block": (_odd_outcome("block"), ["rm -rf build"], {("rm -rf build", ("outcome",))}),
     "NO_GRANT empty": ((('NO_GRANT = ("credentials", "store_write")', "NO_GRANT = ()"),), ["cat ~/.ssh/id_rsa"],
                        {("cat ~/.ssh/id_rsa", ("no_grant", "binds_exact"))}),    # binds_exact reads no_grant
-    "binds_exact false": ((("    q = c.displaced\n", "    return False\n    q = c.displaced\n"),),
+    "binds_exact false": ((_function_entry_patch("binds_exact", "return False"),),
                           ["gh pr comment 3 --body hi"], {("gh pr comment 3 --body hi", ("binds_exact",))}),
     # The hook's check dropped, decide's own reading kept (its unseen-body violation still shows on main).
     "body_unseen dropped": ((("    unseen = body_unseen(eff)\n", "    unseen = _unseen(eff)\n"),
@@ -985,7 +996,7 @@ def test_a_hook_check_that_raises_is_the_hooks_error_card(tmp_path):
     # The hook calls binds_exact in the same try as decide: a raise sends the call to its error path, a once-only
     # ask. So it is a decide error, not a lost check, and it is not lowered against main's ask.
     base = _tree(tmp_path, "base")
-    head = _tree(tmp_path, "head", ("    q = c.displaced\n", "    raise RuntimeError('zz')\n    q = c.displaced\n"))
+    head = _tree(tmp_path, "head", _function_entry_patch("binds_exact", "raise RuntimeError('zz')"))
     corpus = tmp_path / "lines.json"
     corpus.write_text(json.dumps(["gh pr comment 3 --body hi"]), encoding="utf-8")
     proc, rep = _gate_diff(base, head, tmp_path, "--only-corpus", "--no-variants", "--corpus", str(corpus),
