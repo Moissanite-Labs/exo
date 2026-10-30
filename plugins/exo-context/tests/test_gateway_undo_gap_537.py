@@ -1,6 +1,6 @@
 """Gateway undo without a provider notification (#537): the first host turn of a new engine drops a pin the host's
-transcript no longer holds, by the lead noted with the pin, and the controls keep pins after a transcript cut
-short, a compaction and an earlier undo."""
+transcript no longer holds, when the transcript is the one noted last with its tail cut at or before the pin's lead.
+The controls keep pins after a transcript cut short, a compaction and an earlier undo."""
 import gc
 import json
 import re
@@ -29,7 +29,7 @@ def seed(sid):
     engine = ExoContextEngine(write_handoffs=False)
     engine.on_session_start(sid)
     before = [SYS, mine('begin the importer'), {'role': 'assistant', 'content': 'ok'}, mine(RULING)]
-    engine.select_context(before, session_id=sid, conversation_messages=before)
+    engine.select_context(before, session_id=sid, conversation_messages=before, incoming_message=before[-1])
     assert engine._load_pins()['ruling'] == [RULING]
     return engine
 
@@ -129,6 +129,14 @@ class Gateway:
     def compress(self):
         self.history = self.engine.compress(list(self.history), force=True)
 
+    def window(self, n):
+        """The host sends only its last n user turns from now on, under the same session, to a new engine."""
+        users = [i for i, m in enumerate(self.history) if m['role'] == 'user']
+        self.history = self.history[users[-n]:]
+        self.engine = None
+        gc.collect()
+        self.engine = self.agent()
+
     def file(self):
         return json.loads(self.engine._pin_file().read_text())
 
@@ -139,11 +147,40 @@ def test_a_gateway_undo_drops_the_ruling_in_the_new_agent():
         gw.turn(text)
     data = gw.file()
     assert data['ruling'] == [RULING] and all(re.fullmatch('[0-9a-f]{16}', v) for v in data['reach'].values())
+    assert data['leads'] and all(re.fullmatch('[0-9a-f]{16}', v) for v in data['leads'])
     gw.undo(2)
     out = gw.turn('next step')
     assert gw.file()['ruling'] == [] and gw.file()['dropped']
     assert out is None or RULING not in hf.message_text(out[0])
     assert RULING not in gw.engine._pin_file().read_text()
+
+
+@pytest.mark.parametrize('n', [2, 3])
+def test_a_gateway_undo_that_also_takes_earlier_turns_drops_the_ruling(n):
+    """/undo 3 takes the turn before the ruling's as well, so the transcript holds only part of the ruling's lead.
+    It ends where the transcript the engine noted had a lead, before the ruling's, so the ruling goes as for /undo 2."""
+    gw = Gateway('gw-deep-537')
+    for text in ('a first task', 'start the importer', RULING, 'now the parser'):
+        gw.turn(text)
+    gw.undo(n)
+    gw.turn('next step')
+    assert gw.file()['ruling'] == [] and gw.file()['dropped']
+
+
+@pytest.mark.parametrize('turns, kept', [
+    (('continue', RULING, 'continue', 'work on the parser'), 2),
+    (('continue', RULING, 'continue', 'parser', 'tests'), 3),
+    (('yes', 'continue', RULING, 'yes', 'continue', 'parser'), 3),
+])
+def test_a_transcript_cut_short_that_opens_like_the_lead_keeps_the_ruling(turns, kept):
+    """The host sends a new engine only its last turns, and they open with the same words as the ruling's lead. The
+    transcript then goes on past where that lead ended, so it is no undo, and the ruling stays."""
+    gw = Gateway('gw-window-537')
+    for text in turns:
+        gw.turn(text)
+    gw.window(kept)
+    gw.turn('next step')
+    assert gw.file()['ruling'] == [RULING] and not gw.file().get('dropped')
 
 
 def test_a_gateway_undo_of_a_later_turn_keeps_the_ruling():
@@ -261,3 +298,13 @@ def test_a_request_with_no_turn_message_reconciles_nothing():
     fresh = ExoContextEngine(write_handoffs=False)
     fresh.select_context(after, session_id=sid, conversation_messages=after)
     assert fresh._load_pins(sid)['ruling'] == [RULING]
+
+
+def test_a_request_with_no_turn_message_notes_no_lead():
+    """Only a request that can reconcile notes leads, so the core's requests do not pay for them."""
+    engine = ExoContextEngine(write_handoffs=False)
+    engine.on_session_start('gw-core-lead-537')
+    before = [SYS, mine('begin the importer'), {'role': 'assistant', 'content': 'ok'}, mine(RULING)]
+    engine.select_context(before, session_id='gw-core-lead-537', conversation_messages=before)
+    data = json.loads(engine._pin_file().read_text())
+    assert data['ruling'] == [RULING] and 'reach' not in data and 'leads' not in data
