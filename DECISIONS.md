@@ -4605,6 +4605,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the lock is a plain `Lock`, not reentrant. A block that awaited would now hang its thread instead of restoring out
   of order, and a test fails on any `with umask(...)` block in `src` or `plugins` that awaits or yields.
 
+- **Amendment 2026-10-29 (#263):** bus recipient lookups use a derived `(recipient, seq)` index. A one-time backfill and write triggers preserve the signed log unchanged and update the index in the log transaction. Search/FTS, projection, transport pooling and learning-watermark changes remain separate.
+
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
 - **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an

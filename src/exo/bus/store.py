@@ -16,6 +16,19 @@ CREATE INDEX IF NOT EXISTS log_thread ON log(thread);
 CREATE VIEW IF NOT EXISTS head AS SELECT seq, chain AS head FROM log ORDER BY seq DESC LIMIT 1;
 CREATE TABLE IF NOT EXISTS checkpoints (
   seq INTEGER NOT NULL, head TEXT NOT NULL, ts TEXT NOT NULL, doc_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS log_recipients (
+  recipient TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (recipient, seq)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY);
+CREATE TRIGGER IF NOT EXISTS log_recipient_insert AFTER INSERT ON log BEGIN
+  INSERT OR IGNORE INTO log_recipients SELECT value, new.seq FROM json_each(new.to_json);
+END;
+CREATE TRIGGER IF NOT EXISTS log_recipient_update AFTER UPDATE OF to_json ON log BEGIN
+  DELETE FROM log_recipients WHERE seq = old.seq;
+  INSERT OR IGNORE INTO log_recipients SELECT value, new.seq FROM json_each(new.to_json);
+END;
+CREATE TRIGGER IF NOT EXISTS log_recipient_delete AFTER DELETE ON log BEGIN
+  DELETE FROM log_recipients WHERE seq = old.seq;
+END;
 """
 
 COLS = "seq,id,prev,ts,from_seat,to_json,thread,kind,body,enc_json,attach_json,sig,chain,received_at"
@@ -47,7 +60,22 @@ class Store:
         self.db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate_recipients()
         self._lock = threading.Lock()
+
+    def _migrate_recipients(self) -> None:
+        """Backfill once under the same write lock as append; triggers maintain the derived index thereafter."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            if not self.db.execute("SELECT 1 FROM store_migrations WHERE name='recipients-v1'").fetchone():
+                self.db.execute("INSERT OR IGNORE INTO log_recipients SELECT value, log.seq"
+                                " FROM log, json_each(log.to_json)")
+                self.db.execute("INSERT INTO store_migrations VALUES ('recipients-v1')")
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            self.db.close()
+            raise
 
     def head(self) -> tuple[int, str]:
         row = self.db.execute("SELECT seq, head FROM head").fetchone()
@@ -81,19 +109,22 @@ class Store:
 
     def messages(self, since: int = 0, to: str | None = None, thread: str | None = None,
                  limit: int = 200) -> list[dict]:
-        where, params = "seq > ?", [since]
+        where = "seq > ?"
+        params: list[str | int] = [since]
         if to:
-            where += " AND EXISTS (SELECT 1 FROM json_each(log.to_json) WHERE value = ?)"
-            params.append(to)
+            where += " AND seq IN (SELECT seq FROM log_recipients WHERE recipient = ? AND seq > ?)"
+            params.extend((to, since))
         if thread:
             where += " AND thread = ?"
             params.append(thread)
         return self._select(where, tuple(params), limit)
 
     def inbox(self, audiences: list[str], since: int = 0, limit: int = 200) -> list[dict]:
+        if not audiences:
+            return []
         marks = ",".join("?" * len(audiences))
-        return self._select(f"seq > ? AND EXISTS (SELECT 1 FROM json_each(log.to_json) WHERE value IN ({marks}))",
-                            (since, *audiences), limit)
+        return self._select(f"seq IN (SELECT seq FROM log_recipients WHERE recipient IN ({marks}) AND seq > ?)",
+                            (*audiences, since), limit)
 
     def thread(self, thread_id: str, limit: int = 500) -> list[dict]:
         return self._select("thread = ? OR id = ?", (thread_id, thread_id), limit)
