@@ -480,6 +480,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-perm .xc-btn { margin-left: auto; }
 .xc-perm[hidden] { display: none; }
 .xc-prov { max-width: 960px; width: 100%; margin: 0 auto; padding: 22px 18px 40px; display: flex; flex-direction: column; gap: 14px; }
+.xc-prov-slot { display: contents; }
 .xc-prov-lead { color: var(--fg-2); font-size: 13px; max-width: 70ch; }
 .xc-prov-list { border: 1px solid var(--line); background: var(--line); display: grid; gap: 1px; }
 .xc-prow { background: var(--bg-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; border-left: 3px solid transparent; }

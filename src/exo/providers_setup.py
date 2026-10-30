@@ -74,7 +74,7 @@ def custom_provider(name: object, endpoint: object, protocol: object, auth: obje
         raise SetupError("Enter a valid HTTP or HTTPS base URL without spaces.")
     try:
         u = urlsplit(endpoint)
-        if u.scheme not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None \
+        if "?" in endpoint or "#" in endpoint or u.scheme not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None \
                 or u.query or u.fragment or "\\" in u.netloc or u.netloc.endswith(":"):
             raise ValueError()
         _ = u.port

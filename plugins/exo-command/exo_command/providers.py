@@ -3,6 +3,8 @@ HTTP edge and its guard.
 
   GET  /api/providers                  every provider with status (never a key value), ``ready``, ``store``
   GET  /api/providers/models           models for the default picker (from the core); says why when it fails
+  GET  /api/providers/custom           custom provider metadata from the core (never a key value)
+  POST /api/providers/custom           add or explicitly edit a custom provider and optionally store its key
   POST /api/providers/<name>/key       {"key": "..."}  store it; the core is told to reload credentials
   POST /api/providers/<name>/remove    delete the stored key
   POST /api/providers/<name>/test      one tiny live call: latency and error class
@@ -124,7 +126,7 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
         if parts == ["custom"] and method == "GET":
             return 200, {"providers": await _custom_list(centre)}
         if parts == ["custom"] and method == "POST":
-            return 200, await _custom_save(centre, body)
+            return 200, await _custom_save(centre, body, router_factory)
         if parts == ["default"] and method == "POST":
             return 200, await _default(centre, body, router_factory)
         if len(parts) == 2 and method == "POST" and parts[1] in ("key", "remove", "test"):
@@ -192,7 +194,7 @@ async def _custom_list(centre) -> list[dict[str, str]]:
     return sorted(out, key=lambda item: item["name"])
 
 
-async def _custom_save(centre, body: Dict[str, Any]) -> Dict[str, Any]:
+async def _custom_save(centre, body: Dict[str, Any], router_factory: Callable[[], Any]) -> Dict[str, Any]:
     # A key never crosses the core protocol or enters config.json.
     value = body.pop("key", "")
     try:
@@ -207,14 +209,22 @@ async def _custom_save(centre, body: Dict[str, Any]) -> Dict[str, Any]:
             ps.remember_secret(value)
         current = await _custom_config(centre)
         old = current.get(name)
-        if old is not None and (not isinstance(old, dict) or old.get("setup_managed") is not True):
+        replace = body.get("replace", False)
+        if not isinstance(replace, bool):
+            raise ps.SetupError("Replace must be true or false.")
+        if name in current and (not isinstance(old, dict) or old.get("setup_managed") is not True):
             raise ps.SetupError("That provider name already belongs to a manually configured provider.")
+        if name in current and not replace:
+            raise ps.SetupError("A custom provider with that name already exists. Use Edit to change it.")
+        if name not in current and replace:
+            raise ps.SetupError("This custom provider no longer exists. Add it instead.")
         # The core enforces principal authority; never fall back to editing local disk on refusal or outage.
         await centre.source.call(s.ConfigSet(key="models.providers." + name, value=spec))
         result: Dict[str, Any] = {"ok": True, "provider": name, "applies": "next start", "key_saved": False}
         if value:
             try:
-                router = ps.Router(catalog={"providers": {name: spec}})
+                router = await asyncio.to_thread(router_factory)
+                router.providers[name] = spec
                 stored = await asyncio.to_thread(ps.set_key, name, value, router=router)
                 result.update(key_saved=True, stored_in=stored["stored_in"], warning=stored.get("warning", ""))
             except Exception:

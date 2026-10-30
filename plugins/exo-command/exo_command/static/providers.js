@@ -38,6 +38,7 @@ export function mount(root) {
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
   let data = null, models = null, modelsError = null, err = "", picked = "";
   let custom = [], customError = "", editing = null;
+  let layout = null;
 
   // D-091: a failed model list says which failure it was. A transport failure can be retried; an authority
   // refusal cannot, so it gets no button. A failed retry keeps the last good list, so the picker stays usable.
@@ -167,7 +168,7 @@ export function mount(root) {
     const field = (label, input) => h("label", null, h("span", null, label), input);
     const form = h("form", { class: "xc-custom-form", onsubmit: async (e) => {
       e.preventDefault();
-      const request = { name: name.value, endpoint: endpoint.value, protocol: protocol.value, auth: auth.value, model: model.value, key: key.value };
+      const request = { name: name.value, endpoint: endpoint.value, protocol: protocol.value, auth: auth.value, model: model.value, key: key.value, replace: !!editing.existing };
       key.value = "";
       saveButton.disabled = cancelButton.disabled = true;
       try {
@@ -219,18 +220,27 @@ export function mount(root) {
   }
 
   function draw(force = false) {
-    if (editing && !force) return;  // keep the user's in-progress fields through background refreshes
-    if (err) { body.replaceChildren(errorBox(err)); return; }
-    if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
+    if (err) {
+      if (editing && layout) layout.before.replaceChildren(errorBox(err));
+      else { layout = null; body.replaceChildren(errorBox(err)); }
+      return;
+    }
+    if (!data) { layout = null; body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
     const rows = data.providers || [];
     const active = document.activeElement;
     const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
-    if (keep) return;   // never redraw while a key is being typed
+    if (keep && !(active.closest && active.closest(".xc-custom-form"))) return; // preserve other key fields
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
     counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
       ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
-    body.replaceChildren(...[
+    if (!layout) {
+      layout = { before: h("div", { class: "xc-prov-slot" }), custom: h("div", { class: "xc-prov-slot" }),
+        after: h("div", { class: "xc-prov-slot" }) };
+      body.replaceChildren(layout.before, layout.custom, layout.after);
+      force = true;
+    }
+    layout.before.replaceChildren(...[
       h("p", { class: "xc-prov-lead" }, h("span", { class: "xc-led", "data-s": "known", "aria-hidden": "true" }),
         "Keys are stored in " + (STORE_TEXT[data.store] || data.store || "the local store") +
         ". They are sent to this local server once, never shown again, and never kept in the browser."),
@@ -238,8 +248,11 @@ export function mount(root) {
       rows.length ? h("div", { class: "xc-prov-list", role: "list" }, rows.map(row)) : emptyState({ k: "No providers",
         title: "This core knows no model provider yet.",
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
-        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
-      customPanel(), picker()].filter(Boolean));
+        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." })].filter(Boolean));
+    // Keep the actual form node (including focus and password input) during unrelated refreshes.
+    if (force || !editing) layout.custom.replaceChildren(customPanel());
+    const pick = picker();
+    layout.after.replaceChildren(...(pick ? [pick] : []));
   }
 
   draw();

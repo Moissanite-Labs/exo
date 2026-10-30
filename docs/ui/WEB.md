@@ -390,6 +390,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Providers** offers a Google AI Studio Gemini key using Google's OpenAI-compatible endpoint and a custom provider form
   for OpenAI Chat Completions or Anthropic Messages. Custom endpoint settings apply after the core restarts; keys use the
   existing secret store. Endpoint changes use a separate key reference. See `docs/PROVIDERS.md` for protocol and URL limits.
+  Add requires a new name; use Edit to replace an existing entry. Other provider actions can show status while the
+  custom form retains its in-progress fields.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals

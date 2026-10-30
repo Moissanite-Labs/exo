@@ -62,10 +62,12 @@ assert.equal(field("Base URL").value,"https://example.test/v1");
 fail=false; field("Custom provider API key").value="synthetic-key-0123456789";
 await all().find(x=>x.tagName==="FORM" && x.attrs.class==="xc-custom-form").attrs.onsubmit({preventDefault(){}}); await settle();
 assert.match(root.textContent,/Restart the core/); assert.ok(button("Edit demo")); assert.ok(!root.textContent.includes("synthetic-key"));
+assert.equal(attempts.at(-1).replace,false);
 button("Edit demo").attrs.onclick(); assert.equal(field("Model ID").value,"model-one");
 field("Base URL").value="http://127.0.0.1:8000/v1"; field("Authentication").value="none"; field("Model ID").value="model-two";
 await all().find(x=>x.tagName==="FORM" && x.attrs.class==="xc-custom-form").attrs.onsubmit({preventDefault(){}}); await settle();
 assert.equal(attempts.at(-1).endpoint,"http://127.0.0.1:8000/v1"); assert.equal(attempts.at(-1).key,"");
+assert.equal(attempts.at(-1).replace,true);
 assert.match(root.textContent,/model-two/); assert.equal(records[0].auth,"none");
 ''')
     result = subprocess.run([shutil.which("node"), str(tmp_path / "test.mjs")], capture_output=True, text=True, timeout=10)

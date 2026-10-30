@@ -62,10 +62,10 @@ def test_save_edit_and_endpoint_change_do_not_forward_old_key(tmp_path):
     old = src.providers["custom-demo"].copy()
     assert KEY not in json.dumps(old) and KEY not in json.dumps(result)
     assert KEY in (tmp_path / "keys.env").read_text()
-    code, result = call(centre, "POST", {**BASE, "model": "model-two", "key": ""})
+    code, result = call(centre, "POST", {**BASE, "model": "model-two", "key": "", "replace": True})
     assert code == 200 and src.providers["custom-demo"]["key_env"] == old["key_env"]
     assert src.providers["custom-demo"]["setup_model"] == "model-two"
-    code, _ = call(centre, "POST", {**BASE, "endpoint": "https://other.test/v1", "key": ""})
+    code, _ = call(centre, "POST", {**BASE, "endpoint": "https://other.test/v1", "key": "", "replace": True})
     new = src.providers["custom-demo"]
     assert code == 200 and new["key_env"] != old["key_env"]
     assert ps.keys_mod.file_get(new["key_env"]) is None
@@ -78,6 +78,8 @@ def test_save_edit_and_endpoint_change_do_not_forward_old_key(tmp_path):
 @pytest.mark.parametrize("change", [
     {"name": "bad.name"}, {"endpoint": "file:///tmp/a"}, {"endpoint": "https://user:secret@127.0.0.1/v1"},
     {"endpoint": "https://example.test/v1?key=secret"}, {"endpoint": "https://example.test/v1#secret"},
+    {"endpoint": "https://example.test/v1?"}, {"endpoint": "https://example.test/v1#"},
+    {"endpoint": "https://example.test/v1/?#"},
     {"endpoint": "https://example.test:99999/v1"}, {"protocol": "unknown"}, {"auth": "custom-header"},
     {"model": "bad model"}, {"model": "x" * 200}, {"model": "model\x7f"},
 ])
@@ -130,6 +132,43 @@ def test_refusal_or_manual_name_collision_does_not_store_key(tmp_path):
     src.providers["custom-demo"] = {"base_url": "https://manual.test"}
     code, _ = call(Centre(src), "POST", {**BASE, "key": KEY})
     assert code == 400 and src.providers["custom-demo"] == {"base_url": "https://manual.test"}
+
+
+def test_add_collision_requires_explicit_edit_and_rejects_stale_edit():
+    src = Source()
+    centre = Centre(src)
+    assert call(centre, "POST", {**BASE, "auth": "none"})[0] == 200
+    before = src.providers["custom-demo"].copy()
+    code, result = call(centre, "POST", {**BASE, "auth": "none", "endpoint": "https://other.test/v1"})
+    assert code == 400 and "already" in result["error"] and src.providers["custom-demo"] == before
+    assert call(centre, "POST", {**BASE, "auth": "none", "replace": "true"})[0] == 400
+    assert call(centre, "POST", {**BASE, "name": "missing", "auth": "none", "replace": True})[0] == 400
+    assert call(centre, "POST", {**BASE, "auth": "none", "replace": True})[0] == 200
+
+
+def test_custom_key_save_respects_required_spend_policy(tmp_path, monkeypatch):
+    from exo.config import Config
+    from exo.model_spend import SpendJournal
+    home = tmp_path / "home"
+    journal = tmp_path / "spend.sqlite"
+    spend = {"principal": "alice", "journal": str(journal), "journal_id": SpendJournal.provision(journal, "alice"),
+             "daily_usd": "0", "monthly_usd": "0", "routes": {}}
+    cfg = Config.load(home)
+    cfg.set("models.spend", spend)
+    cfg.save()
+    monkeypatch.setenv("EXO_MODEL_SPEND_REQUIRED", "1")
+    monkeypatch.delenv("EXO_MODEL_SPEND_POLICY", raising=False)
+    src = Source()
+    code, result = call(Centre(src), "POST", {**BASE, "key": KEY})
+    assert code == 200 and result["key_saved"] and ps.keys_mod.file_get(src.providers["custom-demo"]["key_env"]) == KEY
+
+
+def test_missing_required_spend_policy_does_not_store_custom_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXO_MODEL_SPEND_REQUIRED", "1")
+    monkeypatch.delenv("EXO_MODEL_SPEND_POLICY", raising=False)
+    code, result = call(Centre(Source()), "POST", {**BASE, "key": KEY})
+    assert code == 200 and not result["key_saved"] and "key could not be stored" in result["warning"]
+    assert not (tmp_path / "keys.env").exists()
 
 
 def test_key_store_failure_reports_partial_save(monkeypatch):

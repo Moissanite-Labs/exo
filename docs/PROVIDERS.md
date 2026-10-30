@@ -262,9 +262,10 @@ available `gemini:model-id` route. No live Google call was made for this change.
 require replaying reasoning or provider-specific tool-call metadata that Exo's Chat Completions adapter does not yet
 preserve; see [issue #616](https://github.com/Moissanite-Labs/exo/issues/616).
 
-**Custom providers in the web/desktop Providers page:** choose **Add custom provider**, enter a name, base URL,
+**Custom providers in the web/desktop Providers page:** choose **Add custom provider**, enter a new name, base URL,
 protocol, authentication and model ID, then optionally enter an API key. Exo supports OpenAI Chat Completions with
 Bearer authentication and Anthropic Messages with `x-api-key`, or no key; an arbitrary API is not necessarily compatible.
+Use **Edit** to change an existing custom provider; adding the same name is refused.
 The OpenAI base includes the API path (often `/v1`); Anthropic uses the service root because Exo adds `/v1/messages`.
 Use HTTPS for remote endpoints: HTTP, including on local networks, sends the key without encryption. URL credentials,
 query strings and fragments are refused. Do not put a key in a URL or model ID.

@@ -22,6 +22,7 @@ def test_custom_provider_form_persists_and_handles_errors(monkeypatch, tmp_path,
     monkeypatch.setenv("EXO_NO_KEYCHAIN", "1")
     monkeypatch.setenv("EXO_NO_SECRET_SERVICE", "1")
     monkeypatch.setattr(ps, "default_store", lambda: "file")
+    monkeypatch.setattr(ps, "test_provider", lambda *a, **kw: {"ok": False, "error_class": "not_running", "detail": "synthetic"})
 
     class Source(ThreadSrc):
         async def call(self, command):
@@ -43,9 +44,14 @@ def test_custom_provider_form_persists_and_handles_errors(monkeypatch, tmp_path,
             browser.eval("[...document.querySelectorAll('button')].find(b=>b.textContent==='Add custom provider').click()")
             assert browser.eval("[...document.querySelectorAll('.xc-custom-form .xc-field')].every(x=>{const r=x.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1})")
             browser.type('[aria-label="Provider name"]', "demo")
+            browser.type('[aria-label="Custom provider API key"]', "synthetic-browser-key-0123456789")
+            browser.eval("[...document.querySelectorAll('.xc-prow')].find(r=>r.querySelector('.xc-prow-name')?.textContent==='ollama').querySelector('button').click()")
+            browser.wait("[...document.querySelectorAll('.xc-prow')].some(r=>r.querySelector('.xc-prow-name')?.textContent==='ollama' && r.querySelector('[role=status]')?.textContent.includes('Test failed'))")
+            assert browser.eval("document.querySelector('[aria-label=\"Provider name\"]').value") == "demo"
+            assert browser.eval("document.querySelector('[aria-label=\"Custom provider API key\"]').value") == "synthetic-browser-key-0123456789"
+            assert browser.eval("document.activeElement === document.querySelector('[aria-label=\"Custom provider API key\"]')")
             browser.type('[aria-label="Base URL"]', "https://example.test/v1?key=bad")
             browser.type('[aria-label="Model ID"]', "model-one")
-            browser.type('[aria-label="Custom provider API key"]', "synthetic-browser-key-0123456789")
             browser.eval("document.querySelector('.xc-custom-form').requestSubmit()")
             browser.wait("document.querySelector('.xc-custom-form [role=status]').textContent.includes('without credentials')")
             assert browser.eval("document.querySelector('[aria-label=\"Custom provider API key\"]').value") == ""
