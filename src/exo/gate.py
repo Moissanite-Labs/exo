@@ -5511,6 +5511,54 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
+    """ssh's own option values that name a file ssh makes on this machine, whatever its remote line runs (#484): its
+    control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a key to (`-o UserKnownHostsFile`) and a
+    forward's socket (`-L`, `-R`, `-o LocalForward`, `-o RemoteForward`). `-F` only reads its file and `-i` is a key.
+    Each comes as (the word that holds the value, the paths it names), and `none` names no path. A value in a word
+    of its own is that word. An attached one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters
+    before the value cut off, when the source spells them as they read. The options are read as _ssh_options reads
+    them, before the host and after it, up to the remote command."""
+    texts, out = [w.text for w in words], []
+
+    def scan(i: int, after: bool) -> int:
+        while i < len(texts) and texts[i].startswith("-") and not (after and texts[i] == "-"):
+            a, i = texts[i], i + 1
+            if a.startswith("--"):
+                if after and a == "--":
+                    break
+                continue
+            v = next((j for j, ch in enumerate(a[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+            if not v or v == len(a) - 1 and i == len(texts):
+                continue
+            if v == len(a) - 1:
+                w, value, i = words[i], texts[i], i + 1
+            else:
+                w, value = words[i - 1], a[v + 1:]
+                if w.raw.startswith(a[:v + 1]):
+                    w = replace(w, text=value, raw=w.raw[v + 1:])
+            key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
+            rest = rest.replace('"', "") if a[v] == "o" else rest
+            if key in ("S", "controlpath", "userknownhostsfile"):
+                paths = rest.split() if key == "userknownhostsfile" else [rest]
+            elif key in ("L", "R", "localforward", "remoteforward"):
+                paths = [p for p in re.split(r"[\s:]", rest) if "/" in p]      # a socket path holds a /
+            else:
+                continue
+            out.append((w, [p for p in paths if p.lower() != "none"]))
+        return i
+
+    scan(scan(1, False) + 1, True)
+    return out
+
+
+def _ssh_file_hits(x: str) -> list[str]:
+    """The store paths in one of ssh's file option values (_shell_hits' find for _ssh_file_words): the value and each
+    piece of it between whitespace, `:`, `=` and `,` (`UserKnownHostsFile=/tmp/kh ~/.exo/state/kh`,
+    `~/.exo/state/sock:localhost:5432`)."""
+    return [p for p in dict.fromkeys([x] + re.split(r"[\s:=,]", x)) if p and _store_word(p)]
+
+
 def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     """Where a builtin's operands start in ``args`` (its words after the name), and the option letters bash surely
     reads before them. `--` ends the options, and so does a word not spelled `-x`, or `+x` when ``plus`` (declare,
@@ -6090,6 +6138,17 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
+    # #484: ssh makes its control socket, the known-hosts file it adds a key to and a forward's socket on this machine
+    # whatever its remote line runs, so the return below must not skip a store path there when every part is a read.
+    # When a part is more than that, the scan below reads these words with the others.
+    if words and words[0].text.rsplit("/", 1)[-1] == "ssh" and all(_store_quiet(p) for p in parts):
+        for w, paths in _ssh_file_words(words):
+            got = _shell_hits(w, seen, "narrow", _ssh_file_hits)
+            hits += [w.text] if got is None else got
+            if _unknown_store(w, seen):
+                hits.append(w.text)
+            if ctx.get("store_cwd") and any(not _expand_text(p).startswith("/") for p in paths):
+                hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a

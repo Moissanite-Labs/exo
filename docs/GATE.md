@@ -2110,7 +2110,7 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   `eval /proc/self/fd/3; gh pr comment 1 --body hi`). A deny cell on the post still denies the
   line (#464). A path that `hash -p` or a `BASH_CMDS` value records makes no store write,
   whatever runs it, so it is kept out of this (#330). The
-  same check reads ssh's own options, such as its log file (`-E`), only when the line ssh runs
+  same check reads ssh's own log file (`-E`) only when the line ssh runs
   is more than reads (#484): `ssh -E ~/.exo/state/log host ls` is allowed. less's log file
   (`-o`, `-O`, `--log-file`) is read the same way: `cat f | less -o ~/.exo/state/y` is allowed.
   A rebind in that line
@@ -3023,6 +3023,22 @@ the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every 
 is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
 (`cp evil.py __init__.py` or `write_file __init__.py` in a session started in `~/.exo/plugins/foo`):
 the store check reads a relative path by its name alone, as for every protected folder (below).
+
+ssh's own files (#484). ssh makes some files on this machine whatever its remote line runs: its
+control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a host key to
+(`-o UserKnownHostsFile`) and the socket of a forward (`-L`, `-R`, `-o LocalForward`,
+`-o RemoteForward`). A store path in one of these values is a `store_write`, also when the remote
+line only reads. So `ssh -S ~/.exo/state/ctl host ls` and
+`ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` ask the principal, and so does a relative value
+after a `cd` into the store (`cd ~/.exo/state && ssh -S ctl host ls`). Before, the store check read
+these words only when the remote line was more than reads. A value is read in each form the store
+check reads a word: attached (`-S~/x`, `-oControlPath=x`), after the host, with `$HOME`, a brace set
+or an expansion. Each path of a `UserKnownHostsFile` list counts. A forward's value is split at `:`,
+so a socket path counts on either side. A value outside the store keeps the line a read
+(`ssh -S /tmp/ctl host ls`), and so does `none`. `-F` and `GlobalKnownHostsFile` only read their
+file, so `ssh -F ~/.exo/state/cfg host ls` stays a read. A line whose remote part is more than reads
+is read as before: the check reads every word of the line. ssh's log file (`-E`) is not covered
+here. It is still a known limit (above), and #919 is open for it.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and

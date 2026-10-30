@@ -1353,6 +1353,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
+  store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
+  file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-o LocalForward`,
+  `-o RemoteForward`). `_store_touch` returned before it read a command's words when every part was a read, and
+  for ssh those parts are its remote line. So `ssh -S ~/.exo/state/ctl host ls`,
+  `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
+  reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
+  it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
+  an expansion the gate cannot spell out). A relative value counts after a `cd` into the store. A line whose remote
+  part is more than reads keeps its reading: the scan reads every word of it. `-F` and `GlobalKnownHostsFile` only
+  read their file and stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919
+  is open for it. *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  *Measured:* main's `scripts/gate_diff.py`, main 49312d41 against this change, built-in corpus and policies:
+  92,524 actions x 88 policies (8,142,112 pairs), 0 lowered. 35,404 pairs on 490 actions tightened, each to
+  `store_write`.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
