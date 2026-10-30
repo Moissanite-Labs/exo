@@ -3526,26 +3526,27 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
 def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: frozenset) -> Classification:
     """A gh command whose subcommand is its third word."""
     target, link, alts = _gh_target(argv, dynamic)
-    c = _gh_kind(argv, cmd, stdin, target, link)
+    fields = _gh_fields(argv, stdin)
+    c = _gh_kind(argv, cmd, stdin, target, link, fields)
     gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
     gh_close = c.category == "github_close" and (argv + ["", ""])[1:3] in (["pr", "close"], ["issue", "close"])
     if (c.category in OUTBOUND or gist or gh_close or c.category == "vcs_merge") and _gh_unseen(argv, stdin, dynamic):
         c.signals.append("unseen_body")
     # #399: the same action on each other target the gate cannot rule out is a part, and decide keeps the strictest.
+    known_targets = {c.target}
     for t, url in alts:
-        alt = _gh_kind(argv, cmd, stdin, t, url)
-        if alt.target not in [c.target] + c.alt_targets:
+        alt = _gh_kind(argv, cmd, stdin, t, url, fields)
+        if alt.target not in known_targets:
+            known_targets.add(alt.target)
             alt.alt_copy = True
             c.parts.append(alt)
             c.alt_targets.append(alt.target)
     return c
 
 
-def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: str) -> Classification:
+def _gh_fields(argv: list[str], stdin: str | None) -> tuple[str, str, str]:
+    """The target-invariant body/title/file fields, parsed once per gh reading set (#550)."""
     group = argv[1] if len(argv) > 1 else ""
-    verb = argv[2] if len(argv) > 2 else ""
-    if group and group not in _GH_GROUPS:
-        return _opaque(f"gh {group} (an alias or extension the gate cannot see)", cmd)
     body_opt, file_opt, title_opt = _gh_text_options(group)
     body = _opt(argv, *body_opt) or ""
     title = _opt(argv, *title_opt) or ""
@@ -3554,6 +3555,16 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
         body_file = ""
         if stdin is not None and not body:
             body = stdin
+    return body, title, body_file
+
+
+def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: str,
+             text_fields: tuple[str, str, str] | None = None) -> Classification:
+    group = argv[1] if len(argv) > 1 else ""
+    verb = argv[2] if len(argv) > 2 else ""
+    if group and group not in _GH_GROUPS:
+        return _opaque(f"gh {group} (an alias or extension the gate cannot see)", cmd)
+    body, title, body_file = text_fields if text_fields is not None else _gh_fields(argv, stdin)
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
     if verb in ("close", "reopen") and group in ("pr", "issue"):

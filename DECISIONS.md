@@ -4224,6 +4224,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
 
+### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
+
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+
+The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
@@ -4726,6 +4732,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
   process-tree sibling, so it skips where `/proc` is unavailable. The existing SIGHUP guard stays. The cleanup
   signal-handler test still runs where SIGHUP is available; gate-diff runtime and gate policy are unchanged.
+- **Amendment 2026-10-29 (#907): a newer push to a pull request cancels its older CI run.** Hosted Actions run
+  again since the repository move, and agents push several times to one pull request. Every push started the
+  full matrix, two macOS jobs of about 30 minutes among it, and the older run kept its runners after a newer push
+  replaced it. At 17:15 UTC on 2026-10-29, 71 `ci` runs were queued, the oldest for 3 hours 20 minutes, and 29
+  of them belonged to a pull request with a newer queued run. `ci.yml` and `gate-preflight.yml` now have a
+  `concurrency` group per pull request with `cancel-in-progress`. A push to main gets a group of its own commit,
+  so main keeps one run per merge and never cancels one. Rejected for now: skipping the test matrix on draft
+  pull requests, which would cut more but changes what a draft's author can rely on.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
