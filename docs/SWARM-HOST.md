@@ -34,6 +34,23 @@ instances itself, and is not an authentication boundary or an OS sandbox.
 - Failed, interrupted or cancelled turns leave inputs pending (no
   acknowledgement, no retry); replies are routed before acknowledgement. This
   is not exactly-once delivery.
+- `aclose` stops and **awaits settlement** of every local runtime before any
+  optional `engine_factory.aclose()` cleanup runs, so engines are never
+  released while a runtime task may still be running. Factory cleanup is
+  optional (the host works fine with a factory that cannot be closed).
+- Factory cleanup is **fail-closed**: a failed factory close keeps the
+  runtimes in place and leaves the failed attempt recorded rather than
+  flipping `closed`. The close may be retried (idempotent), because the
+  settlement has already happened and cleanup alone is retriable.
+- Concurrent `aclose()` callers share **one** in-flight cleanup task: the
+  factory is closed at most once per attempt, and `asyncio.shield` keeps
+  the cleanup running when an individual caller is cancelled. A caller's
+  `CancelledError` therefore says nothing about cleanup; poll `closed`
+  and retry `aclose()` explicitly to await or re-drive it. A failed
+  shared attempt is dropped once retrieved, so an explicit later
+  `aclose()` starts a fresh attempt; a successful close is idempotent.
+- Once closing begins, no new `create` or `start` is accepted: both raise
+  `HostError` ("closing or closed").
 
 ## `status()` API
 
