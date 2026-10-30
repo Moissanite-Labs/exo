@@ -1,15 +1,22 @@
 """Trusted launcher for one swarm group (docs/SWARM-LAUNCH.md).
 
 ``create`` is the one-call trusted-Python path from an explicit profile list to a
-running group: it validates everything up front, assembles the ``GroupHost`` (its
+group: it validates everything up front, assembles the ``GroupHost`` (its
 session store, the authorized profile set and a ``GroupComposition`` engine factory)
 and then builds the owner engine through ``exo.compose.create`` with the injected
 host. It never reads a protocol command, never discovers members implicitly and
 never activates config or environment: the only inputs are the explicit
-``profiles`` (plus the optional ``plugins`` profile) and the ambient ``$EXO_HOME``
-config that ``compose`` already loads. The owner seat is the ``seat`` argument, else
-``$EXO_SEAT`` (read, never set), else ``"default"`` — exactly what ``compose``
-resolves; it must never appear in ``profiles``.
+``profiles`` (plus the optional ``plugins`` profile and the ``mode``/``conductor``
+pair) and the ambient ``$EXO_HOME`` config that ``compose`` already loads. The
+owner seat is the ``seat`` argument, else ``$EXO_SEAT`` (read, never set), else
+``"default"`` — exactly what ``compose`` resolves; it must never appear in
+``profiles``. ``create`` only saves the group definition and builds the owner
+engine: no member engine exists and no model call happens until ``start``.
+
+The two real modes are the ones the core runtime already implements: ``"conductor"``
+(the default; ``conductor`` defaults to the first profile and must be a member) and
+``"socratic"`` (no conductor, and an explicit one is rejected). Audiences are derived
+from the stored mode by the core host — never from model output or message content.
 
 Validation is fail-closed before allocation: profile IDs, owner eligibility and the
 plugin profile are checked before the config is read; named member seats are loaded
@@ -33,7 +40,7 @@ from exo.compose import create as compose_create
 from exo.config import Config
 from exo.core import seats
 from exo.core.group_composition import GroupComposition, GroupPlugins
-from exo.core.group_host import GroupHost
+from exo.core.group_host import ConversationOptions, GroupHost
 from exo.core.groups import GroupStore, SavedGroup
 from exo.core.sessions import SessionStore
 
@@ -77,8 +84,27 @@ def _audiences_for(group: SavedGroup) -> dict[str, list[str]]:
     return {p: [q for q in profiles if q != p] for p in profiles}
 
 
+def _resolve_mode(mode: str, conductor: str | None, names: list[str]) -> tuple[str, str | None]:
+    """Validate the mode/conductor pair before any allocation; return the resolved pair."""
+    if mode not in ("conductor", "socratic"):
+        raise LaunchError("mode must be 'conductor' or 'socratic'")
+    if mode == "socratic":
+        if conductor is not None:
+            raise LaunchError("socratic groups have no conductor")
+        return mode, None
+    if conductor is None:
+        return mode, names[0]  # explicit default: the first profile is the conductor
+    if not isinstance(conductor, str) or not seats.ID_RE.fullmatch(conductor):
+        raise LaunchError(f"conductor {conductor!r} is not a valid profile ID")
+    if conductor not in names:
+        raise LaunchError(f"conductor {conductor!r} must be a group member profile")
+    return mode, conductor
+
+
 def create(seat: str | None = None, *, profiles: Iterable[str],
-           plugins: GroupPlugins | None = None) -> "GroupLaunch":
+           plugins: GroupPlugins | None = None,
+           mode: str = "conductor",
+           conductor: str | None = None) -> "GroupLaunch":
     """Launch one swarm group for the effective owner seat and return a :class:`GroupLaunch`.
 
     ``profiles`` is the explicit, exclusive membership (>= 2 unique seat IDs); the
@@ -86,8 +112,13 @@ def create(seat: str | None = None, *, profiles: Iterable[str],
     member seats are loaded from ``$EXO_HOME/seats`` — no directory scans. Members
     run ``cfg.models()`` against the one shared session DB and the injected
     ``GroupPlugins`` (``None`` means the empty profile: no folders, nothing enabled —
-    plugins are disabled by default). The group is created in conductor mode with the
-    first profile as conductor; call ``GroupLaunch.start`` to bind engines and run it.
+    plugins are disabled by default). The group is created in ``mode`` — the default
+    ``"conductor"`` with ``conductor`` (default: the first profile) as its hub, or
+    ``"socratic"`` with no conductor, where an explicit conductor is rejected. Both
+    the mode and the conductor are validated before the config is read, before the
+    session store is opened and before anything is allocated. This call only saves
+    the group definition and builds the owner engine: no member engine exists and no
+    model call happens until ``GroupLaunch.start``.
     """
     names = _validate_profiles(profiles)
     owner = _effective_owner(seat)
@@ -95,6 +126,7 @@ def create(seat: str | None = None, *, profiles: Iterable[str],
         raise LaunchError(f"owner seat {owner!r} must not be a group member profile")
     if plugins is not None and not isinstance(plugins, GroupPlugins):
         raise LaunchError("plugins must be a GroupPlugins instance or None")
+    mode, conductor = _resolve_mode(mode, conductor, names)
 
     cfg = Config.load()  # ambient $EXO_HOME; never written, never activated here
     loaded = {}
@@ -122,7 +154,7 @@ def create(seat: str | None = None, *, profiles: Iterable[str],
                                        plugins=plugins if plugins is not None else GroupPlugins())
         host = GroupHost(GroupStore(store), owner=owner, known_profiles=frozenset(names),
                          engine_factory=composition)
-        group = host.create(mode="conductor", members=list(names), conductor=names[0])
+        group = host.create(mode=mode, members=list(names), conductor=conductor)
         engine = compose_create(seat, group_host=host)
     except LaunchError:
         store.close()
@@ -160,9 +192,22 @@ class GroupLaunch:
         """Whether the host has fully settled its shared cleanup (store may close)."""
         return self.host._closed  # noqa: SLF001 - same-package launcher
 
-    def start(self) -> tuple:
-        """Bind the member engines via the host factory and start the run once."""
-        return self.host.start(self.group.id, audiences=_audiences_for(self.group))
+    def start(self, *, conversation: ConversationOptions | None = None) -> tuple:
+        """Bind the member engines via the host factory and start the run once.
+
+        The default (``conversation=None``) is the one-shot ``GroupEngineAdapter``
+        with the fixed audiences derived from the stored group mode. Passing an
+        explicit ``ConversationOptions`` starts the bounded reactive conversation
+        instead: the options are forwarded to ``GroupHost.start`` unchanged and
+        *without* ``audiences`` (the host derives them from the stored mode and
+        rejects caller-supplied audiences for a conversation start). Bounds are
+        validated by the host before the factory is invoked or any claim exists.
+        """
+        if conversation is None:
+            return self.host.start(self.group.id, audiences=_audiences_for(self.group))
+        if not isinstance(conversation, ConversationOptions):
+            raise LaunchError("conversation must be a ConversationOptions instance or None")
+        return self.host.start(self.group.id, conversation=conversation)
 
     async def wait(self) -> tuple:
         """Await the group's settlement."""
