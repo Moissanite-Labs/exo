@@ -281,7 +281,7 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 | `register_skill(name, path)` | Adds a skill file. |
 | `get_config(key, default)` | Reads a plugin setting. |
 
-**Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
+**Hooks.** `register_hook` accepts only the names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
 `on_turn_start`, `on_turn_end`, `delegated_approval_validate` and `delegated_approval_audit`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
