@@ -52,6 +52,38 @@ instances itself, and is not an authentication boundary or an OS sandbox.
 - Once closing begins, no new `create` or `start` is accepted: both raise
   `HostError` ("closing or closed").
 
+## Conversation opt-in
+
+Without the opt-in, `start` keeps the exact one-shot
+`GroupEngineAdapter` behavior with caller-supplied `audiences`. With the
+explicit `conversation=ConversationOptions(max_turns=..., idle_timeout=...)`
+opt-in, `start` binds the reactive `GroupConversationAdapter` instead:
+
+- Fixed authorized audiences are derived from the stored group mode
+  (conductor mode: workers target the conductor, the conductor targets its
+  first peer; socratic mode: every member targets all others). Caller
+  `audiences` are then rejected with `HostError`.
+- `max_turns` (int >= 1) and `idle_timeout` (number > 0) are validated
+  **before** the engine factory is invoked or any durable claim exists, so
+  an invalid bound leaves no engines and no claim; the caller may fix the
+  inputs and start once. Without explicit options, the defaults mirror
+  `DEFAULT_MAX_TURNS`/`DEFAULT_IDLE_TIMEOUT`.
+- A per-start `ConversationWake` is created, set once after the successful
+  start (initial mailbox input needs no idle poll) and stored only then; a
+  failed construction closes the unregistered wake and leaves no stored
+  wake.
+- No client activation: a conversation start is a host-side runtime
+  binding only. It constructs no client, connection or UI, sends nothing
+  on the wire, and requires no member presence: member loops idle on
+  durable pending input until a host send sets the wake or a peer reply
+  arrives. Host objects (and this opt-in) are never exposed to models.
+
+A host `send` persists the human message first, then sets the stored wake;
+a member that misses the wake still picks the message up on its bounded
+idle poll. `stop` cancels the member loops; `aclose` settles every runtime
+and then closes each stored wake so no member lingers inside a long idle
+wait.
+
 ## `status()` API
 
 `status(group_id)` returns a structured snapshot dict:

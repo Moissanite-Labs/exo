@@ -11,13 +11,24 @@ It delegates durable claims, pause/stop semantics and receipts to
 ``GroupRuntime``: one claim per group, no automatic retry, no stale-claim
 takeover. A real factory integration (constructing authorized engines) is
 deliberately out of scope for this slice.
+
+An explicit opt-in (``conversation=ConversationOptions(...)`` on ``start``)
+binds the reactive ``GroupConversationAdapter`` instead of the one-shot
+``GroupEngineAdapter``: fixed authorized audiences are derived from the
+stored group mode, explicit ``max_turns``/``idle_timeout`` bounds are
+validated before the factory is invoked or any claim exists, and a host
+``send`` wakes the running conversation after the message is persisted.
+Without the opt-in, ``start`` keeps the exact one-shot default behavior.
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import dataclass
 from typing import Callable, Collection, Mapping
 
+from exo.core.group_conversation import (DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TURNS,
+                                         ConversationWake, GroupConversationAdapter)
 from exo.core.group_engine_adapter import GroupEngineAdapter
 from exo.core.group_execution import GroupExecutions
 from exo.core.group_messages import GroupMessage, GroupMessages
@@ -32,6 +43,21 @@ EngineFactory = Callable[[SavedGroup], Mapping[str, object]]
 
 class HostError(ValueError):
     """Host-level rejection: authorization, unknown group or lifecycle misuse."""
+
+
+@dataclass(frozen=True)
+class ConversationOptions:
+    """Explicit opt-in bounds for a reactive conversation start.
+
+    ``max_turns`` is the per-member budget of successful engine turns and
+    ``idle_timeout`` bounds each no-input wait (a missed wake degrades to
+    this poll, never a lost message). Both are validated before the engine
+    factory is invoked or any durable claim exists. Instances are immutable
+    and reusable; each conversation start owns its own ``ConversationWake``.
+    """
+
+    max_turns: int = DEFAULT_MAX_TURNS
+    idle_timeout: float = DEFAULT_IDLE_TIMEOUT
 
 
 class GroupHost:
@@ -59,6 +85,9 @@ class GroupHost:
         self._profiles = profiles
         self._factory = engine_factory
         self._runtimes: dict[str, GroupRuntime] = {}
+        # Wakes for opt-in conversation runtimes, keyed the same way; a host
+        # ``send`` after an accepted persist wakes the matching conversation.
+        self._wakes: dict[str, ConversationWake] = {}
         # Closing begins the moment aclose() is entered: no new start/create
         # is accepted afterwards. A successful close flips ``_closed`` once;
         # a failed close retains runtimes and drops the in-flight cleanup
@@ -100,8 +129,26 @@ class GroupHost:
             raise HostError("group execution has not started in this process")
         return runtime
 
+    @staticmethod
+    def _audiences_for(group: SavedGroup) -> dict[str, list[str]]:
+        """Fixed authorized audiences derived from the stored group mode.
+
+        Conductor mode: every worker targets exactly the conductor, and the
+        conductor targets its first peer in stored member order. Socratic
+        mode: every member targets all other members. Audiences are never
+        inferred from model output or message content.
+        """
+        profiles = [m.profile for m in group.members]
+        if group.mode == "conductor":
+            conductor = group.conductor
+            first_peer = next(p for p in profiles if p != conductor)
+            return {p: ([conductor] if p != conductor else [first_peer])
+                    for p in profiles}
+        return {p: [q for q in profiles if q != p] for p in profiles}
+
     def start(self, group_id: str, *,
-              audiences: Mapping[str, list[str]]) -> tuple:
+              audiences: Mapping[str, list[str]] | None = None,
+              conversation: ConversationOptions | None = None) -> tuple:
         """Bind authorized engines and claim one durable execution. No retry.
 
         Stored membership is re-validated against the injected profile set
@@ -110,6 +157,16 @@ class GroupHost:
         audience leaves no runtime and no durable claim, so the caller may fix
         inputs and start once. A partial start failure after the claim still
         blocks retry by design (GroupExecutions).
+
+        Default (no ``conversation``) is the one-shot ``GroupEngineAdapter``
+        with caller-supplied ``audiences``. With the explicit
+        ``conversation`` opt-in the fixed authorized audiences are derived
+        from the stored group mode (caller ``audiences`` are then rejected),
+        conversation bounds are validated before the factory is invoked or
+        any claim exists, and the reactive ``GroupConversationAdapter`` is
+        bound with a per-start ``ConversationWake``: accepted host ``send``s
+        and member replies wake the running conversation, while a missed
+        wake degrades to the bounded idle poll.
         """
         self._ensure_accepting()
         group = self._group(group_id)
@@ -119,6 +176,49 @@ class GroupHost:
         if unknown:
             raise HostError("group members outside the injected profile set: "
                             + ", ".join(sorted(unknown)))
+        if conversation is not None:
+            # Validate bounds before the factory is invoked or any claim
+            # exists: an invalid bound leaves no engines and no receipt.
+            # These are the adapter's full preallocation bounds, mirrored
+            # verbatim (the exact-type test also rejects bools, and the
+            # ordered comparisons reject inf/nan) so an out-of-range or
+            # non-finite value never reaches the factory or a claim.
+            if (type(conversation.max_turns) is not int
+                    or not 1 <= conversation.max_turns <= 10000):
+                raise HostError(
+                    "conversation max_turns must be an explicit positive finite budget")
+            if (type(conversation.idle_timeout) not in (int, float)
+                    or not 0 < conversation.idle_timeout <= 86400):
+                raise HostError("conversation idle_timeout must bound the idle wait")
+            if audiences is not None:
+                raise HostError("audiences are derived from the stored group mode "
+                                "for a conversation start; do not pass them")
+            engines = dict(self._factory(group) or {})
+            wake = ConversationWake()
+            try:
+                adapter = GroupConversationAdapter(
+                    group, engines,
+                    audiences=self._audiences_for(group),
+                    wake=wake,
+                    max_turns=conversation.max_turns,
+                    idle_timeout=float(conversation.idle_timeout))
+                runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
+                                       adapters=adapter.adapters())
+                runtime.start()
+            except ValueError as e:
+                # Nothing started: close the unregistered wake so no waiter
+                # lingers, and leave no runtime, no claim and no stored wake.
+                wake.close()
+                raise HostError(str(e)) from e
+            # Same contract as start_conversation: set the wake once after a
+            # successful start so initial mailbox input is picked up without
+            # an idle-timeout wait. The wake is stored only now.
+            wake.set()
+            self._runtimes[group_id] = runtime
+            self._wakes[group_id] = wake
+            return runtime.status()
+        if audiences is None:
+            raise HostError("one-shot start requires explicit audiences")
         engines = dict(self._factory(group) or {})
         try:
             adapter = GroupEngineAdapter(group, engines, audiences=audiences)
@@ -190,13 +290,24 @@ class GroupHost:
             raise HostError(str(e)) from e
 
     def send(self, group_id: str, *, audience: list[str], text: str) -> GroupMessage:
-        """Human message with an explicit audience; never a member tool."""
+        """Human message with an explicit audience; never a member tool.
+
+        The message is persisted first; only after the send is accepted does
+        an opt-in conversation running in this process get woken for its
+        audience. The wake is immediate and in-memory only; persistence is
+        the source of truth, so a member that misses it still picks the
+        message up on its bounded idle poll.
+        """
         group = self._group(group_id)
         try:
-            return self._messages.send_human(group.id, owner=self._owner,
-                                             audience=audience, text=text)
+            message = self._messages.send_human(group.id, owner=self._owner,
+                                                audience=audience, text=text)
         except ValueError as e:
             raise HostError(str(e)) from e
+        wake = self._wakes.get(group.id)
+        if wake is not None:
+            wake.set()
+        return message
 
     def _ensure_accepting(self) -> None:
         """Reject new work once closing has begun."""
@@ -280,6 +391,11 @@ class GroupHost:
                 raise HostError(f"engine factory close failed: {exc}") from exc
 
         self._runtimes.clear()
+        # Wakes are removed on close: closing each unregistered wake wakes any
+        # member still waiting so it exits on its stop flag, never a hang.
+        for wake in self._wakes.values():
+            wake.close()
+        self._wakes.clear()
         self._closed = True
         # Successful close: drop the finished shared task synchronously (no
         # loop tick needed) since ``closed`` now short-circuits new callers.
