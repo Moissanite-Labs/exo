@@ -11,11 +11,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
-- `docs/GATE.md`'s store limits no longer say that the stdin of a `sudo -s` or `sudo -i` shell is not read (#491
-  follow-up). #718 made the gate read it, but the paragraph still called
-  `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store
-  write and a delete, and a stdin the gate cannot read asks. The D-074 amendment says so too, and
-  `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that paragraph and that amendment
+- `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
+  follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
+  `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+  `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
+  file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. D-074's limits say so too,
+  and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that paragraph and those limits
   name. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to

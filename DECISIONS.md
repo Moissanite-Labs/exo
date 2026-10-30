@@ -5642,8 +5642,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
   Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
   gate did not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` was a `read`, as was the same line with `rm -rf`)
-  until #718 (#491) read it. Now `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
-  `sudo -s <<< 'rm -rf ~/.exo/config.json'` are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete.
+  until #718 (#491). The gate now reads the text a line feeds that shell where it can (a here-string, a heredoc, a
+  pipe from `echo`). So `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf ~/.exo/config.json'`
+  are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
+  as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
+  `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
+  and a policy that allows `opaque_exec` lets them run.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
