@@ -10410,10 +10410,9 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
             while j < len(s) and s[j] in " \t":
                 j += 1
             if j < len(s) and s[j] in "},":
-                out[str(k)] = None
-                i = j
-                continue
-            v, i = _flow(s, i + 1)
+                v, i = None, j
+            else:
+                v, i = _flow(s, i + 1)
             out[str(k)] = v
     return _flow_atom(s, i, stop=",]}")
 
