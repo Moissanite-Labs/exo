@@ -18,6 +18,9 @@ read keeps the last good text. A few shorter spellings are accepted (top-level `
 `toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
 does not read are ignored.
 
+When supplied, the top-level `plugins` value or `[plugins] enabled` must be a list; an invalid value stops the
+seat from loading. An empty list enables no plugins, while an omitted value uses the config.json default.
+
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name
 name = "scout"
