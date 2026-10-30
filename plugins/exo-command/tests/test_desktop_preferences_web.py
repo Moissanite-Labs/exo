@@ -528,3 +528,21 @@ def test_hiding_the_page_sends_the_last_reading_position_at_once(event):
             assert got[0] is not None and abs(got[0] - got[1]) < .005, got
     finally:
         srv.close()
+
+
+def test_leaving_chat_sends_the_last_reading_position_at_once():
+    """Leaving Chat unmounts it. The place the reader stopped at is sent then. A throttled save that fires after
+    the unmount sends nothing, so without that send the place would be lost."""
+    srv = Served(ThreadSrc(pairs=60))
+    try:
+        with Browser() as b:
+            restored_and_quiet(b, srv, .2)
+            before = b.eval("savedPrefs.length")
+            want = b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop=Math.round((l.scrollHeight-l.clientHeight)*.7);"
+                          "l.dispatchEvent(new Event('scroll'));location.hash='#tasks';return l.scrollTop/(l.scrollHeight-l.clientHeight);})()")
+            b.wait(f"savedPrefs.slice({before}).some(p=>p.view==='tasks')")
+            b.eval("new Promise(r=>setTimeout(r,400))")
+            got = b.eval(f"savedPrefs.slice({before}).filter(p=>Object.hasOwn(p,'scroll')).at(-1) ?? null")
+            assert got and got['thread'] == 's1' and abs(got['scroll'] - want) < .005, (got, want)
+    finally:
+        srv.close()
