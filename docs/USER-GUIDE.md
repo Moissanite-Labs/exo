@@ -82,6 +82,8 @@ when it joins a core whose seat has another default. A resumed thread keeps its 
 `--max-rounds 0` removes the tool-round cap for new turns sent from this window; a positive number sets a limit.
 This counts tool rounds rather than elapsed time: a large finite limit can also allow a long-running turn.
 `/rounds` works in both the terminal and web composer. It changes the setting for later turns without changing a turn already running.
+
+`/limits` shows the connected core's controls for all conversations and delegated workers. A principal can use `/limits rounds off` or `/limits rounds 60`, and `/limits worker-timeout 15m`, `1h`, `off` or `default`. A core rounds override takes precedence over a window choice. `/limits default` clears both overrides. Running work keeps its admitted limits. The policy resets on core restart. Token budgets, permissions and other safety limits stay in effect. See [Run limits](RUN-LIMITS.md).
 Each web page keeps its own setting until reload; it is not saved to the session. Only a principal connection
 may request an override. A turn with no limit can keep running after its window closes; reopen its thread and use
 `/stop` to interrupt it. Scheduled runs, wakes and delegated children keep their existing limits.
@@ -290,6 +292,10 @@ once, and each has a cap on tool rounds, tokens and time. The briefs and receipt
 You can watch and control them:
 
 - `/tasks` lists them with their status. `/open <task>` shows one's session (read only).
+- In the terminal, a parent shows a separate cue when an active delegated task or nested task needs approval.
+  The cue names the child and gives `/open <task>` to review its own card. It does not focus or answer a card,
+  stop parallel parent work, or extend the parent's permissions. Ordinary forks and unrelated tasks are excluded.
+  A failed metadata refresh labels the cue "last known" until a successful refresh.
 - `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
 - `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.
 - On the web page, the Tasks cards have Open, Steer and Stop buttons.

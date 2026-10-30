@@ -11,7 +11,7 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
-  POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
+  POST /api/chat/sessions/<id>/command     command.run           {name, args}; allowlisted core commands only
   POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
   GET  /api/chat/models                    models.list           the /model picker's choices
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
@@ -47,7 +47,7 @@ from .source import SourceError, core_message
 MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
-READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
+READ_COMMANDS = ("context", "findings", "trace", "limits")   # limits is principal-guarded in the core
 PERMISSION_MODES = ("bypass", "ask", "full")
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
@@ -193,7 +193,18 @@ async def _model(c, p, q, body):
 
 async def _command(c, p, q, body):
     name = _choice(body, "name", READ_COMMANDS)
-    return await c.source.call(s.CommandRun(name=name, args=_str(body, "args", limit=40), session=p[2]))
+    args = _str(body, "args", limit=40)
+    if name == "limits":
+        try:
+            probe = await c.source.call(s.CommandRun(name="limits", args="json", session=p[2]))
+            state = probe.get("output")
+            if not isinstance(state, dict) or state.get("supported") is not True:
+                raise ValueError()
+        except Exception:
+            raise BadRequest("This core does not support /limits. Upgrade the core first.") from None
+        if args.strip() in ("", "status", "json"):
+            return probe
+    return await c.source.call(s.CommandRun(name=name, args=args, session=p[2]))
 
 
 async def _unsteer(c, p, q, body):
@@ -323,7 +334,7 @@ async def _schedule_edit(c, p, q, body):
 
 
 # ---------------------------------------------------------------- completion (D-037)
-WEB_COMMANDS = {"rounds": "tool-round limit for new turns in this window: default|off|number", "context": "what the next model call carries, part by part",
+WEB_COMMANDS = {"limits": "core-wide rounds and delegated-worker deadline: rounds|worker-timeout default|off|number", "rounds": "tool-round limit for new turns in this window: default|off|number", "context": "what the next model call carries, part by part",
                 "model": "pick or set the shared main model; default <ref> saves the default",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",

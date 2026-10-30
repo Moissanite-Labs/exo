@@ -9,7 +9,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Principal `/limits` controls set ephemeral core-wide rounds and worker wall deadlines for new work. Existing running work and independent safety limits remain unchanged.
+
 ### Fixed
+- Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
+  (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
+  scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues.
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.

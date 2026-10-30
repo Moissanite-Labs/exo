@@ -3817,6 +3817,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
@@ -4525,6 +4531,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
   message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+**D-070 amendment (2026-10-30):** The principal may set ephemeral core-wide tool-round and delegated-worker wall limits through `/limits`. New turns and newly started workers snapshot the policy. Existing work keeps its admitted limits. Defaults and window-local `/rounds` remain available, with an explicit core rounds override taking precedence. Token, depth, concurrency, permission and spending limits remain independent. See `docs/RUN-LIMITS.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
 - **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with

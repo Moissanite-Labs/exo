@@ -187,6 +187,15 @@ def memory_status(eng: CoreEngine) -> dict[str, str]:
     return {"state": "on", "provider": mem.name, "text": ""}
 
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
+    if b.name == "limits":
+        if b.args.strip() not in ("", "json", "status"):
+            if not is_principal(current_caller()):
+                raise CommandFailed("forbidden", "only the principal can change core-wide run limits")
+            try:
+                eng.run_limits.update(b.args.strip())
+            except (ValueError, TypeError):
+                raise CommandFailed("bad_request", "usage: /limits rounds|worker-timeout default|off|nonnegative-integer [all], or /limits default") from None
+        return eng.run_limits.status(eng.loop.max_iterations, eng.agents.limits.max_turns, eng.agents.limits.timeout_s)
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
             raise CommandFailed("bad_request", "usage: /context [json]")

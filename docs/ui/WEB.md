@@ -406,3 +406,8 @@ status. Model retry and fallback notices carry `source: model_route` and a `call
 Turn completion clears any remaining route warning, while newer general notices and command errors
 remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
 notices until another status message or thread selection replaces them.
+
+
+### Core-wide run limits
+
+The composer routes `/limits` to the connected core, after a capability probe, and displays its scope and effective limits as a report. It never sends this command as a model turn. The core requires principal authority for changes. Existing `/rounds` remains window-local. See [Run limits](../RUN-LIMITS.md).

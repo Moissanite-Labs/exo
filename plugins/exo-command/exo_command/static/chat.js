@@ -872,7 +872,7 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
-    const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
+    const slash = command && ["context", "findings", "trace", "limits"].includes(command.name) ? [null, command.name, command.args] : null;
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
       input.value = ""; help.sent(text);

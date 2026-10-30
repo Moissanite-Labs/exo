@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from exo import diagnostics, provenance
 from exo.core import trace, workspace
+from exo.core.run_limits import RunLimits, LimitSnapshot
 from exo.core.agents import Delegator
 from exo.core import agentlog
 from exo.core.context import AgentContext, ContextTree, DefaultCompressor, TurnContext, apply_selection as _apply_selection  # noqa: F401 - legacy named export
@@ -227,6 +228,7 @@ class CoreRuntime:
         from exo.core.reasoning import ReasoningSettings
         self.reasoning_settings = ReasoningSettings(self.home, self.agent, self.router)
         self.loop.reasoning_settings = self.reasoning_settings
+        self.run_limits = RunLimits()
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._system_extra
@@ -693,16 +695,18 @@ class CoreRuntime:
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None, max_rounds: int | None = None) -> None:
         if self._closing:
             return
-        task = asyncio.create_task(self.run_turn(b, meta, max_rounds=max_rounds))
+        task = asyncio.create_task(self.run_turn(b, meta, max_rounds=max_rounds, limits_snapshot=self.run_limits.snapshot()))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None,
-                       max_rounds: int | None = None) -> Any:
+                       max_rounds: int | None = None, limits_snapshot: LimitSnapshot | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
         if self._closing and asyncio.current_task() not in self._tasks:
             raise CommandFailed("closed", "the core is shutting down")
+        admitted = limits_snapshot or self.run_limits.snapshot()
+        max_rounds = admitted.rounds_for((loop or self.loop).max_iterations, max_rounds)
         meta = dict(meta or {})
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
@@ -795,7 +799,8 @@ class CoreRuntime:
         return {"tools": self.registry.schemas()}
 
     async def _commands_list(self, b: s.CommandsList) -> dict[str, Any]:
-        own = [{"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
+        own = [{"name": "limits", "description": "principal controls for core-wide round and worker wall limits", "args": "[rounds|worker-timeout default|off|number]"},
+               {"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]

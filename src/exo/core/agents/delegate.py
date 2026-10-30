@@ -313,7 +313,7 @@ class Delegator:
         # no cwd line here: the loop names the child session's cwd (b.cwd) in the system text
         child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
                      e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
-                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
+                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
         child._state = e.loop._state  # one lock, steer queue and running flag per session, whichever loop runs it
@@ -341,6 +341,14 @@ class Delegator:
         provider, model = self.route(b.tier)
         try:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
+                # Snapshot at worker start, after any concurrency wait. Running workers never change.
+                policy = getattr(self.engine, "run_limits", None)
+                if policy is not None:
+                    limits = policy.snapshot()
+                    b = replace(b, max_turns=limits.rounds_for(self.limits.max_turns),
+                                timeout_s=limits.timeout_for(self.limits.timeout_s))
+                    line = encode(b)
+                    db._q("UPDATE tasks SET brief=? WHERE id=?", (line, b.id))
                 loop = self._loop(b, provider, model)
                 info = await loop.create_session(title=f"{b.role}: {b.goal[:60]}", model=model,
                                                  cwd=b.cwd or None, parent=parent or None,

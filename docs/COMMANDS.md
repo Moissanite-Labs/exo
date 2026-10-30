@@ -297,3 +297,8 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 `0` is success. `1` is a failed check (`lint`, `log verify`, `memory`, a failed decision call, an unset `config get`).
 `2` is a usage error from `exo decide` and `exo upstream`. Argument parsing errors exit with `2`, as `argparse` does.
 `exo chat` exits with `130` on ctrl+c. Most other errors print one line and exit.
+
+
+## Core-wide run limits
+
+`/limits [rounds|worker-timeout default|off|number]` controls new work on the connected core through the principal-only `limits` built-in. Worker deadlines also accept `15m` or `1h`. `/limits default` clears both ephemeral overrides. Running work keeps its admitted limits. Clients probe support before mutations. See [Run limits](RUN-LIMITS.md).

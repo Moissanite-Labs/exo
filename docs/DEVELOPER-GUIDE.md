@@ -1051,3 +1051,8 @@ store. If the handler's second argument has a default, add the command to `OPTIO
 The `deepseek` transport extends Chat Completions for first-party thinking history. Its offline fixtures in
 `tests/core/models/test_deepseek.py` cover prior-answer replay, tool-result pairing, usage, discovery and the
 provider's effort mapping. See [First-party DeepSeek API](PROVIDERS.md#first-party-deepseek-api).
+
+
+### Core-wide run-limit controls (D-070 amendment)
+
+The principal-only `limits` built-in updates a process-local policy. Main turns snapshot it at admission, and delegated workers snapshot it at actual startup after concurrency waiting. Status is read-only. Both clients probe support before changing it. Round and worker wall limits are independent of tokens, permissions and spending. See [Run limits](RUN-LIMITS.md) for precedence and fake-provider tests.
