@@ -158,7 +158,6 @@ class Served:
 
 class Browser:
     def __init__(self, width: int = 1440, height: int = 900):
-        from websockets.sync.client import connect
         chrome = find_chrome()
         if not chrome:
             raise RuntimeError("no Chrome found")
@@ -166,12 +165,12 @@ class Browser:
         self.proc = None
         self._stderr = None
         try:
-            self._start(chrome, width, height, connect)
+            self._start(chrome, width, height)
         except BaseException:
             self.close()
             raise
 
-    def _start(self, chrome, width, height, connect):
+    def _start(self, chrome, width, height):
         self.proc = subprocess.Popen(
             # #907: keep a headless page's timers and frames running at full rate, whatever the runner's window state
             [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
@@ -200,6 +199,7 @@ class Browser:
         port = port_file.read_text().split()[0]
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
         page = next(t for t in targets if t.get("type") == "page")
+        from websockets.sync.client import connect
         self._cm = connect(page["webSocketDebuggerUrl"], max_size=None)
         self.ws = self._cm.__enter__()
         self.n = 0

@@ -1,4 +1,5 @@
 """Chrome startup failures report safe diagnostics and clean up their processes."""
+import builtins
 import os
 import sys
 
@@ -14,6 +15,12 @@ def fake_chrome(tmp_path, monkeypatch):
     processes = []
     mkdir = browser.tempfile.mkdtemp
     popen = browser.subprocess.Popen
+    import_module = builtins.__import__
+
+    def no_websockets(name, *args, **kwargs):
+        if name == "websockets" or name.startswith("websockets."):
+            raise ModuleNotFoundError("synthetic missing optional dependency")
+        return import_module(name, *args, **kwargs)
 
     def profile(*args, **kwargs):
         path = mkdir(*args, dir=tmp_path, **kwargs)
@@ -28,6 +35,7 @@ def fake_chrome(tmp_path, monkeypatch):
     monkeypatch.setattr(browser.tempfile, "mkdtemp", profile)
     monkeypatch.setattr(browser.subprocess, "Popen", spawn)
     monkeypatch.setattr(browser, "find_chrome", lambda: str(script))
+    monkeypatch.setattr(builtins, "__import__", no_websockets)
 
     def make(source):
         script.write_text(f"#!{sys.executable}\n" + source)
@@ -92,5 +100,21 @@ def test_error_after_port_creation_still_cleans_up(fake_chrome, monkeypatch):
         raise RuntimeError("synthetic connection error")
     monkeypatch.setattr(browser.urllib.request, "urlopen", fail)
     with pytest.raises(RuntimeError, match="synthetic connection error"):
+        browser.Browser()
+    assert processes[0].poll() is not None and not os.path.exists(profiles[0])
+
+
+def test_missing_connection_dependency_also_cleans_up(fake_chrome, monkeypatch):
+    profiles, processes = fake_chrome(
+        "import pathlib, sys, time\n"
+        "profile = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--user-data-dir='))\n"
+        "pathlib.Path(profile, 'DevToolsActivePort').write_text('12345\\n')\n"
+        "time.sleep(30)\n"
+    )
+    class Response:
+        def read(self):
+            return b'[{"type":"page","webSocketDebuggerUrl":"ws://127.0.0.1/"}]'
+    monkeypatch.setattr(browser.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(ModuleNotFoundError, match="synthetic missing optional dependency"):
         browser.Browser()
     assert processes[0].poll() is not None and not os.path.exists(profiles[0])
