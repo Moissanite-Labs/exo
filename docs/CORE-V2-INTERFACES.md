@@ -8,7 +8,9 @@ additively (new optional fields with defaults). Ask the lead before changing any
 
 - `ContentPart`: type `text/image/reasoning`, text = "", data? (base64), mime?, url?, signature?
   (opaque reasoning token, send back unchanged). Helper `ContentPart.of_text(s)`.
-- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON).
+- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON). Arguments that did not parse as a JSON object
+  arrive as `BadArguments`, an empty dict whose `error` says why. The registry answers that call with an error
+  result and runs no hook and no tool (exo-desktop #52, `docs/TOOLS.md` "Arguments that did not parse").
 - `ToolResult`: call_id, content: list[ContentPart] = [], is_error = False. Helpers `of_text()`, `.text()`.
 - `Message`: role `system/user/assistant/tool`, content: list[ContentPart] = [], tool_calls: list[ToolCall]
   = [], tool_results: list[ToolResult] = [], id?, meta: dict = {} (never sent to a provider).
@@ -24,6 +26,13 @@ additively (new optional fields with defaults). Ask the lead before changing any
   retryable = False, status? (HTTP code), retry_after? (seconds, from the provider).
 - `Provider` (runtime-checkable Protocol): `name: str`;
   `stream(messages, tools, **opts) -> AsyncIterator[ProviderEvent]` (an async generator).
+
+Reasoning levels: the `reasoning` opt (one of the common opts below) is Exo's level, `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max` or `ultra`. Each transport sends only what its API takes, since a 400 ends the call
+with no fallback (exo-desktop #52). OpenAI-compatible transports send `max` and `ultra` as `xhigh`, the top of
+OpenAI's and OpenRouter's scale, and leave out a level they do not know. Anthropic models that take a thinking
+budget get one of at least 1,024 tokens and below `max_tokens`. With a `max_tokens` of 1,024 or less there is no
+room, so thinking stays off.
 
 Provider contract: deltas arrive as `text` / `reasoning`; tool calls arrive whole (`tool_call`, the
 transport assembles argument deltas); `usage` may repeat, last wins; the stream ends with exactly one
