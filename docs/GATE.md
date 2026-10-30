@@ -1467,16 +1467,21 @@ gate does not read:
   text. The regex sees the text as written: an allow rule for `git push` does not match
   `g''it push --force origin main`, and a deny rule for `git push` still denies it. A line the gate
   reads as one part is matched on its command text as before. So is a line of one simple command
-  whose other parts the gate made for it with no own text, a secret path it names
-  (`cat ~/.kube/config`) or a string literal in its code
-  (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
-  different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. There are two exceptions. A line whose text
+  beside a secret path it names (`cat ~/.kube/config`), a part the gate made for it with no own
+  text. No two of its parts have different own texts, so a rule that matches the line names its
+  one command, and the line is decided as before. There are three exceptions. A line whose text
   holds `<<` goes through the own text test (#458), so a rule that names only a here-string or a
   here-doc body lowers nothing: under `categories: {delete: deny}` and an allow rule for
   `npm test`, `rm -rf build <<< 'npm test'` is denied. Where the `<<` starts neither (a quoted
-  `<<`, a shift), the own text is the line's and the line is decided as before.
-  And the part a shell call's own folder added carries the `cd <folder>` stand-in among
+  `<<`, a shift), the own text is the line's and the line is decided as before. A part with no
+  own text other than a secret path is not beside the command as that path is (#458): a string
+  literal in code read as a command (only a guess at a command), a reader a compound feeds
+  (`{ bash; } < f`), a nest past a cap, or the reading of a word bash rejects or the gate cannot
+  read (`echo 'unclosed ; rm -rf ./work`). Where it decides the line or would be stricter alone,
+  no rule keyed on `command` lowers it, on a line of one command as beside a second
+  (`node -e "require('child_process').execSync('gh pr comment 3')"`, an `execute_code` call). A
+  call with no own text at all, a tool other than a shell, is matched on its command text as
+  before. And the part a shell call's own folder added carries the `cd <folder>` stand-in among
   its setters (#516), so a line with it is not one text, and a rule that would lower the line or
   lift the part's deny names the folder, as it names the `cd` in the cd form ("The tool's own
   folder"). A line of one command with a comment and no `<<` is still matched on its whole text,
@@ -1488,8 +1493,9 @@ gate does not read:
   heredoc a shell reads and a `$( )`. In code (`execute_code`, `python -c`) the code part and a
   call the gate recognizes carry the code's text, or the command that runs it
   (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal read as a
-  command (`os.system('rm -rf build')`) has none, so beside another command no `command` rule
-  lowers it: use a category or tool key. A rule written for a whole compound line, such as
+  command (`os.system('rm -rf build')`) has none, so where it decides the line or would be
+  stricter alone no `command` rule lowers it, alone or beside another command (#458): use a
+  category or tool key. A rule written for a whole compound line, such as
   `'^git push origin main && git push origin dev$'`, now has to name each command on it too, for
   example as `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`.
   Until it does, the line gets its matrix or category outcome (here log). The ledger view of a classification

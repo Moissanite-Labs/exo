@@ -6008,6 +6008,15 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   decided as before, so no decision is looser. Rejected: dropping the here-string from the own text with no
   `whole`. Main's `scripts/gate_diff.py` found that draft lowering 20 pairs: under
   `['^ls', '^rm -rf build$']` it allowed `ls; rm -rf build <<< 'npm test'`, which main asks about or denies.
+  A string literal in code that the gate reads as a command has no own text, but it left a line of one command one
+  text, so a rule for the interpreter lowered it: with `opaque_exec: allow` and an allow rule for `^python3 -c`,
+  `python3 -c 'import os; os.system("git push --force origin main")'` was allowed under a force_push deny. Now a part
+  with no own text makes a line not one text, unless it is a secret path the command names (a `credentials` part):
+  the command's own text names that path, while a literal is only a guess at another command. The same holds for the
+  other parts with no own text: a reader a compound feeds (`{ bash; } < f`), a nest past a cap, and the reading of
+  a word bash rejects or the gate cannot read (an unclosed quote, `$(`, `${` or `$((`). So such a part
+  that decides the line, or would be stricter alone, is lowered by no rule keyed on `command`, on a line of one
+  command or in `execute_code` as beside a second command. A category or tool key still lowers it.
   Not done: a line of one command with a comment and no `<<` is still matched on its whole text
   (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
   argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches

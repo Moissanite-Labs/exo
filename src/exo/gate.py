@@ -7403,7 +7403,8 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
     string literals, as in subprocess.run([...])) as a shell command. Only results that matter count.
     The code part and each call found carry `own` as their own text (#394): by default the shell command that runs
     the code (`python3 -c '..'`), or the code itself for execute_code. A literal read as a command is only a guess
-    at one, so no part of its result has own text, and no rule keyed on `command` lowers it."""
+    at one, so no part of its result has own text, and no rule keyed on `command` lowers it, on a line of one command
+    too (#458, _one_text)."""
     if own is ...:
         slot = _own_text.get()
         own = slot[0] if slot is not None else code
@@ -7411,8 +7412,9 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
 
 
 def _unowned(c: Classification, seen: dict[int, Classification]) -> Classification:
-    """``c`` and the parts it was built from, without own text or setters (#394), so code with a literal stays one
-    text for _one_text however the literal reads. Parts shared within ``c`` stay shared."""
+    """``c`` and the parts it was built from, without own text or setters (#394): a setter in a literal runs in the
+    shell the code starts, not in the line around it. Each part with no own text makes the line not one text for
+    _one_text (#458). Parts shared within ``c`` stay shared."""
     if id(c) not in seen:
         seen[id(c)] = replace(c, own=None, setters=[], parts=[_unowned(p, seen) for p in c.parts])
     return seen[id(c)]
@@ -9774,16 +9776,25 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
 
 def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
-    parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
-    its code). A call with no own text at all (a tool other than a shell or execute_code) is one text too.
+    secret path it names, a part the gate made for it with no own text (`cat ~/.kube/config`). A call with no own
+    text at all (a tool other than a shell or execute_code) is one text too.
+    Any other part with no own text makes the line not one text (#458): a string literal in code read as a command
+    (only a guess at one), a reader a compound feeds, a nest past a cap, the reading of a word bash rejects or the
+    gate cannot read (`echo 'unclosed ; rm -rf ./work`). Where such a part decides the line or would be stricter
+    alone, no rule keyed on `command` lowers it, as beside a second command: `python3 -c 'import os;
+    os.system("git push --force origin main")'` under an allow rule for `^python3 -c`.
     Nor is a line whose text holds `<<` (#458): a here-string's word and a here-doc's body are stdin, not the
     command's own text, so a rule that would lower the line must name that text, as on a line of two commands. Where
     the `<<` starts neither (a quoted `<<`, a shift), the own text is the line's, and the pass decides as before.
     The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516), so a line
     with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as it names
     the `cd` in the cd form; naming the folder lifts no deny of the part's."""
-    texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
-    return not texts or (len(texts) < 2 and "<<" not in c.command)
+    texts: set[str] = set()
+    guess = False
+    for p in _each_part(c):
+        guess = guess or (p.own is None and p.category != "credentials")
+        texts.update(t for t in (p.own, *p.setters) if t is not None)
+    return not texts or (len(texts) < 2 and not guess and "<<" not in c.command)
 
 
 def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
@@ -10012,12 +10023,13 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
-    command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
-    folder added is on it. That part carries a `_StandIn` for `cd <folder>` among its setters (#516), so the line
-    goes through the own text pass: a rule that names only the command is passed over, and the part's matrix deny
-    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of. A line whose text holds
-    `<<` goes through that pass too (#458): a here-string's word and a here-doc's body are not the command's own text,
-    so a rule that names only them lowers nothing.
+    command, beside the secret paths it names, is decided as before (_one_text). Any other part with no own text (a
+    string literal in its code read as a command, a reader a compound feeds, a word bash rejects) makes the line go
+    through the own text pass (#458). So does the part the call's own folder added, which carries a `_StandIn` for
+    `cd <folder>` among its setters (#516): a rule that names only the command is passed over, and the part's matrix
+    deny stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of. A line whose text
+    holds `<<` goes through that pass too (#458): a here-string's word and a here-doc's body are not the command's
+    own text, so a rule that names only them lowers nothing.
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
