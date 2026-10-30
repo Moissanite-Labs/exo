@@ -347,8 +347,9 @@ file. A core's own failure is shown in its own words, with no exception class na
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
 A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
 "Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
-section, so focus then moves to "Try again" if the retry failed again, or to the model select if it worked.
-Focus moved out of the Providers panel while the retry ran stays where it is.
+section, so focus then moves to "Try again" when it is offered again, or else to the model select. A refusal
+with no list leaves neither, so focus moves to the refusal message. An empty list removes the section, so focus
+moves to the workspace. Focus moved out of the Providers panel while the retry ran stays where it is.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.

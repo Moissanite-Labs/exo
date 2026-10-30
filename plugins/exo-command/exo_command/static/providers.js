@@ -59,7 +59,8 @@ export function mount(root) {
   }
 
   // A retry redraws the section, which drops the focused Try again button. If focus is still lost after the
-  // reply, it goes to Try again when the retry failed again, else to the model select that stays.
+  // reply, it goes to Try again when that is drawn again, else to the model select. A refusal with no list
+  // leaves neither, so its message takes focus. With no section left, the workspace takes it.
   async function retryModels() {
     modelsError = null;
     if (alive) draw();
@@ -67,8 +68,10 @@ export function mount(root) {
     if (alive) draw();
     if (!alive || document.activeElement !== document.body) return;
     const again = [...body.querySelectorAll(".xc-prov-def button")].find((b) => b.textContent === "Try again");
-    const next = again || body.querySelector(".xc-prov-def select");
-    if (next) next.focus();
+    const note = body.querySelector(".xc-prov-def .xc-warn");
+    const next = again || body.querySelector(".xc-prov-def select") || note || root;
+    if (next === note) note.tabIndex = -1;
+    next.focus();
   }
 
   function show(name, text, cls) { results[name] = { text, cls }; if (alive) draw(); }
