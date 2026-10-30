@@ -345,7 +345,11 @@ in whichever agent the host built then (#389, #580). A compression move carries 
 listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
 `exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it. A host with no
 agent left reports `exo.host_undo.report(session)` itself, which reaches the engines still registered for the
-session (#580).
+session (#580). A host that reports no undo at all, such as Hermes's messaging gateway, is covered when it sends
+its whole transcript as `conversation_messages` and the turn's message as `incoming_message`. The first such turn
+of a session in a new engine drops a pin whose lead the transcript starts with but whose message it no longer
+holds (#537). A host that trims the start of its transcript drops nothing that way, and one that edits an earlier
+user row keeps the pins after it.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat

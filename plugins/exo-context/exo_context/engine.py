@@ -19,7 +19,10 @@ waits for the session's next turn in ``exo.host_undo``, not in one engine (#580)
 turn, whichever agent Hermes built it on, drops the earlier turns' pins from the turn's transcript. A pin whose
 message a compaction folded stays while the host's transcript still holds that summary row, before the undo as
 after it: a compress that folded the window's first row notes the fold with the pins, and an undo after it counts
-that row as reaching back (#581).
+that row as reaching back (#581). An undo no one reports (Hermes's messaging gateway cuts its transcript and builds
+a new agent) is settled by the first turn of the session that a new engine runs for the host: the pins file keeps
+each pin's lead, the rows before its message, and a transcript that starts with the lead but holds the pin no more
+drops it (#537).
 
 On a flat message list (``compress``, used by hosts and tools):
 1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
@@ -153,6 +156,23 @@ def _part_of(first: str, msg: dict[str, Any]) -> bool:
     return text == first or (END_MARKER in text and text.strip() in first)
 
 
+def _summary_row(msg: dict[str, Any]) -> bool:
+    """Is `msg` a compaction's summary row (a host's or this engine's), in any role but system?"""
+    return msg.get('role') != 'system' and (bool(msg.get(SUMMARY_FLAG)) or hf.is_summary_text(hf.message_text(msg)))
+
+
+def _leads(rows: list[dict[str, Any]]) -> list[str]:
+    """For each place in `rows`, before each row and after the last, a digest of the user and summary rows before
+    it, in order from the start, or '' when there are none. Where a pin's message was, this is the pin's lead: a
+    transcript that starts with the same rows reaches back to it, and one cut short at its start does not (#537)."""
+    out, lead = [], ''
+    for m in rows:
+        out.append(lead)
+        if m.get('role') == 'user' or _summary_row(m):
+            lead = _digest(lead + ' ' + _digest(hf.message_text(m)))
+    return out + [lead]
+
+
 def _proxy(name: str) -> property:
     default = getattr(ContextEngine, name, 0)
 
@@ -225,6 +245,8 @@ class ExoContextEngine(ContextEngine):
         # compress before the undo noted for that row)
         d['_x_undo'] = None
         d['_x_turn'] = 0  # host_undo's number for the last turn of the window's session that this engine saw
+        d['_x_reach'] = {}  # session -> {digest of a pin: its lead in the host's transcript (_leads)} (#537)
+        d['_x_ran'] = set()  # the sessions this engine has run a host's turn of: the first one reconciles (#537)
         host_undo.listen(self)  # a host's undo reaches the engine only through exo-memory (#389)
 
     # --- attribute routing ---------------------------------------------------------
@@ -576,6 +598,67 @@ class ExoContextEngine(ContextEngine):
         if kept != pins:
             self._rewound(sid, pins, kept, None, set())
 
+    def _reconcile(self, kwargs: dict[str, Any]) -> None:
+        """The first turn of a session that this engine runs for a host that sends the turn's ``incoming_message``
+        (Hermes): drop each pin the host undid without a notice (#537). Hermes's messaging gateway cuts its
+        transcript on ``/undo``, builds a new agent and tells no one, so the pins file still holds the undone pins. A
+        pin goes only when the host's transcript (``conversation_messages``) starts with the pin's lead (the user and
+        summary rows before its message, noted by ``_note_reach``) before the turn's own message, holds the pin in no
+        principal message any more, and has no summary row after the lead, where a compaction may have folded the
+        pin. So a transcript cut short at its start, a pin with no lead (one said in the session's first message, or
+        never seen in a host's transcript) and a pin a compaction may have folded all stay. The drop is an undo's:
+        logged as counts, its digests kept out of every later carry (#592)."""
+        sid, live = self._x_session_id, kwargs.get('conversation_messages')
+        if not sid or sid in self._x_ran or kwargs.get('incoming_message') is None or not isinstance(live, list):
+            return
+        self._x_ran.add(sid)
+        pins = self._load_pins(sid, fresh=True)
+        reach = self._x_reach.get(sid) or {}
+        if not reach:
+            return
+        rows = [m for m in live if isinstance(m, dict)]
+        own, users = kwargs['incoming_message'], [i for i, m in enumerate(rows) if m.get('role') == 'user']
+        own = hf.message_text(own) if isinstance(own, dict) else str(own)
+        end = users[-1] if users and hf.message_text(rows[users[-1]]) == own else len(rows)
+        leads, at = _leads(rows), {}
+        for i in range(end + 1):  # where each lead ends, before the turn's own message
+            if leads[i]:
+                at.setdefault(leads[i], i)
+        now = _holder(rows)
+
+        def undone(kind: str, text: str) -> bool:
+            i = at.get(reach.get(_pin_digest(kind, text), ''))
+            return i is not None and not now(kind, text) and not any(_summary_row(m) for m in rows[i:])
+        kept = {k: [t for t in items if not undone(k, t)] for k, items in pins.items()}
+        if kept != pins:
+            self._rewound(sid, pins, kept, None, set())
+
+    def _note_reach(self, live: Any, pins: dict[str, list[str]]) -> None:
+        """Note each pin's lead in the host's transcript (``conversation_messages``), at the first principal message
+        that holds it, so the first turn of a later engine can tell an undo from a transcript cut short (#537). A pin
+        the transcript does not hold keeps the lead noted while it did, and one held by the first row has none. The
+        pins file keeps the leads as digests, no text."""
+        if not isinstance(live, list) or not any(pins.values()):
+            return
+        sid, rows = self._x_session_id, [m for m in live if isinstance(m, dict)]
+        leads = _leads(rows)
+        said = [(i, hf.Signal('', hf.strip_pinned(hf.message_text(m))).key())
+                for i, m in enumerate(provenance.principal_view(rows)) if m.get('role') == 'user']
+        reach = self._x_reach.setdefault(sid, {})
+        before = dict(reach)
+        for kind, items in pins.items():
+            for text in items:
+                key = hf.Signal(kind, text).key()
+                at = next((i for i, u in said if key in u), None)
+                if at is None:
+                    continue
+                if leads[at]:
+                    reach[_pin_digest(kind, text)] = leads[at]
+                else:
+                    reach.pop(_pin_digest(kind, text), None)
+        if reach != before:
+            self._save_pins(pins, sid)
+
     def _folded(self, sid: str, messages: list[dict[str, Any]]) -> Callable[[str, str], bool]:
         """Does a summary row in `messages` carry the pin (kind, text)? One does when a compaction folded the pin's
         message and wrote the row's block, or wrote that block over an earlier row that carried the pin."""
@@ -616,6 +699,7 @@ class ExoContextEngine(ContextEngine):
     def select_context(self, request_messages: list[dict[str, Any]], **kwargs: Any):
         self._bind(kwargs.get('session_id'))
         self._after_undo(kwargs)  # a pending undo waits in exo.host_undo for this session's next turn (#580)
+        self._reconcile(kwargs)  # an undo no one reported, on this engine's first turn of the session (#537)
         selected = None
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
@@ -625,6 +709,7 @@ class ExoContextEngine(ContextEngine):
         full = self._block_for(pins)
         self._x_messages = list(msgs) + ([{'role': 'system', 'content': full}] if full else [])
         self._saw(self._x_session_id)
+        self._note_reach(kwargs.get('conversation_messages'), pins)
         parts = [self._block_for(hidden, self._x_last_handoff) if hidden else '', self._x_resume_block]
         extra = '\n\n'.join(p for p in parts if p)
         if not extra:
@@ -662,6 +747,9 @@ class ExoContextEngine(ContextEngine):
                 noted = data.get('first_row')  # what a compress noted as folding the window's first row (#581)
                 self._x_firstrow[sid] = {str(r): [str(x) for x in blocks] for r, blocks in noted.items()
                                          if isinstance(blocks, list)} if isinstance(noted, dict) else {}
+                reach = data.get('reach')  # each pin's lead in the host's transcript (#537)
+                self._x_reach[sid] = {str(d): lead for d, lead in reach.items()
+                                      if isinstance(lead, str) and lead} if isinstance(reach, dict) else {}
             except (OSError, ValueError, AttributeError, TypeError):
                 pins = self._x_pins.get(sid) or {'ruling': [], 'correction': [], 'open_decision': []}
             self._x_pins[sid] = pins
@@ -696,13 +784,14 @@ class ExoContextEngine(ContextEngine):
 
     def _save_pins(self, pins: dict[str, list[str]], sid: str | None = None) -> None:
         """Write this session's pins, the folded ones among them as digests with the blocks they ride (#389), what
-        an undo dropped, as digests (#592), and the noted first row (#581). A digest of a pin live again leaves the
-        dropped list."""
+        an undo dropped, as digests (#592), the noted first row (#581) and each pin's lead (#537). A digest of a pin
+        live again leaves the dropped list."""
         sid = self._x_session_id if sid is None else sid
         names = {_pin_digest(k, t) for k, items in pins.items() for t in items}
         folded = self._x_folded[sid] = {d: v for d, v in self._x_folded.get(sid, {}).items() if d in names}
         dropped = self._x_dropped[sid] = {d for d in self._x_dropped.get(sid, set()) if d not in names}
         noted = self._x_firstrow.get(sid) or {}
+        reach = self._x_reach[sid] = {d: v for d, v in self._x_reach.get(sid, {}).items() if d in names}
         try:
             path = self._pin_file(sid)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -713,6 +802,8 @@ class ExoContextEngine(ContextEngine):
                 data['dropped'] = sorted(dropped)
             if noted:
                 data['first_row'] = noted
+            if reach:
+                data['reach'] = reach
             path.write_text(json.dumps(data), encoding='utf-8')
         except OSError as e:
             logger.warning('exo-context: could not save pins: %s', e)

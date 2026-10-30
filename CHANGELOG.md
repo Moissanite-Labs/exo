@@ -34,6 +34,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
   It now draws an answer only when it was asked after the list on screen. This was the intermittent failure of
   `test_first_submission_recovery_belongs_to_created_thread_after_remount` (#859).
+- A ruling removed by Hermes's messaging gateway `/undo` no longer comes back as the principal's pinned words
+  (#537). The gateway cuts its transcript and drops the cached agent without telling anyone, so the new agent's
+  exo-context read the ruling back from the pins file. Each pin now has a lead in that file, a digest of the rows
+  before its message. The first turn of a new engine drops a pin when the host's transcript starts with its lead
+  but no longer holds it, and no summary row comes after the lead. A transcript cut short at its start, a folded
+  pin and a ruling in the session's first message stay. The same turn settles a CLI `/undo` in the no-agent gap.
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable

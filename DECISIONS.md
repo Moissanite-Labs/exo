@@ -4489,6 +4489,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-25 (#389):* the survival sentence of the #385 amendment holds until an undo, the core's or a
   host's, removes the turn a pin came from. The D-041 amendment of 2026-10-24 has the details.
+  *Amendment 2026-10-30 (#537):* that includes an undo the host does not report, such as the messaging gateway's.
+  The first turn of a new engine checks the pins against the host's transcript. The D-041 amendment's 2026-10-30
+  note has the details.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -4727,6 +4730,26 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
   can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
   the ruling as written until the next compaction.
+  *2026-10-30 note (#537):* Hermes's messaging gateway cuts its transcript on `/undo`, drops the cached agent and
+  tells no one. The new agent's engine read the undone ruling back from the pins file, and its block, summaries and
+  handoffs carried it again. Each pin now has a lead in the pins file. The lead is a digest of the user and summary
+  rows that come before the first principal message holding the pin, in order from the start of the host's
+  transcript (`conversation_messages`). Each request that sends a transcript notes the lead of every pin the
+  transcript holds. The first turn of a session that an engine runs for a host that sends `incoming_message`
+  (Hermes does, the core does not) checks the pins against the transcript. A pin goes when the transcript starts
+  with its lead before the turn's own message, no principal message holds the pin, and no summary row comes after
+  the lead. An undo keeps the rows before the undone turn, so it passes. A transcript cut short at its start does
+  not start with the lead, so it drops nothing. A compaction that folded the pin's message leaves a summary row
+  after the lead, so that pin stays too. The drop is an undo's: logged as counts, its digests kept out of every
+  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  transcript lacks it, since a transcript cut short lacks it too (the controls from #817). The check also settles
+  an undo before the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next
+  turn of a new engine. Not covered now, five cases. A pin said in the session's first message has no lead, so an
+  unreported undo of every turn keeps it. An unreported undo waits for a new engine: while the same engine runs the
+  session, only a notice drops pins. A compaction between the undo and the new engine's first request keeps the
+  pins too: its summary row replaces part of their leads or comes after them. A lead noted before a compaction changed the rows before the
+  pin stays old until the next request notes it again. A summary row and a handoff file written before the drop
+  keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its

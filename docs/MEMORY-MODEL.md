@@ -285,14 +285,24 @@ The pins file now keeps the digests of what an undo dropped beside the folded pi
 parent pin whose digest is there. A first bind still inherits, a pin the child still holds carries as before, and
 a ruling said again after the undo is pinned again, so only its undone copy stays out.
 
-Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
-agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. Its `/undo` would reach the
-engines still registered for the session through `exo.host_undo.report(session)`, one call the CLI does not make
-yet (#580). Once no engine is registered any more, nothing holds the window, so nothing can tell which pins the
-undone turns held. A host that runs exo-context
-without exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it
-started finds no window. A `/compress` between the last turn and the undo can keep the earlier undone turns' pins.
-A summary row or handoff file written before the drop keeps the ruling until the next compaction.
+An undo no one reports is settled by the next new engine (#537). Hermes's messaging gateway tells no one about
+`/undo`: it cuts its transcript and drops the cached agent. Nor does the CLI while it has no agent, from a command
+such as `/reasoning`, `/fast` or `/personality` to the next turn. So each pin has a lead in the pins file: a digest
+of the user and summary rows before the first principal message that holds it, in order from the start of the
+host's transcript (`conversation_messages`). Each request that sends a transcript notes the leads of the pins it
+holds. The first turn of a session that an engine runs for a host that sends `incoming_message` checks the pins.
+A pin goes when the transcript starts with its lead before the turn's own message, no principal message holds it,
+and no summary row comes after the lead. An undo keeps the rows before the undone turn, so it passes. A transcript
+cut short at its start, a pin said in the session's first message (it has no lead) and a pin a summary row after
+its lead may have folded all stay. The core sends no `incoming_message`, so its requests never check: it reports
+every undo itself. The same check settles an undo before the engine has seen a turn of that session.
+
+Some cases are not covered. An undo no one reports waits for a new engine: while one engine runs the session, only
+a notice drops pins. A host that runs exo-context without exo-memory passes no notice, so its undo waits the same
+way. A compaction between such an undo and the new engine's first request keeps the pins. A pin said in the
+session's first message stays after an undo of every turn. A `/compress` between the last turn and the undo can
+keep the earlier undone turns' pins. A summary row or handoff file written before the drop keeps the ruling until
+the next compaction.
 
 ## Who wrote it: every message has an author (D-040)
 
