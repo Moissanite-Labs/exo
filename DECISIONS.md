@@ -269,6 +269,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   code or prompt text from it until the licence is known.
 - **Rejected:** recall as an add-on to a growing transcript (the Hermes model; it degrades on long sessions).
 
+- **Amendment 2026-10-29 (#254):** positive context transcript windows use `SessionStore.last_messages`, a descending indexed query followed by chronological decoding. Hidden rows and other sessions remain excluded. Legacy custom stores and non-positive slice semantics keep the existing fallback. Event paging and the remaining session/store paths are separate work.
+
 ## D-014 (2026-10-12) One surface: terminal feel, app power summoned by the model
 - **A's idea (verbatim in `~/hafiz/nodes/work/exo.md`):** "the core typing and chat area feels just like a
   terminal but all the extra ui elements can be intelligently pulled up by the model when

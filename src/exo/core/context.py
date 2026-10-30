@@ -398,6 +398,9 @@ class TreeContext:
 
     def transcript(self, session: str, last: int) -> list[Message]:
         """Recent original messages, including provenance, tool calls and results."""
+        bounded = getattr(self.store, "last_messages", None)
+        if bounded is not None and isinstance(last, int) and not isinstance(last, bool) and last > 0:
+            return bounded(session, last)
         return self.store.messages(session)[-last:]
 
     async def _summarize(self, session: str, content: str, previous: str | None = None, extra: str = "") -> str:
