@@ -5641,7 +5641,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
   Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
-  gate does not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a `read`, as is the same line with `rm -rf`).
+  gate did not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` was a `read`, as was the same line with `rm -rf`)
+  until #718 (#491) read it. Now `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+  `sudo -s <<< 'rm -rf ~/.exo/config.json'` are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
