@@ -343,7 +343,9 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. The posting rules list a post's violations under the post's own name, and right after
+part. Past eight other targets, the line on most of them is decided without the copies, and the
+line on its own target keeps them, so the decision stays the same ("Invariant gh field parsing
+(#550)" below). The posting rules list a post's violations under the post's own name, and right after
 them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
 target can be public where the post's is internal). On a line with such copies, the other posts
 keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
@@ -3510,6 +3512,21 @@ Git gc.recentObjectsHook is read as shell execution across git configuration for
 
 ### Invariant gh field parsing (#550)
 
-The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only.
 
 The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
+Since the D-038 amendment of 2026-10-30, the rest of #550 is closed too. A close's or reopen's comment and a merge's
+subject are read once per line, with the body and the title. `decide` reads the line on its own target with every
+part, the copies on its other targets among them. Past eight other targets (`_ALTS_IN_FULL`), it reads the line on
+most of them without the copies (`_without_copies`). A copy is a part on its own target with the line's own text,
+so the line on its own target already meets each deny, reserved entry and posting finding it brings. What the
+posting rules list of the copies turns only on the exposure of the line's own target, so the line on the first
+other target of each exposure not met yet keeps the copies, at most one per exposure. The outcome, the exposure,
+the third party, the reserved hits and the findings stay the same, and the work grows with the number of URL
+operands, not with its square. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`.
+It now takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:
+`tests/security/test_gate_gh_field_work_550.py` and `tests/security/test_gate_expansion_scan_linear.py`.
+
+Two smaller points from the issue. The ledger row's `alt_targets` already read a user and a password in a URL as
+`***@`. `gh pr --repo="$R" comment 5` still reads as `opaque_exec`, which asks: stricter than needed, never lower.

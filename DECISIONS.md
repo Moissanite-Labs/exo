@@ -1341,6 +1341,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL
+  operand on another instance is another target (#399), with a copy of the action among the line's parts. `decide`
+  read the line on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook.
+  Past eight other targets (`_ALTS_IN_FULL`), the line on most of them is now decided without the copies
+  (`_without_copies`). The line on its own target keeps them. Each copy is a part on its own target with the line's
+  own text, so the own text test (#394) reads the same texts, and every raise a copy brings (a deny or reserved
+  entry, a cell or rule that denies it alone, a posting finding) is met on the line's own target. So the outcome,
+  the exposure, the third party and the reserved hits stay the same. What the posting rules list of the copies
+  turns only on the exposure of the line's own target. So the line on the first other target of each exposure not
+  met yet keeps the copies too, at most one per exposure, and every finding is listed as often as before. Up to
+  eight other targets the decision is as before, word for word, so no line gh accepts changes. A close's or
+  reopen's comment and a merge's subject are read once per line too, as #920 reads the body and the title.
+  Rejected: a cap on URL operands that fails closed past it. A deny on a target past the cap would then only ask,
+  and #920's test keeps every target. Rejected too: no copies on any other target. On a line whose targets differ
+  in exposure it listed a finding once where main listed it under a copy's name too. Tests:
+  `tests/security/test_gate_gh_field_work_550.py`,
+  `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
+  `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a

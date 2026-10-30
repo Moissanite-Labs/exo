@@ -3545,8 +3545,10 @@ def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: fr
 
 
 def _gh_fields(argv: list[str], stdin: str | None) -> tuple[str, str, str]:
-    """The target-invariant body/title/file fields, parsed once per gh reading set (#550)."""
+    """The target-invariant body/title/file fields, parsed once per gh reading set (#550): a close's or reopen's
+    comment and a merge's subject too, so each other target no longer scans the line for them again."""
     group = argv[1] if len(argv) > 1 else ""
+    verb = argv[2] if len(argv) > 2 else ""
     body_opt, file_opt, title_opt = _gh_text_options(group)
     body = _opt(argv, *body_opt) or ""
     title = _opt(argv, *title_opt) or ""
@@ -3555,6 +3557,14 @@ def _gh_fields(argv: list[str], stdin: str | None) -> tuple[str, str, str]:
         body_file = ""
         if stdin is not None and not body:
             body = stdin
+    if verb in ("close", "reopen") and group in ("pr", "issue"):
+        comment = _opt(argv, "--comment", "-c")  # a close or reopen posts this text with it (#326, #397)
+        if comment is not None:
+            body = comment
+    if verb == "merge" and group == "pr":
+        subject = _opt(argv, "--subject")  # the merge commit's subject; -t already lands in title
+        if subject is not None:
+            title = subject
     return body, title, body_file
 
 
@@ -3567,14 +3577,6 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
     body, title, body_file = text_fields if text_fields is not None else _gh_fields(argv, stdin)
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
-    if verb in ("close", "reopen") and group in ("pr", "issue"):
-        comment = _opt(argv, "--comment", "-c")  # a close or reopen posts this text with it (#326, #397)
-        if comment is not None:
-            kw["text"] = comment
-    if verb == "merge" and group == "pr":
-        subject = _opt(argv, "--subject")  # the merge commit's subject; -t already lands in title
-        if subject is not None:
-            kw["title"] = subject
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
@@ -9957,9 +9959,22 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                                   pol, ctx) for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
-        # #399: decided on each target the gate cannot rule out.
+        # #399: decided on each target the gate cannot rule out. The line on its own target keeps every part. Past
+        # _ALTS_IN_FULL other targets, the line on most of them is decided without the copies of a gh action on its
+        # other targets (#550). With them each target cost a pass over every copy, and a line of many URL operands
+        # took seconds. Each copy is a part on its own target with the line's own text, so the first decision met it
+        # already and the outcome is the same. What the posting rules list of the copies turns only on the exposure
+        # of the line's own target, so the first other target of each exposure not met yet keeps the copies.
         base = replace(c, alt_targets=[])
-        return _strictest([decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets],
+        others = [replace(base, target=t) for t in c.alt_targets]
+        if len(others) > _ALTS_IN_FULL:
+            lean, scopes = _without_copies(base), pol["gates"].get("scopes") or {}
+            met = {apply_scopes(base, scopes)[0]}
+            for n, one in enumerate(others):
+                exposure = apply_scopes(one, scopes)[0]
+                others[n] = one if exposure not in met else replace(lean, target=one.target)
+                met.add(exposure)
+        return _strictest([decide(base, pol, ctx)] + [decide(one, pol, ctx) for one in others],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
     if c.displaced is not None:
         # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
@@ -9987,6 +10002,25 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         if OUTCOMES.index(d.outcome) <= OUTCOMES.index(before.outcome):
             return before
     return d
+
+
+# #550: up to this many other targets, decide reads the line on each with every part, as before. gh itself refuses
+# most lines with more than one URL operand.
+_ALTS_IN_FULL = 8
+
+
+def _without_copies(c: Classification) -> Classification:
+    """``c`` without the copies of a gh action on its other targets (alt_copy), at any depth (#550). A part that
+    holds none stays the same object, so parts shared in ``c`` stay shared."""
+    seen: dict[int, Classification] = {}
+
+    def walk(p: Classification) -> Classification:
+        if id(p) not in seen:
+            kids = [walk(q) for q in p.parts if not q.alt_copy]
+            same = len(kids) == len(p.parts) and all(a is b for a, b in zip(kids, p.parts))
+            seen[id(p)] = p if same else replace(p, parts=kids)
+        return seen[id(p)]
+    return walk(c)
 
 
 def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | None) -> Decision:

@@ -80,3 +80,27 @@ def test_a_command_value_nest_reads_each_value_once():
     n = _times("${GIT_PAGER:=less }") // 4
     c = _timed("echo " + "${GIT_PAGER:=less " * n + "}" * n, SLACK)
     assert (c.category, gate.decide(c).outcome) == ("read", "allow"), c
+
+
+_URLS = " ".join(f"https://ghe.corp/o/r/pull/{i}" for i in range(_times("https://ghe.corp/o/r/pull/1234 ")))
+
+
+@pytest.mark.parametrize("cmd", [
+    f"gh pr comment {_URLS} -b x",
+    f"gh pr close {_URLS} --comment x",
+    f"gh pr merge {_URLS} --subject x",
+    f"true && gh pr comment {_URLS} -b x",
+], ids=["comment", "close", "merge", "compound"])
+def test_a_gh_line_of_many_url_operands_is_linear(cmd):
+    """#550: each URL operand on another instance is another target, with a copy of the action on it. classify read a
+    close's comment or a merge's subject once per copy, and decide read the line on each target with every copy: some
+    3,000 targets took minutes. The line on each other target is now decided without the copies, as the first
+    decision met each of them. The lexer and the per-word store check take most of classify's time (#293)."""
+    c = _timed(cmd, SLACK)
+    assert len(c.alt_targets) > 3000, len(c.alt_targets)
+    t = time.process_time()
+    d = gate.decide(c, gate.normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]},
+                                                          "deny": ["target:ghe.corp/o/r#3000"]}}))
+    took = time.process_time() - t
+    assert took < BOUND, took
+    assert d.outcome == "deny", d       # a deny on one far target still reaches the line
