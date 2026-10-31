@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/audit_public_history.py"
 spec = importlib.util.spec_from_file_location("history_audit", SCRIPT)
 audit = importlib.util.module_from_spec(spec)
@@ -32,7 +34,7 @@ def test_deleted_history_and_secondary_refs_are_checked_without_content_disclosu
     before = git(repo, "show-ref")
     patterns = tmp_path / "private-patterns"
     patterns.write_text("private-client-fixture\n")
-    assert audit.main(["--repo", str(repo), "--literal-file", str(patterns)]) == 0
+    assert audit.main(["--repo", str(repo), "--literal-file", str(patterns)]) == 2
     output = capsys.readouterr().out
     for private in ["fixture-person", "/Users/fixture-seat", "private-client-fixture", str(patterns), str(repo)]:
         assert private not in output
@@ -41,7 +43,7 @@ def test_deleted_history_and_secondary_refs_are_checked_without_content_disclosu
     assert row["historical_blobs"] == row["scanned_blobs"] == 1
     assert row["pattern_matches"] == {"email": 1, "home_path": 1}
     assert row["literal_matches"] == 1 and row["removal_candidate"]
-    assert report["read_only"] and report["complete"] and report["ref_count"] == 2
+    assert report["read_only"] and report["local_complete"] and not report["complete"] and report["ref_count"] == 2
     assert git(repo, "show-ref") == before
     assert git(repo, "status", "--porcelain") == b""
 
@@ -61,6 +63,8 @@ def test_oversized_blob_marks_the_report_incomplete(tmp_path, monkeypatch):
             return b""
         if args[0] == "for-each-ref":
             return b"a\n"
+        if args[0] == "worktree":
+            return b"worktree fixture\0\0"
         if args[0] == "rev-list":
             return b"a docs/BRIEF.md\n"
         if args[:2] == ("cat-file", "-t"):
@@ -71,7 +75,7 @@ def test_oversized_blob_marks_the_report_incomplete(tmp_path, monkeypatch):
     monkeypatch.setattr(audit, "git", fake_git)
     monkeypatch.setattr(audit, "object_inventory", lambda repo, roots=None: [])
     report = audit.audit(tmp_path)
-    assert not report["complete"]
+    assert not report["complete"] and not report["local_complete"]
     assert all(x["oversized_blobs"] == 1 and x["scanned_blobs"] == 0 for x in report["targets"])
 
 
@@ -103,7 +107,7 @@ def test_subdirectory_and_default_cwd(tmp_path, monkeypatch, capsys):
     add_brief(repo)
     assert brief_count(audit.audit(repo / 'docs')) == 1
     monkeypatch.chdir(repo / 'docs')
-    assert audit.main([]) == 0
+    assert audit.main([]) == 2
     assert brief_count(json.loads(capsys.readouterr().out)) == 1
 
 
@@ -177,7 +181,7 @@ def test_whole_object_literals_and_blob_tag(tmp_path):
     assert all(row['historical_blobs'] == 0 for row in report['targets'])
     assert report['all_objects_literals']['literal_matches'] == 3
     assert report['all_objects_literals']['scanned_tags'] == 1
-    assert report['complete']
+    assert report['local_complete'] and not report['complete']
 
 
 def test_aggregate_oversize_and_missing_object(tmp_path, monkeypatch, capsys):
@@ -185,7 +189,7 @@ def test_aggregate_oversize_and_missing_object(tmp_path, monkeypatch, capsys):
     with monkeypatch.context() as patch:
         patch.setattr(audit, 'MAX_BLOB_BYTES', 1)
         report = audit.audit(repo, (b'fixture',))
-    assert not report['complete'] and report['all_objects_literals']['oversized_objects']
+    assert not report['complete'] and not report['local_complete'] and report['all_objects_literals']['oversized_objects']
     oid = git(repo, 'rev-parse', 'HEAD:safe').strip().decode()
     (repo / '.git/objects' / oid[:2] / oid[2:]).unlink()
     assert audit.main(['--repo', str(repo)]) == 2
@@ -218,7 +222,8 @@ def test_ref_change_marks_coverage_incomplete(tmp_path, monkeypatch):
                 return result + b'refs/heads/new abc\n'
         return result
     monkeypatch.setattr(audit, 'git', changing)
-    assert not audit.audit(repo)['complete']
+    report = audit.audit(repo)
+    assert not report['refs_unchanged'] and not report['local_complete'] and not report['complete']
 
 
 def test_runbook_requires_principal_cutover_and_states_coverage():
@@ -227,6 +232,9 @@ def test_runbook_requires_principal_cutover_and_states_coverage():
     assert 'never\nprincipal cutover authorization' in text
     assert 'all_objects_literals' in text and 'Shallow and partial/promisor' in text
     assert 'refs/pull/*' in text and 'conditional' in text
+    assert 'fresh private `--mirror` clone' in text
+    assert '--verify-remote origin' in text and 'local_complete' in text
+    assert 'historical_paths_literals' in text and 'ref_names_literals' in text
 
 
 def test_graft_file_and_environment_are_refused_before_traversal(tmp_path, monkeypatch):
@@ -272,4 +280,140 @@ def test_detached_head_roots_are_pinned_and_motion_is_incomplete(tmp_path, monke
     monkeypatch.setattr(audit, 'object_inventory', moving)
     report = audit.audit(repo)
     assert brief_count(report) == 1
-    assert report['refs_unchanged'] and not report['head_unchanged'] and not report['complete']
+    assert report['refs_unchanged'] and not report['head_unchanged'] and not report['local_complete'] and not report['complete']
+
+
+def clone(repo, destination, *options):
+    subprocess.check_call(['git', 'clone', '-q', *options, repo.as_uri(), str(destination)])
+    return destination
+
+
+def test_single_branch_and_plain_clone_cannot_claim_remote_completeness(tmp_path):
+    repo = fixture_repo(tmp_path)
+    default = git(repo, 'symbolic-ref', '--short', 'HEAD').strip().decode()
+    git(repo, 'checkout', '-qb', 'side')
+    add_brief(repo)
+    git(repo, 'checkout', default)
+    single = clone(repo, tmp_path / 'single', '--single-branch')
+    report = audit.audit(single)
+    assert report['local_complete'] and not report['complete'] and brief_count(report) == 0
+    assert 'non-mirror' in report['coverage'] and 'refs/pull/*' in report['coverage']
+    assert report['ref_namespaces']['remotes'] == 2  # origin/HEAD and the one branch
+    report = audit.audit(single, verify_remote='origin')
+    assert not report['complete'] and not report['full_mirror'] and not report['targets']
+    plain = clone(repo, tmp_path / 'plain')
+    report = audit.audit(plain)
+    assert brief_count(report) == 1 and not report['complete']
+    mirror = clone(repo, tmp_path / 'mirror.git', '--mirror')
+    report = audit.audit(mirror, verify_remote='origin')
+    assert report['complete'] and report['local_complete'] and report['remote_verified']
+    assert brief_count(report) == 1 and report['ref_namespaces']['heads'] == 2
+    assert report['remote_ref_namespaces'] == report['ref_namespaces']
+
+
+def test_advertised_pr_only_history_requires_verified_mirror(tmp_path, capsys):
+    repo = fixture_repo(tmp_path)
+    safe = git(repo, 'rev-parse', 'HEAD').strip().decode()
+    add_brief(repo)
+    private = git(repo, 'rev-parse', 'HEAD').strip().decode()
+    git(repo, 'update-ref', 'refs/pull/1/head', private)
+    git(repo, 'reset', '--hard', safe)
+    plain = clone(repo, tmp_path / 'plain')
+    report = audit.audit(plain)
+    assert report['local_complete'] and not report['complete'] and brief_count(report) == 0
+    assert report['ref_namespaces']['pull'] == 0
+    mirror = clone(repo, tmp_path / 'mirror.git', '--mirror')
+    assert audit.main(['--repo', str(mirror), '--verify-remote', 'origin']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['complete'] and brief_count(report) == 1 and report['ref_namespaces']['pull'] == 1
+    git(repo, 'update-ref', 'refs/heads/new', safe)
+    report = audit.audit(mirror, verify_remote='origin')
+    assert not report['complete'] and not report['mirror_refs_match']
+
+
+def test_remote_motion_during_scan_is_incomplete(tmp_path, monkeypatch):
+    source = fixture_repo(tmp_path)
+    mirror = clone(source, tmp_path / 'mirror.git', '--mirror')
+    original = audit.scan_literals
+    def moving(repo, literals, inventory):
+        result = original(repo, literals, inventory)
+        git(source, 'branch', 'new')
+        return result
+    monkeypatch.setattr(audit, 'scan_literals', moving)
+    report = audit.audit(mirror, (b'fixture',), verify_remote='origin')
+    assert report['local_complete'] and not report['remote_refs_unchanged'] and not report['complete']
+
+
+def test_full_paths_tree_only_refs_and_ref_names_are_counted_without_disclosure(tmp_path, capsys):
+    repo = fixture_repo(tmp_path)
+    (repo / 'notes/private-component').mkdir(parents=True)
+    (repo / 'notes/private-component/client-fixture.md').write_text('safe content')
+    git(repo, 'add', '.')
+    private_tree = git(repo, 'write-tree').strip().decode()
+    git(repo, 'reset', '--hard', 'HEAD')
+    git(repo, 'branch', 'private-component/client-fixture')
+    git(repo, 'tag', '-a', 'tree-only', private_tree, '-m', 'safe')
+    literals = tmp_path / 'patterns'
+    literals.write_text('private-component\nprivate-component/client-fixture\n')
+    assert audit.main(['--repo', str(repo), '--literal-file', str(literals)]) == 2
+    output = capsys.readouterr().out
+    assert 'private-component' not in output and 'client-fixture' not in output
+    report = json.loads(output)
+    assert report['local_complete']
+    assert report['all_objects_literals']['scanned_trees'] > 0
+    assert report['all_objects_literals']['literal_matches'] == 1  # one raw tree entry
+    assert report['historical_paths_literals']['literal_matches'] == 3  # directory + file, plus cross-component literal
+    assert report['ref_names_literals']['literal_matches'] == 2
+
+
+@pytest.mark.parametrize('key', sorted(audit.REDIRECT_ENV | {'GIT_CONFIG_COUNT', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_PARAMETERS'}))
+def test_git_environment_redirection_refused_before_git(tmp_path, monkeypatch, capsys, key):
+    monkeypatch.setenv(key, 'private-redirection-fixture')
+    def forbidden(*args):
+        raise AssertionError('Git must not run under redirection')
+    monkeypatch.setattr(audit, 'git', forbidden)
+    assert audit.main(['--repo', str(tmp_path)]) == 2
+    output = capsys.readouterr().out
+    assert 'private-redirection-fixture' not in output
+    report = json.loads(output)
+    assert report['environment_redirected'] and not report['local_complete'] and not report['complete']
+    assert key not in audit.git_environment()
+
+
+def test_actual_git_dir_cannot_redirect_repository(tmp_path, monkeypatch):
+    parent = tmp_path / 'a';parent.mkdir()
+    private = fixture_repo(parent)
+    add_brief(private)
+    other = tmp_path / 'b';other.mkdir()
+    safe = fixture_repo(other)
+    monkeypatch.setenv('GIT_DIR', str(safe / '.git'))
+    report = audit.audit(private)
+    assert report['environment_redirected'] and not report['complete']
+
+
+@pytest.mark.parametrize('content', [b'', b'\n\n'])
+def test_empty_supplied_literal_file_is_error(tmp_path, capsys, content):
+    repo = fixture_repo(tmp_path)
+    patterns = tmp_path / 'private-pattern-file'
+    patterns.write_bytes(content)
+    assert audit.main(['--repo', str(repo), '--literal-file', str(patterns)]) == 2
+    output = capsys.readouterr().out
+    assert 'private-pattern-file' not in output and json.loads(output)['error']
+
+
+def test_linked_detached_head_refused_before_traversal(tmp_path, monkeypatch):
+    repo = fixture_repo(tmp_path)
+    safe = git(repo, 'rev-parse', 'HEAD').strip().decode()
+    add_brief(repo)
+    private = git(repo, 'rev-parse', 'HEAD').strip().decode()
+    git(repo, 'reset', '--hard', safe)
+    linked = tmp_path / 'linked'
+    git(repo, 'worktree', 'add', '--detach', str(linked), private)
+    original = audit.git
+    def guarded(repo, *args):
+        assert args[0] not in ('rev-list', 'cat-file')
+        return original(repo, *args)
+    monkeypatch.setattr(audit, 'git', guarded)
+    for path in [repo, linked]:
+        report = audit.audit(path)
+        assert report['worktree_count'] == 2 and not report['local_complete'] and not report['complete']

@@ -129,7 +129,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 
 - A read-only, content-free historical-path audit and a private cleanup rehearsal runbook (#49).
-  Remote history and repository visibility remain unchanged.
+  Overall completeness requires a full mirror verified against advertised remote refs; local traversal,
+  historical path/ref-name literals and omitted-ref coverage are reported separately. The tool does
+  not rewrite remote history or change repository visibility.
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 

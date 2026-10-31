@@ -15,6 +15,16 @@ PATTERNS = {
     "home_path": re.compile(rb"/(?:Users|home)/[^/\s\"'`<>]+"),
 }
 MAX_BLOB_BYTES = 16 * 1024 * 1024
+REDIRECT_ENV = {
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_INDEX_FILE",
+    "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+}
+
+
+def redirects_repository(key: str) -> bool:
+    return key in REDIRECT_ENV or key.startswith("GIT_CONFIG")
 
 
 def git_command(repo: Path, *args: str) -> list[str]:
@@ -22,7 +32,8 @@ def git_command(repo: Path, *args: str) -> list[str]:
 
 
 def git_environment() -> dict[str, str]:
-    return {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0",
+    return {**{key: value for key, value in os.environ.items() if not redirects_repository(key)},
+            "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0",
             "GIT_GRAFT_FILE": os.devnull}
 
 
@@ -39,7 +50,34 @@ def git(repo: Path, *args: str) -> bytes:
     return result.stdout
 
 
-def audit(repo: Path, literals: tuple[bytes, ...] = ()) -> dict:
+def namespace_counts(refs: list[bytes]) -> dict[str, int]:
+    result = {"heads": 0, "tags": 0, "remotes": 0, "pull": 0, "other": 0}
+    for line in refs:
+        name = line.split()[0]
+        namespace = next((key for key in result if name.startswith(b"refs/" + key.encode() + b"/")), "other")
+        result[namespace] += 1
+    return result
+
+
+def advertised_refs(repo: Path, remote: str) -> list[bytes]:
+    # A named remote only: a URL or option is not accepted or echoed.
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", remote):
+        raise ValueError("invalid remote name")
+    return sorted(name + b" " + oid for oid, name in
+                  (line.split() for line in git(repo, "ls-remote", "--refs", remote).splitlines()))
+
+
+def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | None = None) -> dict:
+    report = {"schema": 3, "read_only": True, "ref_count": 0, "targets": [],
+              "complete": False, "local_complete": False, "remote_verified": False,
+              "coverage": "local refs only; non-mirror clones can omit advertised branches and refs/pull/*; "
+                          "remote coverage requires --verify-remote on a full mirror; excludes reflogs, "
+                          "unreachable and unadvertised objects, caches, LFS payloads, forks and other clones",
+              "literal_scope": "reachable blob, commit, tag and tree objects, historical paths and ref names"
+                               if literals else "not requested",
+              "environment_redirected": any(redirects_repository(key) for key in os.environ)}
+    if report["environment_redirected"]:
+        return report
     # Refuse before object traversal: older Git versions may ignore NO_LAZY_FETCH.
     shallow = git(repo, "rev-parse", "--is-shallow-repository").strip() == b"true"
     config = git(repo, "config", "--includes", "--list", "--null").lower().split(b"\0")
@@ -53,13 +91,27 @@ def audit(repo: Path, literals: tuple[bytes, ...] = ()) -> dict:
         graft_path = repo / graft_path
     grafts = "GIT_GRAFT_FILE" in os.environ or (graft_path / "info/grafts").exists()
     refs = git(repo, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
-    report = {"schema": 2, "read_only": True, "ref_count": len(refs), "targets": [],
-              "complete": not (shallow or partial or grafts), "shallow": shallow,
-              "partial": partial, "grafts": grafts,
-              "coverage": "local reachable objects only; excludes reflogs, unreachable and unadvertised remote objects",
-              "literal_scope": "all reachable blob, commit and tag objects" if literals else "not requested"}
-    if shallow or partial or grafts:
+    worktrees = git(repo, "worktree", "list", "--porcelain", "-z").split(b"\0")
+    linked_worktrees = sum(item.startswith(b"worktree ") for item in worktrees)
+    report.update({"ref_count": len(refs), "ref_namespaces": namespace_counts(refs),
+                   "shallow": shallow, "partial": partial, "grafts": grafts,
+                   "worktree_count": linked_worktrees})
+    if shallow or partial or grafts or linked_worktrees > 1:
         return report
+    remote_refs = None
+    if verify_remote is not None:
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", verify_remote):
+            raise ValueError("invalid remote name")
+        fetch = git(repo, "config", "--get-all", f"remote.{verify_remote}.fetch").splitlines()
+        report["full_mirror"] = (git(repo, "rev-parse", "--is-bare-repository").strip() == b"true"
+                                 and fetch == [b"+refs/*:refs/*"])
+        if not report["full_mirror"]:
+            return report
+        remote_refs = advertised_refs(repo, verify_remote)
+        report["remote_ref_namespaces"] = namespace_counts(remote_refs)
+        report["mirror_refs_match"] = sorted(refs) == remote_refs
+        if not report["mirror_refs_match"]:
+            return report
     head = head_state(repo)
     roots = tuple(sorted({line.split()[-1].decode("ascii") for line in refs} |
                          {head[0].decode("ascii")}))
@@ -79,7 +131,6 @@ def audit(repo: Path, literals: tuple[bytes, ...] = ()) -> dict:
         for oid in blobs:
             if int(git(repo, "cat-file", "-s", oid)) > MAX_BLOB_BYTES:
                 row["oversized_blobs"] += 1
-                report["complete"] = False
                 continue
             content = git(repo, "cat-file", "blob", oid)
             row["scanned_blobs"] += 1
@@ -89,12 +140,22 @@ def audit(repo: Path, literals: tuple[bytes, ...] = ()) -> dict:
         report["targets"].append(row)
     if literals:
         report["all_objects_literals"] = scan_literals(repo, literals, inventory)
-        if report["all_objects_literals"]["oversized_objects"]:
-            report["complete"] = False
+        report["historical_paths_literals"] = scan_path_literals(repo, literals, roots, inventory)
+        report["ref_names_literals"] = {
+            "scanned_ref_names": len(refs),
+            "literal_matches": sum(line.split()[0].count(value) for line in refs for value in literals),
+        }
     # A concurrent ref update makes this snapshot unsuitable for verification.
     report["refs_unchanged"] = refs == git(repo, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
     report["head_unchanged"] = head == head_state(repo)
-    report["complete"] = report["complete"] and report["refs_unchanged"] and report["head_unchanged"]
+    report["local_complete"] = (report["refs_unchanged"] and report["head_unchanged"]
+                                and not any(row["oversized_blobs"] for row in report["targets"])
+                                and not report.get("all_objects_literals", {}).get("oversized_objects", 0)
+                                and not report.get("historical_paths_literals", {}).get("oversized_trees", 0))
+    if remote_refs is not None:
+        report["remote_refs_unchanged"] = remote_refs == advertised_refs(repo, verify_remote)
+        report["remote_verified"] = report["remote_refs_unchanged"] and report["mirror_refs_match"]
+    report["complete"] = report["local_complete"] and report["remote_verified"]
     return report
 
 
@@ -121,6 +182,7 @@ def object_inventory(repo: Path, roots: tuple[str, ...] | None = None) -> list[t
 
 def scan_literals(repo: Path, literals: tuple[bytes, ...], inventory: list) -> dict:
     result = {"scanned_blobs": 0, "scanned_commits": 0, "scanned_tags": 0,
+              "scanned_trees": 0,
               "oversized_objects": 0, "literal_matches": 0}
     # Request one object at a time to bound memory and avoid pipe deadlock.
     with subprocess.Popen(git_command(repo, "cat-file", "--batch"), env=git_environment(),
@@ -128,7 +190,7 @@ def scan_literals(repo: Path, literals: tuple[bytes, ...], inventory: list) -> d
                           stderr=subprocess.DEVNULL) as process:
         try:
             for oid, kind, size in inventory:
-                if kind not in (b"blob", b"commit", b"tag"):
+                if kind not in (b"blob", b"commit", b"tag", b"tree"):
                     continue
                 if int(size) > MAX_BLOB_BYTES:
                     result["oversized_objects"] += 1
@@ -151,15 +213,79 @@ def scan_literals(repo: Path, literals: tuple[bytes, ...], inventory: list) -> d
     return result
 
 
+def scan_path_literals(repo: Path, literals: tuple[bytes, ...], roots: tuple[str, ...], inventory: list) -> dict:
+    """Count full paths per distinct historical root tree, including tree-only refs.
+
+    Raw tree-object matches alone miss a literal spanning multiple path components.
+    Read entries once and walk them with their prefixes; never print any path.
+    """
+    root_trees = set(git(repo, "rev-list", "--format=%T", "--no-commit-header", *roots).splitlines())
+    for oid in roots:
+        if git(repo, "cat-file", "-t", oid + "^{}").strip() == b"tree":
+            root_trees.add(git(repo, "rev-parse", oid + "^{}").strip())
+    sizes = {oid: size for oid, kind, size in inventory if kind == b"tree"}
+    oid_size = 32 if git(repo, "rev-parse", "--show-object-format").strip() == b"sha256" else 20
+    result = {"scanned_root_trees": len(root_trees), "scanned_paths": 0,
+              "literal_matches": 0, "oversized_trees": 0}
+    entries = {}
+    with subprocess.Popen(git_command(repo, "cat-file", "--batch"), env=git_environment(),
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) as process:
+        try:
+            for root in root_trees:
+                stack = [(b"", root)]
+                while stack:
+                    prefix, oid = stack.pop()
+                    if oid not in sizes:
+                        raise ValueError("history tree unavailable")
+                    if sizes[oid] > MAX_BLOB_BYTES:
+                        result["oversized_trees"] += 1
+                        continue
+                    if oid not in entries:
+                        process.stdin.write(oid + b"\n")
+                        process.stdin.flush()
+                        header = process.stdout.readline().split()
+                        if len(header) != 3 or header[:2] != [oid, b"tree"]:
+                            raise ValueError("history tree unavailable")
+                        content = process.stdout.read(int(header[2]))
+                        if len(content) != int(header[2]) or process.stdout.read(1) != b"\n":
+                            raise ValueError("history tree truncated")
+                        parsed, offset = [], 0
+                        while offset < len(content):
+                            space = content.index(b" ", offset)
+                            end = content.index(b"\0", space)
+                            child = content[end + 1:end + 1 + oid_size]
+                            if len(child) != oid_size:
+                                raise ValueError("history tree invalid")
+                            parsed.append((content[offset:space], content[space + 1:end], child.hex().encode()))
+                            offset = end + 1 + oid_size
+                        entries[oid] = parsed
+                    for mode, name, child in entries[oid]:
+                        path = prefix + name
+                        result["scanned_paths"] += 1
+                        result["literal_matches"] += sum(path.count(value) for value in literals)
+                        if mode == b"40000":
+                            stack.append((path + b"/", child))
+        finally:
+            process.stdin.close()
+            process.wait()
+        if process.returncode:
+            raise ValueError("history path scan failed")
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--literal-file", type=Path,
                         help="private newline-delimited bytes to count; values are never printed")
+    parser.add_argument("--verify-remote", help="verify a named full-mirror remote's advertised refs before and after scanning")
     args = parser.parse_args(argv)
     try:
         literals = tuple(x for x in args.literal_file.read_bytes().splitlines() if x) if args.literal_file else ()
-        report = audit(args.repo, literals)
+        if args.literal_file and not literals:
+            raise ValueError("empty literal file")
+        report = audit(args.repo, literals, args.verify_remote)
     except (OSError, ValueError, UnicodeError):
         print(json.dumps({"error": "history audit failed; inspect repository and private pattern file locally"}))
         return 2

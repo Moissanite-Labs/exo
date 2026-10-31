@@ -1178,3 +1178,6 @@ Before sharing repository history, follow `docs/PUBLIC-HISTORY-CLEANUP.md`. The 
 `scripts/audit_public_history.py` reports counts for the historical paths in #49 without printing
 matched content. It does not rewrite or push history. The runbook separates private rehearsal,
 independent verification, final remote-ref approval and retained-copy review.
+Ordinary clones have local coverage only; overall completeness requires a fresh full mirror
+verified with `--verify-remote origin`. Literal checks include object contents, historical paths
+and ref names, with counts reported separately.
