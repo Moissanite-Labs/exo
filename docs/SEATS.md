@@ -101,6 +101,19 @@ An unseated core preserves the client's seat label for compatibility. That label
 not proof of profile execution or a memory access boundary. This check governs new sessions;
 it does not isolate access to existing sessions.
 
+## Session command ownership
+
+A loaded seat lists only sessions whose stored `agent` matches its identity. Session
+get, resume, fork, undo and turn-send commands reject other owners with the same
+`not_found` response used for a missing session. A matching display `seat` label
+does not grant access. Owned delegate children remain accessible. Unseated cores
+retain their existing access for compatibility.
+
+This is one part of Swarm profile isolation, not a complete privacy boundary.
+Event subscription and replay, other retrieval APIs, tools with filesystem access,
+and unseated cores still need separate access controls. Do not treat profiles
+sharing a home as isolated from hostile code.
+
 ## Skills
 
 Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/` in the checkout, or
