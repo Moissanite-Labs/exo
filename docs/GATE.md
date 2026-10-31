@@ -369,8 +369,8 @@ part. Past eight other targets, the line on each of them keeps one copy of each 
 policy tells apart, and the line on its own target keeps them all, so the decision stays the
 same ("Invariant gh field parsing (#550)" below). The posting rules list a post's violations
 under the post's own name, and right after them what a copy finds that neither the post nor
-another copy of it does (under a scope a copy's target can be public where the post's is internal). On a line with such copies, the other posts
-keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
+another copy of it does (under a scope a copy's target can be public where the post's is
+internal). On a line with such copies, the other posts keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
 own, so it lists all that main lists while those list no more than 200. Its question merges the
 readings of the line, so a copy's finding can show both under the copy's name and under the
 post's, and it lists one `and N more on other posts`, which counts each entry a reading left out
