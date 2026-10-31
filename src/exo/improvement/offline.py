@@ -19,6 +19,7 @@ ADAPTERS = ("signed-decimal-v1", "text-normalize-v1")
 SLUG = re.compile(r"[a-z][a-z0-9-]{0,47}\Z")
 AMOUNT = re.compile(r"[+-]?[0-9]{1,8}(?:\.[0-9]{1,4})?\Z")
 FILE_CAP = 256 * 1024
+_ALLOW_MISSING = getattr(os.path, "ALLOW_MISSING", None)
 
 
 @dataclass(frozen=True)
@@ -58,9 +59,17 @@ def _resolve_boundary(path, diagnostic, *, allow_missing=False):
         except FileNotFoundError:
             if not allow_missing:
                 raise
-            # A fresh Exo home/output directory need not exist, but cycles must
-            # still be detected by the strict resolution attempted above.
-            return path.resolve(strict=False)
+            # Ignore missing components only; non-strict resolution can mask a
+            # loop reached after a missing/.. prefix on Python 3.13.
+            if _ALLOW_MISSING is not None:
+                return Path(os.path.realpath(path, strict=_ALLOW_MISSING))
+            # Compatibility with older maintenance releases: recheck the
+            # canonical result strictly before accepting an absent target.
+            resolved = path.resolve(strict=False)
+            try:
+                return resolved.resolve(strict=True)
+            except FileNotFoundError:
+                return resolved
     except (OSError, RuntimeError) as exc:
         raise BoundaryError(diagnostic) from exc
 

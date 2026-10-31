@@ -480,11 +480,13 @@ def test_output_parent_cannot_be_a_protected_store(tmp_path, monkeypatch, capsys
 
 
 @pytest.mark.parametrize("variable", ["EXO_HOME", "EXO_PRINCIPAL_STORE"])
-def test_environment_root_cycles_are_cli_path_refusals(tmp_path, variable):
+@pytest.mark.parametrize("masked", [False, True])
+def test_environment_root_cycles_are_cli_path_refusals(tmp_path, variable, masked):
     loop = tmp_path / "private-loop"
     loop.symlink_to(loop)
     (tmp_path / "public.json").write_text(json.dumps(fixture()))
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), variable: str(loop)}
+    value = tmp_path / "missing" / ".." / "private-loop" if masked else loop
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), variable: str(value)}
     result = subprocess.run([sys.executable, "-m", "exo.cli", "improve", "--offline",
                              "--adapter", "text-normalize-v1", "--fixture", "public.json",
                              "--output", "refused"], cwd=tmp_path, env=env,
@@ -492,7 +494,8 @@ def test_environment_root_cycles_are_cli_path_refusals(tmp_path, variable):
     assert result.returncode == 2 and not result.stdout
     assert f"cannot resolve {variable}" in result.stderr
     assert "repair its path or unset that environment variable" in result.stderr
-    assert str(loop) not in result.stderr and "Traceback" not in result.stderr
+    assert str(loop) not in result.stderr and str(value) not in result.stderr
+    assert "Traceback" not in result.stderr
     assert not (tmp_path / "improvement-runs").exists()
 
 
@@ -503,3 +506,36 @@ def test_future_environment_roots_do_not_require_initialization(tmp_path, monkey
     assert code == 0 and report["status"] == "review_ready"
     assert not (tmp_path / "not-created-home").exists()
     assert not (tmp_path / "not-created-store").exists()
+
+
+@pytest.mark.parametrize("variable", ["EXO_HOME", "EXO_PRINCIPAL_STORE"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_missing_path_resolution_refuses_masked_cycle_before_fixture_read(tmp_path, monkeypatch, capsys, variable, legacy):
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    if legacy:
+        monkeypatch.setattr(O, "_ALLOW_MISSING", None)
+    value = tmp_path / "missing" / ".." / "loop"
+    monkeypatch.setenv(variable, str(value))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("masked cycle must be refused before fixture reads")
+    monkeypatch.setattr(O, "load_fixture", forbidden)
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
+                     "--fixture", "public.json", "--output", "refused"])
+    result = capsys.readouterr()
+    assert code == 2 and not result.out and f"cannot resolve {variable}" in result.err
+    assert str(loop) not in result.err and str(value) not in result.err
+    assert "Traceback" not in result.err
+    assert not (tmp_path / "improvement-runs").exists()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_missing_path_resolution_preserves_absent_environment_roots(tmp_path, monkeypatch, capsys, legacy):
+    if legacy:
+        monkeypatch.setattr(O, "_ALLOW_MISSING", None)
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "missing" / ".." / "missing-home"))
+    monkeypatch.setenv("EXO_PRINCIPAL_STORE", str(tmp_path / "missing" / ".." / "missing-store"))
+    assert invoke(tmp_path, monkeypatch, capsys)[0] == 0
+    assert not (tmp_path / "missing-home").exists()
+    assert not (tmp_path / "missing-store").exists()

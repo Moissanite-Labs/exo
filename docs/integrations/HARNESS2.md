@@ -54,7 +54,10 @@ target) fails closed with path-error exit 2. Its separate diagnostic identifies
 `principals.<id>` in `EXO_HOME/config.json` to repair or remove; it does not blame
 the fixture or disclose private path values. Cycles in `EXO_HOME` and
 `EXO_PRINCIPAL_STORE` also fail closed with an environment-setting diagnostic.
-Fresh nonexistent environment roots remain allowed; they are not initialized. A failed write
+Fresh nonexistent environment roots remain allowed; they are not initialized.
+Missing components are tolerated without hiding later symlink cycles, including
+`missing/../loop` spellings. Resolution uses the standard library's
+`ALLOW_MISSING` when available and strictly rechecks legacy canonical fallbacks. A failed write
 releases its newly reserved run directory only if empty;
 preexisting runs and nonempty output are preserved. Output names come only from
 the explicit CLI flag, never fixture contents.
