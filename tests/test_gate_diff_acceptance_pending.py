@@ -41,8 +41,8 @@ def python_calls(count, phase):
     return calls
 
 
-@pytest.mark.xfail(strict=True, reason="Open #550: deciding many URL operands has superlinear Python work")
 def test_url_operand_decisions_have_a_bounded_work_growth():
+    # #550: past eight other targets, decide reads the line on each without the copies of the action.
     small, large = python_calls(8, "decide"), python_calls(32, "decide")
     # Four times the input allows six times the work plus fixed overhead. This
     # deterministic proxy is not a wall-clock or end-to-end performance claim.

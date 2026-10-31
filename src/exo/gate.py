@@ -2357,7 +2357,8 @@ _EXEC_ENV_OPAQUE = {
     **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
         DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
         OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
-    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
+    # GH_CONFIG_DIR picks gh's hosts, tokens and settings, its pager and editor commands too (#566)
+    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME GH_CONFIG_DIR BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
         RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
     "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
@@ -3295,13 +3296,20 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
 
     An operand from an expansion (an index in ``dynamic``) may be a URL for any repo, so the empty target, a repo
     the line does not name, is a reading too. So is an operand that names a repo on another instance
-    (_gh_elsewhere)."""
+    (_gh_elsewhere).
+
+    gh reads GH_REPO as `-R` when the line gives none (#566). Each value the line sets for it (_gh_env_repo) is a
+    reading too, of each parse with no `-R`, read as `-R` is. So is the endpoint of gh api with its `{owner}` and
+    `{repo}` filled from it."""
     group, verb = (argv + ["", ""])[1:3]
+    env = [v for v in _gh_env_repo.get() if v]
     if group == "api":
         ops = _gh_api_operands(argv)
-        target, link = _gh_api_target(argv[ops[0]] if ops else "")
+        endpoint = argv[ops[0]] if ops else ""
+        target, link = _gh_api_target(endpoint)
         old = _gh_api_target(next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), ""))
-        return target, link, _gh_others(target, [old] + [("", "")] * any(i in dynamic for i in ops))
+        return target, link, _gh_others(target, [old] + _gh_api_env(endpoint, env) +
+                                        [("", "")] * any(i in dynamic for i in ops))
     if (group, verb) in _GH_TAKES:
         parses = [_gh_operands(argv, *_gh_options(group, _GH_TAKES[(group, verb)]))]
         sure = set(parses[0][1])
@@ -3309,14 +3317,15 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
         longs = tuple(a for a in argv[3:] if a.startswith("--") and len(a) > 2 and "=" not in a)
         parses = [_gh_operands(argv, "", ()), _gh_operands(argv, _GH_ANY_SHORT, longs)]
         sure = set(parses[0][1]) & set(parses[1][1])
+    by_env = [(v, o) for v in env for r, o in parses if not r]
     # A `-R` on another instance names a repo the scopes may not mean: its value as written is a reading too.
-    raw = [_gh_read(group, r, [argv[i] for i in o], verb=verb) for r, o in parses if r and not _gh_repo(r)[1]]
+    raw = [_gh_read(group, r, [argv[i] for i in o], verb=verb) for r, o in parses + by_env if r and not _gh_repo(r)[1]]
     parses = [(_gh_repo(r)[0], o) for r, o in parses]
     repo, ops = parses[0]
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))],
                             verb=verb)
     readings = [_gh_read(group, r, [argv[i] for i in o], url, verb=verb)
-                for r, o in parses for url in (True, False) if url or r]
+                for r, o in parses + [(_gh_repo(v)[0], o) for v, o in by_env] for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
     readings += [r for _, o in parses for r in _gh_elsewhere(group, verb, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
@@ -3325,6 +3334,19 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)], verb=verb),
                  _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], before=True)]     # as before #399
     return target, link, _gh_others(target, readings)
+
+
+def _gh_api_env(endpoint: str, values: list[str]) -> list[tuple[str, str]]:
+    """The readings of a gh api endpoint whose `{owner}` and `{repo}` gh fills from GH_REPO (#566): the endpoint
+    filled from each value, read as `-R` reads a repo (_gh_repo_parts), and a value on another instance as written,
+    as a `-R` on another instance is. gh refuses a value it cannot read as a repo, so that one adds nothing."""
+    out: list[tuple[str, str]] = []
+    for v in values if "{owner}" in endpoint or "{repo}" in endpoint else []:
+        if (parts := _gh_repo_parts(v)) is not None:
+            owner, name = parts[1].split("/")
+            out.append(_gh_api_target(endpoint.replace("{owner}", owner).replace("{repo}", name)))
+            out += [(v, "")] * (not _gh_on_github(parts[0]))
+    return out
 
 
 def _gh_others(target: str, readings: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -3481,6 +3503,51 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset, split: frozenset = froze
 # first `-X` word as written, as before #399.
 _gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
 _GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the call needs a floor
+# Set while classify reads a gh command: the GH_REPO values it may run with (_gh_env_repos, #566).
+_gh_env_repo: contextvars.ContextVar[tuple[str | None, ...]] = contextvars.ContextVar("exo_gate_gh_env_repo",
+                                                                                       default=())
+
+
+def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str | None, ...]:
+    """The GH_REPO values gh may read on command k (#566): an assignment before its program word
+    (`GH_REPO=pub/repo gh ..`, also through env or sudo), and the value the line set before k
+    (`export GH_REPO=pub/repo; gh ..`, ``literals``, #579). A bare assignment counts too: gh sees it when the
+    variable was exported before the line. So does each value the line set before k in a compound or around a
+    nested line (`{ export GH_REPO=pub/repo; gh ..; }`, `export GH_REPO=pub/repo; x=$(gh ..)`, _GH_REPO_SET).
+    None stands for a value the gate cannot read."""
+    out: list[str | None] = []
+    for w in k.words:
+        if w is program:
+            break
+        name, eq, value = w.text.partition("=")
+        if eq and name == "GH_REPO":
+            out.append(None if _expands(w) else value)
+    if "GH_REPO" in literals:
+        out.append(literals["GH_REPO"])
+    if (memo := _call_memo.get()) is not None:
+        out += memo.get(_GH_REPO_SET, {})
+    return tuple(dict.fromkeys(out))
+
+
+# The mark in _call_memo for the GH_REPO values the line set so far, in a compound or a nested line too (#566): the
+# last _GH_REPO_KEPT of them, the latest last. bash keeps the latest, and a branch may leave an earlier one, so a gh
+# command reads each. The bound keeps a long line of values and gh commands linear: a value past it, as a value the
+# gate cannot read, adds no reading, and the line's own reading, a repo it does not name, still decides.
+_GH_REPO_SET = ("gh", "GH_REPO")
+_GH_REPO_KEPT = 4
+
+
+def _gh_repo_sets(k: "_Cmd") -> list[str]:
+    """The GH_REPO values command k sets for the commands after it (#566), each one the gate can read: a bare
+    assignment's, and an argument of export or its kind, past the words that open a compound (`{ export
+    GH_REPO=pub/repo; ..; }`, `then`)."""
+    words = list(itertools.dropwhile(lambda w: not w.quoted and w.text in _OPENERS, k.words))
+    if words and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS:
+        words = words[1:]
+    elif not all(_ASSIGN.fullmatch(w.text) for w in words):
+        return []
+    return [value for w in words for name, eq, value in [w.text.partition("=")]
+            if eq and name == "GH_REPO" and value and not _expands(w)]
 
 
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
@@ -3545,8 +3612,10 @@ def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: fr
 
 
 def _gh_fields(argv: list[str], stdin: str | None) -> tuple[str, str, str]:
-    """The target-invariant body/title/file fields, parsed once per gh reading set (#550)."""
+    """The target-invariant body/title/file fields, parsed once per gh reading set (#550): a close's or reopen's
+    comment and a merge's subject too, so each other target no longer scans the line for them again."""
     group = argv[1] if len(argv) > 1 else ""
+    verb = argv[2] if len(argv) > 2 else ""
     body_opt, file_opt, title_opt = _gh_text_options(group)
     body = _opt(argv, *body_opt) or ""
     title = _opt(argv, *title_opt) or ""
@@ -3555,6 +3624,14 @@ def _gh_fields(argv: list[str], stdin: str | None) -> tuple[str, str, str]:
         body_file = ""
         if stdin is not None and not body:
             body = stdin
+    if verb in ("close", "reopen") and group in ("pr", "issue"):
+        comment = _opt(argv, "--comment", "-c")  # a close or reopen posts this text with it (#326, #397)
+        if comment is not None:
+            body = comment
+    if verb == "merge" and group == "pr":
+        subject = _opt(argv, "--subject")  # the merge commit's subject; -t already lands in title
+        if subject is not None:
+            title = subject
     return body, title, body_file
 
 
@@ -3567,14 +3644,6 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
     body, title, body_file = text_fields if text_fields is not None else _gh_fields(argv, stdin)
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
-    if verb in ("close", "reopen") and group in ("pr", "issue"):
-        comment = _opt(argv, "--comment", "-c")  # a close or reopen posts this text with it (#326, #397)
-        if comment is not None:
-            kw["text"] = comment
-    if verb == "merge" and group == "pr":
-        subject = _opt(argv, "--subject")  # the merge commit's subject; -t already lands in title
-        if subject is not None:
-            kw["title"] = subject
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
@@ -5107,7 +5176,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "gh":
         # A word bash splits is a word from an expansion here, also `$(cat <<'EOF' .. EOF)` outside quotes (#399).
         dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
-        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn, frozenset(i for i in dyn if _gh_splits(words[i])))]
+        token = _gh_env_repo.set(_gh_env_repos(k, p, ctx.get("literals") or {}))
+        try:
+            return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn,
+                                 frozenset(i for i in dyn if _gh_splits(words[i])))]
+        finally:
+            _gh_env_repo.reset(token)
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),
                                k.piped_in or _own_stdin(k))]
@@ -6927,10 +7001,12 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
 
 
 def _budgets() -> tuple:
-    """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend."""
+    """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend, and
+    the GH_REPO values the line set so far (_GH_REPO_SET), which a gh command in it reads (#566)."""
     left, memo = _brace_left.get(), _call_memo.get()
     return (None if left is None else tuple(left),
-            None if memo is None else tuple(memo.get(k, [_EXO_PARTS])[0] for k in ("exo_parts", "exo_parts_written")))
+            None if memo is None else tuple(memo.get(k, [_EXO_PARTS])[0] for k in ("exo_parts", "exo_parts_written")),
+            None if memo is None else tuple(memo.get(_GH_REPO_SET, {})))
 
 
 def _own_copy(c: Classification) -> Classification:
@@ -7018,6 +7094,13 @@ def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot:
     got = _classify_simple(k, cmd, depth, ctx, piped)
     if late:
         ctx["literals"].update(own)
+    if (memo := _call_memo.get()) is not None and (values := _gh_repo_sets(k)):
+        kept = memo.setdefault(_GH_REPO_SET, {})        # what a gh after it reads as GH_REPO (#566)
+        for v in values:
+            kept.pop(v, None)
+            kept[v] = None
+        while len(kept) > _GH_REPO_KEPT:
+            del kept[next(iter(kept))]
     if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
         got = _given_stdin(got, _stdin_own(k), ctx)
     return got
@@ -9988,9 +10071,22 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                                   pol, ctx) for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
-        # #399: decided on each target the gate cannot rule out.
+        # #399: decided on each target the gate cannot rule out. The line on its own target keeps every part. Past
+        # _ALTS_IN_FULL other targets, the line on most of them is decided without the copies of a gh action on its
+        # other targets (#550). With them each target cost a pass over every copy, and a line of many URL operands
+        # took seconds. Each copy is a part on its own target with the line's own text, so the first decision met it
+        # already and the outcome is the same. What the posting rules list of the copies turns only on how the
+        # policy reads the line's own target (_alt_key), so the first other target of each such reading keeps them.
         base = replace(c, alt_targets=[])
-        return _strictest([decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets],
+        others = [replace(base, target=t) for t in c.alt_targets]
+        if len(others) > _ALTS_IN_FULL:
+            lean, scopes, globs = _without_copies(base), pol["gates"].get("scopes") or {}, _target_globs(pol["gates"])
+            met = {_alt_key(base, scopes, globs)}
+            for n, one in enumerate(others):
+                key = _alt_key(one, scopes, globs)
+                others[n] = one if key not in met else replace(lean, target=one.target)
+                met.add(key)
+        return _strictest([decide(base, pol, ctx)] + [decide(one, pol, ctx) for one in others],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
     if c.displaced is not None:
         # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
@@ -10018,6 +10114,46 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         if OUTCOMES.index(d.outcome) <= OUTCOMES.index(before.outcome):
             return before
     return d
+
+
+# #550: up to this many other targets, decide reads the line on each with every part, as before. gh itself refuses
+# most lines with more than one URL operand.
+_ALTS_IN_FULL = 8
+
+
+def _without_copies(c: Classification) -> Classification:
+    """``c`` without the copies of a gh action on its other targets (alt_copy), at any depth (#550). A part that
+    holds none stays the same object, so parts shared in ``c`` stay shared."""
+    seen: dict[int, Classification] = {}
+
+    def walk(p: Classification) -> Classification:
+        if id(p) not in seen:
+            kids = [walk(q) for q in p.parts if not q.alt_copy]
+            same = len(kids) == len(p.parts) and all(a is b for a, b in zip(kids, p.parts))
+            seen[id(p)] = p if same else replace(p, parts=kids)
+        return seen[id(p)]
+    return walk(c)
+
+
+def _target_globs(gates: Mapping) -> list:
+    """Each target pattern of the policy's rules and of its deny and reserved entries (#550)."""
+    out: list = []
+    for r in gates.get("rules") or []:
+        out += _as_list(r["match"].get("target", []))
+    for e in [*(gates.get("deny") or []), *(gates.get("reserved") or [])]:
+        if isinstance(e, Mapping):
+            out += _as_list((e["match"] if isinstance(e.get("match"), Mapping) else e).get("target", []))
+        elif (s := str(e).strip()).partition(":")[0] == "target":
+            out.append(s.partition(":")[2].strip())
+    return out
+
+
+def _alt_key(c: Classification, scopes: Mapping, globs: list) -> tuple:
+    """How the policy reads the line's own target (#550): its exposure and third party after the scopes, and which
+    target patterns match it. Nothing else decide reads turns on that target, so the line decides alike on two
+    targets of one key. A rule on one target can pick a reading of the line whose own post the posting rules skip (a
+    `$".."` word read as opaque_exec), and its copies then list their findings: the key keeps such a target apart."""
+    return apply_scopes(c, scopes), tuple(_glob_any(c.target, [g]) for g in globs)
 
 
 def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | None) -> Decision:

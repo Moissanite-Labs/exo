@@ -1349,6 +1349,47 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (issue #566):* gh reads `GH_REPO` as `-R` when the line gives none, and `GH_CONFIG_DIR`
+  picks its config. The gate read neither. `GH_REPO=pub/repo gh pr comment 5` posts on `pub/repo#5`, but the gate
+  read the target as `#5`, a repo the line does not name: the line asked as public with a third party, yet a
+  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix assignment
+  (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read as `-R` is,
+  on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). An export or a bare assignment in a compound, or
+  before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
+  `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
+  four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
+  linear. A value past the four adds no reading, as a value the gate cannot read. gh api's `{owner}` and `{repo}`
+  are filled from it. The line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5`
+  still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that change which config files are used
+  (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and `editor` commands. So it asks, as
+  `opaque_exec` named in the summary. Left open: `GH_HOST`, which picks gh's host, and a prefix assignment on a
+  command that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`), whose gh still asks as on a repo the line
+  does not name. Tests: `tests/security/test_gate_gh_repo_env_566.py`, the GH_REPO row of
+  `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
+  `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL
+  operand on another instance is another target (#399), with a copy of the action among the line's parts. `decide`
+  read the line on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook.
+  Past eight other targets (`_ALTS_IN_FULL`), the line on most of them is now decided without the copies
+  (`_without_copies`). The line on its own target keeps them. Each copy is a part on its own target with the line's
+  own text, so the own text test (#394) reads the same texts, and every raise a copy brings (a deny or reserved
+  entry, a cell or rule that denies it alone, a posting finding) is met on the line's own target. So the outcome,
+  the exposure, the third party and the reserved hits stay the same. What the posting rules list of the copies
+  turns only on how the policy reads the line's own target (`_alt_key`): its exposure and third party after the
+  scopes, and which target patterns of the rules and of the deny and reserved entries match it. A rule on some
+  targets can pick the line's `$".."` reading (#136), whose own post the posting rules skip, and the copies then
+  list their findings. So the line on the first other target of each such reading not met yet keeps the copies
+  too, and every finding is listed as often as before. The policy's target patterns bound how many there are. Up to
+  eight other targets the decision is as before, word for word, so no line gh accepts changes. A close's or
+  reopen's comment and a merge's subject are read once per line too, as #920 reads the body and the title.
+  Rejected: a cap on URL operands that fails closed past it. A deny on a target past the cap would then only ask,
+  and #920's test keeps every target. Rejected too: no copies on any other target. On a line whose targets differ
+  in exposure it listed a finding once where main listed it under a copy's name too. Rejected as well: one
+  target of each exposure. With a deny rule on `git.example/*` that the `$".."` reading meets, it dropped a copy's
+  finding there, at an equal deny. Tests:
+  `tests/security/test_gate_gh_field_work_550.py`,
+  `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
+  `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a

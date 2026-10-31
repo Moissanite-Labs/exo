@@ -80,7 +80,7 @@ KNOWN_GAPS = {
     "api_repo_merge_commit_message", "mcp_merge_commit_text",
     # #547 (store line lift keeps its own text) is fixed: its three store_* cases pass and carry no marker.
     "gh_host_destination",
-    "gh_repo_destination", "exported_gh_repo_destination", "gh_config_directory_changes_execution",
+    # #566's GH_REPO and GH_CONFIG_DIR rows are fixed: they pass and carry no marker.
 }
 
 
