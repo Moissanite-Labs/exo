@@ -653,6 +653,8 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
+    categories; it never prints the raw browser output.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
