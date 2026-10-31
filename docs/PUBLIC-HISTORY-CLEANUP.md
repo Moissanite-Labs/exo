@@ -43,6 +43,14 @@ Local paths, `file://` URLs, self-remotes such as `.` and aliases expanded to lo
 `remote_local: true`, `remote_network: false` and incomplete remote coverage. They can omit hosting
 PR refs even when a local mirror exactly matches its source. Unsupported remote-helper transports
 also remain unverified. Effective URLs are classified locally and never printed.
+`remote_network` describes URL syntax only. `transport_overridden: true` prevents remote verification
+when `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, `core.sshCommand`,
+`core.gitProxy`, or the selected remote's `uploadpack`/`vcs` overrides are present. Custom commands
+can serve a different repository behind a hosting-looking URL. Their presence is refused
+conservatively, even if a particular URL scheme would not use them; their values are never
+printed or executed to decide eligibility. This is a matching-ref check through standard Git
+transport in the operator's trusted environment, not an independent attestation of a provider
+or its storage. Selecting the authoritative hosting URL remains the operator's responsibility.
 Remote namespace counts and stability flags are reported without exposing names or IDs.
 A stale mirror fails that comparison; the audit never fetches or changes refs to fix it.
 Without verified remote coverage, even a successful local traversal has `complete: false`

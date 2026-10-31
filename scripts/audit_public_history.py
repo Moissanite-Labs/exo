@@ -22,6 +22,7 @@ REDIRECT_ENV = {
     "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_CEILING_DIRECTORIES",
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
 }
+TRANSPORT_ENV = {"GIT_SSH", "GIT_SSH_COMMAND", "GIT_PROXY_COMMAND", "GIT_EXEC_PATH"}
 
 
 def redirects_repository(key: str) -> bool:
@@ -96,6 +97,20 @@ def remote_location(repo: Path, remote: str) -> str:
     return "local"
 
 
+def transport_overridden(repo: Path, remote: str) -> bool:
+    """Known custom commands/helpers can serve a different repository than the URL.
+
+    Refuse their presence conservatively, even if a particular URL scheme would
+    not use them. Never execute a custom transport to decide whether it is safe.
+    """
+    if any(key in os.environ for key in TRANSPORT_ENV):
+        return True
+    keys = {b"core.sshcommand", b"core.gitproxy", f"remote.{remote}.uploadpack".lower().encode(),
+            f"remote.{remote}.vcs".lower().encode()}
+    config = git(repo, "config", "--includes", "--list", "--null").split(b"\0")
+    return any(item.split(b"\n", 1)[0].lower() in keys for item in config)
+
+
 def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | None = None) -> dict:
     report = {"schema": 3, "read_only": True, "ref_count": 0, "targets": [],
               "complete": False, "local_complete": False, "remote_verified": False,
@@ -140,11 +155,13 @@ def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | Non
         report["remote_local"] = location == "local"
         report["remote_network"] = location == "network"
         if report["remote_network"]:
-            remote_refs = advertised_refs(repo, verify_remote)
-            report["remote_ref_namespaces"] = namespace_counts(remote_refs)
-            report["mirror_refs_match"] = sorted(refs) == remote_refs
-            if not report["mirror_refs_match"]:
-                return report
+            report["transport_overridden"] = transport_overridden(repo, verify_remote)
+            if not report["transport_overridden"]:
+                remote_refs = advertised_refs(repo, verify_remote)
+                report["remote_ref_namespaces"] = namespace_counts(remote_refs)
+                report["mirror_refs_match"] = sorted(refs) == remote_refs
+                if not report["mirror_refs_match"]:
+                    return report
     head = head_state(repo)
     roots = tuple(sorted({line.split()[-1].decode("ascii") for line in refs} |
                          {head[0].decode("ascii")}))

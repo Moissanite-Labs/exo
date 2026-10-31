@@ -140,7 +140,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Overall completeness requires a full mirror verified against advertised remote refs; local traversal,
   historical path/ref-name literals and omitted-ref coverage are reported separately. The tool does
   not rewrite remote history or change repository visibility. Local/file/self remotes cannot establish
-  hosting coverage, and the synthetic tests isolate inherited Git configuration selectors.
+  hosting coverage; known custom transport commands/helpers also leave remote coverage unverified.
+  The synthetic tests isolate inherited Git configuration and transport selectors.
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 

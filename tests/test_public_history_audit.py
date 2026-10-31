@@ -2,7 +2,9 @@
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,15 +20,16 @@ def isolate_caller_git_environment(monkeypatch):
     # A caller may use GIT_CONFIG_* for its proxy. Each audit starts clean here;
     # explicit redirection tests still set their own selectors after this fixture.
     for key in list(os.environ):
-        if audit.redirects_repository(key) or key == 'GIT_GRAFT_FILE':
+        if audit.redirects_repository(key) or key in audit.TRANSPORT_ENV or key == 'GIT_GRAFT_FILE':
             monkeypatch.delenv(key)
 
 
 @pytest.fixture
 def synthetic_host(monkeypatch):
     # Exercise actual Git ref comparisons without contacting a hosting service.
-    # Local-source refusal is tested separately without this classification stub.
+    # Source/transport refusals have separate unmocked and explicit guard tests.
     monkeypatch.setattr(audit, 'remote_location', lambda repo, remote: 'network')
+    monkeypatch.setattr(audit, 'transport_overridden', lambda repo, remote: False)
 
 
 def git(repo, *args):
@@ -491,3 +494,54 @@ def test_effective_remote_transport_classification_is_content_free(tmp_path, mon
         return url.encode() + b'\n'
     monkeypatch.setattr(audit, 'git', fake_git)
     assert audit.remote_location(tmp_path, 'origin') == expected
+
+
+@pytest.mark.parametrize('override', ['GIT_SSH_COMMAND', 'core.sshCommand'])
+def test_unmocked_ssh_wrapper_cannot_verify_a_stale_local_source(tmp_path, monkeypatch, capsys, override):
+    source = fixture_repo(tmp_path)
+    safe = git(source, 'rev-parse', 'HEAD').strip().decode()
+    add_brief(source)
+    git(source, 'update-ref', 'refs/pull/1/head', 'HEAD')
+    git(source, 'reset', '--hard', safe)
+    plain = clone(source, tmp_path / 'plain')
+    mirror = clone(plain, tmp_path / 'mirror.git', '--mirror')
+    wrapper = tmp_path / 'synthetic-ssh-wrapper.py'
+    wrapper.write_text('import os\nos.execvp("git", ["git", "upload-pack", ' + repr(str(plain)) + '])\n')
+    command = shlex.join([sys.executable, str(wrapper)])
+    git(mirror, 'remote', 'set-url', 'origin', 'git@hosting.example.invalid:synthetic/repo.git')
+    monkeypatch.setenv('GIT_SSH_VARIANT', 'simple')
+    if override == 'GIT_SSH_COMMAND':
+        monkeypatch.setenv(override, command)
+    else:
+        git(mirror, 'config', override, command)
+    # Prove the real, unmocked transport substitutes the incomplete local source.
+    advertised = git(mirror, 'ls-remote', '--refs', 'origin')
+    assert b'refs/pull/1/head' not in advertised
+    assert b'refs/pull/1/head' in git(source, 'show-ref')
+    wrapper.write_text('raise SystemExit("transport must not execute during audit")\n')
+    assert audit.main(['--repo', str(mirror), '--verify-remote', 'origin']) == 2
+    output = capsys.readouterr().out
+    assert str(tmp_path) not in output and 'hosting.example.invalid' not in output and command not in output
+    report = json.loads(output)
+    assert report['local_complete'] and report['remote_network'] and report['transport_overridden']
+    assert not report['remote_verified'] and not report['complete']
+    assert report['ref_namespaces']['pull'] == 0 and brief_count(report) == 0
+
+
+@pytest.mark.parametrize('key', sorted(audit.TRANSPORT_ENV) + [
+    'core.sshCommand', 'core.gitProxy', 'remote.origin.uploadpack', 'remote.origin.vcs',
+])
+def test_custom_transport_presence_refuses_verification_without_execution(tmp_path, monkeypatch, key):
+    source = fixture_repo(tmp_path)
+    mirror = clone(source, tmp_path / 'mirror.git', '--mirror')
+    git(mirror, 'remote', 'set-url', 'origin', 'https://hosting.example.invalid/synthetic/repo.git')
+    if key in audit.TRANSPORT_ENV:
+        monkeypatch.setenv(key, 'private-custom-transport-fixture')
+    else:
+        git(mirror, 'config', key, 'private-custom-transport-fixture')
+    def forbidden(*args):
+        raise AssertionError('Overridden transport must not execute or be treated as source evidence')
+    monkeypatch.setattr(audit, 'advertised_refs', forbidden)
+    report = audit.audit(mirror, verify_remote='origin')
+    assert report['local_complete'] and report['transport_overridden'] and not report['remote_verified']
+    assert not report['complete'] and 'private-custom-transport-fixture' not in json.dumps(report)
