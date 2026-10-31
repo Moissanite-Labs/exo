@@ -1406,16 +1406,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   are. dash and zsh expand them, a known limit. The expansion matches bash 5.2's builtins on 7,500 random formats and
   texts, but for a `\u` past ASCII.
 
-  Main's `scripts/gate_diff.py` against main e4ced6d6, whose gate is d995d667's, lowers 0 pairs in each of six runs.
+  Main's `scripts/gate_diff.py` against main 4a2b6769, whose gate is d995d667's, lowers 0 pairs in each of six runs.
   The built-in corpus gives 1,265,792 pairs without variants and 8,108,232 with them.
 
   Three aimed corpora give 29,040 pairs (the first build's 165 printf, `echo -e`, `echo`, `%b`, `%s`, octal, hex,
   `\c` and nested shell lines), 74,448 (its review's 364 lines) and 56,144 (319 lines that spend each budget in
   printed output before a strict command).
 
-  The last two corpora under 12 policies that ask for `opaque_exec` beside allow rules give 17,640. The runs tighten
-  1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from `opaque_exec` to a store write or a delete. Tests:
-  `tests/security/test_gate_printf_escapes_1047.py`.
+  The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
+  and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
+  `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
