@@ -3118,6 +3118,9 @@ A stdin the gate cannot read (a file, a variable, a pipe from another command, t
 `sudo -s < /tmp/script.sh`, `cat /tmp/script.sh | sudo -s`, `sudo -s <<< "$CMD"` and
 `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`: `deny: [store_write]`
 asks for them rather than denying them, and a policy that allows `opaque_exec` lets them run.
+The gate takes the text of a `printf` or `echo -e` as written and does not expand an escape such
+as `\n`. So `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too, not a store
+write.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,

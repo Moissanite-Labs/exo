@@ -5647,7 +5647,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
   as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
   `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
-  and a policy that allows `opaque_exec` lets them run.
+  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
