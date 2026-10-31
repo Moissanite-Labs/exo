@@ -16,6 +16,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
+- `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
+  follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
+  `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+  `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
+  file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. The gate does not expand a
+  `printf` or `echo -e` escape, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  D-074's limits say so too, and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that
+  paragraph and those limits name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
@@ -60,6 +69,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   conversations yet.") until the next session event, because the page drew whichever list answer arrived last.
   It now draws an answer only when it was asked after the list on screen. This was the intermittent failure of
   `test_first_submission_recovery_belongs_to_created_thread_after_remount` (#859).
+- A ruling removed by Hermes's messaging gateway `/undo` no longer comes back as the principal's pinned words
+  (#537). The gateway cuts its transcript and drops the cached agent without telling anyone, so the new agent's
+  exo-context read the ruling back from the pins file. Each pin now has a lead in that file, a digest of the rows
+  before its message, and the file keeps the digests of the transcript's rows up to the last lead. The first turn
+  of a new engine drops a pin when the host's transcript is the noted one with its tail cut at or before the
+  pin's lead, no longer holds the pin, and has no summary row that carries it. So an `/undo N` that also takes
+  earlier turns drops it too. A transcript cut short at its start (unless its rows read word for word like the
+  session's first rows), a folded pin (also one said again after the fold) and a ruling in the session's first
+  message stay. The same turn settles a CLI `/undo` in the no-agent gap.
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
@@ -314,6 +332,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `muse-cli` keeps earlier tool calls and results in its flattened prompt, as text. It used to drop them, and
   an assistant turn that only called tools (exo-desktop #52).
 
+- Accepting a lesson is all or nothing. When the node or skill file write stops partway (a full disk), or indexing
+  or the ledger write fails after it, the file goes back to what it was. A retry then adds the lesson once, not
+  twice. The file stays when Ctrl-C lands after the ledger committed the accept. With a ledger authority, it also
+  stays when the authority committed the accept despite the error, or may have committed it and cannot be reached
+  to check (exo-desktop #54).
+
+- An accept given when its answer was not in the transcript no longer becomes an eval replay whose gold answer is
+  the placeholder text "(answer not in the transcript)". An accept whose answer was found still counts
+  (exo-desktop #54).
+
+- A held conflict proposal can be decided. No client asks its `belief_conflict` question yet, so the docs now
+  name `exo proposals accept` or `reject` as the way to end it, and either one closes the question in the ledger
+  (exo-desktop #54).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
@@ -463,6 +495,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
+
+- The Hermes import's watermark now records which session sources it read. A run that reads a source the last
+  one skipped (cron, say) starts again from the first row, so the older rows of that source are no longer missed.
+  Rows already imported are not added twice (exo-desktop #54).
 
 - Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
   the connection without a response. They send no approval answer to the core (#740).

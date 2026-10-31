@@ -234,6 +234,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
   captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
   and each later turn under 1 ms.
+  *Amendment 2026-10-28 (exo-desktop #54):* no client asks a `belief_conflict` question yet, so an answer cannot
+  release a held conflict proposal in normal use. A direct `exo proposals accept` or `reject` is how it ends, and it
+  now records the question id, which closes the question. A hand-written `answer` that refs the question still
+  works. Putting the question in the ask queue is a follow-up.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -4630,6 +4634,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-25 (#389):* the survival sentence of the #385 amendment holds until an undo, the core's or a
   host's, removes the turn a pin came from. The D-041 amendment of 2026-10-24 has the details.
+  *Amendment 2026-10-30 (#537):* that includes an undo the host does not report, such as the messaging gateway's.
+  The first turn of a new engine checks the pins against the host's transcript. The D-041 amendment's 2026-10-30
+  note has the details.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -4906,6 +4913,42 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   request (`muse-cli` refuses a call with tools, D-051), not a fault of the key or the model. It cooled the whole
   credential, so a later call without tools skipped a route that would have served it. It now falls back and
   cools nothing. `docs/PROVIDERS.md`.
+  *2026-10-30 note (#537):* Hermes's messaging gateway cuts its transcript on `/undo`, drops the cached agent and
+  tells no one. The new agent's engine read the undone ruling back from the pins file, and its block, summaries and
+  handoffs carried it again. Each pin now has a lead in the pins file. The lead is a digest of the user and summary
+  rows that come before the first principal message holding the pin, in order from the start of the host's transcript
+  (`conversation_messages`). The file also keeps the transcript's leads, one after each user or summary row, up to the
+  last pin's lead. Only a request that sends `incoming_message` notes them (Hermes does, the core does not). The first
+  such turn of a session that an engine runs checks the pins against the transcript. The transcript before the turn's
+  own message must end at one of the noted leads, so it is the noted transcript with its tail cut. A pin goes when its
+  lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
+  (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
+  ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
+  with the same words as the lead
+  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
+  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
+  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
+  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
+  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
+  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
+  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
+  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
+  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
+  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
+  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
+  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
+  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
+  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
+  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
+  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
+  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. An unreported undo waits for a new
+  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
+  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
+  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
+  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
+  written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
@@ -5820,7 +5863,14 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
   Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
-  gate does not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a `read`, as is the same line with `rm -rf`).
+  gate did not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` was a `read`, as was the same line with `rm -rf`)
+  until #718 (#491). The gate now reads the text a line feeds that shell where it can (a here-string, a heredoc, a
+  pipe from `echo`). So `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf ~/.exo/config.json'`
+  are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
+  as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
+  `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
+  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
@@ -6446,6 +6496,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - **Limit:** union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk, and union keeps both sides' copy of that hunk with the lines between. When both sides add under one heading and under the next one just below it, an entry can move to the next heading and the lines between repeat, with no conflict. `tests/test_merge_attributes.py` makes the repeat visible: it fails when a version section of `CHANGELOG.md` holds a bullet twice or a `###` heading with nothing under it. Main has neither today. Where an entry sits stays a reviewer's check.
   - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
   - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
+- **Proposed guidance 2026-10-30 (#1008):** Document GitHub's native stacks, issue artifacts and CLI media alongside the existing author-owned workflow. This guidance is advisory until the principal accepts it. Until then the author and review flow in `docs/REPOSITORY-WORKFLOW.md` governs.
+  - These tools do not change independent current-head review, required checks, merge authority, desktop sync or installation boundaries.
+  - Inventory and coordinate any existing stack with its owners before modifying it. A tool's ability to rebase or merge several branches is not authorization to do so.
+  - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md` "GitHub collaboration tools (proposed guidance)", developer guide section 8. No runtime or user-guide change.
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
