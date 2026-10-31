@@ -120,11 +120,35 @@ def test_a_gh_repo_value_on_another_instance_stays_as_written():
 @pytest.mark.parametrize("line", [
     "GH_REPO=pub/repo gh api repos/{owner}/{repo}/issues/5/comments -f body=ok",
     "export GH_REPO=pub/repo; gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=ok",
+    # gh's placeholderRE also fills `:owner` and `:repo` up to a word boundary (review 5722148651)
+    "GH_REPO=pub/repo gh api -X POST /repos/:owner/:repo/issues/5/comments -f body=ok",
+    "export GH_REPO=pub/repo; gh api -X POST repos/:owner/:repo/issues/5/comments -f body=ok",
+    "GH_REPO=pub/repo gh api -X POST repos/{owner}/:repo/issues/5/comments -f body=ok",
+    "GH_REPO=pub/repo gh api -X POST repos/:owner/{repo}/issues/5/comments -f body=ok",
+    "GH_REPO=pub/repo gh api repos/:owner/:repo/pulls/5/reviews -f event=APPROVE",
 ])
 def test_gh_api_fills_owner_and_repo_from_gh_repo(line):
     c, d = run(line, DENY_PUB)
     assert "pub/repo" in c.alt_targets, c
     assert d.outcome == "deny", d
+
+
+@pytest.mark.parametrize("endpoint", [
+    "repos/:owners/:repox/issues/5/comments",       # a word character after the name: no placeholder
+    "repos/:owner_x/:repo1/issues/5/comments",
+    "repos/myorg/app/:branch/issues/5/comments",    # gh fills :branch from git, not from GH_REPO
+    "repos/{branch}/{name}/issues/5/comments",
+])
+def test_gh_api_fills_only_the_placeholders_gh_fills(endpoint):
+    c, _ = run(f"GH_REPO=pub/repo gh api -X POST {endpoint} -f body=ok", DENY_PUB)
+    assert not any(t.startswith("pub/repo") for t in c.alt_targets), c
+
+
+def test_a_gh_api_placeholder_is_filled_in_one_pass():
+    # gh fills each placeholder once, left to right, so a value that holds `{repo}` is not filled again
+    c, _ = run("GH_REPO=pub/x gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=ok", DENY_PUB)
+    assert "pub/x" in c.alt_targets, c
+    assert gate._gh_api_env("repos/:owner/:repo/x", ["{repo}/y"]) == [("repos/{repo}/y/x", "")]
 
 
 @pytest.mark.parametrize("line", [

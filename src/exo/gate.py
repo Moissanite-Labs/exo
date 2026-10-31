@@ -3299,8 +3299,8 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     (_gh_elsewhere).
 
     gh reads GH_REPO as `-R` when the line gives none (#566). Each value the line sets for it (_gh_env_repo) is a
-    reading too, of each parse with no `-R`, read as `-R` is. So is the endpoint of gh api with its `{owner}` and
-    `{repo}` filled from it."""
+    reading too, of each parse with no `-R`, read as `-R` is. So is the endpoint of gh api with its owner and repo
+    placeholders filled from it (_gh_api_env)."""
     group, verb = (argv + ["", ""])[1:3]
     env = [v for v in _gh_env_repo.get() if v]
     if group == "api":
@@ -3336,15 +3336,25 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     return target, link, _gh_others(target, readings)
 
 
+# gh api's placeholders (placeholderRE in api.go, gh 2.89): `:owner`, `:repo` and `:branch` up to a word boundary,
+# and any `{name}`. Go's `\b` reads ASCII word characters only.
+_GH_PLACEHOLDER = re.compile(r"(?a):(owner|repo|branch)\b|\{([a-z]+)\}")
+
+
 def _gh_api_env(endpoint: str, values: list[str]) -> list[tuple[str, str]]:
-    """The readings of a gh api endpoint whose `{owner}` and `{repo}` gh fills from GH_REPO (#566): the endpoint
-    filled from each value, read as `-R` reads a repo (_gh_repo_parts), and a value on another instance as written,
-    as a `-R` on another instance is. gh refuses a value it cannot read as a repo, so that one adds nothing."""
+    """The readings of a gh api endpoint whose owner and repo placeholders gh fills from GH_REPO (#566): `{owner}`
+    and `{repo}`, and `:owner` and `:repo` up to a word boundary (_GH_PLACEHOLDER). Each is the endpoint filled from
+    each value in one pass, as gh fills it, read as `-R` reads a repo (_gh_repo_parts), and a value on another
+    instance as written, as a `-R` on another instance is. gh refuses a value it cannot read as a repo, so that one
+    adds nothing, and leaves `{branch}`, `:branch` and any other `{name}` as written."""
+    if not any((m.group(1) or m.group(2)) in ("owner", "repo") for m in _GH_PLACEHOLDER.finditer(endpoint)):
+        return []
     out: list[tuple[str, str]] = []
-    for v in values if "{owner}" in endpoint or "{repo}" in endpoint else []:
+    for v in values:
         if (parts := _gh_repo_parts(v)) is not None:
-            owner, name = parts[1].split("/")
-            out.append(_gh_api_target(endpoint.replace("{owner}", owner).replace("{repo}", name)))
+            fill = dict(zip(("owner", "repo"), parts[1].split("/")))
+            out.append(_gh_api_target(_GH_PLACEHOLDER.sub(
+                lambda m: fill.get(m.group(1) or m.group(2), m.group(0)), endpoint)))
             out += [(v, "")] * (not _gh_on_github(parts[0]))
     return out
 
