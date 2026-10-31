@@ -24,8 +24,8 @@ class ShutdownTimeout(RuntimeError):
     """close() reached its bound with work still running. Jobs and transports are stopped; plugin resources, the
     session store and the writer claim are kept until close() is called again.
 
-    ``errors`` are the close steps that failed before the bound. The message names the first and it is the cause,
-    so a retry whose steps pass does not hide it."""
+    ``errors`` are the close steps that failed, and a hard stop during the wait. The message names the first and
+    it is the cause, so a retry whose steps pass does not hide it."""
 
     def __init__(self, waiting_for: str, errors: Sequence[BaseException] = ()) -> None:
         self.errors = list(errors)
