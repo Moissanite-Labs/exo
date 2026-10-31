@@ -226,7 +226,7 @@ class ExoApp(App):
         self.delegated_requests: dict[str, dict] = {}
         self.delegated_closed: dict[str, int] = {}
         self._delegated_revision = self._delegated_asked = self._delegated_shown = 0
-        self._delegated_stale = False
+        self._delegated_stale = self._delegated_due = False
         self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
         self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
@@ -1843,6 +1843,9 @@ class ExoApp(App):
         elif isinstance(b, s.ApprovalRequested):
             self.delegated_requests[b.request_id] = {"session": ev.session, "revision": revision}
             self.delegated_closed.pop(b.request_id, None)
+            if ev.session not in (None, self.session) and not self._delegated_due:
+                self._delegated_due = True  # place it now, not on the next tick, with one read for a burst
+                self.run_worker(self.refresh_delegated_approvals(), exit_on_error=False)
         else:
             self.delegated_requests.pop(b.request_id, None)
             self.delegated_closed[b.request_id] = revision
@@ -1863,24 +1866,42 @@ class ExoApp(App):
                 if child == self.session:
                     children[sid] = edges[sid]
                     break
+        # A title is model text: a line break in it must not draw a second cue line.
         lines = [f"Delegated approval{' (last known)' if self._delegated_stale else ''}: "
-                 f"{task.get('title') or sid} ({sid}). /open {task['task_id']} to review."
+                 f"{' '.join(str(task.get('title') or '').split()) or sid} ({sid}). /open {task['task_id']} to review."
                  for sid, task in list(children.items())[:5]]
-        if len(children) > 5:
-            lines.append(f"{len(children) - 5} more delegated threads need approval. /tasks lists tasks.")
-        for cue in self.query("#delegated-approvals"):
+        if len(children) > 5:  # /tasks lists only this thread's own tasks, so name the nested ones here
+            hidden = ", ".join(task["task_id"] for task in list(children.values())[5:])
+            lines.append(f"{len(children) - 5} more delegated threads need approval: {hidden}. "
+                         "/open <task> reviews one.")
+        for cue in self.query("#delegated-approvals").results(Static):
             cue.update(Text("\n".join(lines)))
             cue.display = bool(lines)
 
+    def delegated_pending(self, listed: list[dict], revision: int) -> dict[str, dict]:
+        """Open requests: the snapshot without those closed since it was asked for, plus newer events."""
+        pending = {a["request_id"]: {"session": a.get("session")} for a in listed
+                   if a.get("request_id") and self.delegated_closed.get(a["request_id"], 0) <= revision}
+        pending.update({rid: a for rid, a in self.delegated_requests.items() if a.get("revision", 0) > revision})
+        return pending
+
     async def refresh_delegated_approvals(self) -> None:
-        """Task records alone prove ancestry. Merge events newer than either snapshot request."""
+        """Task records alone prove ancestry. Merge events newer than either snapshot request. ``tasks.list`` sends
+        every task ever written, so it is asked only while another session has an open request (#997)."""
+        self._delegated_due = False
         self._delegated_asked += 1
         asked, revision = self._delegated_asked, self._delegated_revision
+        tasks = None
         try:
-            tasks = await self.client.send(s.TasksList())
             approvals = await self.client.send(s.ApprovalsList())
-            if not tasks.ok or not approvals.ok:
+            if not approvals.ok:
                 raise ValueError("metadata unavailable")
+            listed = approvals.result.get("approvals", [])
+            pending = self.delegated_pending(listed, revision).values()
+            if any(a.get("session") not in (None, self.session) for a in pending):
+                tasks = await self.client.send(s.TasksList())
+                if not tasks.ok:
+                    raise ValueError("metadata unavailable")
         except Exception:
             if asked >= self._delegated_shown:
                 self._delegated_stale = True
@@ -1889,13 +1910,12 @@ class ExoApp(App):
         if asked < self._delegated_shown:
             return
         self._delegated_shown = asked
-        fresh = {t["task_id"]: dict(t) for t in tasks.result.get("tasks", []) if t.get("task_id")}
-        fresh.update({tid: t for tid, t in self.delegated_tasks.items() if t.get("revision", 0) > revision})
-        self.delegated_tasks = fresh
-        pending = {a["request_id"]: {"session": a.get("session")} for a in approvals.result.get("approvals", [])
-                   if a.get("request_id") and self.delegated_closed.get(a["request_id"], 0) <= revision}
-        pending.update({rid: a for rid, a in self.delegated_requests.items() if a.get("revision", 0) > revision})
-        self.delegated_requests = pending
+        if tasks is not None:  # keep only what the cue reads, not each row's brief and receipt
+            fresh = {t["task_id"]: {k: t.get(k) for k in ("task_id", "parent", "child_session", "title", "status")}
+                     for t in tasks.result.get("tasks", []) if t.get("task_id")}
+            fresh.update({tid: t for tid, t in self.delegated_tasks.items() if t.get("revision", 0) > revision})
+            self.delegated_tasks = fresh
+        self.delegated_requests = self.delegated_pending(listed, revision)
         self.delegated_closed = {rid: version for rid, version in self.delegated_closed.items() if version > revision}
         self._delegated_stale = False
         self.draw_delegated_approvals()

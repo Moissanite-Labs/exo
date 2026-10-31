@@ -287,6 +287,7 @@ You can watch and control them:
 - In the terminal, a parent shows a separate cue when an active delegated task or nested task needs approval.
   The cue names the child and gives `/open <task>` to review its own card. It does not focus or answer a card,
   stop parallel parent work, or extend the parent's permissions. Ordinary forks and unrelated tasks are excluded.
+  Past five waiting tasks, the cue names the rest by task id, because `/tasks` lists only this thread's own tasks.
   A failed metadata refresh labels the cue "last known" until a successful refresh.
 - `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
 - `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.

@@ -4863,7 +4863,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
   answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
   preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
-  newer-event and request-generation guards. Metadata failure qualifies the cue as last known.
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
