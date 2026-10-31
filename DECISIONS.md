@@ -5486,11 +5486,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   to Cancel, the safe default for a remove or a standing grant, so a second Enter cancels. Cancel, or Escape while
   focus is in the step, closes it and puts focus back on the button that opened it. Command redraws on every core
   event, so a redraw puts focus back on the approval button that had it. While a remove is in flight its step
-  stays, with Confirm remove and Cancel disabled, since Cancel can no longer stop it. Rejected: focus on Confirm, as
-  on the Chat card, whose help says Enter confirms. Here a second Enter would remove or grant. Rejected: closing
-  the step before the POST, which is one call. The card's pause, run now and remove then come back under the
-  pointer. In headless Chromium, on a card shorter than its grid row, the second click of a double click on Confirm
-  remove then landed on pause and sent a pause for the job being removed.
+  stays, with Confirm remove and Cancel disabled, since Cancel can no longer stop it. Each job in flight keeps its
+  own step (review 5707362258). A failed remove puts focus on that card's remove, unless the person has put focus
+  on another control since. Rejected: focus on Confirm, as on the Chat card, whose help says Enter confirms. Here a
+  second Enter would remove or grant. Rejected: closing the step before the POST, which is one call. The card's
+  pause, run now and remove then come back under the pointer. In headless Chromium, on a card shorter than its
+  grid row, the second click of a double click on Confirm remove then landed on pause and sent a pause for the job
+  being removed.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root

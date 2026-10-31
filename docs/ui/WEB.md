@@ -413,7 +413,9 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   and run now act at once. Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
   while focus is in the step, closes it and puts focus back on remove. While the remove is in flight the step stays,
   with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
-  for the second click of a double click.
+  for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
+  the first step as it is. A failed remove shows the error and puts focus on that card's remove, unless focus is on
+  another control by then.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with

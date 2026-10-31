@@ -4,8 +4,10 @@ import { h, api, short, errorBox, pageHead, readout, pill, emptyState, stamp, un
 
 export function mount(root) {
   // removing: the job whose remove waits for a Confirm remove click. Remove has no undo (exo-desktop #55).
-  // sending: the job whose remove is in flight. Its step stays, with both buttons disabled: Cancel cannot stop it.
-  let jobs = [], err = "", msg = "", loaded = false, removing = null, sending = null;
+  // sending: the jobs whose remove is in flight. Each keeps its step, with both buttons disabled: Cancel cannot stop
+  // it. One id per job, so a second job's remove does not give the first card its buttons back.
+  let jobs = [], err = "", msg = "", loaded = false, removing = null;
+  const sending = new Set();
   const list = h("div", { class: "xc-jobs" });
   const field = (label, el, hint) => h("label", { class: "xc-fl" }, h("span", { class: "xc-fl-k" }, label), el,
     hint ? h("span", { class: "xc-fl-hint" }, hint) : null);
@@ -40,7 +42,7 @@ export function mount(root) {
     note.replaceChildren(...[err ? errorBox(err) : null, msg ? h("div", { class: "xc-note" }, msg) : null].filter(Boolean));
     if (!loaded) { list.replaceChildren(h("div", { class: "xc-loading" }, "Reading the schedule...")); return; }
     list.replaceChildren(...(jobs.length ? jobs.map((j) => {
-      const paused = isPaused(j), name = j.title || short(j.prompt, 60) || jid(j);
+      const paused = isPaused(j), name = j.title || short(j.prompt, 60) || jid(j), held = sending.has(jid(j));
       const time = (label, iso) => h("div", null, h("dt", null, label),
         h("dd", null, iso ? [h("span", null, stamp(iso) || String(iso)), h("i", null, until(iso))] : h("span", { class: "xc-faint" }, "not yet")));
       return h("article", { class: "xc-job", "data-s": paused ? "pause" : "on" },
@@ -53,10 +55,10 @@ export function mount(root) {
         // The confirm is drawn in the page: a desktop web view with no confirm handler answers window.confirm with
         // Cancel. e.detail > 1 is the second click of a double click on "remove", not a confirmation.
         h("div", { class: "xc-btnrow", onkeydown: (e) => { if (e.key === "Escape" && removing === jid(j)) ask(j, null); } },
-          removing === jid(j) || sending === jid(j) ? [
+          removing === jid(j) || held ? [
           h("span", { role: "status", "aria-live": "polite" }, "Remove " + name + "? It cannot be undone."),
-          h("button", { class: "xc-btn xc-danger", disabled: sending === jid(j), onclick: (e) => { if (e.detail > 1 || removing !== jid(j)) return; edit("remove", j); } }, "Confirm remove"),
-          mark(j, h("button", { class: "xc-btn", disabled: sending === jid(j), onclick: () => ask(j, null) }, "Cancel"))] : [
+          h("button", { class: "xc-btn xc-danger", disabled: held, onclick: (e) => { if (e.detail > 1 || removing !== jid(j)) return; edit("remove", j); } }, "Confirm remove"),
+          mark(j, h("button", { class: "xc-btn", disabled: held, onclick: () => ask(j, null) }, "Cancel"))] : [
           h("button", { class: "xc-btn", onclick: () => edit(paused ? "resume" : "pause", j) }, paused ? "resume" : "pause"),
           h("button", { class: "xc-btn", onclick: () => edit("run_now", j) }, "run now"),
           mark(j, h("button", { class: "xc-btn xc-danger", onclick: () => ask(j, jid(j)) }, "remove"))]));
@@ -75,9 +77,12 @@ export function mount(root) {
     loaded = true;
     draw();
   }
+  // True when the core took the edit.
   async function post(body, ok) {
-    try { await api("POST", "/api/schedule", body); msg = ok; err = ""; await load(); }
-    catch (e) { err = e.message; msg = ""; draw(); }
+    try { await api("POST", "/api/schedule", body); }
+    catch (e) { err = e.message; msg = ""; draw(); return false; }
+    msg = ok; err = ""; await load();
+    return true;
   }
   function add() {
     post({ action: "add", when: f.when.value.trim(), prompt: f.prompt.value.trim(), title: f.title.value.trim(), tier: f.tier.value }, "Job added.")
@@ -87,10 +92,21 @@ export function mount(root) {
   // A remove keeps its step until the POST lands. Closing it at once would put pause, run now and remove back under
   // the pointer, and the second click of a double click on Confirm remove would land on one of them.
   async function edit(action, j) {
-    if (action === "remove") sending = jid(j);
+    const id = jid(j);
+    if (action === "remove") sending.add(id);
     removing = null; draw();
-    await post({ action, job_id: jid(j) }, DONE[action] || action + " done.");
-    if (sending === jid(j)) { sending = null; draw(); }
+    let took = false;
+    try { took = await post({ action, job_id: id }, DONE[action] || action + " done."); }
+    finally {
+      // Confirm remove left the page when the step went disabled, so focus fell to the body. A failed remove leaves
+      // the card, so focus goes to its remove. Focus the person has put on a control since stays there. The body,
+      // and a region around the list, are not controls: a click on the page puts focus on its main region.
+      if (action === "remove") {
+        sending.delete(id);
+        const at = document.activeElement, lost = !at || at.contains(list);
+        draw(!took && lost ? jobs.find((x) => jid(x) === id) : null);
+      }
+    }
   }
 
   load(); draw();
