@@ -5,9 +5,11 @@ One profile is one Exo seat: a named agent configuration under
 [SWARM-COMPOSITION.md](SWARM-COMPOSITION.md) and [SWARM-HOST.md](SWARM-HOST.md) for how
 profiles become engines).
 
-P03 status: **create only.** The foundation is
-`exo.profile_management.create_profile(home, name, *, role="", description="") -> Seat`
-in `src/exo/profile_management.py`.
+P03 status: **create + bounded update.** The foundation is
+`exo.profile_management.create_profile(home, name, *, role="", description="") -> Seat`; the
+update slice adds `exo.profile_management.profile_digest(home, name) -> str` and
+`exo.profile_management.update_profile(home, name, *, expected_digest, role=None,
+description=None) -> Seat` in `src/exo/profile_management.py`.
 
 ## Create (`create_profile`)
 
@@ -49,8 +51,41 @@ Guarantees:
   failure, and only that temporary — never a target created by another process — is ever
   removed.
 
-There is deliberately **no** update, delete, clone, import, export or key operation yet,
-and `create_profile` never grants authority: it writes one seat file and nothing else.
+There is deliberately **no** delete, clone, import, export or key operation yet, and
+`create_profile` never grants authority: it writes one seat file and nothing else.
+
+## Update (`profile_digest`, `update_profile`)
+
+`profile_digest(home, name)` returns `sha256:<hex>` over the **exact bytes** of the canonical
+`<home>/seats/<name>.toml`. It is read-only: it creates nothing, takes no lock, and reads no
+key, principal store or config. `update_profile` rewrites `[seat] role`/`description` of that
+one canonical file and returns the reparsed `Seat`.
+
+Guarantees:
+
+- **Canonical bytes only.** The existing file must be byte-for-byte what the shared renderer
+  produces for `[seat] name/role/description` and round-trip to the same values. A comment, an
+  unknown/extra key, another table, the `.json` or `<name>/seat.*` form, or hand-spaced lines
+  is refused **untouched** — this module has no general TOML writer and will not invent one.
+- **Fingerprint, not CAS.** `expected_digest` is required (a missing, malformed or stale one is
+  refused, stale with `ProfileConflict`) so a caller cannot blindly overwrite a newer revision.
+  This is explicitly **not** an atomic compare-and-swap: the final inode+byte re-check and the
+  `os.replace` are two steps, so an *uncooperative* external process editing the file in that
+  window can still have its edit overwritten. Cooperative updaters (callers of this module) are
+  fully serialized.
+- **Cooperative locking.** Updates take an exclusive, non-blocking `flock` on the sibling
+  `.<name>.lock` (created `O_NOFOLLOW|O_CREAT`, mode 0600, regular-owned only). A concurrent
+  update fails fast with `ProfileConflict` — there is no blocking or polling. The lock file is
+  **permanent** and never unlinked (removing it would break the serialization), and it is the
+  only metadata a refused update may leave behind.
+- **Fail before the filesystem.** A non-string field, an invalid seat ID, a missing or malformed
+  `expected_digest`, no field to change, or a platform without `fcntl`/atomic-replace support
+  raises before anything is created (the home/seats directory is never created by an update;
+  symlinks are never followed).
+- **No partial write, mode preserved.** The new bytes are written to an exclusively created
+  temporary, chmod'ed to the original file's mode, fsync'ed, the original re-checked (inode +
+  exact bytes + still-canonical candidates) immediately before the replace, and the temporary
+  is cleaned up on every failure path. Only the original file's bytes are ever replaced.
 
 ## SOUL (deferred)
 
@@ -64,7 +99,7 @@ from the directory form). Soul support lands in a later P number.
 Remaining profile operations land later as separate bounded changes; none of them grant
 or record authority:
 
-- update (edit `role`/`description`/`soul` of an existing profile)
+- update soul (edit the `soul` of an existing profile; `role`/`description` editing shipped in the update slice above)
 - delete
 - clone
 - import / export (move profiles between homes or machines)
