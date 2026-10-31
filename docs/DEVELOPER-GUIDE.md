@@ -267,6 +267,9 @@ credentials"), asks the principal every time, so do not copy a plugin there to t
 `${EXO_VENV:-$EXO_HOME/venv}` for private experiments; loose `EXO_PLUGIN_DIRS` while you edit instead.
 A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
 leaves nothing behind.
+A folder plugin imports as `exo_plugins.<name>`, with each character that is not a letter, digit or `_` made `_`.
+So `a-b` and `a_b` would share one module, and the second would replace the first's code. The second to load is
+refused instead, with an error that names both (exo-desktop #52). Give one of them another name.
 
 What `ctx` offers (`src/exo/core/plugins.py`):
 
@@ -293,7 +296,9 @@ not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
-`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`). A call whose arguments did not parse as
+a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
+did not parse").
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
