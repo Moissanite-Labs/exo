@@ -344,6 +344,20 @@ one it gets no credential, its routes are skipped and the providers list shows i
 its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
 and the result merges over the catalog (`docs/SEATS.md`).
 
+### Connections
+
+Each HTTP transport (one per key of a provider, the decision transport too) keeps one `httpx.AsyncClient` for
+each event loop that calls it, and every call on that loop reuses it (#263). Before, each call made a client and
+closed it after. So each call loaded the CA bundle again (about 10 ms) and opened a new TCP and TLS connection.
+Now a call reuses an idle connection to the same server. httpx keeps an idle connection for 5 seconds.
+
+A client belongs to the loop that made it. The engine's loop and the `aux_sync` thread's loop each get their own,
+and so does each `asyncio.run` of a command. A client whose loop has ended is dropped. When the engine closes, the
+router closes every client it made (`Router.aclose`), each on its own loop. That includes the clients of
+transports that a key reload replaced. A client passed in (`Router(client=...)`, in tests and plugins) and a
+provider instance passed in are not the router's, so it leaves them open. A script that builds its own router
+calls `await router.aclose()` when it is done.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.

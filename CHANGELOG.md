@@ -237,6 +237,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- Model calls reuse their HTTP connection (#263, the HTTP client half of W2-7). Each call made a new
+  `httpx.AsyncClient` and closed it after, so each call loaded the CA bundle again (about 10 ms) and opened a new
+  TCP and TLS connection. Each HTTP transport, the decision transport too, now keeps one client per event loop, and
+  a call reuses an idle connection to the same server. The engine closes these clients when it closes, also those
+  of transports a key reload replaced (D-010 amendment, `docs/PROVIDERS.md` "Connections").
 - The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
   Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
   `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay

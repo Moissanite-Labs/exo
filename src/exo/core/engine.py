@@ -337,7 +337,7 @@ class CoreRuntime:
         self._writer = None
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp, self.router.aclose):
             try:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
