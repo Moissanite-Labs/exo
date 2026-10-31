@@ -114,6 +114,18 @@ Event subscription and replay, other retrieval APIs, tools with filesystem acces
 and unseated cores still need separate access controls. Do not treat profiles
 sharing a home as isolated from hostile code.
 
+## Event ownership
+
+A loaded profile's event hub filters replay and live delivery by the session's stored
+`agent`, including requests without a session filter. Owned child sessions remain
+visible. Events for missing or foreign sessions are hidden. Events without a session
+are also hidden because the shared event log has no owner for them. Producers must
+attach an owned session to profile notices that clients need to see.
+
+The same hub serves command replay, SSE, stdio and channel subscriptions. Unseated
+cores keep the existing event behavior. Sequence cursors remain global and may have
+gaps. This does not hide activity counts or replace other retrieval-path checks.
+
 ## Skills
 
 Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/` in the checkout, or
