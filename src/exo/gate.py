@@ -6298,8 +6298,8 @@ def _escape(s: str, i: int, where: str) -> tuple[str | None, int]:
     """The escape at s[i], a backslash, as bash reads it in a printf format (``where`` "f"), in a `%b` argument
     ("b") or after `echo -e` ("e"), and where the text goes on (#1047). None ends the output (`\\c` in "b" and "e").
     An escape bash keeps as written gives the backslash alone, and the next character is read as usual. So does a
-    `\\u` past ASCII, which bash writes as the locale says (as written in the C locale): to a shell it is the letters
-    of a word either way. A byte from `\\x` or octal past ASCII is the character of that number."""
+    `\\u` past ASCII, which bash writes as its locale allows (the character, or `\\u00E9` for `\\u00e9`): to a shell
+    it is the letters of a word either way. A byte from `\\x` or octal past ASCII is the character of that number."""
     e = s[i + 1:i + 2]
     if e and e in _ESCAPES:
         return _ESCAPES[e], i + 2
