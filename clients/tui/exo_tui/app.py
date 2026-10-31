@@ -165,9 +165,12 @@ class ExoApp(App):
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
                  auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
-                 skip_permissions: bool = False, cwd: str | None = None, remote: bool = False,
+                 skip_permissions: bool = False, full_access: bool = False, cwd: str | None = None, remote: bool = False,
                  max_rounds: int | None = None) -> None:
         super().__init__()
+        if skip_permissions and full_access:
+            raise ValueError("Choose bypass or full access, not both")
+        self.full_access = full_access
         self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
         self.max_rounds = max_rounds
         self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
@@ -360,6 +363,24 @@ class ExoApp(App):
         return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
                                 for w in self.chrono() if isinstance(w, (Block, ToolBlock))])
 
+    async def full_permissions_args(self, all_sessions: bool = False) -> str:
+        sid = "all" if all_sessions else self.session
+        if not sid:
+            raise ValueError("Open a thread before enabling full permissions")
+        status = (await self.client.call(s.CommandRun(name="permissions", args="json"))).get("output")
+        if not isinstance(status, dict) or status.get("supports_full") is not True:
+            raise ValueError("This core does not support session-scoped full permissions")
+        if status.get("full_available") is False:
+            raise ValueError("Full permissions are unavailable with the required tool executor")
+        if all_sessions:
+            if status.get("supports_full_all") is not True:
+                raise ValueError("This core does not support full permissions for all sessions")
+            return "full all"
+        snapshot = await self.client.call(s.SessionGet(session=sid))
+        if (snapshot.get("session") or {}).get("id") != sid or self.session != sid:
+            raise ValueError("The selected thread changed; retry full permissions")
+        return "full " + sid
+
     @property
     def bypass(self) -> bool:
         return self.perm.get("mode") == "bypass"
@@ -381,6 +402,8 @@ class ExoApp(App):
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
         perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
+        if self.perm.get("mode") == "full":
+            perm = ("permissions: full for all sessions (including delegates) · " if self.perm.get("full_session") == "*" else "permissions: full only " + str(self.perm.get("full_session")) + " (all tool calls; other threads ask) · ")
         rounds = "" if self.max_rounds is None else f"rounds: {'unlimited' if self.max_rounds == 0 else self.max_rounds} · "
         return f"{perm}{rounds}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
@@ -395,6 +418,7 @@ class ExoApp(App):
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
                                         window=self.window, cache=self.cache_share, cost=self.cost_label(),
                                         findings=self.findings, bypass=self.bypass,
+                                        full_session=self.perm.get("full_session") if self.perm.get("mode") == "full" else None,
                                         auto=int(self.perm.get("auto_approved") or 0), rounds=self.max_rounds)
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
@@ -519,6 +543,13 @@ class ExoApp(App):
                     self.note(out if isinstance(out, str) else "permissions: bypass")
                 except Exception as exc:
                     self.note(f"--skip-permissions: {getattr(exc, 'message', None) or exc}", "error")
+            if self.full_access:
+                try:
+                    args = await self.full_permissions_args()
+                    out = (await self.client.call(s.CommandRun(name="permissions", args=args, session=self.session))).get("output")
+                    self.note(out if isinstance(out, str) else "permissions: full only " + self.session)
+                except Exception as exc:
+                    self.note(f"--full-access: {getattr(exc, 'message', None) or exc}", "error")
             if self.max_rounds is not None:
                 self.note(ROUND_LIMIT_NOTE, "warn")
             await self.load_permissions()
@@ -1495,6 +1526,15 @@ class ExoApp(App):
         else:  # /context and /compact are core commands too (command.run); the core that holds the agent lock does the work
             if name == "compact":
                 self.note("compacting...")
+            full_request = name == "permissions" and args in ("full", "full all")
+            permission_draft = "/permissions " + args
+            if full_request:
+                try:
+                    args = await self.full_permissions_args(all_sessions=args == "full all")
+                except Exception as exc:
+                    self.note(str(exc), "error")
+                    self.keep_text(permission_draft)
+                    return
             resp = await self.post(s.CommandRun(name=name, args="json" if name == "context" else args,
                                                 session=self.session))
             if resp.ok:
@@ -1511,6 +1551,8 @@ class ExoApp(App):
                 elif out:
                     self.note(out if isinstance(out, str) else str(out))
             if name == "permissions":
+                if full_request and not resp.ok:
+                    self.keep_text(permission_draft)
                 await self.load_permissions()
 
     # ------------------------------------------------------------ onboarding (D-030)

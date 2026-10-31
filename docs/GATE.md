@@ -2831,9 +2831,40 @@ Two other body fields cannot claim the principal. `peers send` with `via="human"
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
 
+## Full permission mode for one session (D-065)
+
+`/permissions full <session-id>` is explicit permission for all tool calls in that one session. Only a live
+principal connection can enable it. It includes calls arising from background messages and steers in the selected
+session, regardless of their author. Other sessions, including delegated child sessions, do not inherit it.
+Calls without a session ID do not inherit it either.
+
+`/permissions full all` is a separate explicit choice for every session in this core, including delegated child
+sessions and background turns. It uses `full_session: "*"` and `scope: core-all-sessions`. It still excludes calls
+without a session ID. Clients must check `supports_full_all` before offering this scope. No client may select
+this broader scope automatically.
+
+Full skips classification, decision-model calls, asks, deny rules, credential/store approval floors
+and posting holds. It does not bypass the tool executor, transport authentication or principal-only control-plane
+commands. A required tool executor refuses full mode. A tool that cannot execute still fails normally.
+
+Before each allowed call, the gate commits a signed ledger row with `decided_by: full`, the selected session,
+actual turn author, turn and call IDs, and a hash of the original arguments. The complete call is recorded without
+truncation, with known and obvious secrets redacted. Serialization, redaction or audit failure blocks the call.
+There is no fallback ask or unaudited allow. Audit and revocation share one lock: a call whose audit committed
+before revocation remains authorized, and subsequent calls use the normal gate. Already executing tools are not
+cancelled by revocation.
+
+Enabling full replaces bypass. `/permissions ask` revokes it from any caller, even if saving the revocation audit
+fails. Switching to bypass also clears the selected session. Enabling full does not answer an existing pending
+approval. It is kept only in memory, never as a standing grant or seat default, and ends when the core restarts.
+
+`/permissions json` advertises `supports_full`, `full_available`, `full_session`, `scope: session-all-turns`,
+`supports_full_all`, `fallback_mode: ask` and `full_auto_approved` in addition to the existing fields. Clients must check capability
+before offering full against an older core. The existing bypass rules below keep their original behavior.
+
 ## Bypass mode (D-065)
 
-Bypass is Exo's permissionless mode, like Claude Code's `--dangerously-skip-permissions`. While it is on, the gate
+Bypass is Exo's floor-preserving mode, like Claude Code's `--dangerously-skip-permissions`. While it is on, the gate
 auto-approves every call it would otherwise ask about, so the agent never stops to wait for you. Bypass
 auto-approves everything except changes to Exo's own records and reading secrets.
 

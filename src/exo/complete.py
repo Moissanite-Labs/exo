@@ -31,7 +31,7 @@ ARG_HINTS: dict[str, str] = {
     "compose": "[task|edit|close]", "layout": "[inverse|classic]",
     "trace": "[last N turns]", "findings": "[count]",
     "grants": "[list | revoke <id>]", "exo": "<subcommand> [args]", "orchestra": "[seats|skills|seat|check]",
-    "peer-release": "<id>", "peer-deny": "<id>", "exo-command": "", "permissions": "[status|bypass|ask]",
+    "peer-release": "<id>", "peer-deny": "<id>", "exo-command": "", "permissions": "[status|bypass|full [all]|ask]",
 }
 
 
@@ -102,8 +102,9 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
     elif cmd == "trace":
         return Slot("[last N turns]", "", _c("5|last 5 turns", "10|last 10 turns", "25|last 25 turns")) if n == 0 else None
     elif cmd == "permissions":
-        return Slot("[status|bypass|ask]", "", _c("status|the mode and how many calls bypass auto-approved",
+        return Slot("[status|bypass|full [all]|ask]", "", _c("status|the mode and how many calls bypass auto-approved",
                                                    "bypass|stop asking, except Exo's own records and secrets",
+                                                   "full|skip all gate checks for all tool calls in the selected thread",
                                                    "ask|ask before risky calls again")) if n == 0 else None
     elif cmd == "findings":
         return Slot("[count]", "", _c("count|how many are open")) if n == 0 else None

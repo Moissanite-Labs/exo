@@ -1,4 +1,8 @@
-"""Permission modes for the gate: ``ask`` (the default) and ``bypass`` (D-065, docs/GATE.md "Bypass mode").
+"""Permission modes: ask, bypass and explicit ephemeral full-session authorization (D-065).
+
+Full authorizes all tool calls in an explicitly selected session, or all sessions, after a signed audit.
+Only a live principal may enable it. Only the explicit all scope covers other sessions. A required executor refuses full.
+Full is never a seat default or a saved grant. The bypass rules below are unchanged.
 
 In ``bypass`` the gate turns an ``ask`` into an ``allow`` so the agent never waits for an answer. It is never silent:
 every such call is written to the signed ledger with ``decided_by: bypass`` and the call itself, and the clients show
@@ -32,9 +36,11 @@ from exo import gate
 
 logger = logging.getLogger("exo_gate")
 
-ASK, BYPASS = "ask", "bypass"
-FLOOR = tuple(gate.NO_GRANT)  # credentials, store_write: asked in every mode
+ASK, BYPASS, FULL = "ask", "bypass", "full"
+FLOOR = tuple(gate.NO_GRANT)  # credentials, store_write: bypass retains these asks
 SUMMARY = "bypass auto-approves everything except changes to Exo's own records and reading secrets"
+FULL_SUMMARY = "full skips all gate restrictions for the explicitly authorized session scope"
+FULL_REQUIRED_REFUSAL = "full is not available with a required tool executor (Exo OS)"
 REQUIRED_REFUSAL = ("bypass is not available with a required tool executor (Exo OS): every call there must be "
                     "decided and committed to the ledger before it runs")
 _CALL_LIMIT = 8000  # characters of the call kept in the ledger row; args_sha256 identifies the exact call
@@ -50,16 +56,22 @@ class Permissions:
         self.via = ""
         self.auto_approved = 0
         self.held = 0         # posting-rule violations held back instead of asked
+        self.full_session: Optional[str] = None
+        self.full_auto_approved = 0
         self.floor_asks = 0   # floor calls that still asked while bypass was on
 
-    def set(self, mode: str, by: str, via: str, now: float) -> None:
+    def set(self, mode: str, by: str, via: str, now: float, session: str = "") -> None:
         self.mode, self.by, self.via = mode, by, via
-        self.since = now if mode == BYPASS else None
+        self.since = now if mode in (BYPASS, FULL) else None
+        self.full_session = session if mode == FULL else None
 
     def snapshot(self, available: bool) -> dict:
-        return {"mode": self.mode, "available": available, "auto_approved": self.auto_approved,
+        return {"mode": self.mode, "available": available, "supports_full": True, "supports_full_all": True, "full_available": available,
+                "full_session": self.full_session, "scope": ("core-all-sessions" if self.full_session == "*" else "session-all-turns") if self.mode == FULL else "core",
+                "fallback_mode": ASK, "full_auto_approved": self.full_auto_approved, "auto_approved": self.auto_approved,
                 "held": self.held, "floor_asks": self.floor_asks, "by": self.by or None, "via": self.via or None,
-                "since": _iso(self.since) if self.since else None, "floor": list(FLOOR), "summary": SUMMARY}
+                "since": _iso(self.since) if self.since else None, "floor": [] if self.mode == FULL and available else list(FLOOR),
+                "summary": FULL_SUMMARY if self.mode == FULL and available else SUMMARY}
 
 
 def seat_default(env: Mapping[str, str] | None = None) -> str:
@@ -102,7 +114,59 @@ def recorded_call(tool: str, args: Mapping) -> dict:
     return out
 
 
+def full_recorded_call(tool: str, args: Mapping) -> tuple[dict, str]:
+    """Full's untruncated exact call, with known and obvious secrets redacted. Errors refuse the call."""
+    import hashlib
+    from exo.ingest.common import redact
+    from exo.envscrub import is_secret_name
+    from exo.core.models.keys import known_secret_values, redact_secrets
+    text = json.dumps(args, sort_keys=True, allow_nan=False)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    known = known_secret_values()
+    masked = 0
+    def scrub_text(value):
+        nonlocal masked
+        clean = redact_secrets(value, values=known)
+        masked += int(clean != value)
+        clean, count = redact(clean)
+        masked += count
+        return clean
+    def scrub(value):
+        nonlocal masked
+        if isinstance(value, dict):
+            out = {}
+            reserved = set(value)
+            for key, item in value.items():
+                clean_key = scrub_text(key)
+                base = clean_key
+                suffix = 2
+                while clean_key in out or (clean_key != key and clean_key in reserved):
+                    clean_key = f"{base} [{suffix}]"
+                    suffix += 1
+                if is_secret_name(key) or key.lower() in {"authorization", "cookie"}:
+                    out[clean_key] = "[redacted]"
+                    masked += 1
+                else:
+                    out[clean_key] = scrub(item)
+            return out
+        if isinstance(value, str):
+            return scrub_text(value)
+        return [scrub(item) for item in value] if isinstance(value, list) else value
+    text = json.dumps(scrub(json.loads(text)), sort_keys=True, allow_nan=False)
+    text, count = redact(redact_secrets(text, values=known))
+    return {"tool": tool, "args": text, "redacted": count + masked}, digest
+
+
 def status_text(p: Permissions, on: bool, available: bool) -> str:
+    if p.mode == FULL and available:
+        target = "all sessions in this core" if p.full_session == "*" else f"session {p.full_session}"
+        others = ("Child sessions are included. Calls without a session ID remain gated. " if p.full_session == "*"
+                  else "Other sessions remain gated; child sessions are not included. ")
+        return (f"permissions: full for {target}. Background messages and steers are included. "
+                "Gate asks, denies, credential/store floors and posting holds are skipped after a successful audit. "
+                + others + "Required executors and control-plane "
+                "authentication are unchanged. /permissions ask revokes full.\n"
+                f"Full auto-approved {p.full_auto_approved} calls. This setting is not saved across restarts.")
     if not on:
         line = "permissions: ask. The gate asks you before risky calls."
         if available:

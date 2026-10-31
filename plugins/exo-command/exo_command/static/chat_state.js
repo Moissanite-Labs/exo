@@ -21,7 +21,7 @@ export function commandUsage({ name, args }) {
   if (name === "context" && args) return "usage: /context";
   if (name === "trace" && args && !/^\d+$/.test(args)) return "usage: /trace [count]";
   if (name === "findings" && args && !["all", "open", "fixed", "verified", "reopened", "count"].includes(args)) return "usage: /findings [state]";
-  if (name === "permissions" && args && !["status", "bypass", "ask"].includes(args)) return "usage: /permissions [status|bypass|ask]";
+  if (name === "permissions" && args && !["status", "bypass", "full", "full all", "ask"].includes(args)) return "usage: /permissions [status|bypass|full|full all|ask]";
   if (name === "layout" && args && !["inverse", "classic"].includes(args)) return "usage: /layout inverse|classic";
   return "";
 }

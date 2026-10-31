@@ -480,6 +480,18 @@ seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); ch
 On an Exo OS installation (a required tool executor) bypass is not available. It is your consent, and it covers only
 your own turns: a turn a peer, a bus wake, a job notice or a local caller started asks as if bypass were off.
 
+For full permissionless operation in one session, use `/permissions full <session-id>` from your principal
+window, or start the terminal client with `--full-access` to authorize its selected or resumed session after
+connection. This flag is separate from `--skip-permissions` and is not passed to new thread windows.
+Peer, bus and job messages delivered to that session also run with full access, including their steers.
+An unaddressed peer message prefers a running thread, then the most recent eligible thread.
+That may be the thread granted full access.
+It skips gate asks, denials, secret and
+store floors, and posting holds. Other sessions and delegated child sessions remain gated. Existing pending
+approvals are not answered automatically. Every new allowed call requires a successful redacted audit write.
+`/permissions ask` revokes full. Full is never saved across core restarts, and required executors refuse it. To explicitly include all sessions
+and delegated children in this core, use `/permissions full all` instead. Calls without a session ID stay gated.
+
 Details: `docs/GATE.md`.
 
 ## 7. Peers

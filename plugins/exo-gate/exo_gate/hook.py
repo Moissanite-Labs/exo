@@ -322,6 +322,7 @@ class Gate:
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+        self._permission_lock = threading.RLock()
         self.permissions = perm.Permissions()  # D-065: ask (default) or bypass, for this run of the core only
 
     @property
@@ -335,23 +336,73 @@ class Gate:
         """Bypass is in force: switched on and not under a required executor, whatever the order they came in."""
         return self.permissions.mode == perm.BYPASS and not self.executor_required
 
-    def set_permissions(self, mode: str, via: str = "/permissions") -> None:
-        """Switch the mode. Bypass needs a live principal connection and no required executor; going back to
-        ask is allowed to anyone, since it only tightens. The ledger row is written before the switch."""
-        if mode not in (perm.ASK, perm.BYPASS):
+    def set_permissions(self, mode: str, via: str = "/permissions", session: str = "") -> None:
+        """Serialize switches and full-call audits. Any caller may revoke full, even if audit storage fails."""
+        if mode not in (perm.ASK, perm.BYPASS, perm.FULL):
             raise ValueError(mode)
-        if mode == perm.BYPASS:
-            by = require_principal("turn on permissions bypass")
+        if mode in (perm.BYPASS, perm.FULL):
+            by = require_principal("turn on permissions " + mode)
             if self.executor_required:
                 from exo.server.engine import CommandFailed
-                raise CommandFailed("forbidden", perm.REQUIRED_REFUSAL)
+                raise CommandFailed("forbidden", perm.FULL_REQUIRED_REFUSAL if mode == perm.FULL else perm.REQUIRED_REFUSAL)
+            if mode == perm.FULL and session == "all":
+                session = "*"
+            if mode == perm.FULL and (not isinstance(session, str) or not session or len(session) > 256
+                                      or any(c.isspace() for c in session)):
+                raise ValueError("full requires one session ID")
         else:
             by = current_caller()
-        if mode == self.permissions.mode:
-            return
-        self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": self.permissions.mode,
-                      "by": by, "via": via, "auto_approved": self.permissions.auto_approved})
-        self.permissions.set(mode, by, via, time.time())
+        with self._permission_lock:
+            previous = self.permissions.mode
+            if mode == previous and (mode != perm.FULL or session == self.permissions.full_session):
+                return
+            row = {"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": previous,
+                   "by": by, "via": via, "auto_approved": self.permissions.auto_approved}
+            if previous == perm.FULL:
+                row["previous_session"] = self.permissions.full_session
+            if mode == perm.FULL:
+                row.update(full_session=session, scope="core-all-sessions" if session == "*" else "session-all-turns")
+            if mode == perm.ASK and previous == perm.FULL:
+                self.permissions.set(mode, by, via, time.time())
+                try:
+                    self._append(row)
+                except Exception:
+                    logger.warning("exo-gate: full revoked but its audit could not be saved")
+                return
+            try:
+                eid = self._append(row)
+            except Exception:
+                if mode == perm.FULL:
+                    raise GateAuditError("Full permission mode audit could not be saved") from None
+                raise
+            if mode == perm.FULL and (not isinstance(eid, str) or not eid):
+                raise GateAuditError("Full permission mode audit could not be saved")
+            self.permissions.set(mode, by, via, time.time(), session)
+
+    def _full(self, tool: str, args: dict, session: str, call_id: str, turn_id: str,
+              author: str) -> tuple[bool, Optional[dict]]:
+        """A full allow linearizes at its committed audit; revocation waits for that operation to finish."""
+        with self._permission_lock:
+            if self.permissions.mode != perm.FULL or not session or (self.permissions.full_session != "*"
+                    and session != self.permissions.full_session):
+                return False, None
+            if self.executor_required:
+                return True, {"action": "block", "message": "Full permissions are unavailable with a required executor"}
+            try:
+                call, digest = perm.full_recorded_call(tool, args)
+                eid = self._append({"gate": PLUGIN_ID, "phase": "decision", "mode": perm.FULL,
+                                    "outcome": "allow", "decided_by": perm.FULL, "call": call,
+                                    "args_sha256": digest, "tool_call_id": call_id or None,
+                                    "turn_id": turn_id or None, "turn_author": author,
+                                    "full_session": self.permissions.full_session, "session_id": session,
+                                    "scope": "core-all-sessions" if self.permissions.full_session == "*"
+                                    else "session-all-turns"}, session=session)
+                if not isinstance(eid, str) or not eid:
+                    raise GateAuditError("Full permission audit could not be saved")
+            except Exception:
+                return True, {"action": "block", "message": "Full permission audit could not be saved; call blocked"}
+            self.permissions.full_auto_approved += 1
+            return True, None
 
     def start_from_seat(self) -> None:
         """The seat file's ``[permissions] mode = "bypass"``, applied once when the gate loads."""
@@ -367,10 +418,11 @@ class Gate:
         self.permissions.set(perm.BYPASS, "seat file", "seat default", time.time())
 
     def permissions_snapshot(self) -> dict:
-        snap = self.permissions.snapshot(available=not self.executor_required)
-        if not self.bypass_on:
-            snap["mode"] = perm.ASK
-        return snap
+        with self._permission_lock:
+            snap = self.permissions.snapshot(available=not self.executor_required)
+            if self.executor_required:
+                snap["mode"] = perm.ASK
+            return snap
 
     def _bypass(self, c: gate.Classification, d: gate.Decision, author: str = "") -> Optional[str]:
         """What bypass does with an ask in a turn the principal started: ``allow``, ``hold`` (a post that breaks
@@ -566,6 +618,9 @@ class Gate:
         session's working folder, from which the tool reads relative paths (#209). ``author`` is who started the
         turn (D-040); bypass lowers only in the principal's (#598)."""
         args = args if isinstance(args, dict) else {}
+        handled, result = self._full(tool_name, args, session_id, tool_call_id, turn_id, author)
+        if handled:
+            return result
         verdict = None
         risk_s = self._risk(tool_name, risk)
         if self.settings.decision_model:
@@ -587,6 +642,9 @@ class Gate:
                       tool_call_id: str = "", turn_id: str = "", risk: Any = None, _verdict: Any = None,
                       cwd: str = "", author: str = "", **_: Any) -> Optional[dict]:
         args = args if isinstance(args, dict) else {}
+        handled, result = self._full(tool_name, args, session_id, tool_call_id, turn_id, author)
+        if handled:
+            return result
         try:
             return self._pre_tool_call(tool_name, args, session_id, tool_call_id, self._risk(tool_name, risk),
                                        _verdict, cwd, author)
@@ -967,12 +1025,16 @@ def permissions_command(g: "Gate", args: str = "") -> Any:
     words = (args or "").split()
     if words[:1] == ["json"]:
         return g.permissions_snapshot()
-    if words[:1] in (["bypass"], ["ask"]):
+    if words[:1] == ["full"]:
+        if len(words) != 2:
+            return "usage: permissions full <session-id|all>"
+        g.set_permissions(perm.FULL, session=words[1])
+    elif words[:1] in (["bypass"], ["ask"]):
         if len(words) > 2 or words[1:] not in ([], ["launch"]):
-            return "usage: permissions [status] | bypass | ask"
+            return "usage: permissions [status] | full <session-id|all> | bypass | ask"
         g.set_permissions(words[0], "launch flag" if words[1:] == ["launch"] else "/permissions")
     elif words and words[0] != "status":
-        return "usage: permissions [status] | bypass | ask"
+        return "usage: permissions [status] | full <session-id|all> | bypass | ask"
     return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
 
 
@@ -1022,7 +1084,7 @@ def register(ctx) -> Gate:
             reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
                     "[status] | accept")
             reg_cmd("permissions", lambda args="": permissions_command(g, args),
-                    "Ask before risky calls, or bypass: " + perm.SUMMARY, "[status] | bypass | ask")
+                    "Ask before risky calls, or bypass: " + perm.SUMMARY, "[status] | full <session-id|all> | bypass | ask")
         except Exception:
             logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g

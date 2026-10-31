@@ -4335,6 +4335,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 
 ## D-065 (2026-10-13) Permissions bypass: a permissionless mode with a floor for Exo's own records
+- **Full-session amendment (2026-10-27, A's explicit request, #623):** a live principal can authorize
+  `/permissions full <session-id>` for all tool calls in one session, including background messages and steers.
+  Other sessions and delegated children do not inherit a selected-session grant. A separate explicit
+  `/permissions full all` authorizes every session in this core, including child sessions. Neither scope
+  authorizes calls lacking a session ID. Full skips all gate classifications, asks, denies,
+  posting holds and credential/store floors. Executor requirements and control-plane authentication remain.
+  A signed, redacted exact-call audit must commit before each allow. Audit failure blocks, and mode switches
+  serialize with that audit. Any caller can revoke with ask even during audit failure. No pending approval is
+  answered by enabling full, and no full grant or seat default is saved. Bypass retains its original rules.
 - **Why (A):** "permissionless mode where the agent doesn't have to ask for permission, like Claude Code and Muse Code
   have". Under the default-ask gate (D-038) a long task stops on every unknown program, script, delete and post.
 - **Decision:** a mode of the gate, `ask` (default) or `bypass`. In bypass an `ask` becomes `allow`, so the agent never

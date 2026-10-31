@@ -36,6 +36,18 @@ Retry activity. Stop remains available as Try stop when only the web feed or act
 Confirmed core loss disables it. Reconnecting does not resend a message. With an explicit attached socket,
 it does not start a core.
 
+## Explicit full permissions
+
+`/permissions full` selects the current thread, including background messages in that thread. Other threads
+and calls without a thread remain gated. `/permissions full all` explicitly covers all sessions, including
+delegated agents; unscoped calls remain gated. The banner names the active scope. `/permissions ask` revokes
+full mode, without answering pending approvals. The grant ends when the core restarts.
+
+The web route probes `supports_full` before forwarding a change, and `supports_full_all` for the explicit
+all-session target. A selected thread must exist. Older cores fail without changing mode, and an unsuccessful
+command stays in the composer. The terminal client's `--full-access` flag explicitly selects its current or
+resumed thread only; new threads do not inherit it. Existing bypass flags keep their floor-preserving behavior.
+
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with

@@ -36,9 +36,11 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--title", default="", help="title for a new session")
     p.add_argument("--cwd", help="working directory for new sessions (existing sessions keep their own directory)")
     p.add_argument("--max-rounds", type=round_limit, help="tool rounds per new turn; 0 removes the limit; this is not a time limit")
-    p.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
+    permissions = p.add_mutually_exclusive_group()
+    permissions.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
                    action="store_true", help="permissions bypass for this run of the core: the gate stops asking, except "
                    "for changes to Exo's own records and reading secrets (D-065). Every auto-approved call is in the ledger")
+    permissions.add_argument("--full-access", action="store_true", help="explicitly skip all gate checks for all tool calls in the selected/resumed thread only, including peer, bus and job messages delivered there. Unaddressed peers prefer a running thread, then the most recent eligible thread. Other threads still ask. Restart clears the grant")
     p.add_argument("--no-intro", action="store_true",
                    help="skip the first-run orientation (and do not offer it again on this EXO_HOME)")
     a = p.parse_args(argv)
@@ -68,5 +70,5 @@ def main(argv: list[str] | None = None) -> int:
         onb.mark_onboarded("skipped")
     intro = not a.no_intro and not os.environ.get("EXO_NO_INTRO")  # the env var skips without writing anything
     ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, cwd=a.cwd, auto_intro=intro, boot_anim=True,
-           provider_check=True, skip_permissions=a.skip_permissions, remote=bool(a.url), max_rounds=a.max_rounds).run()
+           provider_check=True, skip_permissions=a.skip_permissions, full_access=a.full_access, remote=bool(a.url), max_rounds=a.max_rounds).run()
     return 0
