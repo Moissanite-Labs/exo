@@ -198,7 +198,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the engine's loop and the `aux_sync` thread each get their own, and a client whose loop has ended is dropped.
   The engine's close closes every client the router made (`Router.aclose`), each on its own loop, also for the
   transports a key reload replaced. The router keeps only those clients, not the replaced keys. A client or a
-  provider instance passed in stays its owner's to close. Tests: `tests/core/models/test_http_client_reuse.py`.
+  provider instance passed in stays its owner's to close. A command that builds its own router closes it before
+  its loop ends, since a client whose loop has ended cannot be closed: `exo decide` and the baseline decision judge
+  do so after each question. Tests: `tests/core/models/test_http_client_reuse.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

@@ -5,8 +5,10 @@ session. A client's connections belong to the loop that opened them, so a call o
 thread, a command's ``asyncio.run``) gets its own client. Hermetic: every client runs on a mock transport.
 """
 
+import argparse
 import asyncio
 import gc
+import json
 import threading
 import weakref
 
@@ -26,6 +28,9 @@ NOUL = {"q": {"type": "noul", "instructions": "is it?"}}
 
 def answer(request: httpx.Request) -> httpx.Response:
     if request.url.path.endswith("/systemone"):
+        if json.loads(request.content)["questions"]["q"]["type"] == "choice":
+            return httpx.Response(200, json={"answers": {"q": {"type": "choice", "choice": "yes",
+                                                                "probabilities": {"yes": 0.8, "no": 0.2}}}})
         return httpx.Response(200, json={"answers": {"q": {"type": "noul", "noul": 0.9}}})
     return httpx.Response(200, content=SSE, headers={"content-type": "text/event-stream"})
 
@@ -135,6 +140,33 @@ def test_router_close_closes_every_client_it_made_also_after_a_key_reload(made):
         await given.aclose()
 
     asyncio.run(run())
+
+
+def jev_router() -> Router:
+    return Router.from_config({"providers": {"jev": {"transport": "decision", "base_url": "https://jev.test/v1",
+                                                     "roles": ["decision"]}},
+                               "roles": {"decision": ["jev:jev-latest"]}}, env={})
+
+
+def test_decide_command_closes_the_router_it_built(made, monkeypatch, capsys):
+    import exo.models_cmd
+    from exo.decide_cmd import cmd_decide
+
+    monkeypatch.setattr(exo.models_cmd, "build_router", jev_router)
+    assert cmd_decide(argparse.Namespace(question="is it?", options="yes,no", state="s", role="decision")) == 0
+    assert "yes" in capsys.readouterr().out
+    assert len(made) == 1 and made[0].is_closed  # its loop ends with the command: nothing may stay open
+
+
+def test_baseline_decision_judge_closes_each_lines_client(made, monkeypatch):
+    import exo.models_cmd
+    from exo.baseline.export import decision_judge
+
+    monkeypatch.setattr(exo.models_cmd, "build_router", jev_router)
+    judge = decision_judge()
+    for _ in range(2):  # one asyncio.run per line, so one client per line
+        assert judge("a line", "method") is not None
+    assert len(made) == 2 and all(c.is_closed for c in made)
 
 
 def test_engine_close_closes_the_router(tmp_path):

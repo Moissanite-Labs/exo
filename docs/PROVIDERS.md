@@ -356,7 +356,10 @@ and so does each `asyncio.run` of a command. A client whose loop has ended is dr
 router closes every client it made (`Router.aclose`), each on its own loop. That includes the clients of
 transports that a key reload replaced. A client passed in (`Router(client=...)`, in tests and plugins) and a
 provider instance passed in are not the router's, so it leaves them open. A script that builds its own router
-calls `await router.aclose()` when it is done.
+calls `await router.aclose()` on the loop that made the calls, before that loop ends. A client whose loop has
+ended can no longer be closed, and its connection stays open until Python collects it. `exo decide` and the
+baseline decision judge run each question in its own `asyncio.run`, so they close the router they built after
+each question.
 
 ## Roles
 
