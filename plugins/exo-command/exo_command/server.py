@@ -79,6 +79,7 @@ class WebServer:
         self.router_factory = prov.ps.build_router
         self._server: Optional[asyncio.AbstractServer] = None
         self._conns: set = set()
+        self._close_task: Optional[asyncio.Task] = None
         self._feeds: list = []
         self._hosts: set = set()
         self._codes: Dict[str, float] = {}   # unused launch codes -> monotonic deadline
@@ -88,7 +89,10 @@ class WebServer:
     # ------------------------------------------------------------ lifecycle
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
-        self._server = await asyncio.start_server(self._client, host, port)
+        if self._close_task is not None and (not self._close_task.done() or self._conns):
+            raise RuntimeError("web server shutdown is still in progress")
+        self._server = await asyncio.start_server(self._accept_client, host, port)
+        self._close_task = None
         bound = self._server.sockets[0].getsockname()[1]
         names = {"127.0.0.1", "localhost", "[::1]"}
         if host and host not in ("0.0.0.0", "::", ""):
@@ -220,14 +224,53 @@ class WebServer:
             print("exo-command: {}".format(self.page_url(*self._shown)), flush=True)
 
     async def close(self) -> None:
+        # One drain owns cancellation: concurrent/repeated closes must not interrupt a
+        # handler's asynchronous finally block with another cancellation.
+        if self._close_task is not None and asyncio.current_task() in self._conns:
+            # The drain may already be joining this handler's cancellation cleanup.
+            # Joining it here would make each task wait for the other.
+            return
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close(asyncio.current_task()))
+        await asyncio.shield(self._close_task)
+        if asyncio.current_task() not in self._conns:
+            # An external closer also joins a handler that initiated the drain.
+            await asyncio.shield(asyncio.gather(*self._conns, return_exceptions=True))
+
+    async def _close(self, caller: Optional[asyncio.Task]) -> None:
         if self._server is not None:
             self._server.close()
-        for t in list(self._conns):
-            t.cancel()
-        if self._server is not None:
+        # A handler may initiate shutdown. It cannot join itself, but every other
+        # owned handler must finish (including stream unsubscription) before return.
+        clients = [t for t in self._conns if t is not caller]
+        for task in clients:
+            task.cancel()
+        await asyncio.gather(*clients, return_exceptions=True)
+        # Newer asyncio versions also wait for client transports here. A handler
+        # initiating close still owns its transport until this method returns.
+        if self._server is not None and caller not in self._conns:
             await self._server.wait_closed()
 
     # ------------------------------------------------------------ http
+
+    def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self._close_task is not None:
+            writer.close()
+            return
+        # Register at acceptance, before the coroutine gets its first event-loop
+        # turn, so shutdown cannot miss an accepted but not yet started handler.
+        task = asyncio.create_task(self._client(reader, writer))
+        self._conns.add(task)
+
+        def finished(task: asyncio.Task) -> None:
+            # Cancellation before the coroutine's first turn cannot run its finally.
+            self._conns.discard(task)
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+        task.add_done_callback(finished)
 
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
