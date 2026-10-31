@@ -315,7 +315,9 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
   loop and the eval can score delegations (which roles and limits worked).
 - **Done in wave 3:** child usage rolls into the parent session total and the parent emits `usage.updated`
   for it; finished child sessions are locked (`SessionStore.lock`, `assert_open`), so a new turn fails with
-  a clear error.
+  a clear error. The lock is a key in the session's meta. Every meta write (`SessionStore.update_meta`) sets its
+  own keys and keeps the rest in one write transaction, so a context note or `/compact` that writes at the same
+  time cannot drop it (exo-desktop #52).
 - **Background delegation** (Hermes's async mode): return at once and deliver receipts later as messages.
 - **Worktree isolation** for parallel builders that edit the same repo (Hermes `subagent_worktree.py`).
 - **Decision role** (D-015): pick the child role and toolset with a decision model instead of the parent.

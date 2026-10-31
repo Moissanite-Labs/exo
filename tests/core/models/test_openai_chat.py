@@ -91,6 +91,25 @@ def test_local_llamacpp_text_stream_without_key():
     assert rec.body()["reasoning_effort"] == "medium"
 
 
+def _effort(base_url, reasoning):
+    body = OpenAIChatProvider(base_url, "k").build_body([Message.user("hi")], [], model="m", reasoning=reasoning)
+    return body.get("reasoning", {}).get("effort") if "openrouter.ai" in base_url else body.get("reasoning_effort")
+
+
+def test_reasoning_effort_stays_on_the_wire_scale():
+    """OpenAI and OpenRouter take none to xhigh. Exo's max and ultra used to go out as "max", a 400 that no
+    fallback route can fix (exo-desktop #52). They send the top wire value now."""
+    for base in ("https://api.openai.com/v1", "http://127.0.0.1:8080/v1", "https://openrouter.ai/api/v1"):
+        for level in ("max", "ultra"):
+            assert _effort(base, level) == "xhigh", (base, level)
+        for level in ("minimal", "low", "medium", "high", "xhigh"):
+            assert _effort(base, level) == level, (base, level)
+        assert _effort(base, "huge") is None, base  # an unknown level is left out, as before
+    assert _effort("https://api.openai.com/v1", "none") == "none"
+    off = OpenAIChatProvider("https://openrouter.ai/api/v1").build_body([Message.user("hi")], [], reasoning="none")
+    assert off["reasoning"] == {"enabled": False}
+
+
 def test_in_stream_provider_error_and_connection_error():
     rec = Recorder((200, b'data: {"error":{"code":429,"message":"upstream limited"}}\n\n', {}))
     ev = collect(OpenAIChatProvider("http://h/v1", client=rec.client()).stream([Message.user("x")], []))[-1]
