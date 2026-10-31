@@ -3514,7 +3514,13 @@ def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str |
     (`export GH_REPO=pub/repo; gh ..`, ``literals``, #579). A bare assignment counts too: gh sees it when the
     variable was exported before the line. So does each value the line set before k in a compound or around a
     nested line (`{ export GH_REPO=pub/repo; gh ..; }`, `export GH_REPO=pub/repo; x=$(gh ..)`, _GH_REPO_SET).
-    None stands for a value the gate cannot read."""
+    None stands for a value the gate cannot read.
+
+    Of the assignments before the program word, the last _GH_REPO_KEPT values are kept, the latest last. bash, env
+    and sudo pass gh the last one. An earlier one still counts when an option takes the later word as its value
+    (`GH_REPO=a sudo -E -p GH_REPO=b gh ..`, where `-p` takes the prompt). Each value is read on every operand, so
+    the bound keeps a line of many values and many URL operands linear. It is kept before the line's own values
+    are added, so four exports do not push the prefix value out."""
     out: list[str | None] = []
     for w in k.words:
         if w is program:
@@ -3522,6 +3528,7 @@ def _gh_env_repos(k: "_Cmd", program: "_Word", literals: Mapping) -> tuple[str |
         name, eq, value = w.text.partition("=")
         if eq and name == "GH_REPO":
             out.append(None if _expands(w) else value)
+    out = list(dict.fromkeys(reversed(out)))[:_GH_REPO_KEPT][::-1]
     if "GH_REPO" in literals:
         out.append(literals["GH_REPO"])
     if (memo := _call_memo.get()) is not None:

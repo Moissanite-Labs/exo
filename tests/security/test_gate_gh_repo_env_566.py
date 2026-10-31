@@ -64,6 +64,24 @@ def test_the_gh_repo_value_is_another_target_and_the_line_still_asks(line):
     assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
 
 
+def test_of_many_prefix_values_the_last_few_are_kept():
+    # bash, env and sudo pass gh the last one; each value is read on every operand, so only the last few are kept,
+    # before the line's own values are added (review 5722148651)
+    prefix = " ".join(f"GH_REPO=o/r{i}" for i in range(gate._GH_REPO_KEPT + 3))
+    c = gate.classify({"tool": "bash", "args": {"command": f"export GH_REPO=pub/repo; {prefix} gh pr comment 5 -b x"}})
+    last = gate._GH_REPO_KEPT + 2
+    assert {f"o/r{i}#5" for i in range(last - gate._GH_REPO_KEPT + 1, last + 1)} <= set(c.alt_targets), c
+    assert "o/r0#5" not in c.alt_targets and "pub/repo#5" in c.alt_targets, c
+
+
+@pytest.mark.parametrize("repo", ["a/*", "b/*"])
+def test_an_option_that_takes_a_later_prefix_word_keeps_the_earlier_value(repo):
+    # sudo's -p takes the prompt, so gh runs with GH_REPO=a/x where sudo keeps the environment
+    pol = gate.normalize_policies({"gates": {**SCOPE, "deny": [f"target:{repo}"]}})
+    _, d = run("GH_REPO=a/x sudo -E -p GH_REPO=b/y gh pr comment 5 -b x", pol)
+    assert d.outcome == "deny", d
+
+
 def test_a_line_keeps_only_the_last_few_gh_repo_values():
     # each gh command reads the last _GH_REPO_KEPT values the line set before it, so a long line stays linear
     sets = "".join(f"{{ export GH_REPO=o/r{i}; }}; " for i in range(gate._GH_REPO_KEPT + 3))
