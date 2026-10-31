@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass, fields, replace
 from typing import Any
 
+from exo.core.agents.route_config import RouteConfig, RouteConfigError
 from exo.core.context import DefaultCompressor, TreeContext
 from exo.core.loop import Loop
 from exo.core.models.router import TIERS
@@ -81,6 +82,10 @@ _ITEM = {
                             "(architecture, open research synthesis, hard cross-file debugging). Prefer the cheaper "
                             "tier when unsure. Default by role: scout fast, builder and verifier standard, critic "
                             "deep. A child never runs above your own tier."},
+    "route": {"type": "string", "description": "Optional: run this child on one configured named model route "
+                                               "(delegation.routes.routes.<name>), e.g. 'cheap', instead of a tier. "
+                                               "Cannot be combined with `tier`; the route's own tier must never "
+                                               "be above your tier."},
 }
 SPEC = ToolSpec(
     name="delegate", toolset="delegation", risk="low",
@@ -138,6 +143,7 @@ class Delegator:
                                             if k in ROLES and v in TIERS}}
         self.allow_upgrade = bool(cfg.get("allow_upgrade", False))
         self.escalate_on_fail = bool(cfg.get("escalate_on_fail", True))
+        self.route_config = RouteConfig.of(cfg.get("routes"))
         self.tiers: dict[str, str] = {}       # running child session -> the tier it runs at
         self.allow: dict[str, set[str]] = {}  # child session -> tool names it may call
         self.loops: dict[str, Loop] = {}      # running child sessions
@@ -192,6 +198,8 @@ class Delegator:
         if (self.engine.executor_required and any(it.get("seat") for it in items)
                 and getattr(self.engine.executor, "supports_remote_delegation", False) is not True):
             raise ToolError("Required tool executor does not support remote delegation")
+        if any(it.get("seat") and it.get("route") for it in items):
+            raise ToolError("Remote delegation (seat) cannot carry a named route; run that task locally")
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
         runs = [asyncio.ensure_future(self._remote(parent, b, str(it["seat"])) if it.get("seat")
                                       else self._attempts(parent, b)) for b, it in zip(briefs, items)]
@@ -239,6 +247,17 @@ class Delegator:
         top = self._ceiling(parent)
         return tier if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top) else top
 
+    def _route_ref(self, name: str) -> str:
+        """Validate a route name against the configured routes and the router's catalog; return its ref."""
+        try:
+            ref = self.route_config.resolve(name)
+            self.engine.router.pinned(ref, "delegate")
+        except RouteConfigError as exc:
+            raise ToolError(str(exc))
+        except ValueError as exc:
+            raise ToolError(f"route {name!r}: {exc}")
+        return ref
+
     def route(self, tier: str) -> tuple[Any, str]:
         """(provider, "provider:model") for a tier. No usable tier route means the parent's own model."""
         e = self.engine
@@ -254,7 +273,7 @@ class Delegator:
     async def _attempts(self, parent: str, b: Brief) -> Receipt:
         """Run a child; if it failed (not cancelled), retry once one tier up when allowed and it changes the model."""
         r = await self.run(parent, b)
-        if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
+        if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS or b.route:
             return r
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
         if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:
@@ -266,9 +285,28 @@ class Delegator:
         if role not in ROLES:
             raise ToolError(f"role must be one of {', '.join(ROLES)}")
         asked = it.get("tier")
-        if asked is not None and asked not in TIERS:
-            raise ToolError(f"tier must be one of {', '.join(TIERS)}")
-        tier = self._cap(parent, asked or self.role_tiers[role])
+        route = it.get("route")
+        if asked is not None and route is not None:
+            raise ToolError("give a task either `route` or `tier`, not both")
+        if route is not None:
+            if not isinstance(route, str) or not route.strip():
+                raise ToolError("route must be a non-empty configured route name")
+            route = route.strip()
+            ref = self._route_ref(route)
+            target = self.engine.router.tier_of(ref)
+            if target is None:
+                raise ToolError(f"route {route!r} ({ref}) is not on any model tier; cannot verify it "
+                                "never runs above your own tier")
+            pt = self.tiers.get(parent) or self.engine.router.tier_of(self.engine.loop.model)
+            if pt is None:
+                raise ToolError(f"cannot verify route {route!r}'s tier: the parent's own tier is unknown")
+            if TIERS.index(target) > TIERS.index(pt):
+                raise ToolError(f"route {route!r} runs at tier {target}, above your own tier {pt}")
+            tier = target
+        else:
+            if asked is not None and asked not in TIERS:
+                raise ToolError(f"tier must be one of {', '.join(TIERS)}")
+            tier = self._cap(parent, asked or self.role_tiers[role])
         want = it.get("tools")
         tools = self._tools(parent, depth + 1, role, want if isinstance(want, list) else None)
         lim = self.limits
@@ -276,7 +314,7 @@ class Delegator:
         b = Brief(id=new_id("k"), thread=parent or "root", goal=str(it["goal"]).strip(),
                   context=str(it.get("context") or "").strip(), role=role, tools=sorted(tools),
                   max_turns=lim.max_turns, max_tokens=lim.max_tokens, timeout_s=lim.timeout_s, depth=depth + 1,
-                  max_depth=lim.max_depth, cwd=str(cwd or ""), accept=accept, tier=tier)
+                  max_depth=lim.max_depth, cwd=str(cwd or ""), accept=accept, tier=tier, route=route or "")
         encode(b)  # the brief must be a valid packet before anything runs
         return b
 
@@ -338,7 +376,11 @@ class Delegator:
                                       s.now_ts(), s.now_ts()))
         self._emit(parent, b, "queued", None, line)
         sid, code, why, result, loop, turn = "", "", "", None, None, None
-        provider, model = self.route(b.tier)
+        if b.route:
+            ref = self._route_ref(b.route)
+            provider, model = self.engine.router.provider_for(ref), ref
+        else:
+            provider, model = self.route(b.tier)
         try:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
                 loop = self._loop(b, provider, model)
@@ -363,7 +405,7 @@ class Delegator:
             raise
         finally:
             r = self._receipt(b, sid, loop, result, code, why, t0)
-            r.model, r.escalated = model, int(escalated)
+            r.model, r.escalated, r.route = model, int(escalated), b.route
             rl = encode(r)
             sig = json.dumps(sign(rl, self.signer)) if self.signer is not None else None
             db._q("UPDATE tasks SET status=?, receipt=?, sig=?, updated=? WHERE id=?",

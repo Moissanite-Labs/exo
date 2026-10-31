@@ -1,60 +1,81 @@
-# Swarm delegation (D02) — INCOMPLETE, configuration and wire only
+# Swarm delegation (D02): named routes active
 
-Named delegation routes: the parent may ask a child to run on one configured model route,
-`delegation.routes.<name>`, instead of a tier.
+Named delegation routes are active in this slice. A parent may ask a child to run on one configured
+model route, `delegation.routes.routes.<name>`, instead of a tier. A route pins the model exactly.
+The child streams on that one route only: no tier chain, no fallback, and no escalation when the
+child fails.
 
-**This is not an active feature.** What exists today is a configuration parser and the wire
-carrying a name; nothing resolves, routes, or activates a route at runtime.
+## Config
+
+Under the top-level `delegation:` key of the config file:
+
+```yaml
+delegation:
+  routes:
+    backend: model_map          # "model_map" or "default"
+    routes:
+      cheap: "provider:model"   # name -> "provider:model" ref
+```
+
+- The block nests as `delegation.routes = {backend, routes: {name: "provider:model"}}`.
+- `backend: default` (also when the block is missing) keeps today's delegation behavior: tiers and
+  the parent's own model. It takes no routes. A route map beside a `default` backend is rejected as
+  dead configuration.
+- `backend: model_map` requires a non-empty `routes` map. A bare `routes` map implies it.
+- Route names start with a letter, are at most 32 characters, and may not collide with the reserved
+  roles (`main`, `aux`, `delegate`, `decision`, `eval`) or the delegate tiers (`fast`, `standard`,
+  `deep`). Refs must be `"provider:model"` strings. Unknown keys, including `profile_routes`, are
+  rejected rather than silently ignored.
+
+## Active behavior
+
+- **Either route or tier.** A delegate task may carry `route` or `tier`, never both. They are
+  rejected together before any child starts.
+- **Exact pin.** With a route, the child runs on exactly that route's `"provider:model"`, pinned
+  via `Router.provider_for(ref)` / `Router.pinned(ref, role="delegate")`. There is no fallback to
+  any other route. A failed route child is not retried one tier up and is not escalated (ordinary
+  tier children are retried once up on failure when `escalate_on_fail` allows).
+- **Never above the parent.** The route's own tier (the tier its model is ranked on) must be at or
+  below the parent's tier, and the parent's tier must be known. This holds even when
+  `allow_upgrade` is on: upgrade only ever relaxes *tier* requests, while a route picks one exact
+  model that must still respect the no-upgrade cap.
+- **Validation before any task row.** Each of these rejects the delegate call before any task or
+  brief row exists:
+  - an unknown route name
+  - a ref that is not `"provider:model"`, whose provider is unknown, or that may not serve the
+    delegate role
+  - a route whose model is ranked on no known tier, so it cannot be verified safe
+  - a parent whose own tier is unknown
+  - a route above the parent's tier
+- **Remote seats unsupported.** A remote (seat) delegation cannot carry a named route. The parent
+  must run routed work locally.
 
 ## What is built (this slice)
 
-- **`src/exo/core/agents/route_config.py`** — a pure configuration parser, independent of any
-  runtime. It validates the shape of the `delegation.routes` block and returns an immutable
-  mapping of route names to `"provider:model"` refs.
-  - `backend = "default"` (the default, also when the block is missing): tiers and the parent's
-    own model, exactly as delegation behaves today. Takes no routes — a route map beside it is
-    rejected as dead configuration.
-  - `backend = "model_map"`: needs a non-empty `routes` map; `routes` alone implies it.
-  - Route names are structural strings, validated only for shape: they start with a letter, are
-    at most 32 characters, and may not collide with the reserved roles (`main`, `aux`,
-    `delegate`, `decision`, `eval`) or the delegate tiers (`fast`, `standard`, `deep`).
-  - Refs must be `"provider:model"` strings (shape only).
-  - Unknown keys, including `profile_routes`, are rejected rather than silently ignored.
-  - No router validation, no credential lookup, no provider construction, no `Delegator`
-    integration: the parser answers the same on a machine with no keys and no network.
-- **Wire** (`src/exo/wire/packets.py`, `src/exo/wire/grammar.py`): `Brief` and `Receipt` carry an
-  optional `route` field, encoded as opcode 117 (`asked_route`). Route-less packets keep their old
-  bytes exactly, so peers on the older vocabulary are unaffected. The wire carries the name;
-  nothing on the wire resolves it.
-
-## Runtime prerequisite (router helpers, D02 not yet active)
-
-The router side now has the primitives the later activation slice will build on, but nothing calls
-them outside the router's own tests:
-
-- **`Router.stream(..., _exact="provider:model")`** (private, optional): pins the call to the one
-  configured route the ref names. The chain is that route alone — no fallback to any other route,
-  in this role or another — while the ordinary credential rotation, cooldowns, circuit breaker and
-  spend guard of this Router all still apply. A bad ref raises `ValueError` before anything is
-  streamed.
-- **`Router.provider_for(ref, role="delegate")`**: a `RoleProvider` for one route on this same
-  Router (one shared cooldown, breaker and spend state; default `provider()` is unchanged). It
-  validates the ref up front — shape, known provider, and the provider's `roles` table permitting
-  `role` — and raises `ValueError` before any credential is read.
-- Helpers (`_exhausted`, `_chain_cooldowns`, `_refused`) now scope their wait hints and refusals to
-  the chain the call actually walked, so a pinned failure speaks only for its route.
+- `src/exo/core/agents/route_config.py` (the pure config parser, credential-free and
+  network-free): validates the block and returns an immutable mapping of route names to refs, and
+  rejects reserved names and unknown keys. `Delegator` reads it at runtime.
+- Router helpers: `Router.pinned(ref, role="delegate")`, `Router.provider_for(ref)`, and
+  `Router.stream(..., _exact="provider:model")`. These pin exactly and never fall back, while
+  ordinary credential rotation, cooldowns, circuit breaker and spend guard still apply.
+- `src/exo/core/agents/delegate.py`: `Delegator` reads the block at init, validates route and tier
+  choices in the tool spec (either-or, route-name checks via the parser, tier-ceiling checks), and
+  streams the child on the pinned provider.
+- Wire (`src/exo/wire/packets.py`, `src/exo/wire/grammar.py`): `Brief` and `Receipt` carry the
+  optional `route` field as opcode 117 (`asked_route`). Route-less packets keep their old bytes, so
+  peers on the older vocabulary are unaffected.
 
 ## What is deliberately NOT built (later slices)
 
-- No runtime activation: no code path reads `route_config.py` yet, and delegation itself does not
-  use the router helpers above; `Delegator` and the child loop ignore the `route` field.
-- No resolution, fallback, or profile_routes behavior for a failed route; `provider_for` is not
-  called by any delegation path.
-
-D02 is incomplete until that runtime slice lands. Until then, setting `delegation.routes` in a
-config file parses (see `tests/agents/test_route_config.py`) and does nothing else.
+- `profile_routes` (the profile-scoped variant): recognized and rejected, not silently ignored.
+- Executing a named route on a remote seat over the bus.
+- Whole-Swarm completeness: this slice makes named delegation routes *run*. Other D02 surface
+  (profiles, remote routed work, additional backends) is out of scope here.
 
 ## Tests
 
-`tests/agents/test_route_config.py` (parser: defaults, model_map, immutability, rejections) and
-`tests/agents/test_wire.py` (route round-trip, old-bytes guarantee for route-less packets).
+- `tests/agents/test_route_config.py`: parser defaults, model_map, immutability, rejections.
+- `tests/agents/test_wire.py`: route round-trip and the old-bytes guarantee for route-less packets.
+- `tests/agents/test_delegate_routes.py`: runtime. A routed child runs on the named model and fails
+  once without escalation, and every invalid case (route + tier, unknown route, unranked model,
+  above-parent route, unknown parent tier, remote + route) rejects before any task row exists.

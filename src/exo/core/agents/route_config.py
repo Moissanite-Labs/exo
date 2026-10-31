@@ -1,22 +1,25 @@
-"""Named delegation routes: the configuration half only (D02, incomplete).
+"""Named delegation routes (D02): a child runs on one configured named route instead of a tier.
 
-The parent may ask a child to run on one named model route, ``delegation.routes.<name>``, instead
-of a tier. This module is a pure parser for that configuration: it validates the shape of the
-block and hands back an immutable mapping of route names to ``"provider:model"`` refs.
-
-It deliberately stops at structure. Nothing here looks up credentials, checks a provider against
-the router's catalog, or builds a provider for a child: the parser must answer the same way on a
-machine with no keys and no network. Handing a resolved route to ``Delegator`` (and streaming it
-with no fallback) is a later slice; until then no runtime reads this module and the ``route``
-field on the wire is carried, not acted on. See docs/SWARM-DELEGATION.md.
+The parent may ask a child to run on one named model route, ``delegation.routes.routes.<name>``,
+instead of a tier. This module parses and validates the ``delegation.routes`` configuration block,
+and ``Delegator`` resolves named routes through it at runtime. A route pins the child's model
+exactly: no tier chain, no fallback, and no escalation when the child fails.
 
 Config under ``delegation.routes``::
 
     {"backend": "default"}                                  # tiers and the parent's own model, as today
-    {"backend": "model_map", "routes": {"cheap": "fake:fast"}}   # named routes, explicit opt-in
+    {"backend": "model_map", "routes": {"cheap": "fake:fast"}}  # named routes: explicit opt-in
 
-``backend = "default"`` takes no routes: a route map beside it would be silently dead
-configuration, so it is rejected instead. ``backend = "model_map"`` needs at least one route.
+``backend = "default"`` takes no routes: a route map beside it would be dead configuration, so it
+is rejected instead. ``backend = "model_map"`` needs at least one route; a bare ``routes`` map
+implies it. Route names may not collide with the reserved roles or the delegate tiers, and refs
+must be ``"provider:model"`` strings.
+
+Parsing is credential-free and network-free: this module answers the same on a machine with no
+keys and no network. Shape is all it validates here; ``Delegator`` later checks a resolved ref
+against the router's catalog (known provider, a provider that may serve the delegate role, a model
+ranked on a tier at or below the parent's) before any task row exists. See
+docs/SWARM-DELEGATION.md.
 """
 
 from __future__ import annotations
