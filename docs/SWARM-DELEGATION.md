@@ -27,12 +27,29 @@ carrying a name; nothing resolves, routes, or activates a route at runtime.
   bytes exactly, so peers on the older vocabulary are unaffected. The wire carries the name;
   nothing on the wire resolves it.
 
+## Runtime prerequisite (router helpers, D02 not yet active)
+
+The router side now has the primitives the later activation slice will build on, but nothing calls
+them outside the router's own tests:
+
+- **`Router.stream(..., _exact="provider:model")`** (private, optional): pins the call to the one
+  configured route the ref names. The chain is that route alone — no fallback to any other route,
+  in this role or another — while the ordinary credential rotation, cooldowns, circuit breaker and
+  spend guard of this Router all still apply. A bad ref raises `ValueError` before anything is
+  streamed.
+- **`Router.provider_for(ref, role="delegate")`**: a `RoleProvider` for one route on this same
+  Router (one shared cooldown, breaker and spend state; default `provider()` is unchanged). It
+  validates the ref up front — shape, known provider, and the provider's `roles` table permitting
+  `role` — and raises `ValueError` before any credential is read.
+- Helpers (`_exhausted`, `_chain_cooldowns`, `_refused`) now scope their wait hints and refusals to
+  the chain the call actually walked, so a pinned failure speaks only for its route.
+
 ## What is deliberately NOT built (later slices)
 
-- No runtime activation: no code path reads `route_config.py` yet; `Delegator`, the router, and
-  the child loop ignore the `route` field.
-- No provider/catalog validation of a ref, no credential handling, no `profile_routes`.
-- No resolution or fallback behavior for a failed route.
+- No runtime activation: no code path reads `route_config.py` yet, and delegation itself does not
+  use the router helpers above; `Delegator` and the child loop ignore the `route` field.
+- No resolution, fallback, or profile_routes behavior for a failed route; `provider_for` is not
+  called by any delegation path.
 
 D02 is incomplete until that runtime slice lands. Until then, setting `delegation.routes` in a
 config file parses (see `tests/agents/test_route_config.py`) and does nothing else.

@@ -238,6 +238,22 @@ class Router:
         allowed = (self.providers.get(provider) or {}).get("roles")
         return not allowed or role in allowed
 
+    def pinned(self, ref: str, role: str = "delegate") -> Route:
+        """The one route ``ref`` names, checked against the configured providers and the role's limits.
+        Raises ``ValueError`` for a bad shape, an unknown provider, or a provider that may not serve ``role``."""
+        if not ref or ref.startswith("-") or any(c.isspace() for c in ref):
+            raise ValueError(f"bad model ref {ref!r}")
+        route = Route.parse(ref)
+        if route.provider not in self.providers and route.provider not in self.instances:
+            raise ValueError(f"unknown provider {route.provider!r} in {ref!r}")
+        if not self._allows(route.provider, role):
+            raise ValueError(f"provider {route.provider!r} cannot serve role {role!r}")
+        return route
+
+    def _chain_for(self, role: str, ref: str | None = None) -> list[Route]:
+        """The chain for ``role``, or only the route ``ref`` names: an exact-route call never falls back."""
+        return self.chain(role) if ref is None else [self.pinned(ref, role)]
+
     def tier_route(self, tier: str) -> Route | None:
         """First route of ``tier`` (then its fallbacks) whose provider has credentials, else None."""
         return next((r for r in self.chain(tier) if self.credentials(r.provider)), None)
@@ -413,16 +429,23 @@ class Router:
 
     # --- streaming -----------------------------------------------------------
     async def stream(self, role: str, messages: list[Message], tools: list[ToolSpec],
-                     **opts: Any) -> AsyncIterator[ProviderEvent]:
+                     *, _exact: str | None = None, **opts: Any) -> AsyncIterator[ProviderEvent]:
         """Stream from the first available route of ``role``, rotating sibling credentials
         then falling back to later routes until output has started. Ends with exactly one
-        ``done`` or ``error``."""
+        ``done`` or ``error``.
+
+        ``_exact`` (private, D02 prerequisite): pin this call to the one route named
+        ``"provider:model"``. No other configured route is tried, in this role or another. The
+        route keeps the ordinary credential rotation, cooldowns, circuit breaker and spend guard.
+        An invalid ref raises ``ValueError`` before anything is streamed."""
+        if _exact is not None:
+            self.pinned(_exact, role)  # raises before anything is streamed; also limits the chain below
         tried: list[str] = []
         attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
         failed_credentials: set[str] = set()
         attempted_credentials: set[tuple[str, str]] = set()
-        chain = self.chain(role)
+        chain = self._chain_for(role, _exact)
         # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
         skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
         pending_routes, i = chain, 0
@@ -519,7 +542,7 @@ class Router:
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
             attempts[-1]["outcome"] = "error"  # normal routes and the optional last resort are exhausted
-        end = self._exhausted(role, tried, last)
+        end = self._exhausted(role, tried, last, _chain=chain)
         end.attempts = attempts
         yield end
 
@@ -591,29 +614,34 @@ class Router:
                         ev.message.meta.setdefault("model", route.ref)
             yield ev
 
-    def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None) -> ProviderEvent:
+    def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None,
+                   *, _chain: list[Route] | None = None) -> ProviderEvent:
+        """The closing event. ``_chain`` is the chain this call actually walked (exact route: one route), so the
+        wait hint and the refusal speak only for that route."""
+        chain = self.chain(role) if _chain is None else _chain
         now = self.clock()
-        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now)]
+        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now, _chain=chain)]
         wait = min(waits) if waits else None
-        if not self.chain(role):
+        if not chain:
             return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
                                None, retryable=False)
         if not tried and not waits:
             return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
                                "or use /providers to add a provider and choose its model",
                                None, retryable=False)
-        if refused := self._refused(role, tried, last, now):  # no retry now, say what to fix; retry_after: it reopens
+        if refused := self._refused(role, tried, last, now, _chain=chain):  # no retry now, say what to fix
             return error_event(refused[1], refused[0], retryable=False, retry_after=wait)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
 
-    def _chain_cooldowns(self, role: str, now: float) -> list[tuple[float, str, Cooldown]]:
+    def _chain_cooldowns(self, role: str, now: float, *,
+                         _chain: list[Route] | None = None) -> list[tuple[float, str, Cooldown]]:
         """Live cooldowns that bear on ``role``: a credential of a chain provider, or a credential|model cooldown on a
         model of the chain. A gate side call (D-081) cools a model this role never asks, and another provider's
         cooldown says nothing about this role's routes, so neither moves the wait hint or the refusal."""
-        routes = {(r.provider, r.model) for r in self.chain(role)}
+        routes = {(r.provider, r.model) for r in (self.chain(role) if _chain is None else _chain)}
         out: list[tuple[float, str, Cooldown]] = []
         for key, cd in self.cooldowns.items():
             cred, scoped, model = key.partition("|")
@@ -623,12 +651,12 @@ class Router:
         return out
 
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
-                 now: float) -> tuple[int | None, str] | None:
+                 now: float, *, _chain: list[Route] | None = None) -> tuple[int | None, str] | None:
         """Status and message when waiting cannot help: the provider refused the key or login (401, 403), or the key is
         over its spend limit (402) which a new key does not fix; on a later call too, while that credential, or a model
         of the chain on it, reopens first; or a local server is not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
-            cooling = self._chain_cooldowns(role, now)
+            cooling = self._chain_cooldowns(role, now, _chain=_chain)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
             status, err = cd.status, cd.error or f"HTTP {cd.status}"
         else:
@@ -649,6 +677,14 @@ class Router:
 
     def provider(self, role: str = "main") -> RoleProvider:
         return RoleProvider(self, role)
+
+    def provider_for(self, ref: str, role: str = "delegate") -> RoleProvider:
+        """A Provider for the one route ``ref`` names (D02 prerequisite). Raises ``ValueError`` before any
+        credential is read, for a bad shape, a provider that is not configured, or a provider whose ``roles``
+        table may not serve ``role``. Uses this same Router (one cooldown, breaker and spend state) with
+        ``role`` as the stream role, so it never falls back to another route."""
+        self.pinned(ref, role)
+        return RoleProvider(self, role, exact=ref)
 
     def status(self) -> list[dict[str, Any]]:
         """Routes per role with availability, for ``models.list``."""
@@ -684,13 +720,14 @@ class Router:
 class RoleProvider:
     """A Router bound to one role; satisfies the ``Provider`` protocol for the loop."""
 
-    def __init__(self, router: Router, role: str) -> None:
+    def __init__(self, router: Router, role: str, *, exact: str | None = None) -> None:
         self.router = router
         self.role = role
-        self.name = f"router:{role}"
+        self.exact = exact
+        self.name = f"router:{role}" if exact is None else f"router:{role}:{exact}"
 
     def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
-        return self.router.stream(self.role, messages, tools, **opts)
+        return self.router.stream(self.role, messages, tools, _exact=self.exact, **opts)
 
 
 class ModelError(RuntimeError):
