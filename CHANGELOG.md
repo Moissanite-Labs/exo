@@ -335,7 +335,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   While a Schedule remove is in flight, its step now stays with Confirm remove and Cancel disabled. Before, Cancel
   stayed live then. Pressing it hid the step, and the job was removed anyway. Each job keeps its own step, so a
   remove on a second job does not give the first card its buttons back (review 5707362258). A failed remove puts
-  focus on that card's remove. Tests:
+  focus on that card's remove, unless focus has moved outside the job list. Tests:
   `plugins/exo-command/tests/test_schedule_web.py`,
   `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
   `docs/USER-GUIDE.md` §5, D-061 amendment.

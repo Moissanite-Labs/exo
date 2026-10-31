@@ -415,7 +415,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
   for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
   the first step as it is. A failed remove shows the error and puts focus on that card's remove, unless focus is on
-  another control by then.
+  a control outside the job list by then, such as a form field. Each redraw replaces the buttons in the list, so
+  focus on another card's button does not stay.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with

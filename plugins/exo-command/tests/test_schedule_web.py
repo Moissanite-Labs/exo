@@ -214,8 +214,10 @@ def test_a_failed_remove_puts_focus_on_its_remove_unless_focus_moved_on(tmp_path
     """A failed remove puts focus on that card's remove, so a keyboard user can try again. Focus starts on the body,
     since Confirm remove left the page, or on a region around the list, where a click on the page puts it.
 
-    Focus the person put on a control while the remove was out, such as the form's Title, stays there. A remove the
-    core took leaves focus alone, even when the list could not be read again and still shows the card."""
+    Focus the person put on a control while the remove was out, such as the form's Title, stays there. Focus on
+    another card's button does not stay: the error's redraw replaces that button, so focus goes to the failed card's
+    remove, and the other card's open step stays open. A remove the core took leaves focus alone, even when the list
+    could not be read again and still shows the card."""
     execute(tmp_path, r'''
 refuse=true;
 let land;
@@ -231,6 +233,15 @@ for(const moved of [null,root,title]) {
   assert.deepEqual(shown("Weekly digest"),["pause","run now","remove"]);
   assert.equal(document.activeElement,moved===title ? title : onCard("Weekly digest","remove"));
 }
+hold=new Promise(r=>{ land=r; });                   // Morning brief's step is open when Weekly digest's remove fails
+await click(onCard("Weekly digest","remove"));
+await click(onCard("Weekly digest","Confirm remove"));
+await click(onCard("Morning brief","remove"));
+assert.equal(document.activeElement,onCard("Morning brief","Cancel"));
+land(); hold=null; await sleep(20);
+assert.deepEqual(shown("Morning brief"),["Confirm remove","Cancel"]);
+assert.equal(document.activeElement,onCard("Weekly digest","remove"));
+await click(onCard("Morning brief","Cancel"));
 refuse=false; failGet=true;
 await click(onCard("Weekly digest","remove"));
 await click(onCard("Weekly digest","Confirm remove"));

@@ -99,7 +99,8 @@ export function mount(root) {
     try { took = await post({ action, job_id: id }, DONE[action] || action + " done."); }
     finally {
       // Confirm remove left the page when the step went disabled, so focus fell to the body. A failed remove leaves
-      // the card, so focus goes to its remove. Focus the person has put on a control since stays there. The body,
+      // the card, so focus goes to its remove. Focus on a control outside the list, such as a form field, stays
+      // there. Each draw replaces the list's buttons, so focus on another card's button is gone by now. The body,
       // and a region around the list, are not controls: a click on the page puts focus on its main region.
       if (action === "remove") {
         sending.delete(id);
