@@ -1177,3 +1177,13 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Public history preparation
+
+Before sharing repository history, follow `docs/PUBLIC-HISTORY-CLEANUP.md`. The read-only
+`scripts/audit_public_history.py` reports counts for the historical paths in #49 without printing
+matched content. It does not rewrite or push history. The runbook separates private rehearsal,
+independent verification, final remote-ref approval and retained-copy review.
+Ordinary clones have local coverage only; overall completeness requires a fresh full mirror
+verified with `--verify-remote origin`. Literal checks include object contents, historical paths
+and ref names, with counts reported separately.
