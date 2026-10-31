@@ -120,8 +120,26 @@ class Loop:
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
+        self._closing = False
 
     # ---------------------------------------------------------------- public
+
+    def begin_close(self) -> None:
+        """Stop active work and keep already-admitted queued input without another model dispatch."""
+        self._closing = True
+        for state in self._state.values():
+            state.accepting_steers = False
+            if state.running:
+                state.interrupt.set()
+
+    async def flush_pending_close(self) -> None:
+        """After owned tasks stop, retain steers even if a forced cancellation skipped turn cleanup."""
+        for session, state in self._state.items():
+            if state.running:
+                continue
+            for message in state.steer:
+                message.meta["shutdown_pending"] = True
+            await self._drain_steer(session, "", state)
 
     def state(self, session: str) -> _SessionState:
         return self._state.setdefault(session, _SessionState())
@@ -195,17 +213,32 @@ class Loop:
             msg.id = msg.id or new_id("m")  # a client can name it to cancel it (D-045)
             st.steer.append(msg)
             return None
-        async with st.lock:
-            self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
-            st.running = st.accepting_steers = True
-            st.unlimited = (self.max_iterations if max_rounds is None else max_rounds) == 0
-            st.interrupt.clear()
-            try:
-                return await self._turn(session, msg, st, self.max_iterations if max_rounds is None else max_rounds)
-            finally:
-                st.running = st.accepting_steers = False
-                st.unlimited = False
+        started = False
+        try:
+            async with st.lock:
+                if self._closing:
+                    await self._save_shutdown_input(session, msg)
+                    return None
+                self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
+                started = True
+                st.running = st.accepting_steers = True
+                st.unlimited = (self.max_iterations if max_rounds is None else max_rounds) == 0
                 st.interrupt.clear()
+                try:
+                    return await self._turn(session, msg, st, self.max_iterations if max_rounds is None else max_rounds)
+                finally:
+                    st.running = st.accepting_steers = False
+                    st.unlimited = False
+                    st.interrupt.clear()
+        except asyncio.CancelledError:
+            if self._closing and not started and msg.id is None:
+                await self._save_shutdown_input(session, msg)
+            raise
+
+    async def _save_shutdown_input(self, session: str, msg: Message) -> None:
+        msg.meta["shutdown_pending"] = True
+        self.store.append_message(session, msg)
+        await self._emit(ev.MessageCompleted(message=msg), session)
 
     # ---------------------------------------------------------------- turn
 

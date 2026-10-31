@@ -145,15 +145,26 @@ def thread_tail(ctx: Any, session: str, frontier: int, turn_id: str = "", last_t
     return cut_pending(ctx, session, tail, turn_id)
 
 
-async def settle_for_turn(ctx: Any, key: str, turn_id: str = "") -> bool:
+async def settle_for_turn(ctx: Any, key: str, turn_id: str = "", *, owner: str = "") -> bool:
     """Wait only as long as a turn needs: not at all with room to spare, else ``overflow_settle`` seconds for the
     tree's own live jobs. A private thread's tree has no room to spare when ``cut_pending`` would leave a span out.
-    Its turn waits for that tree's jobs only: the agent tree's jobs shrink neither its view nor the cut."""
+    Its turn waits for that tree's jobs only: the agent tree's jobs shrink neither its view nor the cut.
+    An identified turn gets one timed opportunity per owner/tree; anonymous callers retain per-build waits."""
     from exo.core.context import TreeContext  # core imports this module
 
     own = TreeContext.pending  # AgentContext.pending adds the agent tree's jobs to a private thread's
     if not own(ctx, key) or not (verbatim_overflows(ctx, key) or _cuts(ctx, key, turn_id)):
         return True
+    # Agent trees are shared: the owner separates two threads waiting during different turns.
+    # Keep only the latest identity per owner/tree, not every historical turn ID.
+    identity = (owner or key, key)
+    if turn_id and ctx.settled_turns.get(identity) == turn_id:
+        await asyncio.sleep(0)  # let already-ready upkeep publish, without another timed wait
+        return not own(ctx, key, "live")
+    if not own(ctx, key, "live"):
+        return True
+    if turn_id:
+        ctx.settled_turns[identity] = turn_id
     timeout = min(ctx.settle_timeout, getattr(ctx, "overflow_settle", OVERFLOW_SETTLE))
     deadline = asyncio.get_running_loop().time() + timeout
     while pending := own(ctx, key, "live"):

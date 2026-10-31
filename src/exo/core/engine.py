@@ -66,6 +66,9 @@ SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, ed
                  "things in the working directory, then answer briefly.")
 
 
+TURN_CLOSE_GRACE = 2.0
+TURN_CANCEL_GRACE = 1.0
+
 class SqliteLog:
     """EventLog over the ``events`` table of sessions.sqlite."""
 
@@ -184,6 +187,7 @@ class CoreRuntime:
         self.channels: dict[str, Any] = {}  # running channel plugins by name
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
+        self._closing = False
         trace_cfg = {**(trace_cfg or {}), **(seat.trace if seat else {})}  # the seat's [trace] wins (D-032)
         self.thresholds = trace.Thresholds.of(trace_cfg)
         self.findings = Findings(self.store, self.thresholds)
@@ -337,23 +341,52 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
-        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
-        agentlog.release_writer(self._writer)
-        self._writer = None
-        await self.stop_channels()
-        errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        self._closing = True  # admission closes before any shutdown step can yield
+        self.jobs.target.closed = True
+        self.loop.begin_close()
+        errors: list[BaseException] = []
+        for step in (self.stop_channels, self._stop_peers, self._close_scheduler,
+                     self._drain_turns, self.jobs.close, self._close_mcp):
             try:
-                await step()  # jobs end with exod
-            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                await step()
+            except BaseException as exc:  # cleanup continues; report the first failure afterward
                 errors.append(exc)
-        trace.remove_sink(self._on_harness_error)  # after the steps: a notice that fails in jobs.close is recorded
-        try:
-            self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
+        trace.remove_sink(self._on_harness_error)
+        # An extension that ignores cancellation must not keep writing to a closed store.
+        if not any(not task.done() for task in self._tasks):
+            try:
+                self.store.close()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                agentlog.release_writer(self._writer)
+                self._writer = None
         if errors:
             raise errors[0]
+
+    async def _drain_turns(self) -> None:
+        tasks = {task for task in self._tasks if not task.done()}
+        if not tasks:
+            await self.loop.flush_pending_close()
+            return
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=TURN_CLOSE_GRACE)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.wait(tasks, timeout=TURN_CANCEL_GRACE)
+            if all(task.done() for task in tasks):
+                await self.loop.flush_pending_close()
+            raise
+        for task in pending:
+            task.cancel()
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=TURN_CANCEL_GRACE)
+        done = {task for task in tasks if task.done()}
+        await asyncio.gather(*done, return_exceptions=True)
+        if pending:
+            raise RuntimeError("Turn tasks did not stop during core shutdown; the store remains open")
+        await self.loop.flush_pending_close()
 
     async def _stop_peers(self) -> None:
         if self.peers is not None:
@@ -625,6 +658,8 @@ class CoreRuntime:
         return {"session": to_dict(info), "removed": removed}
 
     async def _turn_send(self, b: s.TurnSend) -> dict[str, Any]:
+        if self._closing:
+            raise CommandFailed("closed", "the core is shutting down")
         self._info(b.session)
         if b.max_rounds is not None:
             require_principal("change the tool-round limit")
@@ -656,6 +691,8 @@ class CoreRuntime:
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None, max_rounds: int | None = None) -> None:
+        if self._closing:
+            return
         task = asyncio.create_task(self.run_turn(b, meta, max_rounds=max_rounds))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -664,9 +701,13 @@ class CoreRuntime:
                        max_rounds: int | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
+        if self._closing and asyncio.current_task() not in self._tasks:
+            raise CommandFailed("closed", "the core is shutting down")
         meta = dict(meta or {})
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
+        if self._closing:  # admitted before shutdown, but its task had not started yet
+            return await self.loop.send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta, max_rounds=max_rounds)
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:

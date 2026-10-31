@@ -376,6 +376,7 @@ class TreeContext:
         self.tail_messages = tail_messages
         self.view_budget = view_budget
         self.settle_timeout = settle_timeout
+        self.settled_turns: dict[tuple[str, str], str] = {}  # one overflow-wait opportunity per thread/tree/turn
         self.render_limit = render_limit
         self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
         self.max_attempts = max_attempts  # cap for explicitly non-retryable failures
@@ -988,9 +989,9 @@ class AgentContext(TreeContext):
             return await super().build(session, system, settle)
         self.note(session)
         if settle:
-            await settle_for_turn(self, key)
+            await settle_for_turn(self, key, turn_id, owner=session)
             if self._own(session):  # D-068 on its own tree: a long private thread's first leaves are nearly done
-                await settle_for_turn(self, session, turn_id)
+                await settle_for_turn(self, session, turn_id, owner=session)
         top, frontier, parts = self._view(key)
         self.sync_thread(session, frontier)
         tail = thread_tail(self, session, frontier, turn_id)  # a private tree's pending spans cut (#244)

@@ -306,6 +306,7 @@ import json, pathlib, sys, httpx
 from exo.chatgpt_auth import Service
 home=pathlib.Path(sys.argv[1])
 class Store:
+    backend='fake-os-store'
     def get(self, _): return json.loads((home/'fake-store.json').read_text())
     def set(self, _, bundle): (home/'fake-store.json').write_text(json.dumps(bundle))
 def response(request):
@@ -325,21 +326,20 @@ print('ok')
     assert (tmp_path / 'refresh-count').read_text().splitlines() == ['refresh']
 
 
-def test_encoded_os_store_uses_stdin_and_remembers_decoded_tokens(monkeypatch):
+def test_encoded_os_store_uses_native_keychain_and_remembers_decoded_tokens(monkeypatch):
     import base64
-    from exo import providers_setup as ps
+    from exo import macos_keychain
     from exo.core.models import keys
     calls = []
     store = auth.SecretStore(); store.backend = 'keychain'
     monkeypatch.setattr(store, 'available', lambda: True)
-    monkeypatch.setattr(ps, '_run', lambda argv, stdin=None: calls.append((argv, stdin)) or SimpleNamespace(returncode=0, stdout='', stderr=''))
+    monkeypatch.setattr(macos_keychain, 'set_generic_password', lambda service, name, value: calls.append((service, name, value)))
     bundle = {'access_token': 'fake-access', 'refresh_token': 'fake-refresh', 'id_token': 'fake-id'}
     store.set('exo-chatgpt-fake', bundle)
-    argv, body = calls[0]
-    assert argv == ['security', '-i'] and not any(v in str(argv) for v in bundle.values())
-    encoded = body.split(' -w "', 1)[1].split('"', 1)[0]
+    service, name, encoded = calls[0]
+    assert service == keys.KEYCHAIN_SERVICE and name == 'exo-chatgpt-fake'
     assert json.loads(base64.b64decode(encoded)) == bundle
-    monkeypatch.setattr(keys, 'keychain_get', lambda _: encoded)
+    monkeypatch.setattr(macos_keychain, 'get_generic_password', lambda *_: encoded)
     remembered = []
     monkeypatch.setattr(keys, 'remember_secret', remembered.append)
     assert store.get('exo-chatgpt-fake') == bundle and set(remembered) == set(bundle.values())
@@ -431,3 +431,85 @@ def test_invalid_issued_identifier_refused_before_code_exchange(tmp_path, client
     service.start()
     assert not finish(service, client=client)
     assert not calls and not store.values and not service.status()['available']
+
+
+def test_large_oauth_bundle_bypasses_interactive_security_line_limit(monkeypatch):
+    from exo import macos_keychain, providers_setup as ps
+    store = auth.SecretStore(); store.backend = 'keychain'
+    monkeypatch.setattr(store, 'available', lambda: True)
+    saved = []
+    def limited_cli(argv, stdin=None):
+        # Apple's interactive parser reads at most 4095 bytes per line, irrespective of item capacity.
+        return SimpleNamespace(returncode=1 if len((stdin or '').encode()) >= 4096 else 0,
+                               stdout='', stderr='synthetic interactive line too long')
+    monkeypatch.setattr(ps, '_run', limited_cli)
+    monkeypatch.setattr(macos_keychain, 'set_generic_password', lambda service, name, encoded: saved.append(encoded))
+    bundle = {'access_token': 'synthetic-access-' + 'a' * 6000, 'refresh_token': 'synthetic-refresh-' + 'r' * 1000,
+              'id_token': 'synthetic-identity-' + 'i' * 6000}
+    store.set('exo-chatgpt-large-fixture', bundle)
+    assert len(saved) == 1 and len(saved[0]) > 4096
+    import base64
+    assert json.loads(base64.b64decode(saved[0])) == bundle
+
+
+def test_callback_store_failure_page_is_actionable_and_does_not_echo_exception(tmp_path, monkeypatch):
+    from exo import macos_keychain
+    service, _, _, _ = setup(tmp_path)
+    service.store = auth.SecretStore(); service.store.backend = 'keychain'
+    monkeypatch.setattr(service.store, 'available', lambda: True)
+    def fail(*_):
+        raise RuntimeError('fake-token')
+    monkeypatch.setattr(macos_keychain, 'set_generic_password', fail)
+    service.start()
+    pending = service.pending
+    with httpx.Client(trust_env=False) as client:
+        result = client.get(pending['redirect'], params={'state': pending['state'], 'code': 'synthetic-code',
+                                                        'client_id': 'issued-fixture-client'})
+    assert result.status_code == 400
+    # A store implementation's raw errors must not become callback text.
+    assert 'fake-token' not in result.text and 'synthetic-code' not in result.text
+    assert 'Return to Exo Providers' in result.text and 'Unlock the OS secret store' in result.text
+    assert 'previous connection is unchanged' in result.text and not service.status()['available']
+
+
+def test_legacy_keychain_registration_requires_reauth_and_new_namespace_preserves_old(tmp_path):
+    service, store, _, _ = setup(tmp_path)
+    service.start(); assert finish(service)
+    profile = service.status()['active']
+    legacy_account = service._account(profile)
+    old_bundle = copy.deepcopy(store.values[legacy_account])
+    meta = service._meta()
+    meta['profiles'][profile].pop('storage')
+    meta['profiles'][profile]['store_backend'] = 'keychain'
+    service._save_meta(meta)
+    store.backend = 'keychain'
+    assert not service.status()['available'] and 'Reconnect' in service.status()['message']
+    with pytest.raises(auth.AuthError, match='Reconnect'):
+        service.headers()
+    store.fail = True
+    service.start(profile); assert not finish(service)
+    assert store.values[legacy_account] == old_bundle and service._meta() == meta
+    store.fail = False
+    service.start(profile); assert finish(service)
+    new_account = service._account(profile)
+    assert new_account != legacy_account and new_account.startswith('exo-chatgpt-native-v1-')
+    assert store.values[legacy_account] == old_bundle
+    assert service._meta()['profiles'][profile]['store_backend'] == 'keychain'
+    assert service.headers()['Authorization'].startswith('Bearer ')
+
+
+def test_linux_namespace_and_backend_mismatch_are_explicit(tmp_path):
+    service, store, _, _ = setup(tmp_path)
+    store.backend = 'secret-service'
+    service.start(); assert finish(service)
+    profile = service.status()['active']
+    assert service._account(profile).startswith('exo-chatgpt-')
+    assert not service._account(profile).startswith('exo-chatgpt-native-v1-')
+    meta = service._meta(); meta['profiles'][profile]['store_backend'] = 'keychain'
+    meta['profiles'][profile]['storage'] = 'native-v1'
+    service._save_meta(meta)
+    assert not service.status()['available']
+    with pytest.raises(auth.AuthError, match='another OS secret store'):
+        service.headers()
+    # Explicitly choosing the new Linux storage ignores the previous native namespace marker.
+    assert service._account(profile, native=False).startswith('exo-chatgpt-' + service.scope)

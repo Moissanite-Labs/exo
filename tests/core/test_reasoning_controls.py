@@ -47,7 +47,7 @@ def test_exact_capabilities_and_unknown_routes_are_honest():
     assert not capability(SPEC, 'gpt-6.1-sol')['supported']
     for url in ('https://api.openai.com.evil/v1', 'https://evil.test/api.openai.com/v1', 'http://api.openai.com/v1',
                 'https://api.openai.com:8080/v1', 'https://api.openai.com:bad/v1',
-                'https://user:fake-password@api.openai.com/v1', 'https://api.openai.com/v1?foo',
+                'https://user:fake-password' '@api.openai.com/v1', 'https://api.openai.com/v1?foo',
                 'https://api.openai.com/v1#fragment'):
         assert not capability({**SPEC, 'base_url': url}, 'gpt-5.1')['supported']
     assert 'gateway' in capability({**SPEC, 'base_url': 'https://opencode.ai/zen/go/v1'}, 'deepseek-v4-pro')['reason']

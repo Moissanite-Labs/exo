@@ -654,6 +654,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   real terminal (the SVG export cannot show the terminal's default colours).
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
+- **Amendment 2026-10-29:** the bash schema rejects unknown arguments before dispatch. A misspelled background option returns an argument error instead of changing execution intent; supported foreground, background and timeout behavior stays the same.
 - **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
   of seven asks, the two that hurt most in real use were a shell that holds the turn (a build or a long test run) and
   the principal's words reaching memory by discipline instead of by mechanism.
@@ -1083,6 +1084,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-28 (ChatGPT credential save):** large OAuth bundles use native macOS Security-framework writes, reads and deletion with interactive authorization refused instead of the interactive security tool's bounded line parser. Save failures preserve the previous connection and return a safe retry message. No token enters argv or a temporary file.
 - **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
   connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
   only status crosses the web boundary. The application supplies credential callbacks to the core router,
@@ -1178,6 +1180,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
+- **Amendment 2026-10-29 (#873):** explicit runtime close interrupts and drains its owned turns before store closure and writer release. Admission closes first; accepted input is retained without another model dispatch. Uncooperative cancellation reports incomplete shutdown and keeps the store open. Client disconnect remains distinct from stopping the shared core.
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
   `ConnectError: [Errno 2] No such file or directory`. The terminal client had already started the core in process
   and held the agent's writer lock (D-028), so the two clients only shared an agent if the user ran `exo serve` first.
@@ -4442,6 +4445,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
 
 ## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Amendment 2026-10-29 (#832, wait component):** an identified turn gets one timed overflow-wait opportunity per thread/tree, rather than repeating it before every model round. New turns and other threads retain independent opportunities. Ready-summary assembly, private pending-span cuts and context budgets are unchanged. This adds no wall-time limit or autonomy policy.
 - **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
   bookkeeping delayed replies (issue #99).
 - **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in

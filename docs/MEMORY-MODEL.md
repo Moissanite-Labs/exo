@@ -198,8 +198,14 @@ pending span (#244). That check counts each message in full, where the view cuts
 just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
 nothing to cut. Both waits of the private tree are for its own jobs only, leaves and merges: a merge shrinks the
 view the cut counts. The agent tree's jobs shrink neither the private view nor the cut, so they do not stretch
-either wait. So a private turn can now wait where it did not: while a cut would apply, each call waits up to
+either wait. So a private turn can now wait where it did not: while a cut would apply, its first identified build waits up to
 `overflow_settle` for those jobs.
+
+For builds carrying a turn ID, each thread gets one timed overflow-wait opportunity per tree in that turn
+(#832). Later model rounds use ready summaries and the existing verbatim or pending-span fallback without
+another timed wait. Ready background work still gets an event-loop opportunity to publish. A new turn gets
+a fresh opportunity, and two threads sharing an agent tree do not consume each other's wait. Builds without
+a turn ID retain the previous per-build behavior. Context budgets and private-turn preservation are unchanged.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf

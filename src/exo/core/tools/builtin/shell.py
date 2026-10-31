@@ -347,4 +347,4 @@ def register(reg: Registry) -> None:
                  "background": {"type": "boolean", "description": "Run as a background job and return a job id at "
                                 "once. `timeout` then means the job's wall limit (default and maximum set by the "
                                 "seat, 2 h)."}},
-              "required": ["command"]}, risk="high", toolset="shell")(bash)
+              "required": ["command"], "additionalProperties": False}, risk="high", toolset="shell")(bash)
