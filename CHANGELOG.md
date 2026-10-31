@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
+  missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
+  no longer imply a plan usage limit; provider response text remains private.
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
   Successful pipelines with an earlier-stage failure note remain successful (#791).

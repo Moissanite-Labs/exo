@@ -280,3 +280,141 @@ def test_late_old_grant_outcome_cannot_mutate_new_grant_breaker(old_fails):
                 b_healthy[0]=False;assert (await call())[-1].kind=='error'
             assert r.breakers['chatgpt:authorized'].level==1
     asyncio.run(go())
+
+
+@pytest.mark.parametrize('terminal_output', [None, [], [REASON], [{'type': 'reasoning', 'id': REASON['id']}]])
+def test_completed_stream_retains_observed_items_when_terminal_output_is_partial(terminal_output):
+    async def go():
+        terminal = completed(terminal_output)
+        if terminal_output is None:
+            terminal['response'].pop('output')
+        events = wire({'type': 'response.output_item.done', 'output_index': 0, 'item': REASON},
+                      {'type': 'response.output_item.done', 'output_index': 1, 'item': CALL}, terminal)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=events))) as client:
+            p = OpenAIResponsesProvider('https://api.openai.com/v1', subscription=True,
+                                       header_resolver=lambda: asyncio.sleep(0, result={'Authorization': 'Bearer fixture'}),
+                                       continuation_scope=lambda: 'account-a', client=client)
+            received = [e async for e in p.stream([Message.user('fixture')], TOOLS, model='fixture')]
+            assert received[-1].kind == 'done'
+            assert len([e for e in received if e.kind == 'tool_call']) == 1
+            message = from_dict(Message, json.loads(json.dumps(to_dict(received[-1].message))))
+            assert message.meta['responses_output'] == [REASON, CALL]
+            body = p.build_body([message, Message.tool([ToolResult.of_text(CALL['call_id'], 'fixture result')])], TOOLS, model='fixture')
+            assert body['input'][:2] == [REASON, CALL]
+            assert body['input'][2]['call_id'] == CALL['call_id']
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize('replay', [None, [], [REASON]])
+def test_persisted_partial_replay_never_orphans_recorded_tool_result(replay):
+    p = OpenAIResponsesProvider('https://api.openai.com/v1', subscription=True,
+                               header_resolver=lambda: None, continuation_scope=lambda: 'account-a')
+    from exo.core.types import ToolCall
+    message = Message(role='assistant', tool_calls=[ToolCall(id=CALL['call_id'], name='lookup', arguments={'query': 'fixture'})],
+                      meta={'responses_origin': p.origin + '#fixture#account-a', 'responses_output': replay})
+    history = [message, Message.tool([ToolResult.of_text(CALL['call_id'], 'fixture result')])]
+    body = p.build_body(history, TOOLS, model='fixture')['input']
+    calls = [item for item in body if item.get('type') == 'function_call']
+    assert len(calls) == 1 and calls[0]['call_id'] == CALL['call_id']
+    assert body.index(calls[0]) < next(i for i, item in enumerate(body) if item.get('type') == 'function_call_output')
+    assert [item for item in body if item.get('type') == 'reasoning'] == ([REASON] if replay else [])
+    for opts in ({'model': 'other'}, {'model': 'fixture', '_scope': 'account-b'}):
+        changed = p.build_body(history, TOOLS, **opts)['input']
+        assert not any(item.get('type') == 'reasoning' for item in changed)
+        assert any(item.get('type') == 'function_call' for item in changed)
+
+
+def test_partial_replay_keeps_present_calls_once_and_refuses_conflicting_identity():
+    from exo.core.types import ToolCall
+    p = OpenAIResponsesProvider('https://api.openai.com/v1', subscription=True,
+                               header_resolver=lambda: None, continuation_scope=lambda: 'account-a')
+    canonical = ToolCall(id=CALL['call_id'], name='lookup', arguments={'query': 'fixture'})
+    message = Message(role='assistant', tool_calls=[canonical],
+                      meta={'responses_origin': p.origin + '#fixture#account-a', 'responses_output': [REASON, CALL]})
+    assert p.build_body([message], TOOLS, model='fixture')['input'] == [REASON, CALL]
+    message.meta['responses_output'] = [REASON, {**CALL, 'arguments': '{"query":"different"}'}]
+    with pytest.raises(ValueError, match='Inconsistent Responses tool history'):
+        p.build_body([message], TOOLS, model='fixture')
+    message.meta['responses_output'] = [CALL, CALL]
+    with pytest.raises(ValueError, match='Inconsistent Responses tool history'):
+        p.build_body([message], TOOLS, model='fixture')
+
+
+
+def test_subscription_http_error_hints_use_only_known_codes_not_provider_text():
+    p = OpenAIResponsesProvider('https://api.openai.com/v1', subscription=True, header_resolver=lambda: None)
+    opaque = 'private-provider-body-fixture'
+    for body in (opaque, json.dumps({'error': {'message': opaque, 'code': 'unknown_code'}})):
+        hint = p.error_text(body)
+        assert opaque not in hint and 'request compatibility' in hint and 'settings > Usage' not in hint
+    assert 'usage limit reached' in p.error_text(json.dumps({'error': {'code': 'subscription_sharing_usage_limit_exceeded'}}))
+    assert 'context limit' in p.error_text(json.dumps({'error': {'code': 'context_length_exceeded', 'message': opaque}}))
+
+
+
+def test_terminal_call_cannot_change_an_already_emitted_call():
+    async def go():
+        data = wire({'type': 'response.output_item.done', 'output_index': 0, 'item': CALL},
+                    completed([{**CALL, 'arguments': '{"query":"different"}'}]))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=data))) as client:
+            p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+            events = [e async for e in p.stream([], TOOLS, model='fixture')]
+            assert events[-1].kind == 'error' and not any(e.kind == 'done' for e in events)
+            assert 'different' not in events[-1].error
+    asyncio.run(go())
+
+
+
+def test_conflicting_stream_index_is_refused_without_overwriting_opaque_item():
+    async def go():
+        data = wire({'type': 'response.output_item.done', 'output_index': 0, 'item': REASON},
+                    {'type': 'response.output_item.done', 'output_index': 0, 'item': CALL}, completed([]))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=data))) as client:
+            p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+            events = [e async for e in p.stream([], TOOLS, model='fixture')]
+            assert events[-1].kind == 'error' and not any(e.kind == 'done' for e in events)
+            assert REASON['encrypted_content'] not in events[-1].error
+    asyncio.run(go())
+
+
+def test_inconsistent_saved_call_is_request_error_not_auth_failure():
+    from exo.core.types import ToolCall
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: pytest.fail('must not dispatch'))) as client:
+            p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+            message = Message(role='assistant', tool_calls=[ToolCall(id=CALL['call_id'], name='lookup', arguments={})],
+                              meta={'responses_origin': p.origin + '#fixture#api', 'responses_output': [CALL]})
+            events = [e async for e in p.stream([message], TOOLS, model='fixture')]
+            assert events[-1].kind == 'error' and events[-1].status == 400
+            assert 'authorization' not in events[-1].error.lower() and 'fixture' not in events[-1].error
+    asyncio.run(go())
+
+
+
+def test_unknown_terminal_code_is_not_copied_to_diagnostic():
+    async def go():
+        private_code = 'private_code_fixture_not_public'
+        for code in (private_code, 'context_length_exceeded'):
+            data = wire({'type': 'response.failed', 'response': {'error': {'code': code}}})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=data))) as client:
+                p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+                events = [e async for e in p.stream([], [], model='fixture')]
+                assert events[-1].kind == 'error' and private_code not in events[-1].error
+                assert ('context limit' in events[-1].error) == (code == 'context_length_exceeded')
+    asyncio.run(go())
+
+
+
+def test_streamed_reasoning_preserves_empty_summary_with_partial_terminal_item():
+    async def go():
+        reason = {**REASON, 'summary': []}
+        data = wire({'type': 'response.output_item.done', 'output_index': 0, 'item': reason},
+                    completed([{'type': 'reasoning', 'id': reason['id']}]))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=data))) as client:
+            p = OpenAIResponsesProvider('https://fixture.invalid/v1', 'fixture', client=client)
+            events = [e async for e in p.stream([], [], model='fixture')]
+            assert events[-1].kind == 'done'
+            message = from_dict(Message, json.loads(json.dumps(to_dict(events[-1].message))))
+            assert message.meta['responses_output'] == [reason]
+            assert p.build_body([message], [], model='fixture')['input'] == [reason]
+    asyncio.run(go())

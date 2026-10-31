@@ -14,6 +14,15 @@ from exo.core.models.base import HttpTransport, StreamState, error_event
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 
+def merge_output_item(previous: dict, current: dict) -> dict:
+    for key in ('type', 'id', 'call_id', 'name', 'namespace', 'encrypted_content'):
+        if previous.get(key) and current.get(key) and previous[key] != current[key]:
+            raise ValueError('Inconsistent Responses output history')
+    if previous.get('arguments') and current.get('arguments') and json.loads(previous['arguments']) != json.loads(current['arguments']):
+        raise ValueError('Inconsistent Responses output history')
+    return {**current, **previous, **{key: value for key, value in current.items() if value not in (None, '', [])}}
+
+
 def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict]:
     out = []
     for message in messages:
@@ -23,20 +32,33 @@ def convert_input(messages: list[Message], origin: str, *, subscription: bool = 
                        for r in message.tool_results)
             continue
         replay = message.meta.get('responses_output')
-        if origin and message.role == 'assistant' and message.meta.get('responses_origin') == origin and isinstance(replay, list):
+        replaying = bool(origin and message.role == 'assistant' and message.meta.get('responses_origin') == origin and isinstance(replay, list))
+        present = {}
+        if replaying:
+            for item in replay:
+                if isinstance(item, dict) and item.get('type') == 'function_call':
+                    cid = item.get('call_id')
+                    if cid in present:
+                        raise ValueError('Inconsistent Responses tool history')
+                    present[cid] = item
+            for call in message.tool_calls:
+                if call.id in present:
+                    item = present[call.id]
+                    if item.get('name') != call.name or json.loads(item.get('arguments') or '{}') != call.arguments:
+                        raise ValueError('Inconsistent Responses tool history')
             out.extend(copy.deepcopy(item) for item in replay if isinstance(item, dict) and
                        item.get('type') in ('reasoning', 'message', 'function_call'))
-            continue
+        missing_calls = [call for call in message.tool_calls if call.id not in present]
         role = 'developer' if subscription and message.role == 'system' else message.role
         content = []
-        for part in message.content:
+        for part in ([] if replaying and any(isinstance(item, dict) and item.get('type') == 'message' for item in replay) else message.content):
             if part.type == 'text' and part.text:
                 content.append({'type': 'output_text' if role == 'assistant' else 'input_text', 'text': part.text})
             elif part.type == 'image' and role != 'assistant':
                 content.append({'type': 'input_image', 'image_url': part.url or f'data:{part.mime or "image/png"};base64,{part.data}'})
         if content:
             out.append({'type': 'message', 'role': role, 'content': content})
-        for call in message.tool_calls:
+        for call in missing_calls:
             item = {'type': 'function_call', 'call_id': call.id, 'name': call.name,
                     'arguments': json.dumps(call.arguments)}
             if subscription:
@@ -83,9 +105,13 @@ class OpenAIResponsesProvider(HttpTransport):
             headers = await self.request_headers()
             if self.scope() != scope:
                 raise ValueError('Selected account changed')
-            body = self.build_body(messages, tools, **{**opts, '_scope': scope})
         except Exception:
             yield error_event('Provider authorization or request preparation unavailable', 401, retryable=False)
+            return
+        try:
+            body = self.build_body(messages, tools, **{**opts, '_scope': scope})
+        except Exception:
+            yield error_event('Responses request history or options are inconsistent', 400, retryable=False)
             return
         origin = self.origin + '#' + body['model'] + '#' + scope if scope or not self.subscription else ''
         async for event in self.stream_prepared(body, session_id=opts.get('session_id'), resolved_headers=headers,
@@ -94,7 +120,18 @@ class OpenAIResponsesProvider(HttpTransport):
 
     def error_text(self, body):
         if self.subscription:
-            return 'ChatGPT request refused. Review the connection or ChatGPT settings > Usage.'
+            try:
+                error = json.loads(body).get('error')
+                code = error.get('code') if isinstance(error, dict) else None
+            except (ValueError, AttributeError):
+                code = None
+            messages = {
+                'subscription_sharing_usage_limit_exceeded': 'ChatGPT plan usage limit reached. Review ChatGPT settings > Usage.',
+                'subscription_sharing_usage_unavailable': 'ChatGPT plan usage is unavailable. Retry later or review ChatGPT settings.',
+                'context_length_exceeded': 'ChatGPT request exceeds the model context limit.',
+            }
+            return messages.get(code if isinstance(code, str) else None,
+                                'ChatGPT request refused. Check the connection and request compatibility. A refusal alone does not establish a usage limit.')
         return super().error_text(body)
 
     def build_body(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> dict[str, Any]:
@@ -157,8 +194,6 @@ class OpenAIResponsesProvider(HttpTransport):
         if not isinstance(cid, str) or not cid:
             yield error_event('Invalid Responses function call', 400, retryable=False)
             return
-        if cid in seen:
-            return
         try:
             arguments = json.loads(item.get('arguments') or '{}')
             if not isinstance(arguments, dict) or not isinstance(cid, str) or not cid or not isinstance(name, str) or not name:
@@ -167,6 +202,11 @@ class OpenAIResponsesProvider(HttpTransport):
                 raise ValueError()
         except (ValueError, TypeError):
             yield error_event('Invalid Responses function call', 400, retryable=False)
+            return
+        if cid in seen:
+            previous = next(call for call in st.tool_calls if call.id == cid)
+            if previous.name != name or previous.arguments != arguments:
+                yield error_event('Inconsistent Responses function call', 400, retryable=False)
             return
         seen.add(cid)
         yield st.add_tool_call(ToolCall(id=cid, name=name, arguments=arguments))
@@ -189,6 +229,15 @@ class OpenAIResponsesProvider(HttpTransport):
         elif kind == 'response.output_item.done':
             item = payload.get('item') or {}
             yield from self._item(item, st)
+            if isinstance(item, dict):
+                observed = st.meta.setdefault('_completed_output', {})
+                index = payload.get('output_index', len(observed))
+                if type(index) is int and index >= 0:
+                    try:
+                        observed[index] = copy.deepcopy(merge_output_item(observed.get(index, {}), item))
+                    except (ValueError, TypeError):
+                        yield error_event('Inconsistent Responses output history', 400, retryable=False)
+                        return
         elif kind in ('response.completed', 'response.failed', 'response.incomplete', 'error'):
             response = payload.get('response') or {}
             if not isinstance(response, dict):
@@ -203,8 +252,10 @@ class OpenAIResponsesProvider(HttpTransport):
                 if kind == 'response.incomplete':
                     code = 'response_incomplete'
                 messages = {'subscription_sharing_usage_limit_exceeded': 'ChatGPT plan usage limit reached. Review ChatGPT settings > Usage.',
-                            'subscription_sharing_usage_unavailable': 'ChatGPT plan usage is unavailable. Retry later or review ChatGPT settings.'}
-                yield error_event(messages.get(code, 'Responses request failed: ' + code),
+                            'subscription_sharing_usage_unavailable': 'ChatGPT plan usage is unavailable. Retry later or review ChatGPT settings.',
+                            'context_length_exceeded': 'Responses request exceeds the model context limit.',
+                            'response_incomplete': 'Responses request was incomplete.'}
+                yield error_event(messages.get(code, 'Responses request failed.'),
                                   429 if code == 'subscription_sharing_usage_limit_exceeded' else None,
                                   retryable=code in ('subscription_sharing_usage_unavailable', 'server_error'))
                 return
@@ -212,9 +263,25 @@ class OpenAIResponsesProvider(HttpTransport):
                 yield error_event('Completed Responses event lacks valid completion or usage', None, retryable=False)
                 return
             output = response.get('output')
+            observed = st.meta.pop('_completed_output', {})
+            if output is None and observed:
+                output = []
             if not isinstance(output, list):
                 yield error_event('Completed Responses event has no output', None, retryable=False)
                 return
+            output = copy.deepcopy(output)
+            for index, item in sorted(observed.items()):
+                identity = item.get('call_id') if item.get('type') == 'function_call' else item.get('id')
+                match = next((i for i, existing in enumerate(output) if existing == item or (identity and isinstance(existing, dict) and
+                              (existing.get('call_id') if existing.get('type') == 'function_call' else existing.get('id')) == identity)), None)
+                if match is None:
+                    output.insert(min(index, len(output)), item)
+                else:
+                    try:
+                        output[match] = merge_output_item(item, output[match])
+                    except (ValueError, TypeError):
+                        yield error_event('Inconsistent Responses output history', 400, retryable=False)
+                        return
             for item in output:
                 if not isinstance(item, dict):
                     yield error_event('Invalid Responses output item', None, retryable=False)
