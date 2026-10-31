@@ -2831,3 +2831,9 @@ The public site at exo.askaconsult.com. Versions are `site-vMAJOR.MINOR` (docs/V
 - **v2.0** (2026-10-13, live): the lattice redesign. The living lattice egg on the home page, the roadmap page with linked nodes, the brand page, credits limited to open source and genuine innovators.
 - **v2.0-rc.1** (2026-10-13, staging): the approved redesign candidate, commit `6b8800f`.
 - **v1.0** (2026-10-12, live): the first public site, commit `8d54b55`. Archive: tag `site-live-2026-10-13`.
+
+### 2026-10-29 — auxiliary usage aggregation slice (#878)
+
+- Project explicit auxiliary request observations by session/purpose with retry ID
+  deduplication, failed-attempt usage and unknown-cost preservation. Automatic
+  request capture and displayed totals remain open.
