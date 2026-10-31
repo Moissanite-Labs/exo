@@ -8,20 +8,64 @@ cleanup is async via aclose(). Failures fail closed: partial engines are retaine
 aclose(), never retried, and another member's writer claim is never taken over. A composition
 is single-use: after the first call (success or failure) it rejects further calls until
 aclose() completes, and a failed aclose() retains the failed engines so it can be retried.
+
+Plugins are never discovered implicitly: no entry points, no ``Config.load``, no default
+plugin folders. The host may inject a ``GroupPlugins`` profile with explicit plugin folders,
+an allow-list of enabled plugin names (``()`` by default — inject folders and nothing
+loads until the optimistically-passed ``enabled=None`` names every folder plugin — never
+"all installed plugins"), a deep-copied-per-member plugin config, memory/context backend
+choices, extra skill folders, and an optional host executor + ``executor_required`` pair
+(passed through unchanged to every engine, which enforces it exactly like compose does — it
+is never silently downgraded here). Each member's Seat carries its own ``[plugins] enabled``
+list; a seat without one uses the injected default (or, absent that, the names found in the
+injected folders) when the host opts in with ``enabled=None``). The Seat's ``exo-memory`` identity (``exo_home``, ``agent_id``,
+``principal``, absolute ``principal_store``) is bound into that member's config copy, and
+ALL member bindings and ``principal_store`` paths are prevalidated before any engine (or
+plugin) is constructed, so a bad seat fails closed with no partial construction.
 """
 from __future__ import annotations
 
+import copy
 import os
-from typing import Any, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from collections.abc import Mapping
 
 from exo.application import CoreEngine
 from exo.core.groups import SavedGroup
-from exo.core.plugins import PluginManager
+from exo.core.plugins import PluginError, PluginManager, discover
 from exo.core.seats import Seat
+from exo.core.skills import pack_dir
 
 
 class CompositionError(RuntimeError):
     """Owner, membership or construction failure: the composition fails closed."""
+
+
+@dataclass(frozen=True)
+class GroupPlugins:
+    """Host-injected plugin profile shared by every member engine (explicit, never implicit).
+
+    ``dirs`` are the only plugin folders ever considered (no entry points, no
+    ``$EXO_HOME/plugins``); ``enabled`` is the allow-list applied when a seat has no
+    ``[plugins] enabled`` list of its own. The safe default is the empty tuple: inject
+    ``dirs`` and nothing loads until the host names plugins or passes ``enabled=None``
+    (opt-in to every name discovered in ``dirs`` — explicitly NOT "all installed
+    plugins"). ``config`` is deep-copied per
+    member before the seat's exo-memory identity is merged in, so members never share
+    mutable config. ``executor``/``executor_required`` are passed through to every engine
+    unchanged: required mode is enforced by the engine exactly as in compose, never
+    silently weakened here.
+    """
+    dirs: tuple[str | os.PathLike, ...] = ()
+    enabled: tuple[str, ...] | None = ()
+    config: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    memory_choice: str | None = None
+    context_choice: str | None = None
+    skill_folders: tuple[str | os.PathLike, ...] = ()
+    executor: Any = None
+    executor_required: bool = False
 
 
 class GroupComposition:
@@ -33,7 +77,8 @@ class GroupComposition:
 
     def __init__(self, profiles: Mapping[str, Seat], *, owner: str,
                  home: str | os.PathLike, models: dict[str, Any] | None = None,
-                 cwd: str | None = None, env: Mapping[str, str] | None = None) -> None:
+                 cwd: str | None = None, env: Mapping[str, str] | None = None,
+                 plugins: GroupPlugins | None = None) -> None:
         if not isinstance(owner, str) or not owner.strip():
             raise CompositionError("owner is required")
         if isinstance(profiles, (str, bytes)) or not profiles:
@@ -51,6 +96,7 @@ class GroupComposition:
         self._models = models
         self._cwd = cwd
         self._env = dict(env or {})
+        self._plugins = plugins or GroupPlugins()
         self._engines: dict[str, CoreEngine] = {}  # retained for async aclose()
 
     @property
@@ -66,6 +112,36 @@ class GroupComposition:
         """Engines retained so far (successful call or partial failure), keyed by profile."""
         return dict(self._engines)
 
+    # -------------------------------------------------- per-member binding (prevalidated)
+
+    def _member_binding(self, profile: str) -> dict[str, Any]:
+        """The member's plugin config + enabled list; every value validated before any build."""
+        seat = self._seats[profile]
+        config = copy.deepcopy(dict(self._plugins.config))
+        memory = config.setdefault("exo-memory", {})
+        memory["exo_home"] = str(self._home)
+        memory["agent_id"] = seat.name
+        if seat.principal:
+            memory["principal"] = seat.principal
+        if seat.principal_store:
+            root = Path(seat.principal_store).expanduser()
+            if not root.is_absolute():
+                raise CompositionError(
+                    f"profile {profile!r}: seat principal store must be an absolute path")
+            memory["store_root"] = str(root)
+        if seat.plugins is not None:
+            enabled = list(seat.plugins)
+        elif self._plugins.enabled is not None:
+            enabled = list(self._plugins.enabled)
+        else:
+            # Explicitly never "all installed plugins": only names in the injected folders
+            # (a missing or empty folder enables nothing).
+            try:
+                enabled = [m.name for m in discover(self._plugins.dirs)]
+            except PluginError as exc:
+                raise CompositionError(f"profile {profile!r}: plugin folders unreadable: {exc}") from exc
+        return {"config": config, "enabled": enabled}
+
     def __call__(self, group: SavedGroup) -> Mapping[str, CoreEngine]:
         if self._engines:
             raise CompositionError("engines are already retained; aclose() before composing again")
@@ -79,9 +155,34 @@ class GroupComposition:
         if unknown:
             raise CompositionError("group members outside the authorized mapping: " + ", ".join(unknown))
         try:
+            # Prevalidate ALL member bindings (incl. every principal_store) before any
+            # plugin is loaded or engine constructed, so a bad seat fails closed with no
+            # partial construction.
+            bindings = {profile: self._member_binding(profile) for profile in members}
             for profile in members:
+                seat = self._seats[profile]
+                binding = bindings[profile]
+                pm = PluginManager(config=binding["config"],
+                                   executor_required=self._plugins.executor_required,
+                                   memory_choice=self._plugins.memory_choice,
+                                   context_choice=self._plugins.context_choice)
+                # Explicit folders + allow list only; entry_points=False: no implicit discovery.
+                pm.load_all(dirs=self._plugins.dirs, enabled=binding["enabled"],
+                            entry_points=False)
+                failed = sorted(pm.errors())  # a plugin that fails to load fails the composition
+                if failed:
+                    raise CompositionError(f"profile {profile!r}: plugins failed to load: "
+                                           + ", ".join(failed))
+                folders: list[str | os.PathLike] = [*seat.skill_folders,
+                                                    *self._plugins.skill_folders]
+                if pack := pack_dir():
+                    folders.append(pack)
                 engine = CoreEngine(self._home, self._models, env=dict(self._env), cwd=self._cwd,
-                                    plugins=PluginManager(), seat=self._seats[profile])
+                                    plugins=pm, seat=seat, skill_folders=folders,
+                                    executor=self._plugins.executor,
+                                    executor_required=self._plugins.executor_required,
+                                    mcp=copy.deepcopy(seat.mcp),
+                                    channels=copy.deepcopy(seat.channels))
                 # Retain BEFORE claiming: if the claim raises, the engine still gets closed.
                 self._engines[profile] = engine
                 engine.claim_writer()  # sync; raises if another writer holds this seat's log
