@@ -44,7 +44,7 @@ from exo.core.group_knowledge import (DEFAULT_MAX_CHARS, DEFAULT_MAX_ITEMS,
 from exo.core.group_execution import GroupExecutions
 from exo.core.group_messages import GroupMessage, GroupMessages
 from exo.core.group_runner import MemberStatus
-from exo.core.group_runtime import GroupRuntime
+from exo.core.group_runtime import GroupRuntime, validate_max_concurrent
 from exo.core.groups import GroupStore, SavedGroup
 
 # Trusted host hook: returns one authorized, distinct engine per member profile.
@@ -63,12 +63,16 @@ class ConversationOptions:
     ``max_turns`` is the per-member budget of successful engine turns and
     ``idle_timeout`` bounds each no-input wait (a missed wake degrades to
     this poll, never a lost message). Both are validated before the engine
-    factory is invoked or any durable claim exists. Instances are immutable
-    and reusable; each conversation start owns its own ``ConversationWake``.
+    factory is invoked or any durable claim exists. ``max_concurrent`` is the
+    optional host turn-concurrency bound forwarded to ``GroupRuntime``:
+    ``None`` keeps full member concurrency; a strict ``int`` in
+    ``1..member count`` bounds engine turns, not member loops. Instances are
+    immutable and reusable; each conversation start owns its own ``ConversationWake``.
     """
 
     max_turns: int = DEFAULT_MAX_TURNS
     idle_timeout: float = DEFAULT_IDLE_TIMEOUT
+    max_concurrent: int | None = None
 
 
 class GroupHost:
@@ -162,7 +166,8 @@ class GroupHost:
               conversation: ConversationOptions | None = None,
               knowledge: bool = False,
               max_items: int = DEFAULT_MAX_ITEMS,
-              max_chars: int = DEFAULT_MAX_CHARS) -> tuple:
+              max_chars: int = DEFAULT_MAX_CHARS,
+              max_concurrent: int | None = None) -> tuple:
         """Bind authorized engines and claim one durable execution. No retry.
 
         Stored membership is re-validated against the injected profile set
@@ -171,6 +176,14 @@ class GroupHost:
         audience leaves no runtime and no durable claim, so the caller may fix
         inputs and start once. A partial start failure after the claim still
         blocks retry by design (GroupExecutions).
+
+        ``max_concurrent`` is an explicit host turn-concurrency bound passed to
+        ``GroupRuntime``: ``None`` (the default) preserves full member
+        concurrency; otherwise a strict ``int`` in ``1..member count`` bounds
+        how many members may be inside an actual engine turn at once — never
+        the member loops themselves, which keep observing pause/stop between
+        turns. The bound is validated before the factory is invoked or any
+        durable claim exists.
 
         Default (no ``conversation``) is the one-shot ``GroupEngineAdapter``
         with caller-supplied ``audiences``. With the explicit
@@ -234,6 +247,20 @@ class GroupHost:
             if audiences is not None:
                 raise HostError("audiences are derived from the stored group mode "
                                 "for a conversation start; do not pass them")
+            # Turn bound for a conversation start: the options field is the
+            # more specific declaration and wins when set; the start-level
+            # kwarg is the fallback. The effective bound is validated here,
+            # before the factory, any engine or a claim — with the same strict
+            # rule GroupRuntime applies — so an invalid bound never reaches
+            # the factory or is silently ignored.
+            conversation_bound = (conversation.max_concurrent
+                                  if conversation.max_concurrent is not None
+                                  else max_concurrent)
+            try:
+                conversation_bound = validate_max_concurrent(
+                    conversation_bound, len(group.members))
+            except ValueError as e:
+                raise HostError(str(e)) from e
             engines = dict(self._factory(group) or {})
             wake = ConversationWake()
             try:
@@ -246,7 +273,8 @@ class GroupHost:
                     knowledge=reader,
                     max_items=bounds[0], max_chars=bounds[1])
                 runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
-                                       adapters=adapter.adapters())
+                                       adapters=adapter.adapters(),
+                                       max_concurrent=conversation_bound)
                 runtime.start()
             except ValueError as e:
                 # Nothing started: close the unregistered wake so no waiter
@@ -262,13 +290,18 @@ class GroupHost:
             return runtime.status()
         if audiences is None:
             raise HostError("one-shot start requires explicit audiences")
+        try:
+            bound = validate_max_concurrent(max_concurrent, len(group.members))
+        except ValueError as e:
+            raise HostError(str(e)) from e
         engines = dict(self._factory(group) or {})
         try:
             adapter = GroupEngineAdapter(group, engines, audiences=audiences,
                                          knowledge=reader,
                                          max_items=bounds[0], max_chars=bounds[1])
             runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
-                                   adapters=adapter.adapters())
+                                   adapters=adapter.adapters(),
+                                   max_concurrent=bound)
             runtime.start()
         except ValueError as e:
             raise HostError(str(e)) from e

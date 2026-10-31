@@ -73,6 +73,10 @@ class GroupRunner:
                 self._states[p] = "stopping"
                 task.cancel()
 
+    def stopping(self, profile: str) -> bool:
+        """Whether a host stop has been requested for this member (never clears)."""
+        return self._states.get(profile) == "stopping"
+
     async def wait(self) -> tuple[MemberStatus, ...]:
         if not self._started:
             raise ValueError("group execution has not started")
