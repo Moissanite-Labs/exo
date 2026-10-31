@@ -16,12 +16,13 @@ dashes replaced). The tree, lanes and settle logic are Exo's own.
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import json
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Protocol, TypeVar, cast
 
 from exo import provenance
 from exo.core import trace
@@ -358,6 +359,24 @@ def _with_view(system: str, header: str, parts: list[str], tail: list[Message]) 
     return out + tail
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _one_read(fn: _F) -> _F:
+    """Run a method that never awaits with one read of each summary tree it looks at (#262). No other task runs
+    meanwhile, so the tree cannot change except through this context, and ``_schedule`` drops what it changes."""
+    @functools.wraps(fn)
+    def run(self: Any, *args: Any, **kw: Any) -> Any:
+        if self._read_once is not None:  # inside another such call: share its reads
+            return fn(self, *args, **kw)
+        self._read_once = {}
+        try:
+            return fn(self, *args, **kw)
+        finally:
+            self._read_once = None
+    return cast(_F, run)
+
+
 class TreeContext:
     """Default context engine: summary tree plus verbatim tail, built fresh each turn.
 
@@ -381,6 +400,7 @@ class TreeContext:
         self.max_attempts = max_attempts  # cap for explicitly non-retryable failures
         self.retry_backoff = retry_backoff  # doubles up to five minutes; transient outages remain eligible
         self._retry_at: dict[str, float] = {}  # failed node id -> monotonic time of its next try
+        self._read_once: dict[str, list[SummaryNode]] | None = None  # tree -> its nodes, within _one_read (#262)
         self._lanes = {"live": asyncio.Semaphore(live_parallel),
                        "import": asyncio.Semaphore(import_parallel)}
         self._import_open = asyncio.Event()
@@ -420,6 +440,8 @@ class TreeContext:
                 if not t.done() and (lane is None or t.lane == lane)]  # type: ignore[attr-defined]
 
     def _schedule(self, node: SummaryNode) -> None:
+        if self._read_once:  # a new or retried node changes its tree: read it again
+            self._read_once.pop(node.session, None)
         running = self._tasks.setdefault(node.session, {})
         if node.id in running and not running[node.id].done():
             return
@@ -546,8 +568,16 @@ class TreeContext:
                 self._verbatim_cache[node.id] = self._verbatim(node)
         return self._verbatim_cache[node.id]
 
+    def _nodes(self, key: str) -> list[SummaryNode]:
+        """The tree's nodes, read once per ``_one_read`` call."""
+        if self._read_once is None:
+            return self.store.summaries(key)
+        if key not in self._read_once:
+            self._read_once[key] = self.store.summaries(key)
+        return self._read_once[key]
+
     def _children(self, node: SummaryNode) -> tuple[SummaryNode, SummaryNode]:
-        by_key = {(n.level, n.index): n for n in self.store.summaries(node.session)}
+        by_key = {(n.level, n.index): n for n in self._nodes(node.session)}
         return by_key[(node.level - 1, node.index * 2)], by_key[(node.level - 1, node.index * 2 + 1)]
 
     def import_messages(self, session: str, messages: list[Message]) -> None:
@@ -566,10 +596,11 @@ class TreeContext:
         self.store.save_summary(node)
         return node
 
+    @_one_read
     def note(self, session: str, force: bool = False) -> None:
         """Schedule leaves for full chunks older than the tail; restart lost or failed jobs.
         ``force`` ignores the tail wait (``/compact``): every full chunk up to the last entry is eligible."""
-        nodes = self.store.summaries(session)
+        nodes = self._nodes(session)
         leaves = {n.index: n for n in nodes if n.level == 0}
         running = self._tasks.get(session, {})
         for n in nodes:  # pending in the DB with no task (restart), or failed earlier: retry
@@ -595,7 +626,7 @@ class TreeContext:
 
     def _top(self, session: str) -> list[SummaryNode]:
         """Coarsest finished (done or skipped) nodes that tile the summarized region, plus unfinished leaves."""
-        nodes = self.store.summaries(session)
+        nodes = self._nodes(session)
         done = {(n.level, n.index): n for n in nodes if n.status in ("done", "skipped")}
         leaves = sorted((n for n in nodes if n.level == 0), key=lambda n: n.index)
         out: list[SummaryNode] = []
@@ -612,6 +643,7 @@ class TreeContext:
             i += 2 ** level if best.status in ("done", "skipped") else 1
         return out
 
+    @_one_read
     def _maybe_merge(self, session: str, force: bool = False) -> SummaryNode | None:
         """Schedule one merge of two finished neighbours when the view is over budget. ``force`` (``/compact``)
         skips the budget test but not the size floor: a pair under ``min_compact_tokens`` would only be skipped."""
@@ -619,7 +651,7 @@ class TreeContext:
         fin = ("done", "skipped")  # a skipped span sits in the view verbatim, so it counts and may be merged
         if not force and sum(estimate_tokens(self._body(n)) for n in top if n.status in fin) <= self.view_budget:
             return None
-        existing = {(n.level, n.index) for n in self.store.summaries(session)}
+        existing = {(n.level, n.index) for n in self._nodes(session)}
         for a, b in zip(top, top[1:]):
             if (a.status in fin and b.status in fin and a.level == b.level and a.index % 2 == 0
                     and b.index == a.index + 1 and (a.level + 1, a.index // 2) not in existing):
@@ -647,6 +679,12 @@ class TreeContext:
                 parts.append(f"## {label} {n.start}-{n.end} (verbatim, summary pending)\n{self._verbatim(n)}")
         return parts
 
+    @_one_read
+    def _plain_view(self, session: str) -> tuple[list[SummaryNode], list[str]]:
+        """(nodes in the system message, rendered parts) for a plain session. The overflow check reads any tree so."""
+        top = self._top(session)
+        return top, self._view_parts(top)
+
     async def settle(self, session: str, timeout: float | None = None, lane: str | None = "live") -> bool:
         """Wait until no summary of ``lane`` (live by default, None for every lane) is pending for ``session``.
         False on timeout."""
@@ -665,9 +703,8 @@ class TreeContext:
         self.note(session)
         if settle:
             await settle_for_turn(self, session)
-        top = self._top(session)
+        top, parts = self._plain_view(session)
         frontier = top[-1].end if top else 0
-        parts = self._view_parts(top)
         tail = self.store.messages(session, since=frontier)
         lead = []
         while tail and tail[0].role == "tool":  # orphaned results: their call is in the view
@@ -896,6 +933,7 @@ class AgentContext(TreeContext):
         return n.status == "done" or (n.level > 0 and n.status == "skipped"
                                       and any(self._summarized(c) for c in self._children(n)))
 
+    @_one_read
     def _view(self, key: str) -> tuple[list[SummaryNode], int, list[str]]:
         """(nodes in the system message, frontier, rendered parts) for an agent tree."""
         top = self._top(key)
@@ -908,6 +946,7 @@ class AgentContext(TreeContext):
 
     # ---- /context and /compact (read-only report; forced upkeep)
 
+    @_one_read
     def report(self, session: str, system: str = "", recall: str = "") -> dict[str, Any]:
         """What the next model call for this thread carries, by part, with token estimates. Writes nothing:
         the note another thread's news would add is computed, not stored."""
@@ -920,7 +959,7 @@ class AgentContext(TreeContext):
         notes = [m for m in tail if m.meta.get("note") == "threads"]
         recent = [m for m in tail if m.meta.get("note") != "threads"]
         _, pending_text = self._unseen(session, key, frontier, self.store.get_meta(session))
-        nodes = self.store.summaries(key)
+        nodes = self._nodes(key)
         count = {st: sum(1 for n in nodes if n.status == st) for st in ("done", "pending", "skipped", "failed")}
         last = self._last(key)
         leaves = {n.index for n in nodes if n.level == 0}
@@ -1011,6 +1050,7 @@ class AgentContext(TreeContext):
         private = getattr(self.store, "private", None)  # SessionStore.private: also a session under one
         return not (private(key) if private else self._own(key))
 
+    @_one_read
     def _thread_tail(self, session: str, frontier: int) -> list[Message]:
         """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result.
         A private thread's frontier is its own tree's, whose view leads the tail."""
