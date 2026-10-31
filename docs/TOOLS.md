@@ -200,6 +200,7 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   service `exo`, Linux Secret Service when `secret-tool` is available, or `~/.config/exo/keys.env` mode 0600
   with `EXO_KEYS_FILE` override). If Jev fails or no key exists, local Laya through jg's custom
   endpoint (the same `/v1/systemone` API), when `providers.laya` is configured, on loopback, and listening.
+  A Laya base URL Exo cannot read, such as a port that is not a number, counts as not listening.
   The first line of the result names the backend: `[code_find backend=jev duration_ms=15010]`. A fallback adds
   `fallback_from=...`; a search jg marks incomplete adds `incomplete`.
 - **Key handling:** `jg` ignores key environment variables and reads only a saved config. Each call makes a

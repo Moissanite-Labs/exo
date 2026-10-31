@@ -39,9 +39,7 @@ class BusTarget(EngineTarget):
         return self.path
 
     def pick_session(self, ing: Ingress) -> str | None:
-        if ing.session and self.e.store.get_session(ing.session) is not None:
-            return ing.session
-        return None
+        return ing.session if ing.session and self.takes(ing.session) else None
 
     def can_wake(self, session: str) -> bool:
         return True
