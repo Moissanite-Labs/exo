@@ -1,0 +1,49 @@
+{
+  "command": ".venv/bin/python scripts/smoke_optional_features.py --repo PATH_TO_COMBINED_CHECKOUT",
+  "feature_commits": {
+    "feat/core-plugin-bridge": "d366b0f9a564784bdaa2c810a373c582c02f507a",
+    "feat/modular-harness": "1c956420f97f3213a98f988c1d7596571f5cf7e7",
+    "feat/operations-inbox": "961058d2b43edcce269e7d92f276715824ee4432",
+    "feat/skill-discovery": "f7bf0ad80b2dcbd112f20e7bad812f4dbef65f4b",
+    "feat/tool-evidence": "8d2e4c42d3e085fbc01aa37bb223a229ef3b74e2",
+    "feat/work-notebook": "5443cee76e714bcd5903a096f008a813baf00634"
+  },
+  "integration_commit": "cdf54caf6827add0e0802e2109be5b968378d68f",
+  "results": [
+    {
+      "case": "features_enabled",
+      "inbox_without_runtime": {
+        "approvals": "unknown",
+        "findings": "ok",
+        "jobs": "ok",
+        "questions": "unknown",
+        "schedules": "unknown",
+        "sessions": "ok",
+        "tasks": "unknown"
+      },
+      "notebook_revision_after_restart": 1,
+      "provider_excerpt_chars": 1482,
+      "real_gate_actions": 8,
+      "retrieval_pages": 3,
+      "status": "passed",
+      "stored_chars": 26561
+    },
+    {
+      "case": "features_disabled",
+      "inbox_without_runtime": {
+        "approvals": "unknown",
+        "findings": "ok",
+        "jobs": "ok",
+        "questions": "unknown",
+        "schedules": "unknown",
+        "sessions": "ok",
+        "tasks": "unknown"
+      },
+      "optional_resources_absent": true,
+      "provider_full_result_chars": 26561,
+      "status": "passed"
+    }
+  ],
+  "scope": "Offline composed-runtime verification with a fake model and real gate. No principal canary or paid-provider evaluation.",
+  "upstream_main": "5a9dc394f7406fe58f3c257e8227649ca9a56f72"
+}

@@ -6556,3 +6556,108 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     stop steps.
   - *Count.* With main `74fe9332` merged, the counted core is 16,475 lines (main: 16,028). D-083 reports this
     and does not assert it. Product imports and private-state reads stay at 39 and 8.
+
+## D-085 (2026-10-23) Retained tool-output views with exact bounded expansion
+- **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.
+- **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
+  transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
+  JSON pages through an ordinary registry tool, preserving gate and executor dispatch. Reuse session storage.
+  Do not create a second output archive. Check visible source/result identity before issuing references.
+  Classify the new `tool_output` name as `read`. Explicit read-deny policies still block expansion.
+- **Scope:** Single text-part, non-error results above the configured threshold. Preserve distinct diagnostic
+  and source-label lines or leave the result whole. Expansion pages and multipart/image results stay whole.
+  Delegated views use the optional `for_child(context, tools=names)` contract and require the expansion tool.
+- **Ownership:** Atomically bind new evidence to the configured principal, agent and session in existing metadata.
+  The first writer owns the binding. Initialization preserves unrelated metadata and snapshots its sequence in one transaction.
+  Pre-enable history and fork copies remain uncompressed. References identify a message and result index,
+  not only a reusable tool-call ID. Undo and a bounded recent-message window revoke access. Reads reapply
+  known-key redaction and refuse stale fingerprints. These checks do not change the rest of memory's access.
+- **Rejected:** Storing a duplicate transcript, private compressor overrides, transforming persisted results,
+  silently dropping errors, or promising recovery of bytes discarded before logging. Earlier capture is a
+  separate stage with its own disk and retention limits. Summary-model cost and task-quality gains are unproven.
+- **Validation:** Exact pagination including JSON escaping, restart, session/principal/private/fork isolation,
+  undo/expiry, source mutation, reused call IDs, real engine/child dispatch, executor refusal, cancellation,
+  disabled imports/state and bounded synthetic footprint measurements. No provider or network calls.
+- **Gate review:** Main's `scripts/gate_diff.py` compared `5a9dc394` with local integration `cdf54caf`
+  over 55,047 actions and 87 policies. It reported 3,320 lowered pairs across 62 actions, all using the new
+  `tool_output` or `work_notes` names. No existing tool name had a lowering in this corpus. The full script
+  reported lowerings and did not pass its zero-lowering gate.
+- **Gate repair:** The initial `tool_output` entry accounted for 1,144 lowered pairs across 27 actions,
+  including unsupported path arguments. Read classification now requires the supported keys and types,
+  a nonnegative offset and a page limit from 1 to 24,000. Other shapes use the existing generic classifier,
+  preserving secret/store floors and reserved categories.
+- **Focused comparison:** After that repair, main's script checked 62 `tool_output` actions against all
+  87 policies. Of 5,394 pairs, nine lower for three supported argument shapes, from `unknown` to `read`.
+  There are no malformed-call lowerings, lost reserved hits, lost violations or classifier errors.
+  Those nine changes are intentional. The script still exits 1, and the broad run was not repeated.
+  The [saved corpus and summary](docs/evidence/tool-output-gate-2026-10-23.json) include all cases,
+  the compared commits and commands to reproduce this result.
+- **Runtime boundary:** The tool schema requires `reference` and accepts only `reference`, `offset` and `limit`.
+  It rejects extra path arguments before execution. The caller's session supplies the lookup scope.
+  A real-gate regression verifies that an explicit read-deny policy blocks valid expansion requests.
+- **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. The counted core rises by
+  14 lines over #500's head, which D-083 reports and does not assert. Product imports and private-state reads
+  stay at 39 and 8.
+
+- **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
+  combinations once skill discovery (#509), the operations inbox (#511) and working notes (D-086) are
+  present. The recorded local integration and source fingerprints live in
+  `docs/evidence/optional-features-smoke-2026-10-23.json`.
+  Tool-output CPU/startup samples were refreshed after the current-main and metadata changes.
+  These offline fixtures do not establish task quality or replace the principal canary.
+- **Amendment 2026-10-27 (#510 review):** Expansion serves only results that rendering could excerpt.
+  A reference to an error result, a result shorter than `threshold_chars`, a `tool_output` page or a
+  result without its source call is refused, even when its digest matches. Before, such a digest needed
+  the exact text, so no access was gained. The check keeps it that way if a later caller can get a digest
+  some other way. The feature module is outside the counted core.
+- **Amendment 2026-10-27 (#510 review, page limit):** The gate reads a `tool_output` page as `read` for a
+  `limit` up to the top of the `page_chars` range, 24,000. It cannot see the configured value. The tool
+  refuses a limit above that value, so the category is `read` on both paths and no policy result changes.
+  `exo.tool_evidence.PAGE_CHARS` holds the range, and a test fails if the gate's ceiling and its top differ.
+- **Amendment 2026-10-29 (gate comparison on #500's head):** Main's `scripts/gate_diff.py` compared main
+  `080e87ba` with this change rebased onto #500, at `ab7a12fe`. It ran the built-in corpus with variants, the
+  saved `tool_output` cases and four page-limit cases: 91,712 actions against 88 policies. It found 18 lowered
+  pairs on six actions. All six are supported `tool_output` page calls, each from `unknown` to `read` under
+  `categories_deny`, `categories_ask` and `categories_log`. These are the intended lowerings named above.
+  No reserved hit or violation was lost, no pair tightened, and neither tree had an error. A limit of 24,001
+  stays `unknown`. The gate imports no other Exo module, so its `tool_output` rule is the only change.
+- **Amendment 2026-10-29 (renumbered from D-084):** On 2026-10-28 #742 merged another D-084 into main,
+  "An internal gate error asks once". #510 had merged into #508's branch, so its change now comes to #500
+  in a new PR, and it takes D-085. Main does not use D-085, and no open PR outside this stack does. #511
+  used D-085 too, and it takes a new number when it is rebased onto this change.
+- **Amendment 2026-10-31 (#982 review, reference shape):** The gate reads a `tool_output` page as `read`
+  only when its `reference` has the `te1:` shape that the view issues, `te1:m_<id>:<index>:<64 hex>`.
+  Before, any string passed. A call with the reference `../../.ssh/id_rsa` or `$(rm -rf /)` went from
+  `unknown` to `read` under `categories_deny`, `categories_ask` and `categories_log`. The tool refused such a
+  string and opened no file, but the gate lowered more than this decision names. Any other string now keeps
+  the generic classification. The gate imports no other Exo module, so it holds its own copy of the pattern,
+  and a test keeps it equal to the one in `exo.tool_evidence`.
+  - *Index spelling.* The index must be ASCII digits with no leading zero, as the view writes it. A check
+    of this change found that the pattern's `\d` also took digits of other scripts. The tool read an
+    Arabic-Indic or fullwidth zero, or `00`, as index 0 and served the issued page under that name, and the
+    gate read the call as `read`. The gate and the tool now both refuse those names.
+  - *Gate comparison.* Main's `scripts/gate_diff.py` at `6491bcea` compared #500 at `faf39447`, the commit
+    this change is based on, with this change. The corpus was the built-in one with variants, the 62 saved
+    `tool_output` cases, four page-limit cases (511, 512, 24,000 and 24,001) and 28 calls whose reference is
+    not in the `te1:` shape: paths, a command string and near misses, each alone and with an offset and limit.
+    That is 91,745 actions against 88 policies, 8,073,560 pairs. It found 18 lowered pairs on six actions.
+    All six are supported page calls with a `te1:` reference, each from `unknown` to `read` under the three
+    policies above. These are the lowerings this decision names. None of the 28 other calls lowered. No
+    reserved hit or violation was lost, no pair tightened, and neither tree had an error.
+  - *Against the previous head.* On the 93 `tool_output` cases alone, the previous head `a30d1005` against
+    this change lowers no pair and tightens 84: the 28 other calls, each from `read` to `unknown` under the
+    three policies.
+  - *After the merge of #500's update.* Main's `scripts/gate_diff.py` at `d995d667` compared #500's head
+    `e4f98278` with this change at `d197a03c`. The corpus was the built-in one with variants and 124
+    `tool_output` cases: the 93 above and 31 more. The new ones are references alone and with an offset and
+    limit, such as another digit script, a leading zero, index 999, message ids of 80 and 81 characters and a
+    doubled prefix, and calls with an extra key. That is 91,776 actions against 88 policies, 8,076,288 pairs.
+    It found 36 lowered pairs on 12 actions. Each is a page call with a well-formed `te1:` reference, from
+    `unknown` to `read` under the three policies above. No other call lowered. No reserved hit or violation
+    was lost, no pair tightened, and neither tree had an error.
+- **Amendment 2026-10-31 (merge of #500's `e4f98278`):** Main's #984 added `SessionStore.update_meta` with a
+  dict of keys to set. This change had added it with a callback, which `Evidence.begin` needs to set its key
+  only when it is absent. One method now takes either. A dict skips a missing session, as on main. A callback
+  edits the dict in one transaction, returns its result and raises `KeyError` for a missing session. `lock`
+  and the context's `seen_pos` and `compact_seq` writes use main's dict form. The counted core is 16,489 lines,
+  14 above #500's head at 16,475. Product imports and private-state reads stay at 39 and 8.

@@ -134,6 +134,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+- Optional retained tool-output excerpts with exact paginated expansion, scoped to the session and
+  configured principal. Originals stay in the transcript. Earlier tool caps are not recoverable
+  (`docs/TOOL-OUTPUT.md`, D-085, #501 stage 1; in progress).
+  Expansion refuses a reference to a result that the view would not excerpt.
+  A test keeps the gate's page limit at the top of the `page_chars` range.
+  The gate reads a page as `read` only for a reference in the `te1:` shape. Any other string, such as a
+  file path, keeps the generic classification.
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

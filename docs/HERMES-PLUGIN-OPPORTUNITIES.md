@@ -43,6 +43,10 @@ The source register pins each selected example so later catalog updates do not c
 
 ### 1. Reversible tool-output compression
 
+Stage 1 is implemented for review in [TOOL-OUTPUT.md](TOOL-OUTPUT.md): optional excerpts
+over retained text with exact session-scoped pages. The earlier capture stage below
+remains future work in [#501](https://github.com/aska-digital/exo/issues/501).
+
 **Inspiration:** Tameru. Its pinned version shortens older tool results and can retrieve originals.
 It currently subclasses private Hermes compressor methods. Exo should expose a supported rendering
 interface rather than copy that coupling.
