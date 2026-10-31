@@ -267,6 +267,9 @@ credentials"), asks the principal every time, so do not copy a plugin there to t
 `${EXO_VENV:-$EXO_HOME/venv}` for private experiments; loose `EXO_PLUGIN_DIRS` while you edit instead.
 A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
 leaves nothing behind.
+A folder plugin imports as `exo_plugins.<name>`, with each character that is not a letter, digit or `_` made `_`.
+So `a-b` and `a_b` would share one module, and the second would replace the first's code. The second to load is
+refused instead, with an error that names both (exo-desktop #52). Give one of them another name.
 
 What `ctx` offers (`src/exo/core/plugins.py`):
 
