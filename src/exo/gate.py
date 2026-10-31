@@ -7410,7 +7410,7 @@ TOOLS: dict[str, str] = {
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
     **{t: "delegate" for t in ("delegate_task", "start_chat")},
     "peers": "read", "peer_send": "peer_message",
-    "jobs": "read", "job_output": "read", "job_kill": "shell",  # D-032: the bash command itself is classified as foreground bash
+    "jobs": "read", "job_output": "read", "job_wait": "read", "job_kill": "shell",  # D-032: the bash command itself is classified as foreground bash
     **{t: "credentials" for t in ("browser_vault_fill", "browser_vault_unlock", "browser_vault_save_login",
                                     "browser_vault_enter_code")},
     **{t: "browser" for t in ("browser_cdp", "browser_exec", "browser_dialog", "computer_use")},

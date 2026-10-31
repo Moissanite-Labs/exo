@@ -10,6 +10,7 @@ once, and the agent carries on. When the command ends the core tells the thread 
 | `bash(command, background: true, timeout?)` | Starts the job. Returns `j_3fa91c`, its pid and its log path. `timeout` is the job's wall limit, cut to the seat's cap. |
 | `jobs` | Lists this agent's jobs: id, state, elapsed, exit code, command. |
 | `job_output(id, tail?, grep?)` | Reads the log: the last N lines (default 40, at most 500), after an optional case-insensitive regular expression. |
+| `job_wait(id, timeout?)` | Waits for one owned job to become terminal without polling. Default 30 seconds, maximum 60. Timeout or cancellation leaves the job running; use `job_output` to read results. |
 | `job_kill(id)` | TERM to the job's process group, KILL after a second. |
 
 States: `running`, `done` (exit 0), `failed` (other exit), `killed`, `timeout`, `lost`.
@@ -99,7 +100,7 @@ Subagents cannot start jobs (their sessions end with their report) and do not ge
   was running as `lost`, tells the owning thread (steered into a running turn or queued, never waking it) and says
   the process may still be alive, with its pid. It is not touched: a pid can be reused.
 - The command is gated exactly as a foreground `bash` call: the gate classifies the tool name and the command text,
-  and `background` and `timeout` play no part. `jobs` and `job_output` are reads; `job_kill` is a shell action on the
+  and `background` and `timeout` play no part. `jobs`, `job_output` and `job_wait` are reads; `job_kill` is a shell action on the
   agent's own job.
 - Output is not scrubbed beyond what any tool result is. Commands run with the same environment as foreground bash
   (no bus identity, no key variables, same `env_allow`; see docs/TOOLS.md).
