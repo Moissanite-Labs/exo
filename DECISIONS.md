@@ -1362,35 +1362,49 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
   `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
   four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
-  linear. A value past the four adds no reading, as a value the gate cannot read. gh api's `{owner}` and `{repo}`
-  are filled from it. The line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5`
-  still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that change which config files are used
-  (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and `editor` commands. So it asks, as
-  `opaque_exec` named in the summary. Left open: `GH_HOST`, which picks gh's host, and a prefix assignment on a
-  command that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`), whose gh still asks as on a repo the line
-  does not name. Tests: `tests/security/test_gate_gh_repo_env_566.py`, the GH_REPO row of
-  `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
+  linear. A value past the four adds no reading, as a value the gate cannot read. Of the prefix assignments before
+  one command, the last four values are kept too, before the line's own values are added (review 5722148651). Each
+  value is read on every operand, so 6,000 prefix values before 400 URL operands took 20 s of CPU in classify.
+  bash, `env` and `sudo` pass gh the last one, but an option can take a later word as its value
+  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. gh
+  api's `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as
+  gh's `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
+  change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
+  `editor` commands. So it asks, as `opaque_exec` named in the summary. Left open, each still asking as on a repo
+  the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command that starts a nested
+  shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value a loop body sets
+  after its gh command, which gh reads on the next pass (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`).
+  A function whose gh runs where it is called, after the value is set
+  (`f() { gh ..; }; export GH_REPO=pub/repo; f`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
+  GH_REPO rows of `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
   `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
-- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL
-  operand on another instance is another target (#399), with a copy of the action among the line's parts. `decide`
-  read the line on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook.
-  Past eight other targets (`_ALTS_IN_FULL`), the line on most of them is now decided without the copies
-  (`_without_copies`). The line on its own target keeps them. Each copy is a part on its own target with the line's
-  own text, so the own text test (#394) reads the same texts, and every raise a copy brings (a deny or reserved
-  entry, a cell or rule that denies it alone, a posting finding) is met on the line's own target. So the outcome,
-  the exposure, the third party and the reserved hits stay the same. What the posting rules list of the copies
-  turns only on how the policy reads the line's own target (`_alt_key`): its exposure and third party after the
-  scopes, and which target patterns of the rules and of the deny and reserved entries match it. A rule on some
-  targets can pick the line's `$".."` reading (#136), whose own post the posting rules skip, and the copies then
-  list their findings. So the line on the first other target of each such reading not met yet keeps the copies
-  too, and every finding is listed as often as before. The policy's target patterns bound how many there are. Up to
-  eight other targets the decision is as before, word for word, so no line gh accepts changes. A close's or
-  reopen's comment and a merge's subject are read once per line too, as #920 reads the body and the title.
-  Rejected: a cap on URL operands that fails closed past it. A deny on a target past the cap would then only ask,
-  and #920's test keeps every target. Rejected too: no copies on any other target. On a line whose targets differ
-  in exposure it listed a finding once where main listed it under a copy's name too. Rejected as well: one
-  target of each exposure. With a deny rule on `git.example/*` that the `$".."` reading meets, it dropped a copy's
-  finding there, at an equal deny. Tests:
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL operand on
+  another instance is another target (#399), with a copy of the action among the line's parts. `decide` read the line
+  on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook. Past eight other
+  targets (`_ALTS_IN_FULL`), the line on each of them now keeps, among the copies of each action, only the first copy
+  of each reading the policy tells apart (`_one_copy_each`). The line on its own target keeps every copy. A copy's
+  reading is how the policy reads its target (`_alt_key`: its exposure and third party after the scopes, and which
+  target patterns of the rules and of the deny and reserved entries match it), with every other field `decide` reads
+  of it. Nothing else `decide` reads turns on a copy's target, so copies of one reading decide alike, and each step
+  that meets one meets the first: a deny or reserved entry, a cell or rule that denies it alone (#191), the own text
+  test (#394), the `$".."` reading (#136) and the rule that picks it. The posting rules list a copy's finding once,
+  under the first copy that finds it, and that is the first of its reading. So the line on each other target decides
+  as with every copy: the same outcome, reason, rule, exposure, third party, findings and hidden count. Only its
+  reserved hits differ, by those of the copies it leaves out, and the line on its own target lists every one of them.
+  So the merged decision is the one every part gives, reserved hits and their order included. The work grows with the
+  URL operands times the readings the policy tells apart, which its patterns bound. Up to eight other targets the
+  decision is as before, word for word, so no line gh accepts changes. A close's or reopen's comment and a merge's
+  subject are read once per line too, as #920 reads the body and the title. Rejected: a cap on URL operands that fails
+  closed past it. A deny on a target past the cap would then only ask, and #920's test keeps every target. Rejected
+  too: no copies on any other target. On a line whose targets differ in exposure it listed a finding once where main
+  listed it under a copy's name too. Rejected as well: one target of each exposure. With a deny rule on
+  `git.example/*` that the `$".."` reading meets, it dropped a copy's finding there, at an equal deny. And rejected:
+  the first other target of each reading of the line's own target keeps every copy and the rest keep none (the head
+  reviewed in 5722148651). Under a deny entry on one host, a reserved entry on another and `opaque_exec: deny`, the
+  copies' deny made the github_post reading tie the `$".."` reading on each target, and decide kept the github_post
+  one. Without them the `$".."` reading stood alone, so the lean decision listed `(opaque_exec, target)` reserved hits
+  that the full one does not. Stricter, never lower, but not the same. Tests:
   `tests/security/test_gate_gh_field_work_550.py`,
   `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
   `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.

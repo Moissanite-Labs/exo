@@ -19,13 +19,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `GH_REPO=pub/repo gh pr comment 5`, or an `export GH_REPO=pub/repo` earlier on the line, posts on `pub/repo#5`,
   but the gate read a repo the line does not name, so a `target:` deny or rule on `pub/*` never saw it. Each value
   the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays. An
-  export in a `{ }` group or an `if`, or before a `$( )` or `bash -c`, counts too.
+  export in a `{ }` group or an `if`, or before a `$( )` or `bash -c`, counts too. gh api's `{owner}` and
+  `{repo}`, and its `:owner` and `:repo`, are filled from it. The gate keeps the last four values, so a line of
+  thousands of prefix values and URL operands stays linear.
   `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
 - Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
   Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other
-  one: a 100 KB line took 290 s of CPU inside the hook. Past eight other targets, the line on most of them is now
-  decided without those copies, which the line on its own target already meets. The decision is the same. A
-  close's or reopen's comment and a merge's subject are read once per line, not once per target.
+  one: a 100 KB line took 290 s of CPU inside the hook. Past eight other targets, the line on each of them now
+  keeps one copy of each reading the policy tells apart, and the line on its own target keeps them all. The
+  decision is the same, reserved hits included. A close's or reopen's comment and a merge's subject are read once
+  per line, not once per target.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
 - `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
   follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from

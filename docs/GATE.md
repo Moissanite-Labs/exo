@@ -343,13 +343,21 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   when the variable was exported before the line. So does an export or assignment in a compound,
   or before a nested line that inherits it: `{ export GH_REPO=pub/repo; gh pr comment 5; }`,
   `export GH_REPO=pub/repo; x=$(gh pr comment 5)` and `bash -c`. The gate keeps the last four
-  values the line set, so a long line stays linear. gh api fills `{owner}` and `{repo}` in its
-  endpoint from it, so `repos/{owner}/{repo}/issues/5/comments` reads as `pub/repo` too. The
-  line's own reading stays, so no line decides lower: `GH_REPO=myorg/app gh pr comment 5` still
-  asks as on a repo the line does not name. A value from an expansion adds nothing, as that
-  reading already stands, and so does a value past the four. Not read here: a prefix assignment on
-  a command that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`), and `GH_HOST`, which
-  names gh's host.
+  values the line set, so a long line stays linear. Of the prefix assignments before one command
+  it keeps the last four too. bash, `env` and `sudo` pass gh the last one, but an option can take
+  a later word as its value (`sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt). gh api
+  fills `{owner}` and `{repo}` in its endpoint from it, and `:owner` and `:repo` up to a word
+  boundary, so `repos/{owner}/{repo}/issues/5/comments` and `repos/:owner/:repo/issues/5/comments`
+  read as `pub/repo` too. The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks as on a repo the line does not name. A value from
+  an expansion adds nothing, as that reading already stands, and so does a value past the four.
+  Not read here: a prefix assignment on a command that starts a nested shell
+  (`GH_REPO=pub/repo bash -c '..'`) or that calls a function (`GH_REPO=pub/repo f`). A value a
+  loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh pr comment 5 -b x; export GH_REPO=pub/repo; done`). A function whose gh
+  runs where it is called, after the value is set
+  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). And `GH_HOST`, which names gh's
+  host. Each of these asks as on a repo the line does not name, as before.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
@@ -357,11 +365,11 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. Past eight other targets, the line on most of them is decided without the copies, and the
-line on its own target keeps them, so the decision stays the same ("Invariant gh field parsing
-(#550)" below). The posting rules list a post's violations under the post's own name, and right after
-them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
-target can be public where the post's is internal). On a line with such copies, the other posts
+part. Past eight other targets, the line on each of them keeps one copy of each reading the
+policy tells apart, and the line on its own target keeps them all, so the decision stays the
+same ("Invariant gh field parsing (#550)" below). The posting rules list a post's violations
+under the post's own name, and right after them what a copy finds that neither the post nor
+another copy of it does (under a scope a copy's target can be public where the post's is internal). On a line with such copies, the other posts
 keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
 own, so it lists all that main lists while those list no more than 200. Its question merges the
 readings of the line, so a copy's finding can show both under the copy's name and under the
@@ -3556,15 +3564,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 Since the D-038 amendment of 2026-10-30, the rest of #550 is closed too. A close's or reopen's comment and a merge's
 subject are read once per line, with the body and the title. `decide` reads the line on its own target with every
 part, the copies on its other targets among them. Past eight other targets (`_ALTS_IN_FULL`), it reads the line on
-most of them without the copies (`_without_copies`). A copy is a part on its own target with the line's own text,
-so the line on its own target already meets each deny, reserved entry and posting finding it brings. What the
-posting rules list of the copies turns only on how the policy reads the line's own target: its exposure and third
-party after the scopes, and which target patterns of the policy match it. A rule on some targets can pick the
-line's `$".."` reading, whose own post the posting rules skip, and the copies then list their findings. So the
-line on the first other target of each such reading keeps the copies. The outcome, the exposure,
-the third party, the reserved hits and the findings stay the same, and the work grows with the number of URL
-operands, not with its square. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`.
-It now takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:
+each of them with one copy of each reading the policy tells apart (`_one_copy_each`). A copy's reading is how the
+policy reads its target (its exposure and third party after the scopes, and which target patterns of the policy
+match it), with everything else `decide` reads of it. Copies of one reading decide alike, so each step that meets
+one meets the first. The posting rules list a copy's finding once, under the first copy that finds it, which is
+the first of its reading. So the line on each other target decides as it does with every copy: the same outcome,
+reason, exposure, third party and findings. The copies it leaves out add only their own reserved hits, and the line
+on its own target lists those. So the merged decision is the one every part gives, reserved hits and their order
+included. The work grows with the number of URL operands times the readings the policy tells apart, not with the
+square of the operands. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`. It now
+takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:
 `tests/security/test_gate_gh_field_work_550.py` and `tests/security/test_gate_expansion_scan_linear.py`.
 
 Two smaller points from the issue. The ledger row's `alt_targets` already read a user and a password in a URL as
