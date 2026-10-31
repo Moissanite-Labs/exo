@@ -84,8 +84,9 @@ Envelopes:
   command body still gets a typed `Response`, as the `events.subscribe` case above does. The first command
   starts the core's runtime (the provider readiness probe when no main role is configured, then the MCP
   servers). A start that raises is that command's error, `internal` unless classified, and the next command
-  starts again; so does one after a cancelled start (exo-desktop #14). An MCP server that fails does not fail
-  the start: it is recorded in its status and skipped.
+  starts again. It does after a cancelled start too (exo-desktop #14), and after a start that failed once its
+  only command was cancelled (exo-desktop #2). An MCP server that fails does not fail the start: it is recorded
+  in its status and skipped.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is

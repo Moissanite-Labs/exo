@@ -143,6 +143,33 @@ def test_a_cancelled_awaiter_leaves_the_running_start_alone(tmp_path, monkeypatc
     asyncio.run(main())
 
 
+def test_a_start_that_failed_after_its_only_caller_left_is_retried(tmp_path, monkeypatch):
+    """No command saw that error, so the next command starts again. It does not get the old error."""
+    gate, entered = threading.Event(), threading.Event()
+    calls = _probe(monkeypatch, fail=1, gate=gate, entered=entered)
+    eng = _engine(tmp_path)
+
+    async def main():
+        d = Dispatcher(eng)
+        run = asyncio.ensure_future(d.run(_list()))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task = eng._started
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
+        finally:
+            gate.set()
+        with pytest.raises(ConnectionError):
+            await task  # the start fails after its only caller left
+        again = await d.run(_list())
+        assert again.ok, again.error
+        assert len(calls) == 2
+        await eng.close()
+
+    asyncio.run(main())
+
+
 def _mcp_engine(tmp_path, monkeypatch) -> tuple[CoreEngine, list]:
     """An engine with one MCP server whose first connect never finishes; later connects are ready at once."""
     eng = CoreEngine(tmp_path / "home", {"fake": {}, "roles": {"aux": ["fake:x"]}}, cwd=str(tmp_path),

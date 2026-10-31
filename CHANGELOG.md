@@ -403,6 +403,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
 
+- The next command also retries a start that failed after its only command was cancelled (exo-desktop #2). No
+  command got that error, but the next command got it once more, and only the command after that started again.
+  The next command now drops a finished start that raised or was cancelled before it waits on it. A start still
+  running stays, so a cancelled command never causes a second start. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
+- A local provider whose base URL has a bad port reads as not running (found in the exo-desktop #14 review).
+  `http://127.0.0.1:notaport/v1`, a port above 65535, a broken IPv6 host or a host name part over 63 letters made
+  the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
+  provider check failed. With no main role set, every start runs that check, so every command failed, retry or
+  not. The probe now reads such a URL as nothing listening. Tests:
+  `tests/core/test_providers_setup.py`.
+
+- `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
+  broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:
+  `tests/core/tools/test_codefind.py`. **Docs:** `docs/TOOLS.md` "code_find".
+
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).
 
 - Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
