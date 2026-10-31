@@ -5,6 +5,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
+
 - Gate: invariant gh field parsing (#550, partial scope). The #550 entry under Fixed closes the rest.
 
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
@@ -29,6 +31,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   keeps one copy of each reading the policy tells apart, and the line on its own target keeps them all. The
   decision is the same, reserved hits included. A close's or reopen's comment and a merge's subject are read once
   per line, not once per target.
+- The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
+- "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
+  "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
+  message, or on the workspace when the list came back empty.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
 - `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
   follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
@@ -159,6 +165,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
   conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
 
+
+- A read-only, content-free historical-path audit and a private cleanup rehearsal runbook (#49).
+  Overall completeness requires a full mirror verified against advertised remote refs; local traversal,
+  historical path/ref-name literals and omitted-ref coverage are reported separately. The tool does
+  not rewrite remote history or change repository visibility. Local/file/self remotes cannot establish
+  hosting coverage; known custom transport commands/helpers also leave remote coverage unverified.
+  The synthetic tests isolate inherited Git configuration and transport selectors.
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
