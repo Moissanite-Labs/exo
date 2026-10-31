@@ -6647,6 +6647,14 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - *Against the previous head.* On the 93 `tool_output` cases alone, the previous head `a30d1005` against
     this change lowers no pair and tightens 84: the 28 other calls, each from `read` to `unknown` under the
     three policies.
+  - *After the merge of #500's update.* Main's `scripts/gate_diff.py` at `d995d667` compared #500's head
+    `e4f98278` with this change at `d197a03c`. The corpus was the built-in one with variants and 124
+    `tool_output` cases: the 93 above and 31 more. The new ones are references alone and with an offset and
+    limit, such as another digit script, a leading zero, index 999, message ids of 80 and 81 characters and a
+    doubled prefix, and calls with an extra key. That is 91,776 actions against 88 policies, 8,076,288 pairs.
+    It found 36 lowered pairs on 12 actions. Each is a page call with a well-formed `te1:` reference, from
+    `unknown` to `read` under the three policies above. No other call lowered. No reserved hit or violation
+    was lost, no pair tightened, and neither tree had an error.
 - **Amendment 2026-10-31 (merge of #500's `e4f98278`):** Main's #984 added `SessionStore.update_meta` with a
   dict of keys to set. This change had added it with a callback, which `Evidence.begin` needs to set its key
   only when it is absent. One method now takes either. A dict skips a missing session, as on main. A callback
