@@ -3,8 +3,88 @@
 Exo can run an opt-in, bounded Propose–Probe–Compose experiment through
 `exo.improvement.harness2.run_cycle`. It produces a JSON-serializable, review-only
 proposal and evidence record. It is not connected to the runtime, skill discovery,
-principal memory, nightly climb, provider registry, or activation paths. No CLI
-runtime defaults change. No model, benchmark, or upstream package is installed.
+principal memory, nightly climb, provider registry, or activation paths. The
+`exo improve --offline` CLI makes the experiment usable without a principal store.
+No model, benchmark, or upstream package is installed.
+
+## Use the offline CLI
+
+From a development checkout:
+
+```sh
+cd examples/improvement
+PYTHONPATH=../../src python -m exo.cli improve --offline \
+  --adapter text-normalize-v1 --fixture text.json --output text-check
+PYTHONPATH=../../src python -m exo.cli improve --offline \
+  --adapter signed-decimal-v1 --fixture ledger.json
+```
+
+With an installed Exo package, use `exo improve` with the same flags from a public
+fixture directory. There is no default fixture, provider or principal lookup.
+`--offline` and an explicit trusted adapter name are required. The two built-in
+adapters are ordinary reviewed Python functions: signed-decimal reconciliation
+and trim/lower text normalization. Their editors propose those transformations,
+probe actual transformed outputs, and compose changes that altered behavior.
+JSON cannot supply callbacks, import paths, code, tools or extra authority fields.
+These adapters cover these fixture domains only; they are not model-driven
+improvers for arbitrary Exo tasks.
+
+Each supplied example returns `review_ready`, `activated: false`, 15 counted calls,
+and a disjoint held-out paired delta of 1.0. The total cap includes baseline,
+editor, composer, development and held-out probe calls. Held-out capacity is
+reserved before development begins. Default limits: one round, 16 total tasks,
+64 calls, improvement margin .01; the hard limits remain 8 rounds, 64 total tasks
+and 2,048 total calls. Saturated or non-improving later rounds discard the candidate.
+
+Stdout is the default output and creates no files. `--output text-check` creates
+`./improvement-runs/text-check/artifact.json` with owner-only file/directory modes,
+using Exo's private atomic persistence primitive. Existing run names, symlinks,
+paths/traversal, hidden/protected working directories and Exo-home workspaces are
+refused. Output names come only from the explicit CLI flag, never fixture contents.
+This path policy is not an OS sandbox against another same-user process altering
+the workspace concurrently. Normal agent-tool authorization still applies: no new
+Gate allowance, principal identity, permission bypass or ledger authority is added.
+
+Exit status 0 means a review-only proposal passed both fixture gates; 1 means a
+valid experiment failed, exhausted its budget, did not improve or failed held-out
+checks; 2 means invalid input/limits or a filesystem-policy/I/O refusal. Valid
+unsuccessful experiments still print their audit artifact; they have no top-level
+proposal. Invalid inputs create no artifact. No output is imported by `exo
+proposals`, `learn.nightly`, or the runtime. The typed `ReviewProposal` export is
+explicitly distinct from a principal-authored `consolidate.Proposal`; it claims no
+principal intent or signed-ledger evidence.
+
+### Fixture and evidence contract
+
+The supplied JSON examples show the exact schema. It requires `schema: 1`,
+`classification: "public-synthetic"`, a lowercase namespace, adapter-compatible
+baseline notes, nonempty `development` and `held_out` task lists, and a `references`
+mapping exactly covering all task IDs. Each task has exactly `id`, `domain`, and
+`input`. Classification is a caller declaration, not proof that content is public;
+do not put secrets or private examples in the explicitly supplied file. No other
+file, memory, store or credentials are loaded.
+
+Fixture input must be a plain non-hidden JSON filename in the current directory,
+a regular file up to 256 KiB; symlinks/FIFOs and duplicate JSON keys are refused.
+Task identifiers/namespaces use lowercase letters, digits and hyphens (48 characters
+maximum), and all task IDs must be globally distinct. Exact/normalized input
+aliases are rejected across and within splits: text ignores outer whitespace/case;
+amounts ignore numeric spelling and order. Domains are fixed per adapter, fields
+are bounded, and development plus held-out tasks must fit one cap. Reference
+answers never enter proposer/composer context, including IDs or hashes derived
+from reference answers. Held-out task inputs/IDs also stay outside those contexts.
+
+Only after a composition passes development does the command probe the original
+baseline and selected composition on held-out tasks. Existing `eval.compare` and
+`eval.gate`, plus strict improvement, no individual regression and valid final
+rules, decide whether to export a typed proposal. The development audit is still
+present when held-out rejects it, clearly separated from the top-level export.
+The audit includes source provenance, normalized fixture digest, development and
+held-out evidence and a final digest. The typed proposal references the complete
+development artifact and held-out evidence digests. These are audit-only hashes,
+not signed authority and not editor inputs. Synthetic held-out fixture success
+establishes mechanics only; it does not establish live effectiveness or justify
+promotion into a principal's learning workflow.
 
 ## Run the offline example
 

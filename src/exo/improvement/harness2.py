@@ -56,6 +56,15 @@ def _proposal(value):
     return {"notes": _text(value["notes"])}
 
 
+def _evidence(value):
+    if not isinstance(value, Mapping) or set(value) != {"observation", "score", "rule_ok"}:
+        raise ValueError("malformed probe evidence")
+    score = value["score"]
+    if type(score) not in (float, int) or not math.isfinite(score) or not 0 <= score <= 1 or type(value["rule_ok"]) is not bool:
+        raise ValueError("invalid probe score or rule evidence")
+    return {"observation": _text(value["observation"]), "score": score, "rule_ok": value["rule_ok"]}
+
+
 Editor = Callable[[dict], Mapping]
 Probe = Callable[[dict, dict], Mapping]
 
@@ -99,12 +108,8 @@ def run_cycle(*, tasks: Sequence[Mapping], baseline: Mapping, propose: Editor,
         record = {"label": label, "proposal": harness, "observations": [], "rows": []}
         report["stages"].append(record)
         for task in pool:
-            result = call(probe, task, harness)
-            if not isinstance(result, Mapping) or set(result) != {"observation", "score", "rule_ok"}:
-                raise ValueError("malformed probe evidence")
+            result = _evidence(call(probe, task, harness))
             score = result["score"]
-            if type(score) not in (float, int) or not math.isfinite(score) or not 0 <= score <= 1 or type(result["rule_ok"]) is not bool:
-                raise ValueError("invalid probe score or rule evidence")
             record["observations"].append({"id": task["id"], "observation": _text(result["observation"])})
             record["rows"].append({"id": task["id"], "domain": task["domain"],
                                    "score": score, "rule_ok": result["rule_ok"]})
