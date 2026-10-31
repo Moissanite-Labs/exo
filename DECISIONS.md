@@ -1167,6 +1167,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Add refuses an existing name; editing requires explicit replacement. A keyless endpoint is configured but untested
   until probed. Changes take effect when the core restarts, and a remote core needs its own credential. This amends
   the earlier description that only a provider name crosses the protocol: custom non-secret metadata also does.
+  Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
+  key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
+  custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments

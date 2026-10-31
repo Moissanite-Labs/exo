@@ -266,6 +266,9 @@ preserve; see [issue #616](https://github.com/Moissanite-Labs/exo/issues/616).
 protocol, authentication and model ID, then optionally enter an API key. Exo supports OpenAI Chat Completions with
 Bearer authentication and Anthropic Messages with `x-api-key`, or no key; an arbitrary API is not necessarily compatible.
 Use **Edit** to change an existing custom provider; adding the same name is refused.
+The core's model-discovery cache is tied to a custom provider's endpoint, protocol and key reference. After a
+configuration change it does not fall back to models cached for the old service, even if the new service is offline;
+the manually entered model remains available. Unchanged configurations retain the normal six-hour cache.
 The OpenAI base includes the API path (often `/v1`); Anthropic uses the service root because Exo adds `/v1/messages`.
 Use HTTPS for remote endpoints: HTTP, including on local networks, sends the key without encryption. URL credentials,
 query strings and fragments are refused. Do not put a key in a URL or model ID.
