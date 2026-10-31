@@ -28,13 +28,27 @@ The code change is reviewed once upstream. The downstream reviewer checks the co
 
 ## GitHub collaboration tools (proposed guidance)
 
-For related Exo changes, prefer focused, same-repository [native stacked pull requests](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests) when the dependency chain and its owners make a stack useful. Inventory each existing PR, its author, head, base, review and checks before considering conversion; GitHub may offer a conversion banner for a qualifying chain. A stack does not replace the exact-head independent review or required checks for any layer. Preserve author-owned branches and coordinate before rebasing, retargeting or pushing. Cross-fork stacks are not supported.
+This section is advisory until the principal accepts it. Until then the author and review flow above governs.
 
-The separate `gh stack` extension can rebase and push multiple layers; check local availability and the [management guide](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests) first. Retained GitHub approvals do not by themselves establish current-head review. Verify signatures when required. A selected stack merge can land lower layers too, and partial failures can leave some merged; inspect each outcome before retrying. Follow the applicable merge rules for every layer. No stack conversion, push or merge is authorized merely by this guidance.
+For related Exo changes, prefer focused, same-repository [native stacked pull requests](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests) when the dependency chain and its owners make a stack useful. Cross-fork stacks are not supported.
 
-For substantial work, keep the plan, acceptance criteria, owner, dependencies, verification and PR links with the issue. GitHub's [issue artifacts](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/using-artifacts-with-issues) are in public preview; `gh issue artifact` requires CLI 2.103.0 or later. Record the artifact URL and version, or link an appropriate plan when the feature is unavailable. Public-issue artifacts are public. Deleting an artifact permanently removes its history; prefer edits or restores.
+Inventory each existing PR, its author, head, base, review and checks before considering conversion. GitHub may offer a conversion banner for a qualifying chain. A stack does not replace the exact-head independent review or required checks for any layer. Preserve author-owned branches and coordinate before rebasing, retargeting or pushing.
 
-For visual evidence, GitHub CLI 2.99.0 or later supports repeatable `--attach` on issue and PR writes on GitHub.com; check the [media documentation](https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/) for permissions and limits. Review and redact the file, include descriptive image alt text, and follow existing posting authorization. Local version support does not establish account access.
+The separate `gh stack` extension can rebase and push multiple layers. Check local availability and the [management guide](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests) first. Commits from the website's **Rebase stack** button are not signed with the author's key. Where D-073 signing applies, rebase locally with `gh stack rebase`, then push with `gh stack push`.
+
+GitHub keeps approvals after a stack rebase whose diff is unchanged, even with "Dismiss stale pull request approvals when new commits are pushed" on. A layer's head can move without a new review. Reviewers check that each layer's review names its current head commit.
+
+Merging a layer also merges every unmerged layer below it. A stack merge is all or nothing: if any selected pull request cannot merge, none of them merge. With a merge queue the layers can land in separate groups, and removing a layer from the queue removes every layer above it. Inspect each outcome before retrying.
+
+Follow the applicable merge rules for every layer. No stack conversion, push or merge is authorized merely by this guidance.
+
+For substantial work, keep the plan, acceptance criteria, owner, dependencies, verification and PR links with the issue. GitHub's [issue artifacts](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/using-artifacts-with-issues) are in public preview, and `gh issue artifact` requires CLI 2.103.0 or later. Record the artifact URL and version, or link an appropriate plan when the feature is unavailable.
+
+Public-issue artifacts are public. Deleting an artifact permanently removes its history, so prefer edits or restores.
+
+For visual evidence, GitHub CLI 2.99.0 or later supports a repeatable `--attach` on issue and PR create, edit and comment on GitHub.com. Uploads need write access to the repository. Check the [media documentation](https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/) for other limits.
+
+Review and redact the file before you attach it. Give each image alt text after a `#`, for example `--attach './error.png#Login error after a stale token'`. Without it, `gh` uses the file name. Follow existing posting authorization. Local version support does not establish account access.
 
 ## Desktop syncs
 
