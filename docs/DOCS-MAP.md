@@ -45,7 +45,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-009 Exo is standalone, Hermes is a source | `docs/STANDALONE.md` §0 | n/a | §1 | WP §25 |
 | D-010 Standalone core, protocol first | `docs/STANDALONE.md` §5, `docs/CORE-V2-INTERFACES.md` | §2 | §2 | WP §11, §12 |
 | D-011 Store v2 | `docs/STORE-V2.md` §2 | §11 (store commands) | §9 "Use retrieval" (store v2 itself is designed, not built) | WP §19 (as designed) |
-| D-012 One learning loop (corrections, rulings and typed taste or fact lessons match active beliefs only, so a rejected one never hides them; the rule of three still counts a rejected one; #770, #861, exo-desktop #54) | `docs/LEARNING.md` | §2 (accept, edit, reject keys) | §9 "Work on the learning loop" | WP §6, §22 |
+| D-012 One learning loop (corrections, rulings and typed taste or fact lessons match active beliefs only, so a rejected one never hides them; the rule of three still counts a rejected one; #770, #861, exo-desktop #54; reinforcement decay has a fixed-clock regression) | `docs/LEARNING.md`, `DECISIONS.md` D-012 | §2 (accept, edit, reject keys) | §9 "Work on the learning loop" | WP §6, §22 |
 | D-013 UniiChat context model in the core loop | `docs/MEMORY-MODEL.md` "Context assembly per turn" | §4 | §4 "Memory provider hooks" | WP §17 |
 | D-014 One surface, panels | `docs/PANELS.md`, `docs/UI.md` | §3 (`/panel`) | §9 "Open a panel from a tool" | WP §8, §24 |
 | D-015 Decision models | `docs/PROVIDERS.md` "Providers" | n/a | §9 "Call a decision model" | WP §14 |
