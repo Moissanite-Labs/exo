@@ -2,6 +2,7 @@ import argparse
 import errno
 import json
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -439,21 +440,24 @@ def test_rule_of_three_cache_rebuild_skips_non_principal(template_store, led):
     assert evidence_ids(led) == [mine]
 
 
-def test_repeat_correction_reinforces_and_raises_weight(template_store, led):
+@pytest.mark.parametrize("anchor", ["2026-10-31T13:52:00.000000Z", "2030-02-01T00:00:00.000000Z"])
+def test_repeat_correction_reinforces_and_raises_weight(template_store, led, monkeypatch, anchor):
+    monkeypatch.setattr(crypto, "now_ts", lambda: anchor)
     out = agent(led, "A long answer")
     led.append("verdict", {"verdict": "edit", "target": out["id"], "text": "Keep replies under five lines."},
                "principal")
-    run(template_store, led)
-    w1 = C.proposals_list(template_store, led)[0].weight
+    run(template_store, led, now=anchor)
+    w1 = C.proposals_list(template_store, led, now=anchor)[0].weight
     out = agent(led, "Another long answer")
-    led.append("verdict", {"verdict": "edit", "target": out["id"], "text": "keep replies under five lines again"},
-               "principal")
-    res = run(template_store, led)
+    correction = led.append("verdict", {"verdict": "edit", "target": out["id"],
+                                        "text": "keep replies under five lines again"}, "principal")
+    res = run(template_store, led, now=anchor)
     assert res.proposals == [] and len(res.reinforced) == 1
-    v = C.proposals_list(template_store, led)[0]
+    v = C.proposals_list(template_store, led, now=anchor)[0]
     assert v.weight > w1 and len(v.evidence) == 2
     # Decay: 120 days later without reinforcement the taste belief is weak.
-    old = C.proposals_list(template_store, led, now="2027-02-15T00:00:00+00:00")[0]
+    last_evidence = C.taste.parse_ts(correction["ts"])
+    old = C.proposals_list(template_store, led, now=(last_evidence + timedelta(days=120)).isoformat())[0]
     assert old.weight < 0.1 and old.confidence == "low"
 
 
