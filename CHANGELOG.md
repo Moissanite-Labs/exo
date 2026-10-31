@@ -15,10 +15,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
   `printf 'r\x6d -rf /srv/data' | bash` hid its delete. They are now a store write and a delete.
 
-  The text as written is still read, so nothing decides lower (main's `scripts/gate_diff.py`: 0 lowered pairs on
-  three corpora). A word bash may change, another printf conversion or option, and `echo` without `-e` are read as
-  before. Tests: `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
-  amendment), `docs/DOCS-MAP.md`.
+  The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
+  written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
+  `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
+
+  A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
+  Interpreters and SQL clients still read the text as written only. Tests:
+  `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
@@ -30,8 +34,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
   `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
   file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
-  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. The gate does not expand a
-  `printf` or `echo -e` escape, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. Since #1047 the gate also
+  reads what a `printf` or `echo -e` writes, with its escapes expanded, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store write.
   D-074's limits say so too, and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that
   paragraph and those limits name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
