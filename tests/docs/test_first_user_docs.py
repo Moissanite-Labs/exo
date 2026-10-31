@@ -102,20 +102,22 @@ def test_no_first_user_page_still_calls_the_repository_private():
     """The repository moved to Moissanite-Labs and is public (#931). The install guide and every site page agree.
 
     The old URL counts wherever it ends: in an href, in a link's visible text, or before a backtick. A longer name
-    that only starts with it, such as exo-desktop, does not count.
+    that only starts with it, such as exo-desktop, does not count. The `--exo-source` URL must end at exo too, so
+    exo-cli does not pass. "is private" must start at a word, so "this private key" is not stale.
     """
     pages = ["docs/INSTALL.md", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "site").rglob("index.html")))]
     for rel in pages:
         text = _read(rel)
-        for stale in ("private preview", "on request", "limited during the early build", "is private"):
-            assert stale not in text, f"{rel} still says {stale!r}"
+        for stale in ("private preview", "on request", "limited during the early build", r"\bis private"):
+            said = re.search(stale, text)
+            assert said is None, f"{rel} still says {said.group(0)!r}"
         old = re.search(r"github\.com/aska-digital/exo(?![\w-])", text)
         line = old and text.count("\n", 0, old.start()) + 1
         assert old is None, f"{rel} line {line} still names the old repository"
     install = _read("docs/INSTALL.md")
     assert "public" in install and "early preview" in install, "INSTALL.md: say the repository is public"
     assert "git clone https://github.com/Moissanite-Labs/exo " in install, "INSTALL.md: clone the moved repository"
-    assert "--exo-source https://github.com/Moissanite-Labs/exo" in install, (
+    assert re.search(r"--exo-source https://github\.com/Moissanite-Labs/exo(?![\w-])", install), (
         "INSTALL.md: --exo-source names the moved repository")
 
 
