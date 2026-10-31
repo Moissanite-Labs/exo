@@ -148,6 +148,7 @@ def test_a_gateway_undo_drops_the_ruling_in_the_new_agent():
     data = gw.file()
     assert data['ruling'] == [RULING] and all(re.fullmatch('[0-9a-f]{16}', v) for v in data['reach'].values())
     assert data['leads'] and all(re.fullmatch('[0-9a-f]{16}', v) for v in data['leads'])
+    assert data['leads'][-1] in data['reach'].values()  # the file keeps the leads up to the last pin's, no further
     gw.undo(2)
     out = gw.turn('next step')
     assert gw.file()['ruling'] == [] and gw.file()['dropped']
@@ -190,6 +191,24 @@ def test_a_gateway_undo_of_a_later_turn_keeps_the_ruling():
     gw.undo(1)
     gw.turn('next step')
     assert gw.file()['ruling'] == [RULING]
+
+
+def test_an_undo_the_same_engine_runs_past_is_not_settled_by_a_later_engine():
+    """Not covered (D-041, 2026-10-30 note). The host cuts its transcript, reports no undo and keeps the engine.
+    While that engine runs the session, only a notice drops pins. Its turn after the undo leaves a transcript that
+    goes on past the noted lead, the same as a window that only opens like it, so a later engine keeps the ruling."""
+    gw = Gateway('gw-same-537')
+    for text in ('start the importer', RULING, 'now the parser'):
+        gw.turn(text)
+    users = [i for i, m in enumerate(gw.history) if m['role'] == 'user']
+    gw.history = gw.history[:users[-2]]  # the same cut as gw.undo(2), but the engine stays
+    gw.turn('more work')
+    assert gw.file()['ruling'] == [RULING]
+    gw.engine = None
+    gc.collect()
+    gw.engine = gw.agent()
+    gw.turn('next step')
+    assert gw.file()['ruling'] == [RULING] and not gw.file().get('dropped')
 
 
 @pytest.mark.parametrize('again', [RULING, f'As I said: {RULING}'])

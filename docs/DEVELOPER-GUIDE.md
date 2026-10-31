@@ -352,7 +352,8 @@ its whole transcript as `conversation_messages` and the turn's message as `incom
 of a session in a new engine drops a pin whose message the transcript no longer holds, when the transcript is the
 one noted last with its tail cut at or before the pin's lead (#537). A host that trims the start of its transcript
 drops nothing that way, unless the rows left read word for word like the session's first rows. One that edits an
-earlier user row keeps the pins after it.
+earlier user row keeps the pins after it. A host that keeps its engine across an undo must report it: once that
+engine runs a turn after the undo, no later engine drops the pins.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat

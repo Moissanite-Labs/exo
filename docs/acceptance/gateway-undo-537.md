@@ -12,4 +12,4 @@ That tells an undo from a truncated host window. A window fails at its first row
 
 The check keeps folded pins and tombstones, and drops through the undo path, so the drop is logged and later carries skip it. Absence from a fresh transcript alone still drops nothing. `DECISIONS.md` D-041, 2026-10-30 note, lists the cases that stay uncovered, including the handoff file an earlier compaction wrote.
 
-An explicit post-undo provider event from the host would still help: it reaches a live engine, and this check waits for a new one.
+An explicit post-undo provider event from the host would still help: it reaches a live engine, and this check waits for a new one. A live engine that runs a turn after the undo leaves a transcript that goes on past the noted lead, so no later check drops the pin.

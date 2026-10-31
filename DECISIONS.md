@@ -4769,9 +4769,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   pin said in the session's first message has no lead. A transcript cut short at its start whose rows read word for
   word like the session's first rows looks the same as an undo, so it drops the pins after them: after `continue`, the
   ruling and `continue`, a window of the last `continue` alone drops the ruling. An unreported undo waits for a new
-  engine: while the same engine runs the session, only a notice drops pins. A compaction after the last request that
-  noted the leads keeps the pins: its summary row is not in the noted transcript. A summary row and a handoff file
-  written before the drop keep the ruling as written until the next compaction.
+  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
+  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
+  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
+  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
+  written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
