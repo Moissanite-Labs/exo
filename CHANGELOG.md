@@ -5,6 +5,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
+  supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
 - Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
 
 - Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).

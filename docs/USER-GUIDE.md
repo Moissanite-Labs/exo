@@ -55,6 +55,11 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
+For Google AI Studio, add the Gemini key in Providers or set `GEMINI_API_KEY`; Exo uses Google's
+OpenAI-compatible API. In the web Providers tab, **Add custom provider** configures an unlisted OpenAI Chat
+Completions or Anthropic Messages endpoint, model and optional key. Use **Edit** for an existing entry, then
+restart the core to apply settings. Supported protocols and remote-core key limits are in `docs/PROVIDERS.md`.
+
 A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
 learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
 limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").

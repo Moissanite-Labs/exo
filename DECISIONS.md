@@ -1188,6 +1188,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-30:** the web Providers tab offers a Gemini AI Studio preset using the OpenAI-compatible
+  endpoint and `GEMINI_API_KEY`, plus `GET/POST /api/providers/custom` for supported OpenAI Chat Completions and
+  Anthropic Messages endpoints. The connected core writes non-secret metadata through principal-authorized
+  `config.set`, with no local-disk fallback; the separate key stays in the web server's existing secret store.
+  Custom key references bind provider name, protocol and endpoint, so a key cannot silently follow an endpoint edit.
+  Add refuses an existing name; editing requires explicit replacement. A keyless endpoint is configured but untested
+  until probed. Changes take effect when the core restarts, and a remote core needs its own credential. This amends
+  the earlier description that only a provider name crosses the protocol: custom non-secret metadata also does.
+  Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
+  key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
+  custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
