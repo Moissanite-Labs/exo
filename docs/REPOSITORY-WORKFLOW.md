@@ -2,16 +2,18 @@
 
 Exo owns shared code. Exo Desktop owns its native shell and packaging. Implement each shared change once, then bring merged Exo commits into the desktop fork through a reviewed sync PR.
 
-This is the principal's [approved direction of 2026-10-28](https://github.com/aska-digital/exo/discussions/746), recorded as D-089. It changes the default routing of new work while retaining a temporary alpha exception.
+This is the principal's [approved direction of 2026-10-28](https://github.com/Moissanite-Labs/exo/discussions/746), recorded as D-089. It changes the default routing of new work while retaining a temporary alpha exception.
 
 ## Where a change belongs
 
 | Change | Implementation and review home |
 | --- | --- |
-| Core, providers, memory, permissions, protocol, shared plugins and web UI | `aska-digital/exo` |
-| Documentation and tests for shared behavior | `aska-digital/exo`, beside that implementation |
-| Native desktop shell, desktop packaging, native bridges and their documentation and tests | `aska-digital/exo-desktop` |
-| Desktop sync automation and its tests | `aska-digital/exo-desktop` |
+| Core, providers, memory, permissions, protocol, shared plugins and web UI | `Moissanite-Labs/exo` |
+| Documentation and tests for shared behavior | `Moissanite-Labs/exo`, beside that implementation |
+| Native desktop shell, desktop packaging, native bridges and their documentation and tests | `Moissanite-Labs/exo-desktop` |
+| Desktop sync automation and its tests | `Moissanite-Labs/exo-desktop` |
+
+`Moissanite-Labs/exo-cli` is currently a fork snapshot. Its extraction proposal does not change the shared ownership above. Preserve existing terminal PRs and link work across repositories until a reviewed migration defines the package and API boundary.
 
 A web UI change in `plugins/exo-command` is shared code even when the desktop pilot discovers it. A feature needing a shared API and native integration can have two PRs for those different parts. Do not create a second implementation PR for the same shared change.
 
