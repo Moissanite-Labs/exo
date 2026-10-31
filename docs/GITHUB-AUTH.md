@@ -41,7 +41,11 @@ exo github-auth configure --seat scout --mode host
 exo github-auth remove --seat scout
 ```
 
-Host mode explicitly uses the machine's existing gh configuration and inherited GitHub authentication. Unconfigured seats retain that legacy behavior for compatibility. To prepare a seat for a separate account without using host credentials, run `remove` first.
+Host mode uses the supplied tool environment after the common scrub. It does not restore GitHub tokens or `GH_CONFIG_DIR` from the core process environment. To pass those variables, use the existing `[tools] env_allow` policy. Explicit `env_deny` patterns still win, including `GITHUB_*`. An approved supplied value is preserved.
+
+The normal host gh configuration selected through `HOME` or `XDG_CONFIG_HOME` remains available, without adding a token or config-directory override.
+
+Unconfigured seats keep the common environment behavior for compatibility. To prepare a seat for a separate account without using host credentials, run `remove` first.
 
 Removal writes a disabled binding before attempting deletion. A failed deletion reports `cleanup_pending` and a nonzero CLI exit, retaining the metadata needed to retry. It does not claim the saved token was deleted. Retry removal after resolving the store problem. An already absent Keychain item counts as removed.
 
