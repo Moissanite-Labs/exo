@@ -190,8 +190,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   command got that old error once more, and only the command after that started again. Now `start()` first drops
   a finished start task that raised or was cancelled, then starts again. A start that is still running stays, so a
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
-  its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
-  Tests: `tests/integration/test_engine_start_retry.py`.
+  its error. Core: 15,942 counted lines, 3 fewer than main 080e87ba. The check replaces the 8-line try block (5
+  fewer), and the `code_find` fix in the same PR adds 2. Tests: `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

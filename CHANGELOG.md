@@ -415,7 +415,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
   provider check failed. With no main role set, every start runs that check, so every command failed, retry or
   not. The probe now reads such a URL as nothing listening. Tests:
-  `tests/core/test_providers_setup.py`.
+  `tests/core/test_providers_setup.py`. **Docs:** `docs/PROVIDERS.md` "Roles".
 
 - `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
   broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:
