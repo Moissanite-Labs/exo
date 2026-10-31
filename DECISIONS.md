@@ -6409,3 +6409,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-013 completion integrity amendment — 2026-10-29 (#880)
+
+DefaultCompressor accepts nonempty output only after a successful provider done
+event and no provider error in that attempt. A length/tool-use/interrupted stop
+or stream without done cannot become a finished compaction summary. Existing
+retryability and TreeContext failure fallback remain authoritative; originals
+remain available when a summary attempt fails.
