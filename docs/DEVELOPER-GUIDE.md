@@ -114,8 +114,9 @@ construction still binds plugins. New plugin signature adaptation belongs in thi
 the normal registry/executor path. `for_child(context, tools=names)` is an optional context
 method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
 Use `SessionStore`'s public scoped reads. Shared metadata edits use
-`SessionStore.update_meta(session, callback)` so concurrent writers preserve other keys.
-The callback edits the current dictionary inside one transaction and may read the store.
+`SessionStore.update_meta(session, changes)` so concurrent writers preserve other keys.
+`changes` is a dict of keys to set, or a callback. The callback edits the current
+dictionary inside one transaction and may read the store, and its result is returned.
 `set_meta` replaces the complete object and must not be used for concurrent runtime edits.
 See [TOOL-OUTPUT.md](TOOL-OUTPUT.md) for ownership, limits and tests.
 This adds no output archive and does not recover previously truncated bytes.

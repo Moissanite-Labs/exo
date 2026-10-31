@@ -6596,7 +6596,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   It rejects extra path arguments before execution. The caller's session supplies the lookup scope.
   A real-gate regression verifies that an explicit read-deny policy blocks valid expansion requests.
 - **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. The counted core rises by
-  16 lines, which D-083 reports and does not assert. Product imports and private-state reads stay at 39 and 8.
+  14 lines over #500's head, which D-083 reports and does not assert. Product imports and private-state reads
+  stay at 39 and 8.
 
 - **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
   combinations once skill discovery (#509), the operations inbox (#511) and working notes (D-086) are
@@ -6642,3 +6643,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - *Against the previous head.* On the 93 `tool_output` cases alone, the previous head `a30d1005` against
     this change lowers no pair and tightens 84: the 28 other calls, each from `read` to `unknown` under the
     three policies.
+- **Amendment 2026-10-31 (merge of #500's `e4f98278`):** Main's #984 added `SessionStore.update_meta` with a
+  dict of keys to set. This change had added it with a callback, which `Evidence.begin` needs to set its key
+  only when it is absent. One method now takes either. A dict skips a missing session, as on main. A callback
+  edits the dict in one transaction, returns its result and raises `KeyError` for a missing session. `lock`
+  and the context's `seen_pos` and `compact_seq` writes use main's dict form. The counted core is 16,489 lines,
+  14 above #500's head at 16,475. Product imports and private-state reads stay at 39 and 8.

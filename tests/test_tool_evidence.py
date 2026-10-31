@@ -215,11 +215,19 @@ def test_metadata_initialization_preserves_updates_and_rolls_back(tmp_path, monk
         assert "failed" not in first.get_meta(sid)
         assert second.update_meta(sid, lambda meta: meta.setdefault("value", "returned")) == "returned"
         assert first.get_meta(sid)["value"] == "returned"
+        assert second.update_meta(sid, {"value": "set"}) is None  # a dict of keys, main's form
+        assert first.get_meta(sid)["value"] == "set" and first.get_meta(sid)["locked"] == "finished"
         with pytest.raises(KeyError):
             first.update_meta("missing-session", failed)
+        assert first.update_meta("missing-session", {"value": "set"}) is None  # keys skip it, as on main
     finally:
         first.close()
         second.close()
+
+
+def edit(changes, meta):
+    """Apply an update_meta argument, a dict of keys or a callback, to meta."""
+    return changes(meta) if callable(changes) else meta.update(changes)
 
 
 @pytest.mark.parametrize("binding_first", [True, False])
@@ -236,7 +244,7 @@ def test_lock_and_binding_transactions_preserve_both_write_orders(tmp_path, monk
         def update(meta):
             captured.set()
             assert release.wait(5)
-            return callback(meta)
+            return edit(callback, meta)
         return paused_update(session, update)
 
     def competing_update(session, callback):
@@ -301,7 +309,7 @@ def test_context_metadata_and_lock_transactions_preserve_both_write_orders(tmp_p
         def update(meta):
             captured.set()
             assert release.wait(5)
-            return callback(meta)
+            return edit(callback, meta)
         return update
 
     def context_writes(session, callback):

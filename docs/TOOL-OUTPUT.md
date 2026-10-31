@@ -133,8 +133,8 @@ expansion reads the target message and preceding source call, without scanning h
 Run `tests/test_tool_evidence.py` for exact pages, restart, undo, principal/session/fork
 isolation, redaction, diagnostic preservation, copied messages, real engine dispatch,
 child restrictions, executor refusal, and the write order of a lock against the context's
-metadata edits. `scripts/benchmark_tool_evidence.py --samples 5` measures fixed log, JSON, diff, malformed-text and distinct-error fixtures, renderer time,
-storage growth, and enabled/disabled composition. It makes no model or network calls.
+metadata edits. `scripts/benchmark_tool_evidence.py --samples 5` measures fixed log,
+JSON, diff, malformed-text and distinct-error fixtures, renderer time, storage growth, and enabled/disabled composition. It makes no model or network calls.
 Measurements are engineering evidence, not evidence of better task success.
 
 The [gate comparison](evidence/tool-output-gate-2026-10-23.json) saves all 62 focused cases,
