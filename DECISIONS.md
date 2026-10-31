@@ -4846,11 +4846,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
   cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
   pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
-  If the message repeats the last user row an undo left, and no user or summary row comes before that row, every pin
-  stays too: the engine takes that row for the turn's own message. After `continue`, the ruling and `x`, an `/undo 2`
-  and a next turn of `continue` keep the ruling. A transcript cut short at its start whose rows read word for
-  word like the session's first rows looks the same as an undo, so it drops the pins after them: after `continue`, the
-  ruling and `continue`, a window of the last `continue` alone drops the ruling. An unreported undo waits for a new
+  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
+  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
+  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
+  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
+  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
+  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. An unreported undo waits for a new
   engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
   undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
   that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row

@@ -625,8 +625,9 @@ class ExoContextEngine(ContextEngine):
         transcript) stays, and so does every pin when nothing comes before the turn's own message. The last user row
         is taken for the turn's own message when the two read the same. So a host that leaves the message out of the
         transcript keeps every pin when that message repeats the last user row an undo left and no user or summary
-        row comes before that row (not covered, D-041). The drop is an undo's: logged as counts, its digests kept out
-        of every later carry (#592)."""
+        row comes before that row. Such a host also keeps a pin first said in the last turn before the undo, as
+        ``_note_reach`` notes a lead only from a transcript that holds the pin's message (both not covered, D-041).
+        The drop is an undo's: logged as counts, its digests kept out of every later carry (#592)."""
         sid, live = self._x_session_id, kwargs.get('conversation_messages')
         if not sid or sid in self._x_ran or kwargs.get('incoming_message') is None or not isinstance(live, list):
             return

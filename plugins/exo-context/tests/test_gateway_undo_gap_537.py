@@ -231,6 +231,21 @@ def test_a_turn_message_left_out_that_repeats_the_last_row_left(turns, listed, a
     assert gw.file()['ruling'] == kept
 
 
+@pytest.mark.parametrize('turns, n, kept', [
+    (('start', RULING), 1, [RULING]),  # not covered: no transcript held the ruling's message, so it has no lead
+    (('start', RULING, 'x'), 2, []),  # the turn after the ruling's held it and noted its lead
+])
+def test_a_host_that_leaves_every_turn_message_out_notes_a_lead_one_turn_late(turns, n, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). Only a transcript that holds a pin's message notes
+    the pin's lead, so a pin first said in the last turn before the undo has none and stays."""
+    gw = Gateway('gw-all-out-537')
+    for text in turns:
+        gw.turn(text, listed=False)
+    gw.undo(n)
+    gw.turn('go', listed=False)
+    assert gw.file()['ruling'] == kept
+
+
 @pytest.mark.parametrize('again', [RULING, f'As I said: {RULING}'])
 def test_a_ruling_said_again_in_the_new_turn_stays(again):
     gw = Gateway('gw-again-537')
