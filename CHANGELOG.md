@@ -25,6 +25,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
+- `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
+  follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
+  `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+  `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
+  file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. The gate does not expand a
+  `printf` or `echo -e` escape, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  D-074's limits say so too, and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that
+  paragraph and those limits name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
@@ -75,8 +84,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   before its message, and the file keeps the digests of the transcript's rows up to the last lead. The first turn
   of a new engine drops a pin when the host's transcript is the noted one with its tail cut at or before the
   pin's lead, no longer holds the pin, and has no summary row that carries it. So an `/undo N` that also takes
-  earlier turns drops it too. A transcript cut short at its start, a folded pin (also one said again after the
-  fold) and a ruling in the session's first message stay. The same turn settles a CLI `/undo` in the no-agent gap.
+  earlier turns drops it too. A transcript cut short at its start (unless its rows read word for word like the
+  session's first rows), a folded pin (also one said again after the fold) and a ruling in the session's first
+  message stay. The same turn settles a CLI `/undo` in the no-agent gap.
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable

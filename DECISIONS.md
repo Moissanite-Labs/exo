@@ -4869,7 +4869,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   own message must end at one of the noted leads, so it is the noted transcript with its tail cut. A pin goes when its
   lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
   (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
-  ruling's. A transcript cut short at its start fails at its first row. One that opens with the same words as the lead
+  ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
+  with the same words as the lead
   but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
   that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
   its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
@@ -4878,11 +4880,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
   its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
   before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
-  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, five
+  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
   cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
-  pin said in the session's first message has no lead. A transcript cut short at its start whose rows read word for
-  word like the session's first rows looks the same as an undo, so it drops the pins after them: after `continue`, the
-  ruling and `continue`, a window of the last `continue` alone drops the ruling. An unreported undo waits for a new
+  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
+  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
+  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
+  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
+  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
+  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
+  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. An unreported undo waits for a new
   engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
   undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
   that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
@@ -5802,7 +5809,14 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
   Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
-  gate does not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a `read`, as is the same line with `rm -rf`).
+  gate did not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` was a `read`, as was the same line with `rm -rf`)
+  until #718 (#491). The gate now reads the text a line feeds that shell where it can (a here-string, a heredoc, a
+  pipe from `echo`). So `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf ~/.exo/config.json'`
+  are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
+  as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
+  `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
+  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
