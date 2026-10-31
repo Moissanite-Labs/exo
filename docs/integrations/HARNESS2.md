@@ -45,7 +45,9 @@ Stdout is the default output and creates no files. `--output text-check` creates
 using Exo's private atomic persistence primitive. Existing run names, symlinks,
 paths/traversal, hidden/protected working directories, Exo-home workspaces and
 all principal roots recorded by `exo init --root` (including their descendants)
-are refused. A failed write releases its newly reserved run directory only if empty;
+are refused. A recorded root that cannot be resolved (including a symlink cycle
+or missing target) fails closed with the normal path-error exit 2. A failed write
+releases its newly reserved run directory only if empty;
 preexisting runs and nonempty output are preserved. Output names come only from
 the explicit CLI flag, never fixture contents.
 This path policy is not an OS sandbox against another same-user process altering

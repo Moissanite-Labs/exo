@@ -408,3 +408,31 @@ def test_iteration_help_explains_saturation_rollback(capsys):
     help_text = " ".join(capsys.readouterr().out.split())
     assert "later non-improvement discards earlier proposals" in help_text
     assert "built-in fixtures saturate after one round" in help_text
+
+
+@pytest.mark.parametrize("kind", ["cycle", "missing"])
+def test_unresolvable_recorded_root_is_cli_path_refusal(tmp_path, kind):
+    home = tmp_path / "exo-home"
+    home.mkdir()
+    root = tmp_path / "unresolvable"
+    if kind == "cycle":
+        root.symlink_to(root)
+    (home / "config.json").write_text(json.dumps({"principals": {"alice": str(root)}}))
+    (tmp_path / "public.json").write_text(json.dumps(fixture()))
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "EXO_HOME": str(home)}
+    result = subprocess.run([sys.executable, "-m", "exo.cli", "improve", "--offline",
+                             "--adapter", "text-normalize-v1", "--fixture", "public.json",
+                             "--output", "refused"], cwd=tmp_path, env=env,
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 2 and not result.stdout
+    assert "invalid public fixture, limits or output path" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not (tmp_path / "improvement-runs").exists()
+
+
+def test_unrelated_root_list_runtime_error_is_not_swallowed(tmp_path, monkeypatch, capsys):
+    def defect(*args, **kwargs):
+        raise RuntimeError("unrelated implementation error")
+    monkeypatch.setattr("exo.store.explicit_roots", defect)
+    with pytest.raises(RuntimeError, match="unrelated implementation error"):
+        invoke(tmp_path, monkeypatch, capsys)

@@ -54,7 +54,12 @@ def _workspace():
     homes = [Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser().resolve()]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         homes.append(Path(os.environ["EXO_PRINCIPAL_STORE"]).expanduser().resolve())
-    homes.extend(root.resolve() for root in explicit_roots(homes[0]).values())
+    for root in explicit_roots(homes[0]).values():
+        try:
+            # strict=True detects symlink cycles consistently across Python versions.
+            homes.append(root.resolve(strict=True))
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("cannot resolve a recorded principal root") from exc
     if cwd in (Path(cwd.anchor), Path.home().resolve()) or any(cwd == p or p in cwd.parents for p in homes) or any(p.startswith(".") for p in cwd.parts[1:]):
         raise ValueError("run only in an explicit public workspace")
     if is_sensitive_path(str(cwd)):
