@@ -4839,31 +4839,33 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
   (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
   ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
-  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
-  with the same words as the lead
-  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
-  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
-  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
-  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
-  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
-  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
-  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
-  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
-  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
-  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
-  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
-  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
-  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
-  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
-  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
-  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
-  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
-  ruling. An unreported undo waits for a new
-  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
-  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
-  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
-  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
-  written until the next compaction.
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens with
+  the same words as the lead but goes on past it fails at its end. For a host that leaves the turn's message out, the
+  check stops before a last user row that the message repeats (see below). A pin a compaction folded stays while the
+  transcript holds the summary row: that row comes after the pin's lead or replaces part of it. A folded ruling the
+  principal said again stays as well: its lead moves to the later message, and an undo of that message alone leaves the
+  summary row before the lead, which carries it. The drop is an undo's: logged as counts, its digests kept out of every
+  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  transcript lacks it, since a transcript cut short lacks it too (the controls from #817). Rejected too: dropping a pin
+  when the transcript only starts with its lead. A transcript cut short at its start may open with the same words, and
+  an undo that also takes the turn before the pin's leaves only part of the lead. The check also settles an undo before
+  the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new
+  engine. Not covered now, six cases. An unreported undo of every turn leaves nothing before the turn's own message, so
+  it keeps every pin, and a pin said in the session's first message has no lead. A host may leave the turn's own message
+  out of its transcript. Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the
+  last turn before an undo has none and stays. If the next turn's message repeats the last user row an undo left, and no
+  user or summary row comes before that row, every pin stays too: the engine takes that row for the turn's own message.
+  After `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut
+  short at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops
+  the pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. A host that leaves the turn's message out gets the same drop when the next turn's message repeats the window's
+  last user row and the rows before that row read that way. The engine takes that row for the turn's own message and
+  checks only the rows before it: after `continue`, the ruling, `continue` and `go on`, a window of the last two turns
+  and a next turn of `go on` drop the ruling. An unreported undo waits for a new engine: while the same engine runs the
+  session, only a notice drops pins. If that engine runs a turn after the undo, no later engine drops them either. The
+  transcript then goes on past the noted lead, the same as a window that only opens like it. A compaction after the last
+  request that noted the leads keeps the pins: its summary row is not in the noted transcript. A summary row and a
+  handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its

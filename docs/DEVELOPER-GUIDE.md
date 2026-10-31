@@ -354,12 +354,15 @@ session (#580). A host that reports no undo at all, such as Hermes's messaging g
 its whole transcript as `conversation_messages` and the turn's message as `incoming_message`. The first such turn
 of a session in a new engine drops a pin whose message the transcript no longer holds, when the transcript is the
 one noted last with its tail cut at or before the pin's lead (#537). A host that trims the start of its transcript
-drops nothing that way, unless the rows left read word for word like the session's first rows. One that edits an
-earlier user row keeps the pins after it. One that leaves the turn's message out of `conversation_messages` keeps
-a pin first said in the last turn before an undo, as no transcript held the pin's message to note its lead. It also
-keeps every pin when the next turn's message repeats the last user row an undo left and no user or summary row
-comes before that row. A host that keeps its engine across an undo must report it: once that engine runs a turn
-after the undo, no later engine drops the pins.
+drops nothing that way, unless the rows left read word for word like the session's first rows (one that leaves the
+turn's message out has one more exception, below). One that edits an earlier user row keeps the pins after it. One
+that leaves the turn's message out of `conversation_messages` keeps a pin first said in the last turn before an
+undo, as no transcript held the pin's message to note its lead. It also keeps every pin when the next turn's message
+repeats the last user row an undo left and no user or summary row comes before that row. After a trim of the start,
+a message that repeats the last user row can drop pins instead: the engine takes that row for the turn's message and
+checks only the rows before it, so the pins after those rows go when they read word for word like the session's
+first rows. A host that keeps its engine across an undo must report it: once that engine runs a turn after the undo,
+no later engine drops the pins.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
