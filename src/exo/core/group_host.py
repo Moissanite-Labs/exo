@@ -19,6 +19,15 @@ stored group mode, explicit ``max_turns``/``idle_timeout`` bounds are
 validated before the factory is invoked or any claim exists, and a host
 ``send`` wakes the running conversation after the message is persisted.
 Without the opt-in, ``start`` keeps the exact one-shot default behavior.
+
+A second, independent opt-in (``knowledge=True`` on ``start``) gives every
+member turn a bounded snapshot of this group's owner-published knowledge as
+labelled, quoted, untrusted reference data. The host constructs the reader
+itself on its own ``GroupStore`` (the same database), so no caller-supplied
+object can reach an adapter; ``knowledge=False`` keeps every prompt
+byte-identical to the knowledge-free prompt. Snapshot bounds are validated
+before the factory is invoked or any claim exists, and a snapshot that does
+not fit fails closed rather than being cut. See docs/SWARM-KNOWLEDGE.md.
 """
 from __future__ import annotations
 
@@ -30,6 +39,8 @@ from typing import Callable, Collection, Mapping
 from exo.core.group_conversation import (DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TURNS,
                                          ConversationWake, GroupConversationAdapter)
 from exo.core.group_engine_adapter import GroupEngineAdapter
+from exo.core.group_knowledge import (DEFAULT_MAX_CHARS, DEFAULT_MAX_ITEMS,
+                                      GroupKnowledge)
 from exo.core.group_execution import GroupExecutions
 from exo.core.group_messages import GroupMessage, GroupMessages
 from exo.core.group_runner import MemberStatus
@@ -148,7 +159,10 @@ class GroupHost:
 
     def start(self, group_id: str, *,
               audiences: Mapping[str, list[str]] | None = None,
-              conversation: ConversationOptions | None = None) -> tuple:
+              conversation: ConversationOptions | None = None,
+              knowledge: bool = False,
+              max_items: int = DEFAULT_MAX_ITEMS,
+              max_chars: int = DEFAULT_MAX_CHARS) -> tuple:
         """Bind authorized engines and claim one durable execution. No retry.
 
         Stored membership is re-validated against the injected profile set
@@ -167,8 +181,31 @@ class GroupHost:
         bound with a per-start ``ConversationWake``: accepted host ``send``s
         and member replies wake the running conversation, while a missed
         wake degrades to the bounded idle poll.
+
+        ``knowledge=True`` is an independent opt-in that passes a
+        ``GroupKnowledge`` reader over this host's own ``GroupStore`` (the
+        same database) to whichever adapter is bound, so a member turn also
+        receives a bounded snapshot of the group's owner-published knowledge
+        as quoted, untrusted reference data. The reader is always constructed
+        here, never supplied by the caller, and ``knowledge`` must be an
+        explicit bool. ``max_items``/``max_chars`` bound that snapshot, are
+        validated (strict finite integers, inside the module caps) before the
+        factory is invoked or any claim exists, and fail closed as a
+        ``HostError``; nothing is truncated to fit. With ``knowledge=False``
+        (the default) no reader is built and every prompt is byte-identical
+        to the knowledge-free prompt.
         """
         self._ensure_accepting()
+        # Validate the knowledge opt-in before anything else so a bad flag or
+        # bound can never reach the factory, an engine or a durable claim.
+        # ``type(...) is bool`` rejects 0/1 and truthy strings; bounds go
+        # through the knowledge module's own strict finite checks.
+        if type(knowledge) is not bool:
+            raise HostError("knowledge must be an explicit boolean opt-in")
+        try:
+            bounds = GroupKnowledge.bounds(max_items, max_chars)
+        except ValueError as e:
+            raise HostError(f"knowledge context bounds rejected: {e}") from e
         group = self._group(group_id)
         if group_id in self._runtimes:
             raise HostError("group execution already started in this process")
@@ -176,6 +213,10 @@ class GroupHost:
         if unknown:
             raise HostError("group members outside the injected profile set: "
                             + ", ".join(sorted(unknown)))
+        # Opt-in only: the reader is built here on this host's own store, so
+        # no caller-provided object or foreign database can be injected. It is
+        # constructed once per start and shared read-only by every member.
+        reader = GroupKnowledge(self._groups) if knowledge else None
         if conversation is not None:
             # Validate bounds before the factory is invoked or any claim
             # exists: an invalid bound leaves no engines and no receipt.
@@ -201,7 +242,9 @@ class GroupHost:
                     audiences=self._audiences_for(group),
                     wake=wake,
                     max_turns=conversation.max_turns,
-                    idle_timeout=float(conversation.idle_timeout))
+                    idle_timeout=float(conversation.idle_timeout),
+                    knowledge=reader,
+                    max_items=bounds[0], max_chars=bounds[1])
                 runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
                                        adapters=adapter.adapters())
                 runtime.start()
@@ -221,7 +264,9 @@ class GroupHost:
             raise HostError("one-shot start requires explicit audiences")
         engines = dict(self._factory(group) or {})
         try:
-            adapter = GroupEngineAdapter(group, engines, audiences=audiences)
+            adapter = GroupEngineAdapter(group, engines, audiences=audiences,
+                                         knowledge=reader,
+                                         max_items=bounds[0], max_chars=bounds[1])
             runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
                                    adapters=adapter.adapters())
             runtime.start()
