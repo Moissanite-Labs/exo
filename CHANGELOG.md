@@ -136,6 +136,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
+  Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
+  `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay
+  in exo.
 - A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
   run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
 - `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
