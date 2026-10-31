@@ -22,6 +22,9 @@ notice in the client. It names `exo init <id>`.
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+The consolidation regression for repeated corrections checks reinforcement and then decay 120 days after the
+last evidence timestamp, using fixed event times so its result does not depend on the calendar date of the test run.
+
 A correction or ruling is matched against active beliefs only (proposed, held or accepted). One that agrees with an
 active belief reinforces it; one that opposes an active belief goes through the conflict rule, even when a rejected
 belief matches it better (#861). A rejected belief is never reinforced and stays recorded. A correction or ruling

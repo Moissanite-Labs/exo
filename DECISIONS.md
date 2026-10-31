@@ -271,6 +271,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
   ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
   held (rule 3).
+- **Test clarification (2026-10-31):** the reinforcement regression measures decay 120 days after its last
+  evidence, with fixed event timestamps. This changes the test clock, not the learning rule.
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
