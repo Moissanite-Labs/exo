@@ -215,29 +215,38 @@ def test_direct_approval_is_visible_before_held_delegation_metadata(tmp_path):
 def test_task_list_is_read_only_while_another_sessions_request_is_open(tmp_path):
     """#997: ``tasks.list`` sends every task ever written. The 3 s refresh asks for it only while a request of
     another session is open, never for this thread's own requests or for requests of no thread. The timer may add
-    refreshes while the child's request is open, so the strict count is zero before it opens and after it closes."""
+    refreshes while the child's request is open, so the strict count is zero before it opens and after it closes.
+    Each request event of another session starts its own refresh, the second one too."""
     async def scenario(app, pilot, client, eng):
         child = add_task(eng, app.session, 'running', 'Scout')
         calls = count_tasks_lists(client)
+        refresh, started = app.refresh_delegated_approvals, []
+
+        def on_event():  # the timer keeps the method it got at mount, so only a request event calls this one
+            started.append(True)
+            return refresh()
+        app.refresh_delegated_approvals = on_event
         pending_approval(eng, app.session, s.ApprovalRequested(request_id='own-request', summary='own fixture'))
         pending_approval(eng, None, s.ApprovalRequested(request_id='threadless-request', summary='held peer'))
         for _ in range(3):
-            await app.refresh_delegated_approvals()
-        assert calls == [] and not cue(app)
-        request = s.ApprovalRequested(request_id='child-request', summary='fixture')
-        pending_approval(eng, child, request)
-        # Only a task-list read knows the child's task, and the request event asks for one before the timer does.
-        await until(lambda: '/open k_abc123' in cue(app), pilot, timeout=2)
-        assert calls
-        assert all(set(task) <= {'task_id', 'parent', 'child_session', 'title', 'status', 'revision'}
-                   for task in app.delegated_tasks.values())  # no brief, receipt or detail kept per row
-        eng.approvals.open.pop(request.request_id)
-        eng.hub.publish(s.ApprovalResolved(request_id=request.request_id, decision='deny'), child)
-        await until(lambda: not cue(app), pilot)
-        before = len(calls)
-        for _ in range(3):
-            await app.refresh_delegated_approvals()
-        assert len(calls) == before and not cue(app)
+            await refresh()
+        assert calls == [] and started == [] and not cue(app)
+        for n, request_id in enumerate(('child-request', 'next-child-request'), start=1):
+            request = s.ApprovalRequested(request_id=request_id, summary='fixture')
+            closed = len(calls)
+            pending_approval(eng, child, request)
+            await until(lambda: len(started) == n, pilot, timeout=HELD)  # the event, not the timer, asks
+            # The first time, only a task-list read knows the child's task. The event's refresh asks for one.
+            await until(lambda: '/open k_abc123' in cue(app) and len(calls) > closed, pilot, timeout=HELD)
+            assert all(set(task) <= {'task_id', 'parent', 'child_session', 'title', 'status', 'revision'}
+                       for task in app.delegated_tasks.values())  # no brief, receipt or detail kept per row
+            eng.approvals.open.pop(request.request_id)
+            eng.hub.publish(s.ApprovalResolved(request_id=request.request_id, decision='deny'), child)
+            await until(lambda: not cue(app), pilot)
+            before = len(calls)
+            for _ in range(3):
+                await refresh()
+            assert len(calls) == before and not cue(app)
     run(tmp_path, scenario)
 
 
