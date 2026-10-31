@@ -268,6 +268,79 @@ def test_lock_and_binding_transactions_preserve_both_write_orders(tmp_path, monk
         second.close()
 
 
+class Summaries:
+    async def summarize(self, content, previous=None, **kwargs):
+        return "S"
+
+
+@pytest.mark.parametrize("context_first", [True, False])
+@pytest.mark.parametrize("key", ["seen_pos", "compact_seq"])
+def test_context_metadata_and_lock_transactions_preserve_both_write_orders(tmp_path, monkeypatch, key, context_first):
+    """AgentContext writes seen_pos (sync_thread) and compact_seq (compact) with update_meta, so a lock is kept."""
+    from exo.core.context import AgentContext
+    path = tmp_path / "sessions.sqlite"
+    first, second = SessionStore(path), SessionStore(path)
+    context = AgentContext(first, Summaries(), leaf_size=2, tail_messages=4, min_compact_tokens=0)
+    loop = Loop(first, Script(*[f"ok {i}" for i in range(6)]), context=context, system_prompt="SYS", retry_delay=0)
+
+    async def talk():
+        a = await loop.create_session(agent="razi")
+        for i in range(6 if key == "compact_seq" else 1):
+            await loop.send(a.id, f"fact number {i} " + "word " * 40)
+        b = await loop.create_session(agent="razi")
+        return a.id, b.id
+    a, b = asyncio.run(talk())
+    sid = b if key == "seen_pos" else a
+    assert key not in first.get_meta(sid)
+    write = (lambda: context.sync_thread(b, 0)) if key == "seen_pos" else (lambda: asyncio.run(context.compact(a, "SYS")))
+    context_update, lock_update = first.update_meta, second.update_meta
+    captured, attempted, release = threading.Event(), threading.Event(), threading.Event()
+    pool, locking = ThreadPoolExecutor(max_workers=2), []
+
+    def pause_after_snapshot(callback):
+        def update(meta):
+            captured.set()
+            assert release.wait(5)
+            return callback(meta)
+        return update
+
+    def context_writes(session, callback):
+        if context_first:
+            return context_update(session, pause_after_snapshot(callback))
+        locking.append(pool.submit(second.lock, session, "finished"))  # the lock takes its transaction first
+        assert captured.wait(5)
+        attempted.set()
+        return context_update(session, callback)
+
+    def lock_writes(session, callback):
+        if not context_first:
+            return lock_update(session, pause_after_snapshot(callback))
+        attempted.set()
+        return lock_update(session, callback)
+
+    monkeypatch.setattr(first, "update_meta", context_writes)
+    monkeypatch.setattr(second, "update_meta", lock_writes)
+    try:
+        writing = pool.submit(write)
+        assert captured.wait(5)
+        if context_first:
+            locking.append(pool.submit(second.lock, sid, "finished"))
+        assert attempted.wait(5)
+        try:
+            assert not (locking[0] if context_first else writing).done()  # it waits for the paused transaction
+        finally:
+            release.set()
+        writing.result(timeout=10)
+        locking[0].result(timeout=10)
+        meta = first.get_meta(sid)
+        assert meta["locked"] == "finished" and type(meta[key]) is int and meta[key] > 0
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+        first.close()
+        second.close()
+
+
 def test_pre_enable_records_and_fork_copies_are_not_claimed(evidence):
     obj, _ = evidence
     sid = obj.store.create_session(agent="default").id
