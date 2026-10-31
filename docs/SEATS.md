@@ -18,6 +18,11 @@ read keeps the last good text. A few shorter spellings are accepted (top-level `
 `toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
 does not read are ignored.
 
+Three keys must be lists when they are set: `toolsets` (in `[tools]` or at the top level), `[tools] env_deny` and
+`[skills] load`. For each, no list means more: every toolset, nothing more hidden, every skill. So any other value,
+such as `toolsets = "fs"`, is refused, and the seat does not load (`exo serve --seat` exits with the reason). It
+used to read as no list, and a seat meant to have one toolset got all of them (exo-desktop #52).
+
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name
 name = "scout"
