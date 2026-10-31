@@ -187,6 +187,12 @@ def memory_status(eng: CoreEngine) -> dict[str, str]:
     return {"state": "on", "provider": mem.name, "text": ""}
 
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
+    if b.name == "approval-authority":
+        from exo.principal import require_principal
+        require_principal("manage delegated approval authority")
+        if not b.session or (info := eng.store.get_session(b.session)) is None or info.agent != eng.agent:
+            raise CommandFailed("bad_request", "Select an existing parent session")
+        return eng.approvals.delegation_command(b.session, b.args.strip() or "status")
     if b.name == "checkpoint":
         from exo.work_checkpoint import command
         return await command(eng, b)

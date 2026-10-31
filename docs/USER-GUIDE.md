@@ -322,6 +322,12 @@ An unattended run cannot call a tool outside the list it received. Details: `doc
 
 ## 6. Approvals
 
+You can grant one parent model authority to answer eligible delegated-child requests with
+`/approval-authority grant` in a main conversation acting as parent. Delegated workers cannot receive grants. Use `status` to inspect and `revoke` to withdraw it.
+It is off by default, clears on core restart, and does not cover human-only or credential/store requests.
+See [Parent approval authority](DELEGATED-APPROVAL-AUTHORITY.md) for the exact scope and model wait behavior.
+
+
 On an Exo OS installation, the execution broker checks approved actions too.
 An action the installed broker does not support returns a tool error. Approval
 does not enable that operation. Installation details are in `docs/EXECUTORS.md`.

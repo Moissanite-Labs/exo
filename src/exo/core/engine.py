@@ -14,6 +14,7 @@ Adapters kept here so the parts stay independent of each other:
 from __future__ import annotations
 
 import asyncio
+import json
 import hashlib
 import inspect
 import os
@@ -92,6 +93,8 @@ class HubBus:
         self.engine = engine
 
     async def emit(self, body: Any, session: str | None = None) -> s.Event:
+        if isinstance(body, s.TurnCompleted) and session:
+            await self.engine.agents.close_reviews(session)
         return self.engine.hub.publish(body, session)
 
 
@@ -233,8 +236,20 @@ class CoreRuntime:
                 signer = None
         self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
+        self.approvals.delegation_edges = self.agents.list
+        self.approvals.delegation_audit = self._delegation_audit
+        self.approvals.delegation_validate = self._delegation_validate
+        self.approvals.delegation_parent_allowed = lambda parent: (
+            self.store.get_session(parent) is not None and not self.agents.depth(parent) and parent not in self.agents.loops)
         self.scheduler = attach_scheduler(self) if attach_scheduler else None  # exo.scheduler, from exo.compose
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
+
+    def _delegation_validate(self, context: dict | None) -> bool:
+        return self.plugins.hooks.fire_trusted("delegated_approval_validate", plugin="exo-gate", context=context) is True
+
+    def _delegation_audit(self, body: dict, parent: str, context: dict | None = None) -> str:
+        return self.plugins.hooks.fire_trusted("delegated_approval_audit", plugin="exo-gate", body=body,
+                                               session=parent, context=context)
 
     def _compose_prompt(self) -> str:
         return "\n\n".join(p for p in (self._prompt_head, self.seat.soul if self.seat else "", *self._prompt_tail) if p)
@@ -469,8 +484,8 @@ class CoreRuntime:
                          "in core_plugins (and the seat's plugins list), then restart Exo.")
         # A configured broker binds arguments without relaxing optional policy hooks.
         required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
-        for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
-                                                     _isolate_arguments=bound_mode,
+        for plugin, verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
+                                                     _isolate_arguments=bound_mode, _with_plugins=True,
                                                      **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
@@ -485,7 +500,11 @@ class CoreRuntime:
                 decision = await self.approvals.ask(  # D-033: who may answer, and the exact text it binds to
                     ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
                     options=["allow", "deny"] if once else None, approvers=[str(a) for a in verdict.get("approvers") or []],
-                    binding=str(verdict.get("binding") or ""))
+                    binding=str(verdict.get("binding") or ""),
+                    delegation_eligible=plugin == "exo-gate" and verdict.get("delegation_eligible") is True,
+                    delegation_context={"approval_key": verdict.get("approval_key"), "tool_call_id": call.id,
+                                        "tool": call.name, "args": json.loads(json.dumps(call.arguments)),
+                                        "risk": spec.risk, "cwd": ctx.cwd, "binding": verdict.get("binding")})
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
                 # Never dispatch a broker-bound call after its gate approval callback failed.
@@ -677,12 +696,33 @@ class CoreRuntime:
         """Start a turn in the background (a peer woke an idle session)."""
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
+    @property
+    def accepting_work(self) -> bool:
+        return not self._closing
+
+    def track_owned_task(self, task: asyncio.Task) -> None:
+        """Trusted components register continuations whose cleanup must finish before the store closes."""
+        if self._closing:
+            task.cancel()
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def cancel_owned_task(self, task: asyncio.Task) -> Any:
+        """Explicit stop cleanup is bounded. A survivor remains owned and prevents store closure."""
+        task.cancel()
+        _, pending = await asyncio.wait({task}, timeout=TURN_CANCEL_GRACE)
+        if pending:
+            raise RuntimeError("Owned task did not stop; cleanup incomplete")
+        try:
+            return task.result()
+        except (asyncio.CancelledError, Exception):
+            return None
+
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
         if self._closing:
             return
         task = asyncio.create_task(self.run_turn(b, meta))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self.track_owned_task(task)
 
     async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
@@ -700,6 +740,7 @@ class CoreRuntime:
             return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
                                                  meta=meta)
         finally:
+            await self.agents.close_reviews(b.session)
             await hooks.afire("on_turn_end", session_id=b.session)
 
     # ------------------------------------------------------------ peers (D-026)
@@ -789,6 +830,7 @@ class CoreRuntime:
             own.append({"name": "checkpoint", "description": "record-derived continuity index", "args": ""})
         if getattr(self, "work_notebook", None) is not None:
             own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
+        own.append({"name": "approval-authority", "description": "Grant or revoke parent delegated approvals", "args": "status | grant | revoke"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 

@@ -308,3 +308,11 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 `0` is success. `1` is a failed check (`lint`, `log verify`, `memory`, a failed decision call, an unset `config get`).
 `2` is a usage error from `exo decide` and `exo upstream`. Argument parsing errors exit with `2`, as `argparse` does.
 `exo chat` exits with `130` on ctrl+c. Most other errors print one line and exit.
+
+## Delegated approval authority
+
+`/approval-authority status|grant|revoke` selects the terminal or web Chat conversation as the parent.
+`exo approval-authority status|grant|revoke --socket PATH --session PARENT_ID` uses an existing core.
+All management requires the principal, and clients probe support before mutation. The model-only
+`delegation_review` tool can inspect, allow once, deny or wait for its owned invocation. It cannot grant
+itself authority. See [the capability contract](DELEGATED-APPROVAL-AUTHORITY.md).
