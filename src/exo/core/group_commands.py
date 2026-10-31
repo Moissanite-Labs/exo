@@ -18,10 +18,12 @@ scoped to this seat or the command cannot use it.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from exo import principal
 from exo.core.group_host import GroupHost, HostError
+from exo.core.group_knowledge import GroupKnowledge
 from exo.core.group_messages import GroupMessages
 from exo.core.groups import GroupStore
 from exo.server.engine import CommandFailed
@@ -45,6 +47,14 @@ def _messages(eng: CoreRuntime) -> GroupMessages:
     if msgs is None:
         msgs = eng._group_messages = GroupMessages(_groups(eng))
     return msgs
+
+
+def _knowledge(eng: CoreRuntime) -> GroupKnowledge:
+    """Owner knowledge store on this engine's own sessions database; created lazily, exposed only here."""
+    knowledge = getattr(eng, "_group_knowledge", None)
+    if knowledge is None:
+        knowledge = eng._group_knowledge = GroupKnowledge(_groups(eng))
+    return knowledge
 
 
 def _args(raw: str) -> dict[str, Any]:
@@ -288,6 +298,154 @@ def _op_stop(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     return {"id": group_id, "stopped": True, "member": member}
 
 
+# -- shared knowledge (docs/SWARM-KNOWLEDGE.md) ---------------------------
+#
+# Publishing is owner-only: the publisher is always this seat (``eng.agent``),
+# never a caller-supplied name. Reading is member-scoped: ``member`` is
+# explicit and the stored group is the only authority for who belongs to it,
+# so an unknown profile or another seat's group fails closed. This is a human
+# owner inspection of a member's view, never a member read: the response
+# labels it, and nothing here claims to be the member.
+_VIEW = "human_owner_view"
+
+
+def _knowledge_item(item) -> dict[str, Any]:
+    data = asdict(item)
+    data["sources"] = list(item.sources)
+    return data
+
+
+def _string(args: dict[str, Any], name: str) -> str:
+    """A required non-empty string field, validated before any store call."""
+    value = args[name]
+    if not isinstance(value, str) or not value.strip():
+        raise _bad(f"{name} must be a non-empty string")
+    return value
+
+
+def _member(args: dict[str, Any]) -> str:
+    """The explicit reader profile; membership is then checked against the stored group."""
+    member = _string(args, "member")
+    if member != member.strip():
+        raise _bad("member must be a profile name")
+    return member
+
+
+def _op_knowledge_publish(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(args) - {"id", "key", "text", "sources", "expected_revision"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    missing = [n for n in ("id", "key", "text", "sources") if n not in args]
+    if missing:
+        raise _bad("missing field(s): " + ", ".join(missing))
+    group_id, key, text = _group_id(args), _string(args, "key"), args["text"]
+    sources = args["sources"]
+    if not isinstance(text, str):
+        raise _bad("text must be a string")
+    if (
+        isinstance(sources, (str, bytes))
+        or not isinstance(sources, list)
+        or any(not isinstance(s, str) for s in sources)
+    ):
+        raise _bad("sources must be a non-empty list of source reference strings")
+    expected = args.get("expected_revision", 0)
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise _bad("expected_revision must be a nonnegative integer")
+    try:
+        item = _knowledge(eng).publish(
+            group_id,
+            owner=eng.agent,
+            key=key,
+            text=text,
+            sources=sources,
+            expected_revision=expected,
+        )
+    except ValueError as e:
+        raise _bad(str(e))
+    return {"id": group_id, "view": _VIEW, **_knowledge_item(item)}
+
+
+def _op_knowledge_read(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(args) - {"id", "member", "key"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    missing = [n for n in ("id", "member", "key") if n not in args]
+    if missing:
+        raise _bad("missing field(s): " + ", ".join(missing))
+    group_id, member, key = _group_id(args), _member(args), _string(args, "key")
+    try:
+        item = _knowledge(eng).read(group_id, owner=eng.agent, member=member, key=key)
+    except ValueError as e:
+        raise _bad(str(e))
+    return {
+        "id": group_id,
+        "member": member,
+        "key": key,
+        "view": _VIEW,
+        "item": None if item is None else _knowledge_item(item),
+    }
+
+
+def _op_knowledge_list(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(args) - {"id", "member", "limit"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    missing = [n for n in ("id", "member") if n not in args]
+    if missing:
+        raise _bad("missing field(s): " + ", ".join(missing))
+    group_id, member = _group_id(args), _member(args)
+    limit = _bounded(args["limit"], "limit", 1, 1000) if "limit" in args else _LIMIT
+    try:
+        keys = _knowledge(eng).keys(group_id, owner=eng.agent, member=member)
+    except ValueError as e:
+        raise _bad(str(e))
+    return {
+        "id": group_id,
+        "member": member,
+        "view": _VIEW,
+        "keys": keys[:limit],
+        "total": len(keys),
+        "limit": limit,
+    }
+
+
+def _op_knowledge_history(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(args) - {"id", "member", "key", "limit"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    missing = [n for n in ("id", "member", "key") if n not in args]
+    if missing:
+        raise _bad("missing field(s): " + ", ".join(missing))
+    group_id, member, key = _group_id(args), _member(args), _string(args, "key")
+    limit = _bounded(args["limit"], "limit", 1, 1000) if "limit" in args else _LIMIT
+    try:
+        revisions = _knowledge(eng).history(
+            group_id, owner=eng.agent, member=member, key=key
+        )
+    except ValueError as e:
+        raise _bad(str(e))
+    shown = revisions[-limit:]
+    return {
+        "id": group_id,
+        "member": member,
+        "key": key,
+        "view": _VIEW,
+        "revisions": [_knowledge_item(r) for r in shown],
+        "total": len(revisions),
+        "limit": limit,
+    }
+
+
+_OPS.update(
+    {
+        "knowledge_publish": _op_knowledge_publish,
+        "knowledge_read": _op_knowledge_read,
+        "knowledge_list": _op_knowledge_list,
+        "knowledge_history": _op_knowledge_history,
+    }
+)
+
+
 _OPS.update({"create": _op_create, "start": _op_start, "status": _op_status,
              "pause": _op_pause, "resume": _op_resume, "stop": _op_stop})
 
@@ -300,5 +458,7 @@ async def command(eng: CoreRuntime, b) -> Any:
     if fn is None:
         raise CommandFailed("bad_request",
                             "usage: /group <list|inspect|send|observe|create|start|"
-                            "status|pause|resume|stop> '<json>'")
+                            "status|pause|resume|stop|"
+                            "knowledge_publish|knowledge_read|knowledge_list|"
+                            "knowledge_history> '<json>'")
     return fn(eng, _args(rest))
