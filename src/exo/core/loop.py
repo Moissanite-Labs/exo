@@ -32,6 +32,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.context import TreeContext
 from exo.core.hooks import accepted, maybe_await
+from exo.core.progress import ProgressCheck
 from exo.core.sessions import EventBus, SessionStore, new_id
 from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult, ToolSpec, Usage
 from exo.protocol import schema as ev
@@ -77,6 +78,14 @@ WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; to
                   "(the user can say 'continue' to start a fresh set of rounds).")
 
 
+def _with_progress(messages: list[Message], progress: ProgressCheck) -> list[Message]:
+    if not (feedback := progress.text()):
+        return messages
+    note = Message.user(provenance.defuse_pins(feedback))
+    note.meta.update(note="progress_check", author=provenance.SYSTEM)
+    return [*messages, note]  # transient: never stored, captured or shared with another turn
+
+
 class _SessionState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -84,6 +93,7 @@ class _SessionState:
         self.steer: list[Message] = []
         self.running = self.accepting_steers = False
         self.total = Usage()
+        self.progress = ProgressCheck()
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
@@ -218,6 +228,7 @@ class Loop:
 
     async def _turn(self, session: str, user: Message, st: _SessionState) -> TurnResult:
         turn_id, t0 = new_id("t"), time.monotonic()
+        st.progress = ProgressCheck()
         st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
         waited = self.approval_ms.get(session, 0)
         await self._repair(session)
@@ -280,6 +291,8 @@ class Loop:
         """Add the queued steers as context. Returns the newest author drained ("" when none), so the rounds
         after a steer run for the steer's author (#598): bypass stops lowering once the turn takes anyone else's."""
         out = ""
+        if st.steer:
+            st.progress.clear()
         for m in st.steer:
             await self._add(session, m, turn_id)
             out = provenance.author_of(m)
@@ -324,6 +337,7 @@ class Loop:
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
+            messages = _with_progress(messages, st.progress)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result, _)
             if await self._settle(session, turn_id, stream, msg_id, _, st, result):
@@ -365,6 +379,7 @@ class Loop:
         and the Error event say why); an interrupt still ends the turn "interrupted", like any other call."""
         try:
             messages = await self.context.build(session, system, **extra)
+            messages = _with_progress(messages, st.progress)
             messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result, self.max_iterations, tool_choice="none")
@@ -561,6 +576,8 @@ class Loop:
                     st.stats["interrupted_tool"] = call.name
                     raise
                 results.append(res)
+                if st.progress.observe(call, res):
+                    await self._emit(ev.Notice(text=provenance.defuse_pins(st.progress.text()), level="warn"), session)
                 ms = int((time.monotonic() - t0) * 1000)
                 st.stats["tool_ms"] += ms
                 st.stats["tool_errors"] += int(res.is_error)

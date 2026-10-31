@@ -9,10 +9,6 @@ from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult
 MARKER = "[harness progress check]"  # proposed machine-recognizable envelope, not an accepted policy
 
 
-class MissingProgressFeedback(AssertionError):
-    pass
-
-
 class Script:
     name = "repeat-fixture"
 
@@ -67,14 +63,12 @@ def run_script(tmp_path, operations):
 
 
 @pytest.mark.parametrize("operations", [[READ] * 4, [READ, READ, FAILED_WRITE, READ, READ]])
-@pytest.mark.xfail(strict=True, raises=MissingProgressFeedback,
-                   reason="#792: main has no bounded model-visible progress check")
 def test_repeated_inspection_reaches_model_context_before_the_turn_ends(tmp_path, operations):
     requests = run_script(tmp_path, operations)
     messages = [message for request in requests[3:] for message in request
                 if message.role != "tool" and MARKER in message.text()]
     if not messages:
-        raise MissingProgressFeedback("repeated completed reads never produced model-visible progress feedback")
+        raise AssertionError("repeated completed reads never produced model-visible progress feedback")
     # Evidence and a neutral next-step request: never infer consent to write or publish.
     assert all("cat repeated.txt" in message.text() and "blocker" in message.text().lower()
                for message in messages)

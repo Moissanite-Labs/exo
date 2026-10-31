@@ -564,6 +564,9 @@ folder is not inside a git repo.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
 - `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
 
+- Repeated matching inspection can send the model a progress check asking for a distinct step or a blocker.
+  It does not force a change, grant permission or stop your turn.
+
 Details and the cost rules: `docs/TRACE.md`.
 
 ## 10. Troubleshooting
