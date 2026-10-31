@@ -6024,11 +6024,22 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   as its own text (`_run_own`), as an `-x` value has, with the program's own text as its `whole`, which a rule must
   match too: a rule for the bare push (`'^git push --force origin main$'`) lowers no line it did not lower before.
   The program that runs it keeps its own text. A rule that names both still lowers it.
+  Main's `scripts/gate_diff.py` against main ef4d7252 lowers no pair: on the built-in corpus 8,097,936 pairs (92,022
+  actions under 88 policies), 1,274 of them tightened on 401 actions. On an aimed corpus of these lines under
+  unanchored and anchored rules (3,017 actions under 245 policies, 739,165 pairs) it lowers none and tightens 9,114.
   Not done: a line of one command with a comment and no `<<` is still matched on its whole text
   (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
   argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches
-  its text still names the command. Rejected: giving the command after `sudo`, `env` or `timeout` its own text. Those
-  prefixes stay part of the simple command as written (#394), so `'^sudo git push'` still names the push it runs.
+  its text still names the command. So are a here-doc's `<<` and its end word: under an allow rule for `npm test`,
+  `rm -rf build <<'npm test'` with `npm test` as its end line is still allowed. Leaving them out would also change the
+  own text of a reader of its here-doc (`python3 - <<'EOF'`, #394) and pass over rules that name `<<'EOF'`, so it
+  needs the same decision as a redirection target. Rejected: giving the command after `sudo`, `env` or `timeout` its
+  own text. Those prefixes stay part of the simple command as written (#394), so `'^sudo git push'` still names the
+  push it runs. Not done either: a wrapper that runs its words once as written (`setsid`, `flock`, `chroot`, `taskset`
+  and the rest of the #160 list) is read as `xargs` is, beside an opaque part, but runs its command as a prefix does.
+  Its command keeps the wrapper's text, as does the command after `coproc`, so under `opaque_exec: allow` a rule for
+  `^setsid` still names the push in `setsid git push --force origin main`. Whether these follow `xargs` or the
+  prefixes is left to a decision.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

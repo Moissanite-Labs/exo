@@ -1387,11 +1387,15 @@ gate does not read:
 - How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
   its simple command as written, with its redirections, after leading reserved words such as `then`
   (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
-  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A here-string,
+  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`), and so does a
+  wrapper that runs its words once as written, such as `setsid`, `flock` or `chroot`, or `coproc`
+  (left open by #458). A here-string,
   `<<<` and its word, is left out of it (#458), as a comment and a here-doc body are: a
   here-string and a here-doc body are the command's stdin. So `rm -rf build <<< 'npm test'` has
-  `rm -rf build` as its own text, and a here-doc's command keeps only its operator
-  (`rm -rf build <<EOF`). A pipeline text leaves its here-strings out too. A rule must still
+  `rm -rf build` as its own text. A here-doc's command keeps its operator and end word
+  (`rm -rf build <<EOF`), so an unanchored rule that matches the end word still names the command,
+  as one that matches a redirection target does (#458 leaves both open). A pipeline text leaves
+  its here-strings out too. A rule must still
   match the text as written as well, as before, so `'^rm -rf build$'` does not lower
   `ls; rm -rf build <<< 'npm test'`. The command that `find -exec`, `-execdir`, `-ok` or
   `-okdir`, `xargs` or `git bisect run` runs has the words it runs as its own text (#458), as the

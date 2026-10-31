@@ -332,8 +332,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that `python3 -c` code runs through `os.system` was allowed under `categories: {force_push: deny}`. The command that
   `find -exec`, `xargs` or `git bisect run` runs has its own words as its own text, so a rule for `^find`, `xargs` or
   `^git bisect` no longer lowers it. A rule that names the command too, or a category or tool key, still lowers each.
-  A line of one command with a comment is still matched on its whole text. Tests:
-  `tests/security/test_gate_command_rule_parts.py`.
+  A line of one command with a comment is still matched on its whole text. An unanchored rule that matches a here-doc's
+  end word, a redirection target, or `sudo`, `setsid` or `flock` before the command still names the command. Against
+  main ef4d7252 the gate differential lowers no pair: 8,097,936 built-in pairs, 1,274 tightened, and 739,165 aimed
+  pairs, 9,114 tightened. Tests: `tests/security/test_gate_command_rule_parts.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
