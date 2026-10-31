@@ -42,6 +42,9 @@ path that uses held-out evaluation, decision models for small choices, subagents
 can do the job, and a provider-agnostic model router with fallback. Other promotion paths use principal
 rulings or repeated, high-confidence evidence.
 
+An opt-in [Harness² improvement experiment](docs/integrations/HARNESS2.md) produces
+bounded, evidence-linked proposals for review without activating runtime edits.
+
 ## Screenshots
 
 These are historical screenshots driven by scripted test data for a demo agent named `atlas`, fixing a failing

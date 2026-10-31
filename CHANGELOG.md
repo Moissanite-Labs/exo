@@ -5,6 +5,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Added an opt-in Harness²-style Propose–Probe–Compose experiment with bounded callbacks, behavioral evidence, regression checks and review-only artifacts. Includes an offline synthetic demo; no automatic runtime adoption.
+
 - Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
 
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
