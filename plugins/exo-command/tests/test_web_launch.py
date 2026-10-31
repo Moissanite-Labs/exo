@@ -451,6 +451,7 @@ def test_the_page_strips_the_code_before_it_sends_it(tmp_path):
     static = server.STATIC
     (tmp_path / "app.mjs").write_text((static / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "pet.mjs").write_text('export const createPet=()=>({glyph:{},control:{},start(){},suspend(){}});')
+    (tmp_path / "desktop_prefs.mjs").write_text((static / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((static / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
