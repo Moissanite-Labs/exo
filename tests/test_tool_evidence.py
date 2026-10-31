@@ -711,7 +711,8 @@ SHAPED = "te1:m_example:0:" + "0" * 64  # the shape render issues; no stored res
     {"reference": "/etc/shadow", "limit": 512}, {"reference": "$(rm -rf /)", "offset": 0},
     {"reference": SHAPED + "\n"}, {"reference": " " + SHAPED}, {"reference": SHAPED[:-1]},
     {"reference": SHAPED.upper()}, {"reference": SHAPED.replace(":0:", ":1000:")},
-    {"reference": SHAPED.replace("m_example", "m_../x")}])
+    {"reference": SHAPED.replace("m_example", "m_../x")}, {"reference": SHAPED.replace(":0:", ":00:")},
+    {"reference": SHAPED.replace(":0:", ":٠:")}, {"reference": SHAPED.replace(":0:", ":０:")}])
 def test_malformed_tool_output_arguments_keep_generic_gate_classification(args):
     from exo import gate
     assert gate.classify((TOOL, args)).category == "unknown"
@@ -725,7 +726,10 @@ def test_gate_reads_only_the_reference_shape_render_issues(evidence):
     obj, sid = evidence
     ref = reference(obj.render(sid, recorded(obj, sid, source("log")))[-1].tool_results[0].text())
     assert gate.classify((TOOL, {"reference": ref})).category == "read"
-    for path in ("../../.ssh/id_rsa", "~/.aws/credentials", "/etc/shadow", "$(rm -rf /)"):
+    head, index, digest = ref.rsplit(":", 2)
+    assert index == "0"
+    aliases = [f"{head}:{same}:{digest}" for same in ("00", "٠", "０", "०")]  # int() reads each as 0
+    for path in ("../../.ssh/id_rsa", "~/.aws/credentials", "/etc/shadow", "$(rm -rf /)", *aliases):
         assert gate.classify((TOOL, {"reference": path})).category == "unknown"
         with pytest.raises(ToolError, match="unavailable"):
             obj.read(sid, path)

@@ -9262,7 +9262,7 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
 
 
 # The reference shape tool_evidence issues (D-085). A test keeps the two patterns equal.
-_TOOL_OUTPUT_REF = re.compile(r"te1:(m_[A-Za-z0-9_-]{1,80}):(\d{1,3}):([0-9a-f]{64})\Z")
+_TOOL_OUTPUT_REF = re.compile(r"te1:(m_[A-Za-z0-9_-]{1,80}):(0|[1-9][0-9]{0,2}):([0-9a-f]{64})\Z")
 
 
 def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:

@@ -64,8 +64,9 @@ control characters and Unicode cannot make the registry truncate the JSON envelo
 The runtime supplies the session. The tool accepts no session or file path. Normal
 gate and executor dispatch still apply. The gate classifies supported `tool_output` calls as `read`,
 so an explicit read-deny policy blocks them. A supported call names a reference in the `te1:` shape
-that the view issues. Any other string, such as a file path, keeps the generic classification, and a
-test keeps the gate's pattern equal to the tool's. The gate cannot see the configured `page_chars`.
+that the view issues, with the index in ASCII digits and no leading zero. Any other string, such as a
+file path, keeps the generic classification, and the tool refuses it. A test keeps the gate's pattern
+equal to the tool's. The gate cannot see the configured `page_chars`.
 It reads a `limit` up to 24,000, the top of the allowed range. The tool refuses a limit above the
 configured value, and the call stays a read either way. A test keeps the gate's ceiling at the top
 of that range. Unsupported argument shapes retain generic gate

@@ -6632,6 +6632,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   string and opened no file, but the gate lowered more than this decision names. Any other string now keeps
   the generic classification. The gate imports no other Exo module, so it holds its own copy of the pattern,
   and a test keeps it equal to the one in `exo.tool_evidence`.
+  - *Index spelling.* The index must be ASCII digits with no leading zero, as the view writes it. A check
+    of this change found that the pattern's `\d` also took digits of other scripts. The tool read an
+    Arabic-Indic or fullwidth zero, or `00`, as index 0 and served the issued page under that name, and the
+    gate read the call as `read`. The gate and the tool now both refuse those names.
   - *Gate comparison.* Main's `scripts/gate_diff.py` at `6491bcea` compared #500 at `faf39447`, the commit
     this change is based on, with this change. The corpus was the built-in one with variants, the 62 saved
     `tool_output` cases, four page-limit cases (511, 512, 24,000 and 24,001) and 28 calls whose reference is
