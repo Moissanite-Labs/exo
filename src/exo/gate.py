@@ -5518,7 +5518,8 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
     Each comes as (the word that holds the value, the paths it names), and `none` names no path. A value in a word
     of its own is that word. An attached one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters
     before the value cut off, when the source spells them as they read. The options are read as _ssh_options reads
-    them, before the host and after it, up to the remote command."""
+    them, before the host and after it, up to the remote command. A setting's value is split into words as ssh
+    splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
     texts, out = [w.text for w in words], []
 
     def scan(i: int, after: bool) -> int:
@@ -5538,11 +5539,11 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
                 if w.raw.startswith(a[:v + 1]):
                     w = replace(w, text=value, raw=w.raw[v + 1:])
             key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
-            rest = rest.replace('"', "") if a[v] == "o" else rest
+            args = _ssh_split(rest) if a[v] == "o" else [rest]
             if key in ("S", "controlpath", "userknownhostsfile"):
-                paths = rest.split() if key == "userknownhostsfile" else [rest]
+                paths = args if key == "userknownhostsfile" else args[:1]
             elif key in ("L", "R", "localforward", "remoteforward"):
-                paths = [p for p in re.split(r"[\s:]", rest) if "/" in p]      # a socket path holds a /
+                paths = [f for t in args[:2] for f in _ssh_fwd_fields(t) if "/" in f]   # a socket path holds a /
             else:
                 continue
             out.append((w, [p for p in paths if p.lower() != "none"]))
@@ -5553,10 +5554,74 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
 
 
 def _ssh_file_hits(x: str) -> list[str]:
-    """The store paths in one of ssh's file option values (_shell_hits' find for _ssh_file_words): the value and each
+    """The store paths in one of ssh's file option values (_shell_hits' find for _ssh_file_words): the value, each
     piece of it between whitespace, `:`, `=` and `,` (`UserKnownHostsFile=/tmp/kh ~/.exo/state/kh`,
-    `~/.exo/state/sock:localhost:5432`)."""
-    return [p for p in dict.fromkeys([x] + re.split(r"[\s:=,]", x)) if p and _store_word(p)]
+    `~/.exo/state/sock:localhost:5432`), and each word and field ssh's own parsers make of it, without the quotes,
+    brackets and backslashes ssh drops (`ControlPath '~/x y/ctl'`, `-L '[/x/.exo/state/s]:localhost:1'`). A store
+    folder whose name holds a space, as the desktop app's does, can only be named in a setting inside ssh's quotes.
+    ssh spells out its `%d` token as the home folder."""
+    found = [x] + re.split(r"[\s:=,]", x) + _ssh_fwd_fields(x)
+    for t in _ssh_split(x) + _ssh_split(_ssh_setting(x)[1]):
+        found += [t] + re.split(r"[:=,]", t) + _ssh_fwd_fields(t)
+    return [p for p in dict.fromkeys(found) if p and _store_word(_ssh_home(p))]
+
+
+def _ssh_home(path: str) -> str:
+    """``path`` with ssh's `%d` token at its start (the home folder) written as `~`."""
+    return re.sub(r"^%d(?=/|$)", "~", path)
+
+
+def _ssh_split(text: str) -> list[str]:
+    """A setting's value split into words as ssh's argv_split splits it: at a space or tab outside quotes, with each
+    pair of quotes taken out, and a backslash before a quote, a backslash or (outside quotes) a space dropped and
+    the character after it kept. An unclosed quote runs to the end (ssh rejects the line)."""
+    out: list[str] = []
+    cur: list[str] | None = None
+    quote, i = "", 0
+    while i < len(text):
+        ch, nxt = text[i], text[i + 1:i + 2]
+        if cur is None and ch in " \t":
+            i += 1
+            continue
+        cur = [] if cur is None else cur
+        if ch == "\\" and (nxt in ("'", '"', "\\") or not quote and nxt == " "):
+            cur.append(nxt)
+            i += 2
+            continue
+        if not quote and ch in " \t":
+            out.append("".join(cur))
+            cur = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        elif quote and ch == quote:
+            quote = ""
+        else:
+            cur.append(ch)
+        i += 1
+    return out if cur is None else out + ["".join(cur)]
+
+
+def _ssh_fwd_fields(spec: str) -> list[str]:
+    """A forward's fields as ssh's parse_fwd_field reads them: split at `:`, a field in `[...]` taken as it stands,
+    and a backslash elsewhere dropped and the character after it kept (`[/x:y]:localhost:5432`, `/x/st\\ate:1`)."""
+    out: list[str] = []
+    i = 0
+    while i < len(spec):
+        if spec[i] == "[":
+            j = spec.find("]", i + 1)
+            j = len(spec) if j < 0 else j
+            out.append(spec[i + 1:j])
+            i = j + 2
+            continue
+        cur = []
+        while i < len(spec) and spec[i] != ":":
+            if spec[i] == "\\" and i + 1 < len(spec):
+                i += 1
+            cur.append(spec[i])
+            i += 1
+        out.append("".join(cur))
+        i += 1
+    return out
 
 
 def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
@@ -6030,8 +6095,9 @@ def _ln_targets(argv: list[str]) -> list[str]:
             for b in bases]
 # A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
 # ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
-# ("target").
-_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+# ("target"). ssh's own file options ("ssh", #484) are read with a find of their own, so no other check covers them.
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"},
+           "ssh": {"ssh"}}
 
 
 def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
@@ -6140,14 +6206,15 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 hits.append(t.text)
     # #484: ssh makes its control socket, the known-hosts file it adds a key to and a forward's socket on this machine
     # whatever its remote line runs, so the return below must not skip a store path there when every part is a read.
-    # When a part is more than that, the scan below reads these words with the others.
-    if words and words[0].text.rsplit("/", 1)[-1] == "ssh" and all(_store_quiet(p) for p in parts):
+    # These values are read as ssh reads them (its quotes in a setting, a forward's brackets), which the scan below
+    # does not do, so they are read here on every ssh line, with a store check of their own ("ssh").
+    if words and words[0].text.rsplit("/", 1)[-1] == "ssh":
         for w, paths in _ssh_file_words(words):
-            got = _shell_hits(w, seen, "narrow", _ssh_file_hits)
+            got = _shell_hits(w, seen, "ssh", _ssh_file_hits)
             hits += [w.text] if got is None else got
             if _unknown_store(w, seen):
                 hits.append(w.text)
-            if ctx.get("store_cwd") and any(not _expand_text(p).startswith("/") for p in paths):
+            if ctx.get("store_cwd") and any(not _expand_text(_ssh_home(p)).startswith("/") for p in paths):
                 hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets

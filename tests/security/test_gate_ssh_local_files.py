@@ -54,6 +54,16 @@ STORE_WRITES = [
     "cd ~/.exo/state && ssh -L ./sock:localhost:5432 host ls",
     # an ssh in the remote line
     "ssh a 'ssh -S ~/.exo/state/ctl b ls'",
+    # ssh's own quotes in a setting and a forward's brackets and backslashes, which ssh takes out
+    "ssh -o 'ControlPath ~/.exo/\"st\"ate/ctl' host ls",
+    "ssh -o \"ControlPath=~/.exo/st'a'te/ctl\" host ls",
+    "ssh -o 'UserKnownHostsFile /tmp/kh ~/.exo/\"state\"/kh' host ls",
+    "ssh -o 'LocalForward ~/.exo/\"state\"/sock localhost:5432' host ls",
+    "ssh -o 'LocalForward /x/.exo/st\\ate/sock localhost:5432' host ls",
+    "ssh -L '/x/.exo/st\\ate/sock:localhost:5432' host ls",
+    "ssh -R \"$HOME/.exo/st\\ate/sock:localhost:22\" host ls",
+    "ssh -L '[/x/.exo/state/sock]:localhost:5432' host ls",
+    "ssh -o ControlPath=%d/.exo/state/ctl host ls",
 ]
 
 READS = [
@@ -72,6 +82,10 @@ READS = [
     "cd ~/.exo/state && ssh -S /tmp/ctl host ls",
     "cd ~/.exo/state && ssh -L 5432:localhost:5432 host ls",
     "cd ~/.exo/state && ssh -o ControlPath=none host ls",
+    "cd ~/.exo/state && ssh -o \"ControlPath='/tmp/ctl'\" host ls",
+    "cd ~/.exo/state && ssh -o ControlPath=%d/cm-%C host ls",
+    "ssh -o \"ControlPath '/tmp/a b/ctl'\" host ls",
+    "ssh -o 'UserKnownHostsFile \"/tmp/a b/kh\" /dev/null' host ls",
 ]
 
 
@@ -117,6 +131,41 @@ def test_a_rebind_in_the_remote_line_does_not_hide_the_socket(remote):
     # opaque_exec allow let the socket through.
     c, d = decide(f"ssh -S ~/.exo/state/ctl a {remote}", REBIND_ALLOWED)
     assert c.category == "store_write" and d.outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "ssh -o 'ControlPath ~/.exo/\"st\"ate/ctl' a 'bash -c x'",
+    "ssh -o 'ControlPath ~/.exo/\"st\"ate/ctl' a 'ssh b true'",
+    "ssh -L '/x/.exo/st\\ate/sock:localhost:5432' a 'bash -c x'",
+])
+def test_a_remote_line_that_is_more_than_reads_gets_the_same_reading(command):
+    # The word scan for such a line does not take out ssh's own quotes, so ssh's options are read for it too.
+    c, d = decide(command, REBIND_ALLOWED)
+    assert c.category == "store_write" and d.outcome == "deny"
+
+
+@pytest.mark.parametrize("value", [
+    "-o \"ControlPath '{root}/state/ctl'\"",
+    "-o 'ControlPath \"${{EXO_HOME}}/state/ctl\"'",
+    "-o 'ControlPath %d/Library/Application\\ Support/Exo\\ Desktop/runtime/state/ctl'",
+    "-o \"UserKnownHostsFile /dev/null '{root}/state/kh'\"",
+    "-o \"LocalForward '{root}/state/sock' localhost:5432\"",
+    "-L '[{root}/state/sock]:localhost:5432'",
+    "-S '{root}/state/ctl'",
+])
+def test_a_store_folder_whose_name_holds_a_space(value, tmp_path, monkeypatch):
+    # The desktop app's store is in "Application Support". A setting can only name a path with a space inside
+    # ssh's own quotes, which the store check now takes out as ssh does.
+    home = tmp_path / "home"
+    root = home / "Library" / "Application Support" / "Exo Desktop" / "runtime"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("EXO_HOME", str(root))
+    command = "ssh " + value.format(root=root) + " host ls"
+    c, d = decide(command, DENY_STORE)
+    assert c.category == "store_write" and d.outcome == "deny", command
+    if "{root}" in value:       # the same path outside the store stays a read
+        c, d = decide(command.replace(str(root), "/tmp/Exo Desktop"), DENY_STORE)
+        assert c.category == "read" and d.outcome == "allow", command
 
 
 def test_the_remote_target_rule_is_kept():

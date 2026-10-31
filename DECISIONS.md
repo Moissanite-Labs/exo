@@ -1361,10 +1361,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
   reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
   it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
-  an expansion the gate cannot spell out). A relative value counts after a `cd` into the store. A line whose remote
-  part is more than reads keeps its reading: the scan reads every word of it. `-F` and `GlobalKnownHostsFile` only
-  read their file and stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919
-  is open for it. *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  an expansion the gate cannot spell out). Each value is also read as ssh reads it: a setting split into words with
+  ssh's quotes and backslashes taken out (its argv_split), a forward split into fields without brackets and
+  backslashes (its parse_fwd_field), and `%d` as the home folder. The word scan after the return does not read
+  ssh's quotes, so `ssh -o 'ControlPath ~/.exo/"st"ate/ctl' a 'bash -c x'` was missed there too, and the check runs
+  on every ssh line. A store folder whose name holds a space, as the desktop app's does, can only be named in a
+  setting inside ssh's quotes. A relative value counts after a `cd` into the store. `-F` and `GlobalKnownHostsFile`
+  only read their file and stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change.
+  #919 is open for it. *Cost:* a store path in these options asks the principal even when the remote command only reads.
   *Measured:* main's `scripts/gate_diff.py`, main 49312d41 against this change, built-in corpus and policies:
   92,524 actions x 88 policies (8,142,112 pairs), 0 lowered. 35,404 pairs on 490 actions tightened, each to
   `store_write`.

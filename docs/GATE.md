@@ -3034,11 +3034,16 @@ after a `cd` into the store (`cd ~/.exo/state && ssh -S ctl host ls`). Before, t
 these words only when the remote line was more than reads. A value is read in each form the store
 check reads a word: attached (`-S~/x`, `-oControlPath=x`), after the host, with `$HOME`, a brace set
 or an expansion. Each path of a `UserKnownHostsFile` list counts. A forward's value is split at `:`,
-so a socket path counts on either side. A value outside the store keeps the line a read
-(`ssh -S /tmp/ctl host ls`), and so does `none`. `-F` and `GlobalKnownHostsFile` only read their
-file, so `ssh -F ~/.exo/state/cfg host ls` stays a read. A line whose remote part is more than reads
-is read as before: the check reads every word of the line. ssh's log file (`-E`) is not covered
-here. It is still a known limit (above), and #919 is open for it.
+so a socket path counts on either side. A value is also read as ssh reads it. A setting is split
+into words with ssh's own quotes and backslashes taken out (`-o 'ControlPath ~/.exo/"st"ate/ctl'`),
+a forward's field loses its brackets and backslashes (`-L '[/x/.exo/state/s]:localhost:5432'`), and
+`%d` is the home folder. So a store folder whose name holds a space, as the desktop app's does,
+counts when a setting names it inside ssh's quotes. The word scan of a line does not read ssh's
+quotes, so these values get this check on every ssh line, also when the remote part is more than
+reads. A value outside the store keeps the line a read (`ssh -S /tmp/ctl host ls`), and so does
+`none`. `-F` and `GlobalKnownHostsFile` only read their file, so `ssh -F ~/.exo/state/cfg host ls`
+stays a read. ssh's log file (`-E`) is not covered here. It is still a known limit (above), and
+#919 is open for it.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
