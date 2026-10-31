@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +12,8 @@ import pytest
 
 from exo.config import ConfigError
 from exo.workspace_context import MAX_BYTES, MAX_WARNINGS, RENDER_ROOM, WorkspaceInstructions, attach
+
+CUT = "\n\n[Workspace instructions cut at their size limit.]"  # render() appends this when it cuts
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +23,15 @@ def _owner_only_umask():
     previous = os.umask(0o022)
     yield
     os.umask(previous)
+
+
+@pytest.fixture
+def short_root():
+    """A short folder for deep trees. macOS allows 1,024 bytes in a path, and its temporary folder takes about 100
+    of them, so a deep tree goes under /tmp and its paths do not depend on where pytest puts tmp_path."""
+    root = Path(tempfile.mkdtemp(prefix="exow", dir="/tmp"))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def workspace(tmp_path: Path, **settings) -> tuple[Path, WorkspaceInstructions]:
@@ -422,12 +435,16 @@ def test_the_walk_stops_at_a_folder_someone_else_can_write(tmp_path, monkeypatch
     ("staff", [], True, False), ("me", [], False, False)])
 def test_group_write_counts_as_nobody_else_only_for_the_users_private_group(tmp_path, monkeypatch, name, members,
                                                                             primary, loads):
-    """A umask 002 setup: each user's primary group is named after them, with nobody else in it."""
+    """A umask 002 setup: each user's primary group is named after them, with nobody else in it.
+
+    The file system reports no ACL here. macOS has no ``os.getxattr``, and where Exo cannot read ACLs it eases no
+    group write at all (a test below pins that), so the private-group cases need the answer stated."""
     import exo.workspace_context as wc
     repo, work = _repo(tmp_path)
     (work / "AGENTS.md").chmod(0o664)
-    gid = (work / "AGENTS.md").stat().st_gid
+    gid = (work / "AGENTS.md").stat().st_gid  # on macOS a new file takes its folder's group: read what it got
     _as(monkeypatch, ME)
+    _acl_on(monkeypatch)
     monkeypatch.setattr(wc.pwd, "getpwuid",
                         lambda uid: SimpleNamespace(pw_name="me", pw_gid=gid if primary else gid + 1))
     monkeypatch.setattr(wc.grp, "getgrgid", lambda g: SimpleNamespace(gr_name=name, gr_mem=members))
@@ -495,42 +512,51 @@ def test_the_upward_walk_stops_at_a_folder_another_user_can_write(tmp_path):
     assert "MY GUIDANCE" in text and "OUTER GUIDANCE" not in text
 
 
-def test_warnings_and_headings_have_a_total_bound(tmp_path):
-    root, guidance = workspace(tmp_path)
+def test_warnings_and_headings_have_a_total_bound(short_root):
+    """24 folders of 30 bytes each stay under macOS's 1,024-byte path limit."""
+    root, guidance = workspace(short_root)
     current = root
-    for _ in range(80):
+    for _ in range(24):
         (current / "AGENTS.md").symlink_to("/etc/hostname")
-        current = current / ("d" * 40)
+        current = current / ("d" * 30)
         current.mkdir()
     text = guidance.render(current)
-    assert len(text) <= MAX_BYTES + RENDER_ROOM + 80
-    assert text.count("not symlinks") == MAX_WARNINGS and "more warnings omitted" in text
+    assert len(text) <= guidance.max_bytes + RENDER_ROOM + len(CUT)
+    assert text.count("not symlinks") == MAX_WARNINGS and "8 more warnings omitted" in text
     assert len(guidance.inspect(current)["warnings"]) == MAX_WARNINGS
 
 
-def test_large_files_in_many_folders_stay_within_the_rendered_limit(tmp_path):
-    root, guidance = workspace(tmp_path)
+def test_large_files_in_many_folders_stay_within_the_rendered_limit(short_root):
+    root, guidance = workspace(short_root)
     current = root
     for _ in range(80):
         (current / "AGENTS.md").write_text("x" * 40_000)
-        current = current / ("d" * 40)
+        current = current / "d"
         current.mkdir()
+    report = guidance.inspect(current)
+    assert report["bytes"] == MAX_BYTES and report["truncated"]
+    assert len(report["warnings"]) == MAX_WARNINGS and report["omitted_warnings"] == 80 - MAX_WARNINGS
     text = guidance.render(current)
-    assert len(text) <= MAX_BYTES + RENDER_ROOM + 80
-    assert text.count("x" * 1000) == 32 and "64 more warnings omitted" in text
+    assert len(text) <= guidance.max_bytes + RENDER_ROOM + len(CUT)
+    # The folder names are one byte, so the whole block fits and nothing is cut, whatever the temp folder.
+    assert text.count("x" * 1000) == 32 and "64 more warnings omitted" in text and not text.endswith(CUT)
 
 
-def test_long_paths_are_cut_at_the_rendered_limit_warnings_first(tmp_path):
-    root, guidance = workspace(tmp_path, max_bytes=100)
+def test_long_paths_are_cut_at_the_rendered_limit_warnings_first(short_root):
+    """Three 200-byte folder names put each warning's path past 600 bytes, still under macOS's 1,024."""
+    root, guidance = workspace(short_root, max_bytes=100)
     (root / "AGENTS.md").write_text("ROOT GUIDANCE")
-    current = root
-    for _ in range(18):
-        current = current / ("p" * 200)
+    current = root / ("p" * 200) / ("p" * 200) / ("p" * 200)
+    current.mkdir(parents=True)
+    for _ in range(MAX_WARNINGS):
+        current = current / "d"
         current.mkdir()
         (current / "AGENTS.md").symlink_to("/etc/hostname")
+    limit = guidance.max_bytes + RENDER_ROOM
+    assert sum(map(len, guidance.inspect(current)["warnings"])) > limit  # in full, the warnings pass the limit
     text = guidance.render(current)
-    assert len(text) <= 100 + RENDER_ROOM + 80
-    assert "ROOT GUIDANCE" in text and text.endswith("[Workspace instructions cut at their size limit.]")
+    assert len(text) <= limit + len(CUT)
+    assert "ROOT GUIDANCE" in text and text.endswith(CUT)
 
 
 @pytest.mark.parametrize("name", [".env", ".npmrc", ".netrc", "id_rsa"])

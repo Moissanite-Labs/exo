@@ -186,6 +186,32 @@ def test_rows_status_shapes(monkeypatch, tmp_path):
     assert ps.any_ready(r, prober=lambda url: "11434" in url) is True
 
 
+@pytest.mark.parametrize("url", ["http://127.0.0.1:notaport/v1", "http://127.0.0.1:99999/v1", "http://[::1/v1",
+                                 "http://" + "a" * 70 + ".local:1/v1"])
+def test_probe_reads_a_url_it_cannot_parse_as_not_running(url):
+    """These raised ValueError, so the provider check and every engine start with such a local provider failed."""
+    assert ps.probe(url, timeout=0.1) is False
+
+
+@pytest.mark.parametrize("value", [8080, ["http://127.0.0.1:1/v1"]])
+def test_probe_reads_a_base_url_that_is_not_text_as_not_running(value):
+    """A config can hold a number or a list here. They raised AttributeError and TypeError, as a bad port did."""
+    assert ps.probe(value, timeout=0.1) is False
+
+
+@pytest.mark.parametrize("base_url", ["http://127.0.0.1:notaport/v1", 8080])
+def test_engine_start_with_a_bad_local_port_succeeds(tmp_path, base_url):
+    from exo.core.engine import CoreEngine
+    models = {"providers": {"loc": {"transport": "openai", "local": True, "base_url": base_url}}}
+
+    async def main():
+        eng = CoreEngine(tmp_path / "home", models, cwd=str(tmp_path), env={})
+        assert eng._automatic_main  # so the start runs the provider check
+        await eng.start()
+        await eng.close()
+    asyncio.run(main())
+
+
 def test_rows_provider_without_base_url_cannot_answer_even_with_its_key(monkeypatch):
     monkeypatch.setattr(ps.shutil, "which", lambda name, path=None: None)
     r = Router(catalog={"providers": {}, "models": {}, "roles": {}}, env={"MINE_API_KEY": FAKE},

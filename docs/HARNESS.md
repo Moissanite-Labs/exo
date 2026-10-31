@@ -196,8 +196,8 @@ When a step in 2 fails, the steps after it still run. They also run after a hard
 there, such as a second Ctrl-C. Background jobs are killed all at once, so a hard stop
 during the kills still ends every job. A learner that fails to close still lets step 4
 run. `close()` raises the first error at the end. A hard stop during the wait in step 3
-ends `close()` at once. Jobs and transports are stopped by then, and the rest stays as
-after a timeout.
+does not cut it short. The wait goes on within the same five seconds, so step 4 still
+runs when the work ends in time, and plugin cleanups run before the hard stop is raised.
 
 Python cannot stop a worker thread. If a synchronous tool is still running at step 3,
 `CoreRuntime.close()` raises `ShutdownTimeout`. By then jobs and transports are stopped.
@@ -206,8 +206,8 @@ the writer claim. If a step in 2 also failed, `ShutdownTimeout` names that error
 it in `errors`. A later `close()` finishes the job once the tool returns. The engine
 that `exo serve` and the terminal build (`exo.application.CoreEngine`) logs a warning and
 closes again until it does. Its plugin cleanups then run once and exod exits normally.
-It does not close again after a hard stop in step 2. That `CancelledError`, Ctrl-C or
-`SystemExit` is raised once the wait ends, and the rest stays as after a timeout.
+It does not close again after a hard stop in step 2 or in the wait. That `CancelledError`,
+Ctrl-C or `SystemExit` is raised once the wait ends, and the rest stays as after a timeout.
 No detached cleanup watcher is created.
 
 Plugin tool handlers are called as `fn(args, session_id=, task_id=, tool_call_id=)`. They

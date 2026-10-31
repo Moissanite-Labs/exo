@@ -338,6 +338,9 @@ class Scheduler:
                 await asyncio.wait_for(self._wake.wait(), min(delay, self.poll) + 0.05)
             except asyncio.TimeoutError:
                 pass
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():  # Python 3.11's wait_for returns when a wake meets a cancel
+                raise asyncio.CancelledError  # so close() and stop() still end the loop before it claims a slot
 
 
     async def edit(self, body: Any) -> dict[str, Any]:

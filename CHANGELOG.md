@@ -5,9 +5,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+- Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
+
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
+- Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
+- A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
+- Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
+- A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
+- Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
+  pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
+  start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
+  web tests' headless Chrome no longer throttles background timers and frames, and the exo-command suite's summary
+  names the Chrome binary and version it drove.
+- Web chat keeps a reader's place when the event stream catches up. On load and after a reconnect, the page reads the
+  conversation again and redraws it. That redraw moved a reader who had scrolled back to the newest message. It now
+  keeps their place, as new output does, and a reader at the newest message stays there.
+- Tests: more of the timing and browser tests that failed on GitHub's hosted runners, unrelated to the PRs they ran
+  on, no longer fail on a slow runner (`docs/DEVELOPER-GUIDE.md` §7 "Timing and browser tests on hosted runners").
+  - The search worker test (`test_pathological_pattern_times_out_without_stopping_loop`) built the tool registry
+    inside its timed call. The first build imports the built-in tools, and beside 8 to 10 busy loops that took the
+    call past its 3 s wall-clock bound. The registry is now built before the clock starts. The 3 s bound is
+    unchanged, and so is the 0.5 s bound on the event loop's largest gap between ticks (#907, the entry above).
+  - The chat tests that set a layout loaded the page a second time with `goto()`. That only changed the part after
+    `#`, so the old view answered until the app replaced it, and a test could run against a view about to vanish
+    (`test_show_latest_...`, `test_appending_inside_a_tall_stream_...`, `test_pending_home_frame_...`). They now
+    reload the page, and wait for start-up to finish before they read a position or count requests
+    (`test_loaded_search_filters_...` could count the start-up snapshot read as the filter's).
+  - `test_expanded_status_keeps_composer_and_transcript_reachable` read the layout before the page closed the
+    conversation list for a narrow window, one frame after the resize. It now waits for that frame.
+  - `test_appearance_controls_persist_choice_and_do_not_change_route_or_draft` reloaded with `location.reload()` and
+    then waited for a condition the old page still met. Its next read could run on the new page before the app had
+    built the Appearance control (`Cannot read properties of null`). It now reloads with the browser helper, which
+    returns once the old page is gone.
+  - A test browser's start-up commands wait up to 90 s for Chrome's first tab, instead of 30 s.
 - The Providers page, and every web route that relays a core error, now reads a refused bearer token as a refusal
   (#856, D-091 amendment). A web client started with `exo web --url URL --token-file FILE` and a stale token
   showed `SourceError: http_401: {"error": "bearer token required"}` with a "Try again" that could not help. It
@@ -31,6 +65,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
   (D-091).
 
+- `scripts/gate_diff.py` no longer reports "0 lowered" for three kinds of looser gate: one that fails open once a
+  shared classify budget is spent (six long budget lines now run with the harvest, also under `--no-variants`), one
+  whose `decide` returns an outcome the hook runs but does not know (`"Ask"`, `"block"`: ranked as allow in the head),
+  and one that drops a hook check after `decide` at the same outcome (`no_grant`, `body_unseen`, `binds_exact`, a
+  reserved hit on another part). The summary counts each (#551).
 - A provider spend limit (HTTP 402) now says so instead of blaming the key, and a call whose route stopped on it
   carries the cost `+` mark, because that route's work is not billed in this turn. `trace` reports
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
@@ -50,12 +89,31 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
   array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
   `parse_json` takes the first brace or bracket that decodes.
+- `test_a_setup_state_is_not_a_harness_error` failed on a loaded machine: it slept a fixed 0.2 s after `TurnSend`,
+  but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
+  was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
+  bound). Test-only.
+- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is not a list no longer loads. A string such
+  as `toolsets = "fs"` read as no list, and the seat got every toolset (exo-desktop #52, D-041 amendment).
+- Two folder plugins whose names differ only in punctuation, such as `a-b` and `a_b`, no longer share one module.
+  The second replaced the first's package, so the first plugin's later relative imports ran the second's files.
+  The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
+- `exo findings fix ID` reads `ID` as text. The id went into a SQL `LIKE` as a pattern, so `%` or `_` matched
+  other ids: `exo findings fix % --in SHA` marked the only finding fixed (exo-desktop #52).
+- A finished subagent stays locked when a context note or `/compact` writes its session's meta at the same time.
+  Each writer read the whole meta and wrote it back, so the lock, or another writer's key, could be lost. Meta
+  writes now keep the keys they do not set, in one transaction (exo-desktop #52, D-041 amendment).
+- A provider with several `key_env` names keeps each key's credential id when another key is added or removed. A
+  call that ran across the change skipped the new key as the one that had failed and sent the failed key again.
+  A 501 (`muse-cli` asked to carry tools) falls back without cooling `muse-cli`, so the next call without tools
+  still reaches it (exo-desktop #52, D-041 amendment).
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
   re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
   write lock, so the read neither waits for nor holds up a core that is filing a finding. Opening the store
-  still takes the write lock briefly for its schema check (#797, refs #684).
+  still takes the write lock briefly for its schema check (#797, refs #684). `docs/COMMANDS.md` lists it with
+  the other `exo findings` commands.
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
@@ -99,6 +157,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed
+- The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
+  Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
+  `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay
+  in exo.
+- A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
+  run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
+- `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
+  each add a bullet here no longer conflict. For a branch cut before this, run
+  `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"` once per clone.
 - Chat status instruments wrap within the conversation width. Model names, values and full-row notices
   remain readable when the window or conversation pane narrows, in both layouts.
 - Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings
@@ -121,8 +188,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that outlives the wait keeps plugin resources, the store and the writer claim in place, and `close()` raises
   `ShutdownTimeout`. exod and the terminal close again until the tool returns. Call `close()` from the engine's
   owner, not from inside a turn or tool. A failed step, or a second Ctrl-C while close stops channels and jobs,
-  no longer skips the steps after it, and background jobs are killed all at once. That second Ctrl-C or SIGTERM
-  is not retried away: exod and the terminal raise it once the wait ends.
+  no longer skips the steps after it, and background jobs are killed all at once. A second Ctrl-C during the
+  wait does not cut it short, so plugin cleanups still run when the work ends in time. That second Ctrl-C or
+  SIGTERM is not retried away: exod and the terminal raise it once the wait ends.
 - A failed startup releases what it opened: the writer lock, the stores, the job worker pool, the scheduler, the
   learner and plugin resources.
 - The harness work's plugin lifecycle and shutdown helpers live in the counted core, as `exo.core.plugin_lifecycle`
@@ -251,6 +319,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md` "The store is credentials (D-038)",
   `DECISIONS.md` (D-038 amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 
+- A `max` or `ultra` reasoning level on an OpenAI-compatible route goes out as `xhigh`, not `max`, which
+  OpenAI and OpenRouter refuse with a 400. A legacy Anthropic model with `max_tokens` of 1,024 or less runs
+  without thinking instead of failing on a budget that cannot fit (exo-desktop #52).
+
+- A tool call whose arguments are not a JSON object, such as JSON cut short at `max_tokens`, gets an error
+  result that names the problem. It used to run the tool with no arguments (exo-desktop #52).
+
+- `muse-cli` keeps earlier tool calls and results in its flattened prompt, as text. It used to drop them, and
+  an assistant turn that only called tools (exo-desktop #52).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
@@ -361,6 +439,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
 
+- The next command also retries a start that failed after its only command was cancelled (exo-desktop #2). No
+  command got that error, but the next command got it once more, and only the command after that started again.
+  The next command now drops a finished start that raised or was cancelled before it waits on it. A start still
+  running stays, so a cancelled command never causes a second start. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
+- A local provider whose base URL has a bad port reads as not running (found in the exo-desktop #14 review).
+  `http://127.0.0.1:notaport/v1`, a port above 65535, a broken IPv6 host or a host name part over 63 letters made
+  the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
+  provider check failed. With no main role set, every start runs that check, so every command failed, retry or
+  not. The probe now reads such a URL as nothing listening. Tests:
+  `tests/core/test_providers_setup.py`.
+
+- `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
+  broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:
+  `tests/core/tools/test_codefind.py`. **Docs:** `docs/TOOLS.md` "code_find".
+
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).
 
 - Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
@@ -369,6 +465,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   restart environments as read-only mappings; nine resolved diagnostics are removed (#710).
 
 - Repeated corrections and rulings no longer reinforce rejected beliefs. New agreeing evidence creates a separate proposal for review while preserving the rejection (desktop audit #54).
+
+- Consolidation matches a correction or ruling against active beliefs only, so a rejected belief that matches
+  better no longer hides an active one (#861, after #770). A ruling that contradicts an accepted guarded belief
+  raises the conflict question and is held, where since #770 it became an unheld proposal that rule 1 accepted
+  beside the belief it contradicts; one that agrees with an open proposal reinforces it instead of opening a second
+  one. A reviewer taste or fact lesson whose evidence is all held already by the rejected beliefs it agrees with,
+  one or several together, is skipped again, as before #770: it is not proposed, raises no conflict question (even
+  one the principal already answered) and reinforces no other belief. A reviewer skill lesson is not checked and is
+  still proposed. New evidence after a rejection is still proposed. The rule of three still counts a
+  rejected belief as known (docs/LEARNING.md "Signals in", DECISIONS.md D-012 amendment 2026-10-29).
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
@@ -440,6 +546,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Harness profiles keep main's continuity checkpoint: `work_checkpoint.enabled` decides in every profile, as
   `work_notes.enabled` does (D-088, `docs/HARNESS.md`, `docs/WORK-CHECKPOINT.md`). A delegated or scheduled
   session takes no checkpoint and opens no write transaction for it.
+- On Python 3.11, the scheduler's timer could miss the cancel from close or `Scheduler.stop()` when a wake came
+  at the same moment (D-088, `docs/SCHEDULE.md`). It then claimed a slot that came due during close, and
+  `stop()` could wait for it forever. The timer now checks for a cancel after each wait.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
@@ -1205,6 +1314,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Peers (exo-desktop #52, D-026 amendment): a peer or bus message that names a session lands only in one that
+  exists, is not a subagent and is not finished. A crafted `to_session` used to reach a locked child, a running
+  subagent or an id that does not exist: the message was queued or held there, or it started a turn. Any other
+  name now gets a denied receipt before the policy runs. A held message whose session finished before you
+  allowed it is denied too. The warning for such a message that tries to approve something now shows in a live
+  session, not in the one it named. Tests: `tests/peers/test_explicit_session.py`. **Docs:** `docs/PEERS.md`,
+  `DECISIONS.md`, `docs/DOCS-MAP.md`.
 - Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
   `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
   as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was

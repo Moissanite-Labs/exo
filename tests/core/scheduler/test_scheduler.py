@@ -501,6 +501,33 @@ async def test_loop_survives_a_failing_tick_and_reports_it(tmp_path):
 
 
 @aio
+async def test_stop_ends_the_loop_when_a_wake_comes_in_the_same_pass(tmp_path):
+    """On Python 3.11, wait_for drops a cancel when the event it waits on is set in the same pass. The loop checks
+    for the cancel itself, so stop() still ends it, and a slot that came due is not claimed."""
+    eng = mk(tmp_path)
+    sch, clock = eng.scheduler, Clock(ts(2026, 10, 11, 8, 0))
+    sch.clock = clock
+    job = sch.add("every 1h", "x")
+    sch.start()
+    await asyncio.sleep(0)  # the loop now waits on its wake event
+    main = sch.tasks()[0]
+    clock.t = job["next_run"] + 1
+
+    async def stop_in_the_waking_pass():
+        sch._wake.set()
+        await sch.stop()  # its cancel goes out in the pass that set the wake
+
+    stopping = asyncio.ensure_future(stop_in_the_waking_pass())
+    done, _ = await asyncio.wait({stopping}, timeout=10)
+    if not done:  # leave nothing running for asyncio.run to wait on
+        main.cancel()
+        stopping.cancel()
+    assert done, "stop() did not end the scheduler's loop"
+    assert main.cancelled() and sch.running == {}
+    assert sch.get(job["id"])["next_run"] == job["next_run"]  # left for the next start
+
+
+@aio
 async def test_unexpected_loop_exit_is_reported(tmp_path):
     eng = mk(tmp_path)
     sch = eng.scheduler = Scheduler(eng)

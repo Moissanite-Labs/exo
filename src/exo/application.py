@@ -43,9 +43,9 @@ class CoreEngine(CoreRuntime):
         Python cannot stop that thread, and the process waits for it at exit anyway, so this logs and closes
         again until the tool returns. Then plugin cleanups run once and the writer claim is released.
 
-        A hard stop is not retried. When a stop step met a second Ctrl-C or SIGTERM (``CancelledError``,
-        ``KeyboardInterrupt`` or ``SystemExit``), that error is raised once the bounded attempt ends, and the rest
-        stays as after a timeout.
+        A hard stop is not retried. When a stop step or the wait met a second Ctrl-C or SIGTERM (``CancelledError``,
+        ``KeyboardInterrupt`` or ``SystemExit``), that error is raised after one bounded attempt. If a tool outlived
+        the bound, the rest stays as after a timeout.
         """
         from exo.core.shutdown import ShutdownTimeout
         while True:
