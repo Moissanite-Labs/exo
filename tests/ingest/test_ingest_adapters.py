@@ -207,7 +207,8 @@ def test_hermes(tmp_path, led):
     assert ev[1]["author"] == "hermes:alpha" and a["model"] == "model-h"
     assert brief["author_conf"] == "low" and brief["role"] == "user" and ev[2]["author"] == "hermes:unverified-user"
     assert not any("cron" in e["body"]["text"] for e in ev)
-    assert list(led.iter(kind="ingest"))[-1]["body"]["watermark"] == {"max_id": 6}
+    assert list(led.iter(kind="ingest"))[-1]["body"]["watermark"] == {"max_id": 6,
+                                                                     "sources": sorted(adapter("hermes").INTERACTIVE)}
     assert ingest("hermes", db.parent, led, ME)["added"] == 0  # directory form, idempotent
     assert db.read_bytes() == before  # read-only
 
@@ -222,6 +223,30 @@ def test_hermes_watermark_picks_up_new_rows(tmp_path, led):
     s = ingest("hermes", db, led, ME)
     assert s["added"] == 1 and s["seen"] == 1
     assert utterances(led)[-1]["body"]["profile"] == "default"
+
+
+def test_hermes_watermark_is_scoped_to_its_sources(tmp_path, led):
+    """exo-desktop #54: a run that reads more session sources than the last one did reads the older rows too."""
+    hermes = adapter("hermes")
+    db = make_hermes(tmp_path / "state.db")
+    ingest("hermes", db, led, ME)                                  # interactive sources: the cron row is skipped
+    assert not any(e["body"]["text"] == "cron prompt" for e in utterances(led))
+    wider = hermes.INTERACTIVE + ("cron",)
+    s = hermes.ingest(db, led, ME, sources=wider)
+    assert s["added"] == 1 and utterances(led)[-1]["body"]["text"] == "cron prompt"
+    assert list(led.iter(kind="ingest"))[-1]["body"]["watermark"] == {"max_id": 6, "sources": sorted(wider)}
+    assert "seen" not in hermes.ingest(db, led, ME, sources=wider)  # the wider set's own watermark now holds
+    assert "seen" not in ingest("hermes", db, led, ME)              # a narrower set is covered by it too
+
+
+def test_hermes_watermark_without_sources_counts_as_interactive(tmp_path, led):
+    hermes = adapter("hermes")
+    db = make_hermes(tmp_path / "state.db")
+    led.append("ingest", {"adapter": "hermes", "source": str(db.resolve()), "watermark": {"max_id": 6}}, "ingest")
+    assert "seen" not in ingest("hermes", db, led, ME)             # an older watermark still holds for the default
+    assert hermes.ingest(db, led, ME, sources=("cron",))["added"] == 1
+    hermes.ingest(db, led, ME, sources=())                        # reads nothing, so it covers nothing either
+    assert ingest("hermes", db, led, ME)["seen"] == 4
 
 
 # --- exports -------------------------------------------------------------------------------
