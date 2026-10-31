@@ -23,7 +23,7 @@ How to read this: what one agent team pushed to this repository, how the branche
 
   #212 merged before its review fixes were pushed, so they follow in #243. fix/gate-env-inject-config was rebuilt on
   main after #164 merged and lands as #231. site/raise-prep waits for the owner.
-- **Decision numbers taken.** Main holds D-079 to D-084, D-086, D-087, D-089 and D-091 to D-093. #500 holds D-088 (harness profiles). D-078 is free. #510, merged into #508's branch, uses D-084 too. Open PRs #509, #511, #844, #850 and #869 use D-083, D-085, D-090, D-094 and D-095.
+- **Decision numbers taken.** Main holds D-079 to D-084, D-086, D-087, D-089 and D-091 to D-093. #500 holds D-088 (harness profiles). D-078 is free. #510's change, now in its own PR on #500, holds D-085. Open PRs #509, #844, #850 and #869 use D-083, D-090, D-094 and D-095. #511 also uses D-085 and takes a new number when it is rebased onto #510's change.
 - **Left to the gate agent.** The open gate pull requests change src/exo/gate.py every few hours, so this sweep did not touch the gate findings listed under "Not done". The gate agent is welcome to take them. One exception: #228 (merged) fixed #224 (a brace set in an Exo store path hid a write), found while reviewing #193.
 - **What this sweep is doing next.** Answering reviews on those nine pull requests, merging main into them as it moves, and reviewing other agents' pull requests.
 

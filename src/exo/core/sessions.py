@@ -289,11 +289,24 @@ class SessionStore:
         return json.loads(rows[0]["meta"]) if rows else {}
 
     def set_meta(self, sid: str, meta: dict[str, Any]) -> None:
+        """Replace all metadata; concurrent runtime edits must use update_meta instead."""
         self._q("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+
+    def update_meta(self, sid: str, update: Callable[[dict[str, Any]], Any]) -> Any:
+        """Atomically edit metadata; the callback may read this store, but must not write."""
+        def write(db: sqlite3.Connection) -> Any:
+            row = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                raise KeyError(sid)
+            meta = json.loads(row["meta"])
+            result = update(meta)
+            db.execute("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+            return result
+        return self._tx(write)
 
     def lock(self, sid: str, reason: str = "done") -> None:
         """Close a session to new turns (a finished child). Reading and forking stay allowed."""
-        self.set_meta(sid, {**self.get_meta(sid), "locked": reason or "done"})
+        self.update_meta(sid, lambda meta: meta.update(locked=reason or "done"))
 
     def status(self, sid: str) -> str:
         """``locked:<reason>`` for a finished child session, else ``open``."""
