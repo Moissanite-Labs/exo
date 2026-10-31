@@ -14,7 +14,8 @@ import pytest
 from exo.application import CoreEngine
 from exo.core import seats
 from exo.core.group_composition import CompositionError, GroupComposition, GroupPlugins
-from exo.core.groups import GroupStore
+from exo.core.group_workspace import WorkspaceError
+from exo.core.groups import GroupMember, GroupStore, SavedGroup
 from exo.core.plugins import PluginManager
 from exo.core.sessions import SessionStore
 
@@ -296,6 +297,223 @@ def test_seat_skills_and_cwd_wired(comp, tmp_path):
     assert engines["one"].cwd == str(tmp_path)  # others keep the composition default
     assert "lead-skill" in engines["lead"].skills.skills  # the seat's own folder
     assert "extra-skill" in engines["lead"].skills.skills  # the injected extra folder
+
+
+# ------------------------------------------------------- opt-in workspace preflight (G10)
+#
+# The preflight itself is unit-tested in tests/test_group_workspace.py; what is proven here
+# is the GroupComposition wiring: the flag is opt-in and strictly boolean, the check runs
+# after member validation but BEFORE any binding, plugin load, engine construction or writer
+# claim (nothing to clean up on failure), the engine's exact effective-cwd semantics are
+# used, a one-member group is checked too, and a WorkspaceError surfaces as CompositionError.
+
+
+def test_workspace_check_default_off_rejects_nothing(comp, tmp_path):
+    """Default False is fully backward compatible: identical cwds compose fine."""
+    c = comp()  # every member's effective cwd is the same tmp_path; no check runs
+    engines = c(make_group())
+    assert len(engines) == 3
+
+
+def test_workspace_check_strict_bool(comp):
+    for bad in (1, 0, "yes", None):
+        with pytest.raises(CompositionError, match="workspace_check must be True or False"):
+            GroupComposition(mapping(), owner="host", home="h", workspace_check=bad)
+
+
+def test_workspace_check_fails_before_any_construction(comp, tmp_path):
+    """A shared cwd on the opt-in path fails closed with zero engines, plugins or claims."""
+    c = comp(workspace_check=True)
+    with pytest.raises(CompositionError, match="workspace"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_runs_after_member_validation(comp, tmp_path):
+    """A member outside the mapping is reported first even when the cwd also clashes."""
+    c = comp(profiles=["lead", "one"], workspace_check=True)
+    with pytest.raises(CompositionError, match="outside the authorized mapping"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_distinct_cwds_pass(comp, tmp_path):
+    """Distinct unrelated folders validate and the engines really run in them."""
+    roots = {}
+    for name in PROFILES:
+        roots[name] = tmp_path / name
+        roots[name].mkdir()
+    seats_ = mapping()
+    for name in PROFILES:
+        seats_[name] = seats.parse({"seat": {"name": name},
+                                    "session": {"cwd": str(roots[name])}})
+    c = comp(profiles=None, workspace_check=True)
+    c._seats.update(seats_)
+    engines = c(make_group())
+    for name in PROFILES:
+        assert engines[name].cwd == str(roots[name])  # never changed by the check
+
+
+def test_workspace_check_single_member_still_checked(comp, tmp_path):
+    """One member only: the path checks run even though no sharing is possible."""
+    # A one-member group cannot be built through GroupStore (it demands >= 2 profiles), so the
+    # SavedGroup is made directly. The effective cwd is a file, not a folder: sharing is
+    # impossible, yet the per-member path check must still refuse it.
+    not_a_folder = tmp_path / "not-a-folder"
+    not_a_folder.write_text("x", encoding="utf-8")
+    seats_ = {"solo": seats.parse({"seat": {"name": "solo"},
+                                   "session": {"cwd": str(tmp_path / "gone")}})}
+    group = SavedGroup(id="g-solo", owner="host", mode="conductor", conductor="solo",
+                       members=(GroupMember(profile="solo", session="s-solo"),), created="now")
+    c = comp(profiles=None, cwd=str(not_a_folder), workspace_check=True)
+    c._seats.update(seats_)
+    with pytest.raises(CompositionError, match="is not a directory"):
+        c(group)
+    assert c.engines == {}  # checked before any construction even for one member
+
+
+def test_workspace_check_missing_seat_cwd_falls_back(comp, tmp_path):
+    """The engine ignores a seat cwd that is not a folder (self.cwd_note) and uses the
+    composition's cwd; the preflight validates that resolved folder, not the dead path."""
+    dead = tmp_path / "gone"  # never created
+    shared = tmp_path / "shared"  # the composition cwd (a sibling of the other members)
+    shared.mkdir()
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+    seats_ = mapping()
+    seats_["lead"] = seats.parse({"seat": {"name": "lead"},
+                                  "session": {"cwd": str(dead)}})
+    for name in ("one", "two"):  # everyone else keeps their own folder, so only lead falls back
+        seats_[name] = seats.parse({"seat": {"name": name},
+                                    "session": {"cwd": str(tmp_path / name)}})
+    c = comp(profiles=None, cwd=str(shared), workspace_check=True)
+    c._seats.update(seats_)
+    engines = c(make_group())
+    assert engines["lead"].cwd == str(shared)  # fell back exactly like the engine
+
+
+def test_workspace_check_relative_seat_cwd_is_dropped_not_used(comp, tmp_path):
+    """A relative seat cwd is not a folder, so the engine ignores it (self.cwd_note); the
+    preflight then validates the injected folder the member actually works in."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    for name in ("lead", "one"):
+        (tmp_path / name).mkdir()
+    seats_ = mapping()
+    seats_["two"] = seats.parse({"seat": {"name": "two"}, "session": {"cwd": "rel/cwd"}})
+    for name in ("lead", "one"):
+        seats_[name] = seats.parse({"seat": {"name": name},
+                                    "session": {"cwd": str(tmp_path / name)}})
+    c = comp(profiles=None, cwd=str(shared), workspace_check=True)
+    c._seats.update(seats_)
+    engines = c(make_group())
+    assert engines["two"].cwd == str(shared)  # never the dead relative string
+
+
+def test_workspace_check_rejects_relative_injected_cwd(comp, tmp_path):
+    """A relative host cwd (no seat cwd anywhere) is rejected on opt-in, without cwd_note."""
+    c = comp(cwd="relative/host-cwd", workspace_check=True)
+    for engine_seat in c._seats.values():
+        assert engine_seat.cwd is None  # so the injected cwd is the effective one
+    with pytest.raises(CompositionError, match="is not absolute"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_missing_cwd_everywhere_checks_process_cwd(comp, tmp_path):
+    """No seat cwd and no injected cwd resolves to os.getcwd(); it is still checked, and three
+    members landing on that one folder is a shared-workspace refusal."""
+    c = comp(cwd=None, workspace_check=True)
+    with pytest.raises(CompositionError, match="share the folder"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_duplicate_worktree_rejected(comp, tmp_path):
+    """Two members in one git working tree (plain .git folder) never compose."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    for name in ("sub", "other"):
+        (repo / name).mkdir()
+    seats_ = mapping()
+    seats_["lead"] = seats.parse({"seat": {"name": "lead"},
+                                  "session": {"cwd": str(repo / "sub")}})  # a subfolder: still one tree
+    seats_["one"] = seats.parse({"seat": {"name": "one"},
+                                 "session": {"cwd": str(repo / "other")}})  # another folder, same tree
+    c = comp(cwd=None, workspace_check=True)
+    c._seats.update(seats_)
+    with pytest.raises(CompositionError, match="same git working tree"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_nested_worktrees_overlap_rejected(comp, tmp_path):
+    """Two members in nested checkouts of the same repo are rejected, not just exact equals."""
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    nested = outer / "nested"
+    (nested / ".git").mkdir(parents=True)
+    seats_ = mapping()
+    seats_["lead"] = seats.parse({"seat": {"name": "lead"}, "session": {"cwd": str(outer)}})
+    seats_["one"] = seats.parse({"seat": {"name": "one"}, "session": {"cwd": str(nested)}})
+    c = comp(cwd=None, workspace_check=True)
+    c._seats.update(seats_)
+    with pytest.raises(CompositionError, match="workspace"):
+        c(make_group())
+    assert c.engines == {}
+
+
+def test_workspace_check_plugin_order_irrelevant(comp, tmp_path):
+    """The preflight is before plugin discovery: an unreadable injected plugin folder cannot
+    mask a workspace failure, and a workspace failure wins regardless of folder order."""
+    plugin_a = make_plugin_folder(tmp_path, "plug-a")
+    missing = tmp_path / "missing-plugins"
+    folder_pair = (plugin_a, missing)
+    bad_seats = mapping()
+    bad_seats["lead"] = seats.parse({"seat": {"name": "lead"},
+                                     "session": {"cwd": str(tmp_path)}})  # shared cwd
+    for pair in (folder_pair, tuple(reversed(folder_pair))):
+        c = comp(profiles=None, plugins=GroupPlugins(dirs=pair), workspace_check=True)
+        c._seats.update(bad_seats)
+        with pytest.raises(CompositionError, match="workspace"):
+            c(make_group())
+        assert c.engines == {}
+
+
+def test_workspace_check_workspace_error_mapped_pre_allocation(comp, tmp_path, monkeypatch):
+    """A WorkspaceError (any validator failure) surfaces as CompositionError before the
+    try-block that allocates engines, so it is never wrapped a second time and nothing
+    is ever allocated to clean up."""
+
+    def boom(*a, **kw):
+        raise WorkspaceError("injected by the test")
+
+    monkeypatch.setattr("exo.core.group_composition.validate_workspaces", boom)
+    c = comp(workspace_check=True)
+    with pytest.raises(CompositionError, match="injected by the test") as excinfo:
+        c(make_group())
+    # Mapped once, pre-allocation: never re-wrapped by the engine-construction try-block.
+    assert "workspace check failed" in str(excinfo.value)
+    assert "composition failed" not in str(excinfo.value)
+    assert c.engines == {}
+
+
+def test_workspace_check_accepts_linked_worktrees_of_one_repo(comp, tmp_path):
+    """Two members in two DIFFERENT linked worktrees of one repo are allowed."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    seats_ = mapping()
+    for name in PROFILES:
+        wt = tmp_path / f"wt-{name}"
+        wt.mkdir()
+        (wt / ".git").write_text(f"gitdir: {repo / '.git' / 'worktrees' / name}\n",
+                                 encoding="utf-8")
+        seats_[name] = seats.parse({"seat": {"name": name},
+                                    "session": {"cwd": str(wt)}})
+    c = comp(cwd=None, workspace_check=True)
+    c._seats.update(seats_)
+    engines = c(make_group())
+    assert len(engines) == 3
 
 
 def test_executor_required_passed_through_unchanged(comp, tmp_path):

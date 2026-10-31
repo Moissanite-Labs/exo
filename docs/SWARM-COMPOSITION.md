@@ -41,6 +41,21 @@ folder is ever consulted, so no plugin is discovered implicitly.
   Construction is synchronous, so no nested event loops are ever run; cleanup only happens
   in `aclose()`.
 
+An explicit constructor flag adds the G10 workspace preflight before any of the above:
+
+`GroupComposition(..., workspace_check=True)` — opt-in, default `False` (fully backward
+compatible — the default behavior and every existing test are unchanged). When enabled,
+after member validation but **before** any binding, plugin load or engine construction (a
+one-member group is checked too), the factory validates the **effective cwd** every member
+will actually get — the seat's own folder when it exists, else the injected `cwd`, else the
+process cwd, exactly the way `CoreEngine` resolves it, but pre-construction and without
+touching any engine's `cwd`. It rejects a relative effective cwd and any two members that
+share a folder, nest inside each other or sit in one git working tree (nested worktrees
+included). Failures raise `CompositionError` (the validator's `WorkspaceError` is mapped)
+before anything is allocated. This is a one-shot preflight, not a lock or sandbox — see
+`docs/SWARM-WORKSPACES.md` and `exo.core.group_workspace.validate_workspaces` for what is
+and is not checked.
+
 ## GroupPlugins wiring
 
 `GroupComposition(..., plugins=GroupPlugins(...))` is optional. When omitted (or defaulted)
@@ -160,7 +175,8 @@ no auto-discovery):
   Mapping[str, object]]` — typically a `GroupComposition` instance.
 - `GroupComposition(profiles: Mapping[str, Seat], *, owner: str,
   home: str | os.PathLike, models: dict | None = None, cwd: str | None = None,
-  env: Mapping[str, str] | None = None, plugins: GroupPlugins | None = None)`.
+  env: Mapping[str, str] | None = None, plugins: GroupPlugins | None = None,
+  workspace_check: bool = False)`.
 - `compose.create(seat: str | None = None, *, group_host: GroupHost | None = None)`.
 
 Guarantees of the binding:

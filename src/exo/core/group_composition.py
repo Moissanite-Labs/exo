@@ -22,6 +22,14 @@ injected folders) when the host opts in with ``enabled=None``). The Seat's ``exo
 ``principal``, absolute ``principal_store``) is bound into that member's config copy, and
 ALL member bindings and ``principal_store`` paths are prevalidated before any engine (or
 plugin) is constructed, so a bad seat fails closed with no partial construction.
+
+Opt-in ``workspace_check=True`` adds the G10 preflight (``exo.core.group_workspace``) to that
+same pre-construction validation: the effective cwd of every member — the seat's own folder when
+it exists, else the injected ``cwd``, else the process folder, exactly as the engine resolves it
+— must be an absolute existing directory, and no two members may share a folder, nest inside
+each other, or sit in one git working tree. This reads paths only: it does not change any
+engine's cwd, lock anything, create anything or act as a sandbox, and it is off by default so
+existing compositions keep their behaviour.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from typing import Any
 from collections.abc import Mapping
 
 from exo.application import CoreEngine
+from exo.core.group_workspace import WorkspaceError, validate_workspaces
 from exo.core.groups import SavedGroup
 from exo.core.plugins import PluginError, PluginManager, discover
 from exo.core.seats import Seat
@@ -78,9 +87,12 @@ class GroupComposition:
     def __init__(self, profiles: Mapping[str, Seat], *, owner: str,
                  home: str | os.PathLike, models: dict[str, Any] | None = None,
                  cwd: str | None = None, env: Mapping[str, str] | None = None,
-                 plugins: GroupPlugins | None = None) -> None:
+                 plugins: GroupPlugins | None = None, workspace_check: bool = False) -> None:
         if not isinstance(owner, str) or not owner.strip():
             raise CompositionError("owner is required")
+        if not isinstance(workspace_check, bool):  # strict: no truthiness, no 1/0, no "yes"
+            raise CompositionError(
+                f"workspace_check must be True or False, not {type(workspace_check).__name__}")
         if isinstance(profiles, (str, bytes)) or not profiles:
             raise CompositionError("an explicit authorized profile -> Seat mapping is required")
         seats: dict[str, Seat] = {}
@@ -97,6 +109,7 @@ class GroupComposition:
         self._cwd = cwd
         self._env = dict(env or {})
         self._plugins = plugins or GroupPlugins()
+        self._workspace_check = workspace_check
         self._engines: dict[str, CoreEngine] = {}  # retained for async aclose()
 
     @property
@@ -112,7 +125,33 @@ class GroupComposition:
         """Engines retained so far (successful call or partial failure), keyed by profile."""
         return dict(self._engines)
 
+    @property
+    def workspace_check(self) -> bool:
+        """Whether the opt-in G10 workspace preflight runs before construction."""
+        return self._workspace_check
+
     # -------------------------------------------------- per-member binding (prevalidated)
+
+    def _effective_cwd(self, profile: str) -> str:
+        """The folder this member's engine will work in, resolved exactly as the engine resolves it.
+
+        ``CoreEngine`` prefers the seat's own ``[session] cwd`` when that folder exists (and otherwise
+        silently falls back), then the injected ``cwd``, then the process folder. Checking anything else
+        would validate a folder the member never uses.
+        """
+        seat = self._seats[profile]
+        if seat.cwd:
+            p = Path(seat.cwd).expanduser()
+            if p.is_dir():
+                return str(p)
+        return self._cwd or os.getcwd()
+
+    def _check_workspaces(self, members: list[str]) -> None:
+        """G10 preflight over every member's effective cwd; a refusal is a ``CompositionError``."""
+        try:
+            validate_workspaces({profile: self._effective_cwd(profile) for profile in members})
+        except WorkspaceError as exc:
+            raise CompositionError(f"workspace check failed: {exc}") from exc
 
     def _member_binding(self, profile: str) -> dict[str, Any]:
         """The member's plugin config + enabled list; every value validated before any build."""
@@ -154,6 +193,10 @@ class GroupComposition:
         unknown = [p for p in members if p not in self._seats]
         if unknown:
             raise CompositionError("group members outside the authorized mapping: " + ", ".join(unknown))
+        # Opt-in G10 preflight: also before any binding, plugin load or engine construction (and for a
+        # one-member group too, so its own path checks are the same as everyone else's).
+        if self._workspace_check:
+            self._check_workspaces(members)
         try:
             # Prevalidate ALL member bindings (incl. every principal_store) before any
             # plugin is loaded or engine constructed, so a bad seat fails closed with no
