@@ -1827,6 +1827,11 @@ class _LoopBudget(Exception):
 # those `time`, `-p` and `--` words and opens the compound after them, as without them. Main's reading stays beside.
 _timed: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_timed", default=None)
 _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_opening", default=False)
+# #1047: set while classify reads a call (_printed_reading): [met], which _stdin_texts sets when a shell reads a text
+# that printf or `echo -e` writes (a _Printed). classify then reads the call again with _printing on, where each such
+# shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
+_printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
+_printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -4455,11 +4460,18 @@ def _literal_pipe(w: _Cmd | None) -> str | None:
 
 
 def _stdin_texts(k: _Cmd, piped: str | None, shell: bool = False) -> list[str]:
+    """The texts k reads on its stdin: its heredoc bodies, here-strings and the text piped in. In the call's printed
+    reading (_printing, #1047) a shell (``shell``) reads what printf or `echo -e` writes there (a _Printed's ``out``)
+    in place of the text as written, which the reading as before reads. That reading notes that it met one
+    (_printed_met)."""
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
         out.append(piped)
-    if shell:       # a shell also reads what printf or `echo -e` writes, beside the text as written (#1047)
-        out = [x for t in out for x in ([t, t.out] if isinstance(t, _Printed) else [t])]
+    if shell and any(isinstance(t, _Printed) for t in out):
+        if _printing.get():
+            out = [t.out if isinstance(t, _Printed) else t for t in out]
+        elif (met := _printed_met.get()) is not None:
+            met[0] = True
     return list(dict.fromkeys(out))
 
 
@@ -6255,8 +6267,9 @@ def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
 
 class _Printed(str):
     """A pipe's text as written, which every reader reads as before. ``out`` is what `printf` or `echo -e` writes
-    there once bash expands its escapes and fills its format (#1047). A shell reads both (_stdin_texts), so the
-    line decides at least as it did before."""
+    there once bash expands its escapes and fills its format (#1047). A shell reads it beside the text as written,
+    in a reading of the call of its own (_printed_reading), with budgets and memos of its own: the reading as before
+    stays main's, and decide keeps the strictest."""
     out = ""
 
 
@@ -9254,16 +9267,48 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
     chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
     prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading); the
-    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. ``cwd`` is
-    the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
-    (_in_tool_folder sets it)."""
+    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. A shell that
+    reads what printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as
+    before and in the opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are
+    resolved from there too (_in_tool_folder sets it)."""
     timed = [False]
     met = _timed.set(timed)
     try:
-        c = _one_reading(action, cwd)
+        c = _printed_reading(action, cwd)
     finally:
         _timed.reset(met)
     return _opened_reading(c, action, cwd) if timed[0] and not _opening.get() and not _config_off.get() else c
+
+
+def _printed_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1047: when a shell in it reads a text that printf or `echo -e` writes
+    (_stdin_texts notes it), a second reading of the call beside it, in which each such shell also reads what bash's
+    builtin writes there (a _Printed's ``out``): its escapes expanded and its format filled. The second reading has
+    budgets and memos of its own, as _opened_reading's has, and the output spends them. The reading as before reads
+    no such output, so it is main's reading, with its budgets, memos, parts, lead and listed violations, and its
+    ``ordinary`` reading (D-074) stays beside the second reading's: decide keeps the strictest, so a line never
+    decides lower than before. The ``ordinary`` reading of a call reads no output of its own, as the second reading
+    reads its own, and a reading inside the second reading reads the output with no third reading."""
+    met = [False]
+    token = _printed_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _printed_met.reset(token)
+    if not met[0] or _printing.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _printing.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _printing.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
 
 
 def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
@@ -9273,11 +9318,12 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     `cd`s into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before
     stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once (the reading
     as before reads its own without opening it, _classify_read): decide keeps the strictest, and no_grant (and
-    through it the hook's bypass floor) counts each reading, so a line never decides lower than before."""
+    through it the hook's bypass floor) counts each reading, so a line never decides lower than before. The opened
+    reading has its printed reading too (#1047, _printed_reading)."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _opening.set(True), _timed.set(None)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_printed_reading)(action, cwd)
     finally:
         _timed.reset(met)
         _opening.reset(token)
@@ -9318,10 +9364,11 @@ def _one_reading(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
-def _beside(c: Classification, j: Classification) -> Classification:
+def _beside(c: Classification, j: Classification, lead: bool = False) -> Classification:
     """Readings c and j of one call: the more severe leads (on a tie, c), and the other ends its ``also`` readings,
-    so decide keeps the stricter (#584)."""
-    first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+    so decide keeps the stricter (#584). With ``lead``, the one _combine would keep of the two leads (_lead: a
+    credentials reading, then a store write, then the more severe), as a part of one line would (#1047)."""
+    first, last = (j, c) if (_lead([c, j]) is j if lead else _severity(j) > _severity(c)) else (c, j)
     x = first
     while x.also is not None:
         x = x.also

@@ -5,10 +5,10 @@ nor fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, t
 and the `echo -e` and `\x0a` forms were only `opaque_exec`: the target read as a file named `config.json\n`.
 `printf 'r\x6d -rf /srv/data' | bash` hid its delete. Under `deny: [store_write]` and `deny: [delete]` those lines
 asked, and a policy that allows `opaque_exec` let them run. A shell now also reads what the command writes, with
-its escapes expanded and its `%s`, `%b` and `%%` filled, beside the text as written, so no decision is lower than
-main's. A text the gate cannot be sure of (an expansion, another conversion, an option) is read as before, and so
-is `echo` without `-e`, which writes its words as they are in bash. Classification and decision only: nothing here
-runs the lines.
+its escapes expanded and its `%s`, `%b` and `%%` filled, beside the text as written. It reads it in a second reading
+of the call, with budgets and memos of its own, beside main's reading, and decide keeps the strictest. A text the
+gate cannot be sure of (an expansion, another conversion, an option) is read as before, and so is `echo` without
+`-e`, which writes its words as they are in bash. Classification and decision only: nothing here runs the lines.
 """
 import pytest
 
@@ -38,6 +38,7 @@ POLICIES = [normalize_policies({}), normalize_policies({"gates": {"deny": ["stor
 STORE = ("store_write", "ask", "deny", "ask", "ask")
 DELETE = ("delete", "ask", "ask", "deny", "ask")
 OPAQUE = ("opaque_exec", "ask", "ask", "ask", "allow")
+FORCE = ("force_push", "ask", "ask", "ask", "ask")
 CP = "cp /tmp/x ~/.exo/config.json"
 RM = "rm -rf /srv/data"
 U = "\\" + "u"          # a backslash and u, spelt apart so no tool reads it as a character
@@ -139,6 +140,86 @@ CONTROLS = [
 @pytest.mark.parametrize("line, want", CONTROLS)
 def test_controls_keep_main_reading(line, want):
     assert _decided(line) == want
+
+
+# The first build read the output in the line's own reading, so it spent the call's budgets there. A budget that a
+# later command on the line reads then ran out before that command, and the command was cut short: it decided lower
+# than on main. These rows spend one budget in the output first and then run a strict command that reads it. The
+# output is now read in a reading of the call of its own, with budgets and memos of its own, and main's reading stays
+# beside it, so each row decides as on main d995d667.
+N16, N24 = " ".join(map(str, range(1, 17))), " ".join(map(str, range(1, 25)))
+SUDO_LATER = "sudo -u $U echo rm -rf /srv/data"
+WORD_LATER = """bash -c 'echo "${a:-$(rm -rf /srv/data)}"'"""
+BUDGET_ROWS = [
+    # _SUDO_BRANCHES: 16 readings in a call of a sudo word that may take the next word as its value (`-u $U`)
+    (rf"printf 'sudo -u \x24U echo %s\n' {N16} | bash; {SUDO_LATER}", DELETE),
+    (rf"printf 'sudo -u $U echo %s\n' {N16} | sudo -s; {SUDO_LATER}", DELETE),
+    ("echo -e '" + r"\n".join(rf"sudo -u \x24U echo {i}" for i in range(1, 17)) + f"' | bash; {SUDO_LATER}", DELETE),
+    ("echo -ne '" + r"\n".join(rf"sudo -u $U echo {i}" for i in range(1, 17)) + f"' | sh; {SUDO_LATER}", DELETE),
+    # _WORD_PARTS: 24 parts in a call that only bash's reading opens (a $( ) in a ${..} word)
+    (rf"""printf 'echo "\x24{{a:-\x24(true)}}" %s\n' {N24} | bash; {WORD_LATER}""", DELETE),
+    (rf"""printf 'echo "${{a:-$(true)}}" %s\n' {N24} | bash; eval 'echo "${{a:-$(rm -rf /srv/data)}}"'""", DELETE),
+    (rf"""printf 'echo "${{a:-$(true)}}" %s\n' {N24} | bash; sh -c 'x="${{a:-$(git push --force origin main)}}"'""",
+     FORCE),
+    ("echo -e '" + r"\n".join(rf'echo "\x24{{a:-\x24(true)}}" {i}' for i in range(1, 25)) + f"' | bash; {WORD_LATER}",
+     DELETE),
+]
+
+
+@pytest.mark.parametrize("line, want", BUDGET_ROWS)
+def test_the_output_spends_no_budget_of_main_reading(line, want):
+    assert _decided(line) == want
+
+
+# _EXO_PARTS: the path parts one call may build for names read from a store folder. The output joins 1,600 names to
+# a folder 62 levels down (spelt `\x2eexo`, so the text as written names no store) and spends them. The `rm` in the
+# store after it then failed closed as a credentials part that asks, and a policy that denies deletes and allows the
+# rest by rule asked where main denies.
+DEEP, NAMES = "/".join(f"d{j}" for j in range(62)), " ".join(f"n{i}" for i in range(1600))
+DENY_DELETE_ALLOW_REST = normalize_policies({"gates": {
+    "categories": {"delete": "deny"}, "rules": [{"match": {"command": ".*"}, "decision": "allow", "reason": "rest"}]}})
+
+
+@pytest.mark.parametrize("line", [rf"printf 'cd ~/\x2eexo/{DEEP} && cat {NAMES}\n' | bash; cd ~/.exo && rm -rf run keys",
+                                  rf"echo -e 'cd ~/\x2eexo/{DEEP} && cat {NAMES}' | bash; cd ~/.exo && rm -rf run"])
+def test_the_output_spends_no_store_path_budget_of_main_reading(line):
+    assert decide(sh(line.rsplit("; ", 1)[1]), DENY_DELETE_ALLOW_REST).outcome == "deny"
+    assert decide(sh(line), DENY_DELETE_ALLOW_REST).outcome == "deny"
+    assert _decided(line)[1:] == ("ask", "deny", "deny", "ask")
+
+
+# The other budgets fail closed: past the brace budget a word counts as a store or secret hit, and past #479's budget
+# the second reading of a loop is one store write. The first build decided these as main too. They stay so.
+FAIL_CLOSED_ROWS = [
+    (r"printf 'cat /tmp/\x7b1..1000} %s\n' 1 2 3 4 5 | bash; cp /tmp/x ~/.exo/{config.json,policies/p.yaml}", STORE),
+    (r"printf 'cat /tmp/\x7b1..1000} %s\n' 1 2 3 4 5 | bash; rm -rf /srv/{a,b}", DELETE),
+    (rf"printf 'echo %s\n' {' '.join(map(str, range(70)))} | bash; for i in 1 2; do cp /tmp/x config.json; cd ~/.exo; done",
+     ("credentials", "ask", "deny", "ask", "ask")),
+]
+
+
+@pytest.mark.parametrize("line, want", FAIL_CLOSED_ROWS)
+def test_budgets_that_fail_closed_decide_as_on_main(line, want):
+    assert _decided(line) == want
+
+
+# decide lists twenty violations of other posts on the line and counts the rest. Posts in the output took that room
+# before a later post on the line, so a violation main lists was left out of the list. Each reading lists its own
+# now, and decide keeps every entry any of them lists, as on main d995d667.
+POSTING = normalize_policies({"posting": {"footer": "-- sent by an agent", "forbid_words": ["secret"]}})
+LATER_POST = "gh pr comment 99 --body secret"
+
+
+@pytest.mark.parametrize("line", [
+    rf"printf 'gh pr comment %s --body hello\n' {N24} | bash; {LATER_POST}",
+    "echo -e '" + r"\n".join(f"gh pr comment {i} --body hello" for i in range(1, 25)) + f"' | bash; {LATER_POST}",
+])
+def test_posts_in_the_output_leave_main_listed_violations_listed(line):
+    main = decide(sh(LATER_POST), POSTING).violations
+    got = decide(sh(line), POSTING).violations
+    assert main == ["missing footer: -- sent by an agent", "forbidden word: secret"]
+    assert "GitHub PR comment on #99: forbidden word: secret" in got
+    assert "GitHub PR comment on #99: missing footer: -- sent by an agent" in got
 
 
 @pytest.mark.parametrize("line", [rf"printf '{RM}\n' | gh pr comment 1 -F -",
