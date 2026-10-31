@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "classification": "public-synthetic",
+  "namespace": "normalize-names-v1",
+  "baseline": {"notes": "original"},
+  "development": [
+    {"id": "dev-alice", "domain": "text", "input": " Alice SMITH "},
+    {"id": "dev-bob", "domain": "text", "input": "  BOB Brown "}
+  ],
+  "held_out": [
+    {"id": "held-carol", "domain": "text", "input": " CAROL Jones  "},
+    {"id": "held-dave", "domain": "text", "input": " Dave WHITE "}
+  ],
+  "references": {
+    "dev-alice": "alice smith",
+    "dev-bob": "bob brown",
+    "held-carol": "carol jones",
+    "held-dave": "dave white"
+  }
+}

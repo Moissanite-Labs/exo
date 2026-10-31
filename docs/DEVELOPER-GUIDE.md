@@ -1170,6 +1170,17 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
 
+`exo improve --offline` (D-096) is a storeless CLI example in
+`src/exo/improvement/offline.py`: use the existing lazy registration path without
+`STORE_CMDS` or the common principal flags. Its workspace guard reads only the
+recorded root list through `store.explicit_roots()` and checks the same resolved
+root snapshot for working and export paths; do not construct a store or load its
+contents. Boundary diagnostics identify configuration keys or environment settings,
+not private path values. Fixture JSON cannot select imports or callbacks. Preserve
+editor/evaluator separation and the disjoint held-out gate when changing the
+trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
+`tests/test_cli_lazy.py` and `tests/docs` after a change.
+
 ### Web composer draft ownership
 
 `plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
