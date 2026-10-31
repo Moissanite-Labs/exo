@@ -480,6 +480,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** pricing (`cost_usd` stays null for models missing from the catalog) is a separate fix; a
   provider time to first token is measured at the loop, not inside each provider.
 
+
+- **Amendment 2026-10-29 (#792):** three completed matching inspection calls with matching bounded result
+  fingerprints can add one transient model-visible progress-check note. It is harness evidence, never the
+  principal's voice or a permission grant, and asks for a distinct next step or a blocker without forcing one.
+  A changed result, successful other work or steering clears it; failed work does not establish progress.
+  At most one note is active and four notice events are recorded per turn. Existing limits, retries and
+  cancellation stay intact. The exact recognizer and its false-positive limits are in
+  `docs/REPEAT-FEEDBACK-ACCEPTANCE.md`; scripted fixtures prove delivery, not improved real-task behavior.
+
 ## D-026 (2026-10-12) Peers and one ingress path
 - **Amendment 2026-10-28 (#638):** peer presence must be a JSON object with an integer pid; boolean,
   floating-point and string pids are invalid. Invalid records are skipped and normal discovery prunes
