@@ -4,9 +4,9 @@
 docs/GATE.md still said that `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf /srv/data'` are
 a `read`, and D-074's limits in DECISIONS.md said the same of the first line and of the same line with `rm -rf`.
 A stdin the gate cannot read still asks only as `opaque_exec`, not as a store write, and each text says so too.
-The check takes each `sudo` line either text quotes with what it says the line is now, and asks the gate for that
-line's category and for what a policy decides on it, so the text cannot go stale quietly again. Classification
-only: nothing here runs the lines.
+The check takes each `sudo` line either text quotes with what it says the line is now and what it says a policy
+does with it. It asks the gate for that line's category and for what a policy decides on it, so the text cannot go
+stale quietly again. Classification only: nothing here runs the lines.
 """
 import re
 from pathlib import Path
@@ -47,6 +47,12 @@ OUTCOMES = {
     "opaque_exec": [("the default policy", DEFAULT, "ask"), ("deny: [store_write]", DENY_STORE, "ask"),
                     ("opaque_exec: allow", ALLOW_OPAQUE, "allow")],
 }
+# What a sentence says a policy does with the sudo lines it names: "`deny: [store_write]` denies it", "... asks for
+# them", "a policy that allows `opaque_exec` lets them run". A sentence that names no sudo line speaks of the lines
+# of the sentence just before it ("... are `opaque_exec`. So `deny: [store_write]` asks for them").
+POLICY_SAYS = {"deny: [store_write]": re.compile(r"`deny: \[store_write\]` (?:still )?(denies|asks)\b"),
+               "opaque_exec: allow": re.compile(r"allows `opaque_exec` (?:still )?(lets \w+ run|asks|denies)\b")}
+POLICIES = {name: policy for outcomes in OUTCOMES.values() for name, policy, _ in outcomes}
 
 
 @pytest.fixture(autouse=True)
@@ -61,12 +67,29 @@ def _read_claims(para: str) -> list[tuple[str, str]]:
     return [(line, WORDS[word]) for group, word in CLAIM.findall(para) for line in re.findall(r"`([^`]+)`", group)]
 
 
-def _claims(name: str) -> list[tuple[str, str]]:
+def _read_policy_claims(para: str) -> list[tuple[str, str, str]]:
+    out: list[tuple[str, str, str]] = []
+    prev: list[str] = []
+    for sentence in re.split(r"(?<=\.) (?=[A-Z`])", para):
+        own = [line for line, _ in _read_claims(sentence)]
+        for policy_name, pattern in POLICY_SAYS.items():
+            for verb in pattern.findall(sentence):
+                outcome = {"denies": "deny", "asks": "ask"}.get(verb, "allow")
+                out += [(line, policy_name, outcome) for line in own or prev]
+        prev = own
+    return out
+
+
+def _text(name: str) -> str:
     path, opening, ends = TEXTS[name]
     text = (ROOT / path).read_text(encoding="utf-8")
     start = text.index(opening)
     end = min(i for i in (text.find(e, start + len(opening)) for e in ends) if i != -1)
-    return _read_claims(" ".join(text[start:end].split()))
+    return " ".join(text[start:end].split())
+
+
+def _claims(name: str) -> list[tuple[str, str]]:
+    return _read_claims(_text(name))
 
 
 def _classify(line: str) -> gate.Classification:
@@ -118,3 +141,29 @@ def test_a_policy_decides_each_line_as_the_text_says(name):
         for policy_name, policy, outcome in OUTCOMES.get(category, ()):
             got = gate.decide(c, policy).outcome
             assert got == outcome, f"{name}: `{line}` under {policy_name} is {got}, not {outcome}"
+
+
+@pytest.mark.parametrize("para, said", [
+    ("So `sudo -s <<< 'a'` is a store write, and `deny: [store_write]` denies it.",
+     [("sudo -s <<< 'a'", "deny: [store_write]", "deny")]),
+    ("`sudo -s < f` and `cat f | sudo -s` are `opaque_exec`. So `deny: [store_write]` asks for them, and a policy "
+     "that allows `opaque_exec` lets them run.",
+     [("sudo -s < f", "deny: [store_write]", "ask"), ("cat f | sudo -s", "deny: [store_write]", "ask"),
+      ("sudo -s < f", "opaque_exec: allow", "allow"), ("cat f | sudo -s", "opaque_exec: allow", "allow")]),
+    ("`sudo -s < f` is `opaque_exec`: a policy that allows `opaque_exec` still asks.",
+     [("sudo -s < f", "opaque_exec: allow", "ask")]),
+    ("No line here. `deny: [store_write]` denies it.", []),
+    ("`sudo -s < f` is `opaque_exec`. Another sentence. `deny: [store_write]` denies it.", []),
+])
+def test_the_policy_pattern_reads_each_phrasing(para, said):
+    assert _read_policy_claims(para) == said
+
+
+@pytest.mark.parametrize("name", TEXTS)
+def test_what_the_text_says_a_policy_does_is_what_it_does(name):
+    said = _read_policy_claims(_text(name))
+    assert {("deny: [store_write]", "ask"), ("opaque_exec: allow", "allow")} <= {(p, o) for _, p, o in said}, \
+        f"{name} does not say of a sudo line it names that `deny: [store_write]` asks and an `opaque_exec` allow runs it"
+    for line, policy_name, outcome in said:
+        got = gate.decide(_classify(line), POLICIES[policy_name]).outcome
+        assert got == outcome, f"{name} says `{line}` under {policy_name} is {outcome}, the gate decides {got}"

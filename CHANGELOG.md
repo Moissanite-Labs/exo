@@ -18,7 +18,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
   asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. D-074's limits say so too,
   and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that paragraph and those limits
-  name. Docs only: the gate is unchanged.
+  name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
   pathological search leaves the event loop running allowed only a 0.1 s gap; a busy macOS runner took 0.26 s to
   start the worker. It now allows half the 1 s timeout, which still fails when the search holds the loop. The
