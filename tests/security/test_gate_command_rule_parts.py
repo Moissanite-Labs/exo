@@ -149,7 +149,9 @@ NESTED = [
     (f"bash <<'EOF'\n{PUSH}\nEOF", "^bash", PUSH, {"categories": OPAQUE_OK}),
     (f"bash -c '{PUSH}'", "^bash -c", PUSH, {"categories": OPAQUE_OK}),
     (f"true; eval '{PUSH}'", "eval", PUSH, {"categories": OPAQUE_OK}),
-    (f"true; xargs {PUSH}", "^true", f"xargs {PUSH}", {"categories": OPAQUE_OK}),
+    (f"true; xargs {PUSH}", "^true", PUSH, {"categories": OPAQUE_OK}),                # #458: was `xargs {PUSH}`
+    (f"true; find . -exec {PUSH} ';'", "^true", PUSH, {"categories": OPAQUE_OK}),
+    (f"true; git bisect run {PUSH}", "^true", PUSH, {"categories": OPAQUE_OK}),
 ]
 
 
@@ -802,6 +804,58 @@ def test_a_rule_that_names_the_command_without_its_here_string_does_not_lower_it
     assert outcome(line, p) == expected                                                        # main: the same
     own = next(q.own for q in gate._each_part(sh(line)) if q.category in ("delete", "force_push"))
     assert own.whole == line.split("; ", 1)[1] and own == own.whole.split(" <<<")[0], (own, own.whole)
+
+
+# --- the command find -exec, xargs or git bisect run runs has its own text (#458) ----------------------------------
+# Its parts carried the text of the command that runs it, so a rule written for `^find`, `xargs` or `^git bisect`
+# named them and, under opaque_exec: allow, lifted a category deny on what they run. Main allowed each row.
+
+WRAPPED = [
+    # (line, a rule for the program that runs the command)
+    (f"ls; find . -exec {PUSH} \\;", rule("^ls|^find")),
+    (f"find . -exec {PUSH} \\;", rule("^find")),
+    (f"find . -execdir {PUSH} \\;", rule("^find")),
+    (f"find . -ok {PUSH} \\;", rule("^find")),
+    (f"find . -okdir {PUSH} +", rule("^find")),
+    (f"echo x | xargs {PUSH}", rule("xargs")),
+    (f"echo x | xargs -n1 -I{{}} {PUSH}", rule("xargs")),
+    (f"git bisect run {PUSH}", rule("^git bisect")),
+]
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_for_the_program_does_not_lower_the_command_it_runs(line, r):
+    for cats in ({**PUSH_DENY, **OPAQUE_OK}, PUSH_DENY):
+        d = decide(sh(line), pol(r, categories=cats))
+        assert (d.outcome, d.rule) == ("deny", "category"), (cats, d)               # main: allow, then ask or deny
+    pushes = [p for p in gate._each_part(sh(line)) if p.category == "force_push"]
+    assert pushes and {p.own for p in pushes} == {PUSH}, [(p.summary, p.own) for p in pushes]
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_that_names_the_command_it_runs_too_still_allows_it(line, r):
+    both = rule([*r["match"]["command"].split("|"), f"^{PUSH}"])
+    assert outcome(line, pol(both, categories={**PUSH_DENY, **OPAQUE_OK})) == "allow"
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_that_names_only_the_command_it_runs_does_not_lower_it(line, r):
+    # The program's own text stays the `whole` of the command it runs, so a rule must match that too, as before: an
+    # anchored rule for the bare push does not lower it.
+    p = pol(rule(["^ls", "^echo", f"^{PUSH}$"]), categories={**PUSH_DENY, **OPAQUE_OK})
+    assert outcome(line, p) == "deny"                                                         # main: deny
+
+
+def test_the_program_that_runs_the_command_keeps_its_own_text():
+    line = f"find . -name x -exec {PUSH} \\;"
+    owns = {(p.category, p.own) for p in gate._each_part(sh(line))}
+    assert ("read", line) in owns and ("opaque_exec", line) in owns, owns
+    line = "find . -name '*.pyc' -exec rm -f {} +"
+    assert {p.own for p in gate._each_part(sh(line)) if p.category == "delete"} == {"rm -f {}"}
+    assert outcome(line, pol(rule("^find"), categories={**DELETE_DENY, **OPAQUE_OK})) == "deny"       # main: allow
+    # The delete gets its matrix cell, as when it runs alone, until a rule names it too.
+    assert outcome(line, pol(rule("^find"), categories=OPAQUE_OK)) == outcome("rm -f x", pol()) == "ask"  # main: allow
+    assert outcome(line, pol(rule(["^find", "^rm -f {}$"]), categories=OPAQUE_OK)) == "allow"
 
 
 # --- what stays the same --------------------------------------------------------------------------------------------

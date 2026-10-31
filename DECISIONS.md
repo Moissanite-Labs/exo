@@ -6017,6 +6017,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   a word bash rejects or the gate cannot read (an unclosed quote, `$(`, `${` or `$((`). So such a part
   that decides the line, or would be stricter alone, is lowered by no rule keyed on `command`, on a line of one
   command or in `execute_code` as beside a second command. A category or tool key still lowers it.
+  The command that `find -exec`, `-execdir`, `-ok`, `-okdir`, `xargs` or `git bisect run` runs carried the text of
+  the command around it, so a rule for `^find`, `xargs` or `^git bisect` lowered it: with `opaque_exec: allow`,
+  `find . -exec git push --force origin main \;`, `echo x | xargs git push --force origin main` and
+  `git bisect run git push --force origin main` were allowed under a force_push deny. Now that command has its words
+  as its own text (`_run_own`), as an `-x` value has, with the program's own text as its `whole`, which a rule must
+  match too: a rule for the bare push (`'^git push --force origin main$'`) lowers no line it did not lower before.
+  The program that runs it keeps its own text. A rule that names both still lowers it.
   Not done: a line of one command with a comment and no `<<` is still matched on its whole text
   (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
   argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches

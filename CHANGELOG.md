@@ -322,16 +322,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
   `tests/security/test_gate_store_lift_own_text_547.py`.
 
-- Gate: a here-string, a here-doc body or a command the gate only guessed in code no longer meets an allow or log rule
-  written for another text (#458). Under `categories: {delete: deny}` and an allow rule for `npm test`, `rm -rf build
-  <<< 'npm test'` was allowed by the rule, and so was a here-doc body holding `npm test`. A here-string is now left out
-  of its command's own text, as a here-doc body is, and a line whose text holds `<<` goes through the own text test
-  (#394). A rule must still match the text as written too, so no line is decided lower than before. A part with no own
-  text, such as a string literal in code read as a command, is lowered by no rule keyed on `command` on a line of one
-  command too: with `opaque_exec: allow` and an allow rule for `^python3 -c`, a force push that `python3 -c` code runs
-  through `os.system` was allowed under `categories: {force_push: deny}`. A rule that names the command too, or a
-  category or tool key, still lowers each. A line of one command with a comment is still matched on its whole text.
-  Tests: `tests/security/test_gate_command_rule_parts.py`.
+- Gate: an allow or log rule keyed on `command` must name the command's own text, not its stdin, a command the gate only
+  guessed in code or the text of the program that runs it (#458). Under `categories: {delete: deny}` and an allow rule
+  for `npm test`, `rm -rf build <<< 'npm test'` was allowed by the rule, and so was a here-doc body holding `npm test`.
+  A here-string is now left out of its command's own text, as a here-doc body is, and a line whose text holds `<<` goes
+  through the own text test (#394). A rule must still match the text as written too, so no line is decided lower than
+  before. A part with no own text, such as a string literal in code read as a command, is lowered by no rule keyed on
+  `command` on a line of one command too: with `opaque_exec: allow` and an allow rule for `^python3 -c`, a force push
+  that `python3 -c` code runs through `os.system` was allowed under `categories: {force_push: deny}`. The command that
+  `find -exec`, `xargs` or `git bisect run` runs has its own words as its own text, so a rule for `^find`, `xargs` or
+  `^git bisect` no longer lowers it. A rule that names the command too, or a category or tool key, still lowers each.
+  A line of one command with a comment is still matched on its whole text. Tests:
+  `tests/security/test_gate_command_rule_parts.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).

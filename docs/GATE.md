@@ -1393,7 +1393,11 @@ gate does not read:
   `rm -rf build` as its own text, and a here-doc's command keeps only its operator
   (`rm -rf build <<EOF`). A pipeline text leaves its here-strings out too. A rule must still
   match the text as written as well, as before, so `'^rm -rf build$'` does not lower
-  `ls; rm -rf build <<< 'npm test'`. A nested command
+  `ls; rm -rf build <<< 'npm test'`. The command that `find -exec`, `-execdir`, `-ok` or
+  `-okdir`, `xargs` or `git bisect run` runs has the words it runs as its own text (#458), as the
+  value of `git rebase -x` has: `git push --force origin main` in
+  `find . -exec git push --force origin main \;`. The program that runs it keeps its own, and a
+  rule must match that text as well, as before. A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or

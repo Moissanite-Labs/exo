@@ -4695,6 +4695,21 @@ def _read_as_reader(read: Callable[[str], list[Classification]], text: str) -> l
         slot[0] = was
 
 
+def _run_own(words: list, read: Callable[[], list[Classification]]) -> list[Classification]:
+    """read(), with ``words`` as written for the own text of each part it makes (#458): the command that `find -exec`,
+    `xargs` or `git bisect run` runs is a command of its own, as the value of `git rebase -x` is, so a rule written
+    for the program that runs it does not lower it. The program's own text stays its ``whole`` (_OwnText), so a rule
+    must still match it too, as before. A part that had no own text, or a stand-in, keeps what it had."""
+    slot = _own_text.get()
+    if slot is None or slot[0] is None or isinstance(slot[0], _StandIn):
+        return read()
+    was, slot[0] = slot[0], _own_of(" ".join(w.raw or w.text for w in words), slot[0])
+    try:
+        return read()
+    finally:
+        slot[0] = was
+
+
 def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Classification:
     """``c``, a part _once stored, with ``own`` as the own text of each part in it that has _READER (#394). Only those
     parts and the parts built from them are copied, once per line for each part and own text: the many readers
@@ -5107,7 +5122,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         i = 1
         while i < len(words) and words[i].text.startswith("-"):
             i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
-        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + inner_words(words[i:])
+        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + \
+            _run_own(words[i:], lambda: inner_words(words[i:]))
     if prog == "find":
         parts = [_make("read", summary="find", command=cmd)]
         i = 1
@@ -5116,7 +5132,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 j = i + 1
                 while j < len(words) and words[j].text not in (";", "+"):
                     j += 1
-                parts += [_opaque(f"find {words[i].text} runs a command per file", cmd)] + inner_words(words[i + 1:j])
+                ran = words[i + 1:j]
+                parts += [_opaque(f"find {words[i].text} runs a command per file", cmd)] + \
+                    _run_own(ran, lambda: inner_words(ran))
                 i = j
             elif words[i].text == "-delete":
                 parts.append(_make("delete", summary="find -delete", target=argv[1] if len(argv) > 1 else "",
@@ -5793,7 +5811,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
-            parts += _classify_simple(_wrapped(k, words[i + 2:]), cmd, depth + 1, ctx, piped)
+            parts += _run_own(words[i + 2:], lambda: _classify_simple(_wrapped(k, words[i + 2:]), cmd, depth + 1, ctx,
+                                                                         piped))
         if sub == "submodule":
             j = 0
             while j < len(rest) and rest[j].startswith("-") and rest[j] != "--":
