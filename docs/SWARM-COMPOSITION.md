@@ -130,6 +130,54 @@ skipped when it returns nothing). The combined list is passed to
   plugins and observe their registered command names; live tool execution, channel start
   and compat with third-party plugins are not exercised here.
 
+## Trusted Python caller wiring: `compose.create(..., group_host=...)`
+
+A trusted Python caller (never config, a protocol command, or a model tool) may bind one
+explicitly-constructed `GroupHost` into the single-seat compose path:
+
+```python
+from exo import compose
+from exo.core.group_host import GroupHost
+from exo.core.group_composition import GroupComposition
+from exo.core.groups import GroupStore
+from exo.core.sessions import SessionStore
+
+store = GroupStore(SessionStore(str(home / "sessions.sqlite")))  # MUST be home's own session DB
+comp = GroupComposition(profiles, owner="default", home=home, models=models,
+                        cwd=cwd, env={}, plugins=None)            # the engine factory
+host = GroupHost(store, owner="default", known_profiles={"lead", "one", "two"},
+                 engine_factory=comp)
+engine = compose.create(group_host=host)  # binds host as engine._group_host
+```
+
+Exact signatures (no other wiring exists — no authorization inference, no client wiring,
+no auto-discovery):
+
+- `GroupStore(sessions: SessionStore)` — pass a `SessionStore` whose path is exactly
+  `<home>/sessions.sqlite`.
+- `GroupHost(groups: GroupStore, *, owner: str, known_profiles: Collection[str],
+  engine_factory: EngineFactory)` where `EngineFactory = Callable[[SavedGroup],
+  Mapping[str, object]]` — typically a `GroupComposition` instance.
+- `GroupComposition(profiles: Mapping[str, Seat], *, owner: str,
+  home: str | os.PathLike, models: dict | None = None, cwd: str | None = None,
+  env: Mapping[str, str] | None = None, plugins: GroupPlugins | None = None)`.
+- `compose.create(seat: str | None = None, *, group_host: GroupHost | None = None)`.
+
+Guarantees of the binding:
+
+- **Validated before any engine exists.** `compose.create` checks — before `PluginManager`
+  runs or `CoreEngine` is constructed — that `group_host` is a `GroupHost`, that
+  `host.owner` equals the engine's agent (the seat name, or `"default"` without a seat),
+  and that the host's `GroupStore` wraps `<home>/sessions.sqlite`. Any mismatch raises
+  `HostError` and nothing is created.
+- **Closed first.** `CoreEngine.close()` awaits `host.aclose()` before releasing any
+  owner resource (jobs target, writer lock, channels, peers, scheduler, MCP, store). A
+  host failure or caller cancellation propagates out of `close()` and all owner resources
+  stay available for an explicit retry.
+- **Host lifecycle stays with the caller.** `host.create(mode=..., members=...,
+  conductor=None)` and `start/stop/pause` are unchanged; the compose path never drives
+  them.
+
 ## Example
 
 ```python
