@@ -1366,9 +1366,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   one command, the last four values are kept too, before the line's own values are added (review 5722148651). Each
   value is read on every operand, so 6,000 prefix values before 400 URL operands took 20 s of CPU in classify.
   bash, `env` and `sudo` pass gh the last one, but an option can take a later word as its value
-  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. gh
-  api's `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as
-  gh's `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
+  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. Four
+  such option values after the real one still push it out, and that line asks as on main (#1041). gh api's
+  `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as gh's
+  `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
   `GH_REPO=myorg/app gh pr comment 5` still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
   change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
   `editor` commands. So it asks, as `opaque_exec` named in the summary. Left open, each still asking as on a repo

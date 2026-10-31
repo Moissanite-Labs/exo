@@ -356,8 +356,11 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   loop body sets after its gh command, which gh reads on the next pass
   (`for i in 1 2; do gh pr comment 5 -b x; export GH_REPO=pub/repo; done`). A function whose gh
   runs where it is called, after the value is set
-  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). And `GH_HOST`, which names gh's
-  host. Each of these asks as on a repo the line does not name, as before.
+  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). A prefix value followed by four
+  words that an option takes as its value, each written like an assignment
+  (`GH_REPO=pub/repo sudo -E -p GH_REPO=b1/y` and three more such `-p` words): they push it past
+  the four. And `GH_HOST`, which names gh's host. Each of these asks as on a repo the line does not
+  name, as before.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
