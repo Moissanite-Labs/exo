@@ -87,13 +87,28 @@ def test_web_links_carry_the_page_token():
         assert bare == [], f"{rel} sends the user to the bare address, which has no page token"
 
 
-def test_quick_start_says_the_repository_is_a_private_preview():
+def test_quick_start_says_the_repository_is_public_and_an_early_preview():
     readme = _section(_read("README.md"), "Quick start")
     m = re.search(r'id="install".*?</section>', _read("site/cli/index.html"), re.S)
     assert m, "site/cli/index.html has no #install section"
     for where, text in (("README.md Quick start", readme), ("site/cli #install", m.group(0))):
-        assert "private preview" in text and "on request" in text, where
-        assert text.index("private preview") < text.index("git clone"), f"{where}: say it before the clone"
+        assert "public" in text and "early preview" in text, where
+        assert "private preview" not in text and "on request" not in text, f"{where}: the repository is public"
+        assert text.index("early preview") < text.index("git clone"), f"{where}: say it before the clone"
+        assert "git clone https://github.com/Moissanite-Labs/exo " in text, f"{where}: clone the moved repository"
+
+
+def test_no_first_user_page_still_calls_the_repository_private():
+    """The repository moved to Moissanite-Labs and is public (#931). The install guide and every site page agree."""
+    pages = ["docs/INSTALL.md", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "site").rglob("index.html")))]
+    for rel in pages:
+        text = _read(rel)
+        for stale in ("private preview", "on request", "limited during the early build",
+                      'github.com/aska-digital/exo"'):
+            assert stale not in text, f"{rel} still says {stale!r}"
+    install = _read("docs/INSTALL.md")
+    assert "public" in install and "early preview" in install, "INSTALL.md: say the repository is public"
+    assert "git clone https://github.com/Moissanite-Labs/exo " in install, "INSTALL.md: clone the moved repository"
 
 
 def test_readme_opens_with_what_exo_is_today():

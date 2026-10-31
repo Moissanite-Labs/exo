@@ -13,6 +13,39 @@ Navigation links support browser Back and Forward. The keyboard skip link moves 
 content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
 “Connected” describes the event connection, while the conversation reports its own work state.
 
+## Native display preferences
+
+An installed desktop host may inject `window.__exoDesktopPrefs` before scripts run. The shared web client
+validates its display choices and gives them priority over browser storage left behind on a reused loopback
+port. Browser-only sessions retain their current storage behavior. The host owns persistence and its seat/core
+scope; this bridge does not open a file or infer a seat from conversation data.
+
+Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scroll` fraction cross
+`window.webkit.messageHandlers.exoDesktop.postMessage`. Thread IDs accept letters, digits, underscores and
+hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
+No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
+Open request takes priority over the restored view/thread. The conversation list is bounded, so restoration fetches the saved thread directly and keeps its returned
+metadata visible in the chooser. Only an exact session 404 clears the saved pointer and leaves the chooser
+open. A failed list or other failed transcript read preserves the saved thread and fraction; a successful
+reconnect can finish the initial restore. Restoration uses the ordinary conversation-open event buffer, so
+live messages and tool state arriving during the snapshot read are reconciled afterward. A reconnect
+waits for an active open to finish; queued recovery belongs to that selection and is discarded on navigation
+or unmount. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+saved-thread response from changing a newer selection, and unmount cancels restoration.
+
+A host with no saved thread opens the latest conversation, as a browser does. That covers a first launch and a
+launch after a 404 cleared the pointer. Only the load whose exact read returned 404 leaves the chooser open.
+
+When the stream catches up, the redraw keeps the reader's place in a native page as in a browser ("Reading
+position" under "What is where"). The host then stores that place. While the reader scrolls, the page sends the
+scroll fraction at most once every 250 ms, because each message is a write to the host's preferences. It sends the
+latest fraction at once when the page is hidden or closed (`visibilitychange`, `pagehide`), the conversation
+changes or the view unmounts.
+
+`petMode` comes from the Exopet display control, a `select.xc-pet-mode` that Exopet (#826) adds to the page. The
+page listens for its change event from the start, so a choice made while start-up is loading is saved too. Until
+#826 lands, Exo has no such control and sends no `petMode`.
+
 ## Conversation drafts and unconfirmed sends (D-045)
 
 Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
@@ -226,7 +259,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   thread existed cannot hide that thread once a newer list shows it (#859).
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
-  readers already at the newest item continue following it. The transcript is keyboard focusable.
+  readers already at the newest item continue following it. So does the redraw each time the event stream catches
+  up, on load and after a reconnect, when the page reads the conversation again. Before, that redraw moved the
+  reader back to the newest item. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -310,7 +345,9 @@ the "Layout" button under the thread list or `/layout inverse|classic`; the choi
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
+DevTools (`tests/browser.py`, skipped when Chrome is missing). The driver turns off Chrome's throttling of background
+timers and frames, and the suite's summary line names the Chrome binary and version it drove, so a CI log shows which
+build a layout failure came from (#907). When a wrapped status and composer exceed the available
 height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
 pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
 its bounded height when the chat column scrolls.
