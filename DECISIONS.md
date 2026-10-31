@@ -6554,5 +6554,5 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     again every five seconds. A total deadline would not end the process sooner: the interpreter waits for
     the worker thread at exit, as on main. It would only skip plugin cleanups. #954 tracks a bound for the
     stop steps.
-  - *Count.* The counted core is 16,389 lines (main `080e87ba`: 15,945), which D-083 reports and does not
-    assert. Product imports and private-state reads stay at 39 and 8.
+  - *Count.* With main `74fe9332` merged, the counted core is 16,475 lines (main: 16,028). D-083 reports this
+    and does not assert it. Product imports and private-state reads stay at 39 and 8.
