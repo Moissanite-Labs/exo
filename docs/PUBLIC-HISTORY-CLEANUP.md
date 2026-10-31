@@ -36,7 +36,13 @@ as a unique exposure count. Per-target counts cover only those four paths.
 `local_complete` means traversal of the pinned local roots finished without skipped objects
 or ref/HEAD motion. `ref_namespaces` reports local heads, tags, remotes, pull refs and other refs.
 `complete` additionally requires `--verify-remote` on a bare mirror configured with exactly
-`+refs/*:refs/*`, and equality with all advertised remote refs before and after the scan.
+`+refs/*:refs/*`, a network fetch URL for the actual hosting repository, and equality with all
+advertised remote refs before and after the scan. The operator must select that hosting repository;
+the tool cannot infer which repository is authoritative from matching refs alone.
+Local paths, `file://` URLs, self-remotes such as `.` and aliases expanded to local paths report
+`remote_local: true`, `remote_network: false` and incomplete remote coverage. They can omit hosting
+PR refs even when a local mirror exactly matches its source. Unsupported remote-helper transports
+also remain unverified. Effective URLs are classified locally and never printed.
 Remote namespace counts and stability flags are reported without exposing names or IDs.
 A stale mirror fails that comparison; the audit never fetches or changes refs to fix it.
 Without verified remote coverage, even a successful local traversal has `complete: false`
@@ -59,7 +65,8 @@ GitHub may retain additional unadvertised objects and copies.
 
 1. Freeze changes and record every branch/tag head privately. Coordinate the rewrite window and
    re-clone plan with all owners. Make an offline private backup that will never be published.
-2. Make a fresh private mirror for rehearsal, retaining the original clone unchanged. Verify it has
+2. Make a fresh private mirror **directly from the actual hosting URL**, not from an ordinary local
+   clone or another unverified copy, retaining the original clone unchanged. Verify it has
    every advertised ref, including retained PR refs, using `--verify-remote origin`, and preserve
    the full ref inventory privately. Audit that mirror and review the findings locally. Do not copy
    historical file contents into public review materials.

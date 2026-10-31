@@ -1,6 +1,7 @@
 """History preparation audits are read-only and never print matched content (#49)."""
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,22 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/audit_public_history.py"
 spec = importlib.util.spec_from_file_location("history_audit", SCRIPT)
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
+
+
+@pytest.fixture(autouse=True)
+def isolate_caller_git_environment(monkeypatch):
+    # A caller may use GIT_CONFIG_* for its proxy. Each audit starts clean here;
+    # explicit redirection tests still set their own selectors after this fixture.
+    for key in list(os.environ):
+        if audit.redirects_repository(key) or key == 'GIT_GRAFT_FILE':
+            monkeypatch.delenv(key)
+
+
+@pytest.fixture
+def synthetic_host(monkeypatch):
+    # Exercise actual Git ref comparisons without contacting a hosting service.
+    # Local-source refusal is tested separately without this classification stub.
+    monkeypatch.setattr(audit, 'remote_location', lambda repo, remote: 'network')
 
 
 def git(repo, *args):
@@ -288,7 +305,7 @@ def clone(repo, destination, *options):
     return destination
 
 
-def test_single_branch_and_plain_clone_cannot_claim_remote_completeness(tmp_path):
+def test_single_branch_and_plain_clone_cannot_claim_remote_completeness(tmp_path, synthetic_host):
     repo = fixture_repo(tmp_path)
     default = git(repo, 'symbolic-ref', '--short', 'HEAD').strip().decode()
     git(repo, 'checkout', '-qb', 'side')
@@ -311,7 +328,7 @@ def test_single_branch_and_plain_clone_cannot_claim_remote_completeness(tmp_path
     assert report['remote_ref_namespaces'] == report['ref_namespaces']
 
 
-def test_advertised_pr_only_history_requires_verified_mirror(tmp_path, capsys):
+def test_advertised_pr_only_history_requires_verified_mirror(tmp_path, capsys, synthetic_host):
     repo = fixture_repo(tmp_path)
     safe = git(repo, 'rev-parse', 'HEAD').strip().decode()
     add_brief(repo)
@@ -331,7 +348,7 @@ def test_advertised_pr_only_history_requires_verified_mirror(tmp_path, capsys):
     assert not report['complete'] and not report['mirror_refs_match']
 
 
-def test_remote_motion_during_scan_is_incomplete(tmp_path, monkeypatch):
+def test_remote_motion_during_scan_is_incomplete(tmp_path, monkeypatch, synthetic_host):
     source = fixture_repo(tmp_path)
     mirror = clone(source, tmp_path / 'mirror.git', '--mirror')
     original = audit.scan_literals
@@ -417,3 +434,60 @@ def test_linked_detached_head_refused_before_traversal(tmp_path, monkeypatch):
     for path in [repo, linked]:
         report = audit.audit(path)
         assert report['worktree_count'] == 2 and not report['local_complete'] and not report['complete']
+
+
+@pytest.mark.parametrize('url_kind', ['mirror-of-plain', 'self', 'file-url', 'instead-of'])
+def test_local_sources_cannot_establish_hosting_coverage(tmp_path, capsys, monkeypatch, url_kind):
+    source = fixture_repo(tmp_path)
+    safe = git(source, 'rev-parse', 'HEAD').strip().decode()
+    add_brief(source)
+    git(source, 'update-ref', 'refs/pull/1/head', 'HEAD')
+    git(source, 'reset', '--hard', safe)
+    plain = clone(source, tmp_path / 'plain')
+    mirror = clone(plain, tmp_path / 'mirror.git', '--mirror')
+    if url_kind == 'self':
+        git(mirror, 'remote', 'set-url', 'origin', '.')
+    elif url_kind == 'file-url':
+        git(mirror, 'remote', 'set-url', 'origin', plain.as_uri())
+    elif url_kind == 'instead-of':
+        git(mirror, 'remote', 'set-url', 'origin', 'https://hosting.example.invalid/synthetic/repo')
+        git(mirror, 'config', 'url.' + plain.as_uri() + '.insteadOf', 'https://hosting.example.invalid/synthetic/repo')
+    def forbidden(*args):
+        raise AssertionError('Local or aliased local remotes must not be queried as hosting evidence')
+    monkeypatch.setattr(audit, 'advertised_refs', forbidden)
+    assert audit.main(['--repo', str(mirror), '--verify-remote', 'origin']) == 2
+    output = capsys.readouterr().out
+    assert str(tmp_path) not in output and 'hosting.example.invalid' not in output
+    report = json.loads(output)
+    assert report['full_mirror'] and report['local_complete']
+    assert report['remote_local'] and not report['remote_network'] and not report['remote_verified']
+    assert not report['complete'] and report['ref_namespaces']['pull'] == 0 and brief_count(report) == 0
+
+
+@pytest.mark.parametrize('bare,narrow', [(False, False), (True, True)])
+def test_full_mirror_bare_and_exact_refspec_are_required(tmp_path, synthetic_host, bare, narrow):
+    source = fixture_repo(tmp_path)
+    mirror = clone(source, tmp_path / 'candidate', *(['--bare'] if bare else []))
+    git(mirror, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*' if narrow else '+refs/*:refs/*')
+    # Avoid unrelated ref inequality masking either required condition.
+    if not bare:
+        for ref in git(mirror, 'for-each-ref', '--format=%(refname)', 'refs/remotes').decode().splitlines():
+            git(mirror, 'update-ref', '-d', ref)
+    report = audit.audit(mirror, verify_remote='origin')
+    assert report['full_mirror'] is False and not report['complete'] and report['targets'] == []
+
+
+@pytest.mark.parametrize('url,expected', [
+    ('https://hosting.example.invalid/owner/repo.git', 'network'),
+    ('ssh://git@hosting.example.invalid/owner/repo.git', 'network'),
+    ('git@hosting.example.invalid:owner/repo.git', 'network'),
+    ('git://hosting.example.invalid/owner/repo.git', 'network'),
+    ('relative/repo.git', 'local'),
+    ('ext::private-helper-fixture', 'unsupported'),
+])
+def test_effective_remote_transport_classification_is_content_free(tmp_path, monkeypatch, url, expected):
+    def fake_git(repo, *args):
+        assert args == ('remote', 'get-url', '--all', 'origin')
+        return url.encode() + b'\n'
+    monkeypatch.setattr(audit, 'git', fake_git)
+    assert audit.remote_location(tmp_path, 'origin') == expected

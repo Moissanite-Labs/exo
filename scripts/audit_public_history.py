@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 TARGETS = ("inventory/", "docs/BRIEF.md", "docs/STORE-V2.md", "scripts/deploy-site.sh")
 PATTERNS = {
@@ -67,6 +68,34 @@ def advertised_refs(repo: Path, remote: str) -> list[bytes]:
                   (line.split() for line in git(repo, "ls-remote", "--refs", remote).splitlines()))
 
 
+def remote_location(repo: Path, remote: str) -> str:
+    """Classify the effective fetch URL, without returning or reporting it.
+
+    get-url expands insteadOf aliases. A mirror of a local ordinary clone cannot
+    establish hosting coverage, even when its local source matches perfectly.
+    Unknown remote-helper transports are not executed for verification.
+    """
+    urls = git(repo, "remote", "get-url", "--all", remote).splitlines()
+    if len(urls) != 1:
+        return "unsupported"
+    url = os.fsdecode(urls[0])
+    if url.lower().startswith("file:") or url.startswith(("/", ".", "~", "\\")):
+        return "local"
+    if re.match(r"^[A-Za-z]:[\\/]", url):
+        return "local"
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme in ("https", "http", "ssh", "git") and parsed.hostname:
+            return "network"
+    except ValueError:
+        return "unsupported"
+    if "://" in url or "::" in url:
+        return "unsupported"
+    if re.fullmatch(r"(?:[^/@:\s]+@)?[^/:\s]+:.+", url):
+        return "network"  # Git's scp-style SSH syntax.
+    return "local"
+
+
 def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | None = None) -> dict:
     report = {"schema": 3, "read_only": True, "ref_count": 0, "targets": [],
               "complete": False, "local_complete": False, "remote_verified": False,
@@ -107,11 +136,15 @@ def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | Non
                                  and fetch == [b"+refs/*:refs/*"])
         if not report["full_mirror"]:
             return report
-        remote_refs = advertised_refs(repo, verify_remote)
-        report["remote_ref_namespaces"] = namespace_counts(remote_refs)
-        report["mirror_refs_match"] = sorted(refs) == remote_refs
-        if not report["mirror_refs_match"]:
-            return report
+        location = remote_location(repo, verify_remote)
+        report["remote_local"] = location == "local"
+        report["remote_network"] = location == "network"
+        if report["remote_network"]:
+            remote_refs = advertised_refs(repo, verify_remote)
+            report["remote_ref_namespaces"] = namespace_counts(remote_refs)
+            report["mirror_refs_match"] = sorted(refs) == remote_refs
+            if not report["mirror_refs_match"]:
+                return report
     head = head_state(repo)
     roots = tuple(sorted({line.split()[-1].decode("ascii") for line in refs} |
                          {head[0].decode("ascii")}))
