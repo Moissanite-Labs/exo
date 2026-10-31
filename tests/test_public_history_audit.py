@@ -44,7 +44,7 @@ def test_deleted_history_and_secondary_refs_are_checked_without_content_disclosu
     git(repo, "config", "user.email", "fixture@example.invalid")
     (repo / "docs").mkdir()
     brief = repo / "docs/BRIEF.md"
-    brief.write_text("fixture-person@example.invalid /Users/fixture-seat private-client-fixture")
+    brief.write_text("fixture-person@example.invalid /Users/user private-client-fixture")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "synthetic sensitive history")
     git(repo, "tag", "old-fixture")
@@ -56,7 +56,7 @@ def test_deleted_history_and_secondary_refs_are_checked_without_content_disclosu
     patterns.write_text("private-client-fixture\n")
     assert audit.main(["--repo", str(repo), "--literal-file", str(patterns)]) == 2
     output = capsys.readouterr().out
-    for private in ["fixture-person", "/Users/fixture-seat", "private-client-fixture", str(patterns), str(repo)]:
+    for private in ["fixture-person", "/Users/user", "private-client-fixture", str(patterns), str(repo)]:
         assert private not in output
     report = json.loads(output)
     row = next(x for x in report["targets"] if x["target"] == "docs/BRIEF.md")
@@ -482,8 +482,8 @@ def test_full_mirror_bare_and_exact_refspec_are_required(tmp_path, synthetic_hos
 
 @pytest.mark.parametrize('url,expected', [
     ('https://hosting.example.invalid/owner/repo.git', 'network'),
-    ('ssh://git@hosting.example.invalid/owner/repo.git', 'network'),
-    ('git@hosting.example.invalid:owner/repo.git', 'network'),
+    ('ssh://git@example.invalid/owner/repo.git', 'network'),
+    ('git@example.invalid:owner/repo.git', 'network'),
     ('git://hosting.example.invalid/owner/repo.git', 'network'),
     ('relative/repo.git', 'local'),
     ('ext::private-helper-fixture', 'unsupported'),
@@ -508,7 +508,7 @@ def test_unmocked_ssh_wrapper_cannot_verify_a_stale_local_source(tmp_path, monke
     wrapper = tmp_path / 'synthetic-ssh-wrapper.py'
     wrapper.write_text('import os\nos.execvp("git", ["git", "upload-pack", ' + repr(str(plain)) + '])\n')
     command = shlex.join([sys.executable, str(wrapper)])
-    git(mirror, 'remote', 'set-url', 'origin', 'git@hosting.example.invalid:synthetic/repo.git')
+    git(mirror, 'remote', 'set-url', 'origin', 'git@example.invalid:synthetic/repo.git')
     monkeypatch.setenv('GIT_SSH_VARIANT', 'simple')
     if override == 'GIT_SSH_COMMAND':
         monkeypatch.setenv(override, command)
@@ -521,7 +521,7 @@ def test_unmocked_ssh_wrapper_cannot_verify_a_stale_local_source(tmp_path, monke
     wrapper.write_text('raise SystemExit("transport must not execute during audit")\n')
     assert audit.main(['--repo', str(mirror), '--verify-remote', 'origin']) == 2
     output = capsys.readouterr().out
-    assert str(tmp_path) not in output and 'hosting.example.invalid' not in output and command not in output
+    assert str(tmp_path) not in output and 'example.invalid' not in output and command not in output
     report = json.loads(output)
     assert report['local_complete'] and report['remote_network'] and report['transport_overridden']
     assert not report['remote_verified'] and not report['complete']
