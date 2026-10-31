@@ -570,6 +570,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
   JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
   that is not a mapping fails the send as a refused reply.
+  *Amendment 2026-10-29 (exo-desktop #52, a named session must take messages):* the path took the session a sender
+  named as given. A peer's `to_session`, or the session the bus channel passed, reached a finished (locked) child,
+  a running subagent, or an id that does not exist. The message was queued or held there, or it started a turn.
+  A peer listing never offers those sessions, and a message with no session never lands in one (D-070). Now the
+  path asks its target first, before the policy. The engine's target takes a named session that exists, is not a
+  subagent and is not locked. A scheduled run can still be named by its id, as before. Any other name gets a
+  denied receipt that names the session, and nothing is held for the principal. A held message whose session
+  finished before the principal allowed it is denied on release, and opens no new thread: that thread is only for
+  a message that named no session (PR #212). A job notice is the harness's own and still reaches its job's
+  session, a subagent's too. Hermes' peers target picks a named session only when it knows it, so it follows.
+  A message that tries to approve something is still refused first. The warning to the principal went to the named
+  session even when that session takes no message, so no client showed it. It now goes where a message with no
+  session would go.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -700,6 +713,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
 
 ## D-031 (2026-10-12) UI/UX overhaul, terminal half: make the TUI look like the site's terminal figure
+- **Implementation amendment (2026-10-29):** the principal requested persistent desktop workspace choices. The shared web client accepts validated native display preferences and forwards only view, thread ID, layout, appearance, pet mode and scroll fraction. Explicit navigation wins; an exact session 404 leaves the chooser open and clears the saved pointer; bounded list omission never proves deletion. The native host owns scoped persistence. No prompts, drafts, transcript contents or credentials cross the preference bridge. See `docs/ui/WEB.md`, "Native display preferences".
+
 - **Web amendment, 2026-10-28:** at the principal's request, the shared web workspace keeps the angular
   identity while using readable sans serif conversation text, restrained surfaces and explicit attention
   states. Dark remains the default; Light and System are saved presentation choices. Persistent navigation
@@ -4745,6 +4760,29 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   history lost every tool call and result, and an assistant turn that only called tools. They now go in as text,
   `[tool call <name>] <arguments>` and `[tool result <name>]` blocks. `docs/PROVIDERS.md` "Use a Muse Code
   subscription".
+  *Amendment 2026-10-29 (exo-desktop #52, seats, plugins, findings, session meta and routing):* an audit of the
+  core found more bugs no test caught. Each got a failing test first. A seat's `toolsets`, `[tools] env_deny` and
+  `[skills] load` are lists, and no list means more: every toolset, nothing more hidden, every skill. A value of
+  another type, such as `toolsets = "fs"`, read as no list, so the seat got more than its file asked for. The
+  loader now refuses it and the seat does not load. `docs/SEATS.md`. A folder plugin imports as
+  `exo_plugins.<name>` with each character that is not a word character made `_`, so `a-b` and `a_b` shared one
+  module. Loading the second replaced the first's package, and a later relative import in the first plugin ran
+  the second's file. The module now records the plugin that owns it, and another plugin that maps to the same
+  name is refused with an error that names both. The same plugin can still load again, from any folder, as a
+  fresh manager or a test does. Rejected: a module name that can never clash, such as an escaped or hashed one,
+  since it would rename every plugin's loggers and modules. `docs/DEVELOPER-GUIDE.md` §4. `Findings.get` put an
+  id or prefix into SQL `LIKE` as a pattern, so `%` and `_` matched other ids. It now escapes them, and an empty
+  id names no finding. `docs/TRACE.md` "Commands". Each writer of a session's meta (`lock`, a context note's
+  `seen_pos`, `/compact`'s `compact_seq`) read the whole object and wrote it back in two store calls, so a key
+  another writer set in between was lost. A note written while a child finished could unlock it. They now go
+  through `SessionStore.update_meta`, which sets only its keys and keeps the rest in one write transaction.
+  `docs/AGENT-WIRE.md` "Done in wave 3". A provider whose `key_env` lists several names numbered only the keys it
+  found, so when a key came or went the others moved to new ids. A call in flight across the reload kept the old
+  ids: it skipped the new key as the one that failed, sent the failed key again, and cooled the new key in its
+  place. Each key now takes its place in `key_env` as its id. A 501 is a transport saying it cannot carry this
+  request (`muse-cli` refuses a call with tools, D-051), not a fault of the key or the model. It cooled the whole
+  credential, so a later call without tools skipped a route that would have served it. It now falls back and
+  cools nothing. `docs/PROVIDERS.md`.
   *2026-10-30 note (#537):* Hermes's messaging gateway cuts its transcript on `/undo`, drops the cached agent and
   tells no one. The new agent's engine read the undone ruling back from the pins file, and its block, summaries and
   handoffs carried it again. Each pin now has a lead in the pins file. The lead is a digest of the user and summary

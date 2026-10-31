@@ -291,9 +291,20 @@ class SessionStore:
     def set_meta(self, sid: str, meta: dict[str, Any]) -> None:
         self._q("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
 
+    def update_meta(self, sid: str, changes: dict[str, Any]) -> None:
+        """Set these keys and keep the others, in one write transaction, so a key another writer sets meanwhile is
+        not lost (exo-desktop #52)."""
+        def write(db: sqlite3.Connection) -> None:
+            row = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is not None:
+                meta = {**json.loads(row["meta"]), **changes}
+                db.execute("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+
+        self._tx(write)
+
     def lock(self, sid: str, reason: str = "done") -> None:
         """Close a session to new turns (a finished child). Reading and forking stay allowed."""
-        self.set_meta(sid, {**self.get_meta(sid), "locked": reason or "done"})
+        self.update_meta(sid, {"locked": reason or "done"})
 
     def status(self, sid: str) -> str:
         """``locked:<reason>`` for a finished child session, else ``open``."""
