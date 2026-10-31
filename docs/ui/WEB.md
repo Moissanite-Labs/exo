@@ -410,7 +410,13 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
   drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
   Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
-  and run now act at once.
+  and run now act at once. Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
+  while focus is in the step, closes it and puts focus back on remove. While the remove is in flight the step stays,
+  with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
+  for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
+  the first step as it is. A failed remove shows the error and puts focus on that card's remove, unless focus is on
+  a control outside the job list by then, such as a form field. Each redraw replaces the buttons in the list, so
+  focus on another card's button does not stay.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
@@ -418,6 +424,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   jump back to its top each time.
   Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
+  Focus moves to Cancel when the confirm opens. Cancel, or Escape while focus is in the confirm, puts it back on
+  allow always. A redraw on a core event keeps focus on the same approval button.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
