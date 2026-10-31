@@ -93,6 +93,11 @@ boundary and cannot redeem the parent's references or compress its copied old re
 Undo hides the result and revokes its reference. A reference also expires when its
 message leaves the configured recent-message window. Missing, expired, hidden and
 foreign references return an explicit unavailable error.
+An expired excerpt is not kept. Once its message leaves the window, the view stops
+shortening that result. While the context still holds the message, the model sees the
+full original result again, and the old reference is refused. For example, with
+`retention_messages` at 10, a 27,000-character result shows as an excerpt of about
+2,600 characters. After 10 more messages, the view shows all 27,000 characters.
 Expansion serves only results that the view could excerpt. It refuses a reference to an
 error result, a result shorter than `threshold_chars`, a `tool_output` page or a result
 without its source call, even when the digest matches.
