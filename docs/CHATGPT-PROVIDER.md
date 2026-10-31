@@ -39,6 +39,16 @@ status and account labels, never those tokens. Tokens do not enter Exo messages,
 request URLs, diagnostics or the model context. Sign-in uses a temporary loopback callback and fresh
 state, nonce and a PKCE verifier. PKCE binds the returned authorization code to the sign-in attempt.
 
+On macOS, token bundles use the native Security framework for writes, reads and deletion with the same Python application identity. These operations refuse interactive authorization instead of opening a permission prompt. They do not pass through the `security -i`
+[interactive parser](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/security.c), whose line limit can split a large OAuth bundle. Tokens stay out of process arguments
+and temporary files. A failed save leaves the previous connection unchanged. The callback gives a safe
+failure message and directs you back to Providers to retry.
+
+New macOS grants use a versioned native account namespace. Reconnect an older registration to migrate it.
+The old item and registration remain unchanged if sign-in fails. Exo does not automatically read or delete
+legacy CLI-created orphan items, or weaken their access policy. Linux Secret Service accounts retain their
+existing namespace. A connection from another OS store requires sign-in on the current system.
+
 Exo verifies the identity token's signature, issuer, audience, expiry and nonce before accepting it.
 Permission to use the ChatGPT plan comes from the granted scopes, not from identity alone. A sign-in
 without plan permission remains identifiable but cannot serve model requests.

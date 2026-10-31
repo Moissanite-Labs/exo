@@ -1127,6 +1127,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-28 (ChatGPT credential save):** large OAuth bundles use native macOS Security-framework writes, reads and deletion with interactive authorization refused instead of the interactive security tool's bounded line parser. Save failures preserve the previous connection and return a safe retry message. No token enters argv or a temporary file.
 - **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
   connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
   only status crosses the web boundary. The application supplies credential callbacks to the core router,
