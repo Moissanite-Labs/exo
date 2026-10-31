@@ -5514,13 +5514,17 @@ def _ssh_setting(text: str) -> tuple[str, str]:
 def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
     """ssh's own option values that name a file ssh makes on this machine, whatever its remote line runs (#484): its
     control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a key to (`-o UserKnownHostsFile`) and a
-    forward's socket (`-L`, `-R`, `-o LocalForward`, `-o RemoteForward`). `-F` only reads its file and `-i` is a key.
-    Each comes as (the word that holds the value, the paths it names), and `none` names no path. A value in a word
-    of its own is that word. An attached one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters
-    before the value cut off, when the source spells them as they read. The options are read as _ssh_options reads
-    them, before the host and after it, up to the remote command. A setting's value is split into words as ssh
-    splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
+    forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`). `-F` only reads
+    its file and `-i` is a key. scp and sftp pass their `-o` settings to the ssh they run, so those count for them
+    too. Their other letters name other things (`scp -S` is the program to run). Each comes as (the word that holds
+    the value, the paths it names), and `none` names no path. A value in a word of its own is that word. An attached
+    one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters before the value cut off, when the
+    source spells them as they read. The options are read as _ssh_options reads them, before the host and after it,
+    up to the remote command. scp's and sftp's end at their first operand. A setting's value is split into words as
+    ssh splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
     texts, out = [w.text for w in words], []
+    prog = texts[0].rsplit("/", 1)[-1]
+    letters = _VALUE_OPTS[prog][0]
 
     def scan(i: int, after: bool) -> int:
         while i < len(texts) and texts[i].startswith("-") and not (after and texts[i] == "-"):
@@ -5529,7 +5533,7 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
                 if after and a == "--":
                     break
                 continue
-            v = next((j for j, ch in enumerate(a[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+            v = next((j for j, ch in enumerate(a[1:], 1) if ch in letters), 0)
             if not v or v == len(a) - 1 and i == len(texts):
                 continue
             if v == len(a) - 1:
@@ -5538,18 +5542,22 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
                 w, value = words[i - 1], a[v + 1:]
                 if w.raw.startswith(a[:v + 1]):
                     w = replace(w, text=value, raw=w.raw[v + 1:])
+            if a[v] != "o" and prog != "ssh":
+                continue
             key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
             args = _ssh_split(rest) if a[v] == "o" else [rest]
             if key in ("S", "controlpath", "userknownhostsfile"):
                 paths = args if key == "userknownhostsfile" else args[:1]
-            elif key in ("L", "R", "localforward", "remoteforward"):
+            elif key in ("L", "R", "D", "localforward", "remoteforward", "dynamicforward"):
                 paths = [f for t in args[:2] for f in _ssh_fwd_fields(t) if "/" in f]   # a socket path holds a /
             else:
                 continue
             out.append((w, [p for p in paths if p.lower() != "none"]))
         return i
 
-    scan(scan(1, False) + 1, True)
+    end = scan(1, False)
+    if prog == "ssh":
+        scan(end + 1, True)
     return out
 
 
@@ -6207,8 +6215,9 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     # #484: ssh makes its control socket, the known-hosts file it adds a key to and a forward's socket on this machine
     # whatever its remote line runs, so the return below must not skip a store path there when every part is a read.
     # These values are read as ssh reads them (its quotes in a setting, a forward's brackets), which the scan below
-    # does not do, so they are read here on every ssh line, with a store check of their own ("ssh").
-    if words and words[0].text.rsplit("/", 1)[-1] == "ssh":
+    # does not do, so they are read here on every ssh line, with a store check of their own ("ssh"). scp and sftp
+    # hand their -o settings to ssh, so their lines get the same reading.
+    if words and words[0].text.rsplit("/", 1)[-1] in ("ssh", "scp", "sftp"):
         for w, paths in _ssh_file_words(words):
             got = _shell_hits(w, seen, "ssh", _ssh_file_hits)
             hits += [w.text] if got is None else got

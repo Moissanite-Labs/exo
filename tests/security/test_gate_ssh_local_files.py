@@ -1,9 +1,10 @@
 """ssh's own options that name a file it makes on this machine are store writes whatever the remote line runs (#484).
 
 ssh makes its control socket (`-S`, `-o ControlPath`), adds keys to its known-hosts file (`-o UserKnownHostsFile`)
-and makes a forward's socket (`-L`, `-R`, `-o LocalForward`, `-o RemoteForward`) on this machine. The store check
-read these words only when the remote line was more than reads, so `ssh -S ~/.exo/state/ctl host ls` was allowed.
-Each line here is classified and decided only; no command is executed.
+and makes a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`) on this
+machine. The store check read these words only when the remote line was more than reads, so
+`ssh -S ~/.exo/state/ctl host ls` was allowed. scp and sftp hand their `-o` settings to ssh.
+Each line here is only classified and decided. No command is executed.
 """
 from __future__ import annotations
 
@@ -46,6 +47,8 @@ STORE_WRITES = [
     "x=$(ssh -S ~/.exo/state/ctl host ls)",
     # store paths spelt through HOME, a brace set, an empty substitution or a cd into the store
     "ssh -S $HOME/.exo/state/ctl host ls",
+    "ssh -S '${HOME}/.exo/state/ctl' host ls",              # ssh expands ${HOME} itself
+    "ssh -o 'UserKnownHostsFile=${HOME}/.exo/state/kh' host ls",
     "ssh -S ~/.exo/sta{te,x}/ctl host ls",
     "ssh -S ~/.exo/sta$(:)te/ctl host ls",
     "ssh -S ~/.exo/policies/ctl host ls",
@@ -64,6 +67,12 @@ STORE_WRITES = [
     "ssh -R \"$HOME/.exo/st\\ate/sock:localhost:22\" host ls",
     "ssh -L '[/x/.exo/state/sock]:localhost:5432' host ls",
     "ssh -o ControlPath=%d/.exo/state/ctl host ls",
+    # a dynamic forward on a socket path: ssh listens on that socket here, as for -L
+    "ssh -D ~/.exo/state/sock host ls",
+    "ssh -D~/.exo/state/sock host ls",
+    "ssh -o 'DynamicForward ~/.exo/state/sock' host ls",
+    "ssh -D '[~/.exo/state/sock]' host ls",
+    "cd ~/.exo/state && ssh -D ./sock host ls",
 ]
 
 READS = [
@@ -86,6 +95,10 @@ READS = [
     "cd ~/.exo/state && ssh -o ControlPath=%d/cm-%C host ls",
     "ssh -o \"ControlPath '/tmp/a b/ctl'\" host ls",
     "ssh -o 'UserKnownHostsFile \"/tmp/a b/kh\" /dev/null' host ls",
+    "ssh -D 1080 host ls",
+    "ssh -D localhost:1080 host ls",
+    "ssh -D /tmp/socks.sock host ls",
+    "cd ~/.exo/state && ssh -D 1080 host ls",
 ]
 
 
@@ -166,6 +179,32 @@ def test_a_store_folder_whose_name_holds_a_space(value, tmp_path, monkeypatch):
     if "{root}" in value:       # the same path outside the store stays a read
         c, d = decide(command.replace(str(root), "/tmp/Exo Desktop"), DENY_STORE)
         assert c.category == "read" and d.outcome == "allow", command
+
+
+@pytest.mark.parametrize("command", [
+    "scp -o 'UserKnownHostsFile ~/.exo/\"st\"ate/kh' host:/x /tmp/y",
+    "scp -o \"UserKnownHostsFile=~/.exo/st'a'te/kh\" /tmp/y host:/x",
+    "scp -Ao'UserKnownHostsFile ~/.exo/\"st\"ate/kh' host:/x /tmp/y",
+    "sudo scp -o 'ControlPath ~/.exo/\"st\"ate/ctl' host:/x /tmp/y",
+    "sftp -o 'UserKnownHostsFile ~/.exo/\"st\"ate/kh' host",
+    "sftp -b /dev/null -o 'UserKnownHostsFile ~/.exo/\"st\"ate/kh' host",
+])
+def test_scp_and_sftp_settings_get_the_same_reading(command):
+    # scp and sftp hand -o to the ssh they run. The plain spelling was already a store write. ssh's own quotes hid it.
+    c, d = decide(command, DENY_STORE)
+    assert c.category == "store_write" and d.outcome == "deny", c
+
+
+@pytest.mark.parametrize("command", [
+    "scp -o 'UserKnownHostsFile \"/tmp/a b/kh\"' host:/x /tmp/y",
+    "scp -S /usr/bin/ssh host:/x /tmp/y",
+    "scp -l 100 host:/x /tmp/y",
+    "sftp -o 'UserKnownHostsFile \"/tmp/a b/kh\"' host",
+    "sftp -R 64 host",
+])
+def test_scp_and_sftp_without_a_store_file_keep_their_reading(command):
+    c, _ = decide(command, DENY_STORE)
+    assert c.category != "store_write", c
 
 
 def test_the_remote_target_rule_is_kept():

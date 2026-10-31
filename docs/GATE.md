@@ -3026,24 +3026,28 @@ the store check reads a relative path by its name alone, as for every protected 
 
 ssh's own files (#484). ssh makes some files on this machine whatever its remote line runs: its
 control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a host key to
-(`-o UserKnownHostsFile`) and the socket of a forward (`-L`, `-R`, `-o LocalForward`,
-`-o RemoteForward`). A store path in one of these values is a `store_write`, also when the remote
-line only reads. So `ssh -S ~/.exo/state/ctl host ls` and
+(`-o UserKnownHostsFile`) and the socket of a forward (`-L`, `-R`, `-D`, `-o LocalForward`,
+`-o RemoteForward`, `-o DynamicForward`). A store path in one of these values is a `store_write`,
+also when the remote line only reads. So `ssh -S ~/.exo/state/ctl host ls` and
 `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` ask the principal, and so does a relative value
 after a `cd` into the store (`cd ~/.exo/state && ssh -S ctl host ls`). Before, the store check read
 these words only when the remote line was more than reads. A value is read in each form the store
 check reads a word: attached (`-S~/x`, `-oControlPath=x`), after the host, with `$HOME`, a brace set
 or an expansion. Each path of a `UserKnownHostsFile` list counts. A forward's value is split at `:`,
-so a socket path counts on either side. A value is also read as ssh reads it. A setting is split
-into words with ssh's own quotes and backslashes taken out (`-o 'ControlPath ~/.exo/"st"ate/ctl'`),
-a forward's field loses its brackets and backslashes (`-L '[/x/.exo/state/s]:localhost:5432'`), and
-`%d` is the home folder. So a store folder whose name holds a space, as the desktop app's does,
-counts when a setting names it inside ssh's quotes. The word scan of a line does not read ssh's
-quotes, so these values get this check on every ssh line, also when the remote part is more than
-reads. A value outside the store keeps the line a read (`ssh -S /tmp/ctl host ls`), and so does
-`none`. `-F` and `GlobalKnownHostsFile` only read their file, so `ssh -F ~/.exo/state/cfg host ls`
-stays a read. ssh's log file (`-E`) is not covered here. It is still a known limit (above), and
-#919 is open for it.
+so a socket path counts on either side. A dynamic forward on a path (`-D ~/.exo/state/sock`) makes
+ssh listen on a socket there, as `-L` does. A port stays a read (`ssh -D 1080 host ls`). A value is
+also read as ssh reads it. A setting is split into words with ssh's own quotes and backslashes
+taken out (`-o 'ControlPath ~/.exo/"st"ate/ctl'`), a forward's field loses its brackets and
+backslashes (`-L '[/x/.exo/state/s]:localhost:5432'`), and `%d` is the home folder. So a store
+folder whose name holds a space, as the desktop app's does, counts when a setting names it inside
+ssh's quotes. The word scan of a line does not read ssh's quotes, so these values get this check on
+every ssh line, also when the remote part is more than reads. scp and sftp hand their `-o`
+settings to the ssh they run, so those get the same reading on their lines
+(`scp -o 'UserKnownHostsFile ~/.exo/"st"ate/kh' host:/x /tmp/y`). Their other letters name other
+things (`scp -S` is the program to run). A value outside the store keeps the line a read
+(`ssh -S /tmp/ctl host ls`), and so does `none`. `-F` and `GlobalKnownHostsFile` only read their
+file, so `ssh -F ~/.exo/state/cfg host ls` stays a read. ssh's log file (`-E`) is not covered here.
+It is still a known limit (above), and #919 is open for it.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
