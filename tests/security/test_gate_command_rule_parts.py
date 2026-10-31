@@ -24,6 +24,7 @@ Each line marked "main:" gives that outcome on main f6a8f25d, so those tests fai
 that read `own` fail on main for want of it after their outcome checks pass, and the rest guard what stays.
 Classification and decision only; no command string here is run.
 """
+import os
 import re
 import time
 import tracemalloc
@@ -386,9 +387,15 @@ def test_a_log_rule_over_an_allow_cell_matches_the_whole_line(line):
     assert outcome(line, pol(rule("^ls", "log"))) == "log"
 
 
-@pytest.mark.parametrize("line", ['echo "$(', "export PS4='$(", "{ exec < <("])
+@pytest.mark.parametrize("line", ["echo $(", "export PS4=$(", "{ exec < <("])
 def test_a_catch_all_log_rule_logs_a_line_with_parts_that_have_no_own_text(line):
     assert outcome(line, pol(rule(".*", "log"))) == "log"
+
+
+@pytest.mark.parametrize("line", ['echo "$(', "export PS4='$("])
+def test_a_line_left_inside_a_quote_asks_under_a_catch_all_log_rule(line):
+    # #143: a line that ends inside a quote has an opaque part, as a shell may close the quote elsewhere
+    assert outcome(line, pol(rule(".*", "log"))) == "ask"
 
 
 def test_a_log_rule_that_lowers_or_names_opaque_exec_still_names_its_command():
@@ -800,7 +807,9 @@ def test_a_literal_that_sets_shell_state_leaves_code_decided_as_before(setter):
     assert outcome(f"true; {py}", pol(rule("os\\.system"), categories=OPAQUE_OK)) == "ask"     # main: allow
 
 
-WRITE = {"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
+# No link leads the write elsewhere, on any system. On macOS `/tmp` is a link to `/private/tmp`, and a write through a
+# linked folder gets a part for where it lands (exo-desktop #52). The test after the next one reads that case.
+WRITE = {"tool": "write_file", "args": {"path": os.path.join(os.path.realpath("/tmp"), "x"), "content": "y"}}
 FETCH = {"tool": "web_extract", "args": {"url": "https://example.com/a"}}
 CODE = {"tool": "execute_code", "args": {"code": "print(1)"}}
 
@@ -818,6 +827,22 @@ def test_a_non_shell_tool_is_unchanged(action, r, gates, expected):
     c = classify(action)
     assert not c.parts, c
     assert decide(c, pol(r, **gates)).outcome == expected
+
+
+@pytest.mark.parametrize("r, expected", [
+    (rule("^$", "log"), "log"),
+    (rule("x", "log"), "allow"),
+    ({"match": {"tool": "write_file"}, "decision": "log"}, "log"),
+])
+def test_a_non_shell_write_through_a_linked_folder_keeps_its_rule_outcomes(tmp_path, r, expected):
+    """A write through a linked folder, as `/tmp/x` is on macOS, gets a part for where it lands (exo-desktop #52).
+    That part has no shell text either, so the command rules decide the write as they do with no link."""
+    (tmp_path / "private" / "tmp").mkdir(parents=True)
+    (tmp_path / "tmp").symlink_to(tmp_path / "private" / "tmp")
+    spelt, place = str(tmp_path / "tmp" / "x"), str(tmp_path / "private" / "tmp" / "x")
+    c = classify({"tool": "write_file", "args": {"path": spelt, "content": "y"}})
+    assert [(p.target, p.command) for p in c.parts] == [(spelt, ""), (place, "")]
+    assert decide(c, pol(r)).outcome == expected
 
 
 def test_the_template_policies_parse_and_decide_single_commands_as_before():

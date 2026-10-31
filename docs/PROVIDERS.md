@@ -191,10 +191,13 @@ cannot see the keychain, so the test call is what proves the login works. Error 
 Limits, stated plainly:
 
 - **Text only.** `muse exec` runs its own agent. Exo cannot pass its tools to it or stream tool calls out of it.
-  A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
-  without tools. Its catalog limits it to `aux`; it does not make the main model ready for first run.
+  A turn that carries Exo tools is refused (status 501) and the router falls back to the next route. That refusal
+  cools nothing, so the next call without tools still reaches `muse-cli` (exo-desktop #52). So `muse-cli` suits a
+  role without tools. Its catalog limits it to `aux`. It does not make the main model ready for first run.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
-  is flattened into one prompt, and no token counts come back (usage shows as unknown).
+  is flattened into one prompt, and no token counts come back (usage shows as unknown). Earlier tool rounds stay
+  in that prompt as text: each call as `[tool call <name>] <arguments>` under its assistant turn, and each result
+  as a `[tool result <name>]` block, marked `, error` when it failed. Before exo-desktop #52 they were dropped.
 - **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
   access (`OSStatus -67068`). Exo checks signing with `codesign -dv` only when the configured command is a native
   Mach-O binary. The vendor's `muse` command may be a shell launcher: shell scripts cannot be code-signed, and
@@ -318,6 +321,11 @@ and the result merges over the catalog (`docs/SEATS.md`).
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.
 Override any role in `[models.roles]` in your config.
 
+A provider whose `key_env` is a list of names has one credential for each name whose key is found. A key that
+fails cools down on its own while the others serve the route. A key is known by its place in the list
+(`openrouter#0`, `openrouter#2`), so its id stays put when another key is added or removed. A call that runs
+across such a change then skips the key that failed, not the new one (exo-desktop #52).
+
 ### Route circuit breaker
 
 A route that keeps failing is skipped instead of costing every turn a failed try. After `failures` consecutive
@@ -344,13 +352,17 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 
 The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
 
-- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+- The last route tried refused its key (HTTP 401 or 403): `anthropic rejected the key (HTTP 401: invalid
   x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
   asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
   The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
   401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
   sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
   model (D-081), is not named in a main-role error.
+- The last route tried is over its provider spend limit (HTTP 402): `anthropic is over its provider spend limit
+  (HTTP 402: key_spend_limit_reached): raise the limit or top up the account, then test it in /providers`. A new
+  key does not fix this, so the message does not point at the key field. The route stays benched for its cooldown
+  and the router tries the next one; the notice says so and warns that the turn's cost is a floor (D-093).
 - A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
   test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
   never shown, so it stays out of the session store. With no usable host the error says "its configured
@@ -367,7 +379,8 @@ A passing test in `/providers` (`t`) or in the web Providers tab tells the runni
 Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
 saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
 terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
-started, and a CLI must be installed and logged in.
+started, and a CLI must be installed and logged in. Exo checks a local server with one connect to the host and
+port of its base URL. A base URL it cannot read, such as a port that is not a number, counts as not running.
 
 ## See what is set
 

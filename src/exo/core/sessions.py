@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS captures (
 UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL DEFAULT ''"),
             ("messages", "agent", "TEXT"), ("messages", "pos", "INTEGER"), ("messages", "hash", "TEXT"),
             ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"),
+            ("messages", "copy_pos", "INTEGER"),  # derived original position of a fork copy (#450)
             ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
             ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"),   # ... and how many the capture hook took
             ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"),   # failed summary tries so far
@@ -146,8 +147,14 @@ class SessionStore:
                     have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
                     if col not in have:
                         self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                        if table == "messages" and col == "copy_pos":
+                            self._db.execute("UPDATE messages SET copy_pos=json_extract(data, '$.meta.pos')"
+                                             " WHERE pos IS NULL AND CASE WHEN json_valid(data) THEN"
+                                             " json_extract(data, '$.meta.local')='fork' ELSE 0 END")
                 self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
                                  " WHERE pos IS NOT NULL")
+                self._db.execute("CREATE INDEX IF NOT EXISTS messages_fork_copy ON messages(session,seq,copy_pos)"
+                                 " WHERE pos IS NULL AND copy_pos IS NOT NULL")
             except BaseException:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
@@ -203,6 +210,17 @@ class SessionStore:
                 raise
             self._db.execute("COMMIT")
             return out
+
+    def _read(self, fn: Callable[[sqlite3.Connection], Any]) -> Any:
+        """One snapshot for several SELECTs. A deferred BEGIN takes no write lock, so under WAL it neither waits for
+        nor blocks a writer on another connection to the file (another process, or another store), as ``_tx`` does.
+        Calls on this store still take turns under its one lock and connection, and it cannot nest in a ``_tx``."""
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                return fn(self._db)
+            finally:
+                self._db.execute("ROLLBACK")
 
     # ---------------------------------------------------------------- sessions
 
@@ -273,9 +291,20 @@ class SessionStore:
     def set_meta(self, sid: str, meta: dict[str, Any]) -> None:
         self._q("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
 
+    def update_meta(self, sid: str, changes: dict[str, Any]) -> None:
+        """Set these keys and keep the others, in one write transaction, so a key another writer sets meanwhile is
+        not lost (exo-desktop #52)."""
+        def write(db: sqlite3.Connection) -> None:
+            row = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is not None:
+                meta = {**json.loads(row["meta"]), **changes}
+                db.execute("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+
+        self._tx(write)
+
     def lock(self, sid: str, reason: str = "done") -> None:
         """Close a session to new turns (a finished child). Reading and forking stay allowed."""
-        self.set_meta(sid, {**self.get_meta(sid), "locked": reason or "done"})
+        self.update_meta(sid, {"locked": reason or "done"})
 
     def status(self, sid: str) -> str:
         """``locked:<reason>`` for a finished child session, else ``open``."""
@@ -313,9 +342,10 @@ class SessionStore:
             data = json.dumps(to_dict(msg), ensure_ascii=False)
             if agent:
                 digest = _chain(last["hash"] if last else "", agent, pos, sid, data)
-            db.execute("INSERT INTO messages (id, session, seq, role, turn_id, created, data, agent, pos, hash)"
-                       " VALUES (?,?,?,?,?,?,?,?,?,?)", (msg.id, sid, seq, msg.role, turn_id, now_ts(), data,
-                                                         agent, pos, digest))
+            db.execute("INSERT INTO messages (id, session, seq, role, turn_id, created, data, agent, pos, hash, copy_pos)"
+                       " VALUES (?,?,?,?,?,?,?,?,?,?,json_extract(?, '$.meta.pos'))",
+                       (msg.id, sid, seq, msg.role, turn_id, now_ts(), data, agent, pos, digest,
+                        data if msg.meta.get("local") == "fork" else "null"))
             text = _fts_text(msg)
             if text:
                 db.execute("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)",
@@ -434,17 +464,17 @@ class SessionStore:
         """The seq of this thread's last log entry with pos <= upto_pos (0 if none). A fork copy counts at its
         original's pos (kept in its meta) while the tree can hold that original (visible, not private)."""
         (seq,) = self._q("SELECT COALESCE(MAX(c.seq), 0) FROM messages c WHERE c.session=? AND COALESCE(c.pos, (SELECT"
-                         " o.pos FROM messages o JOIN sessions s ON s.id=o.session WHERE json_extract(c.data, '$.meta.local')"
-                         "='fork' AND o.agent=(SELECT agent FROM sessions WHERE id=c.session) AND o.pos=json_extract(c.data,"
-                         " '$.meta.pos') AND o.hidden=0 AND s.kind!='private'))<=?", (sid, upto_pos))[0]
+                         " o.pos FROM messages o JOIN sessions s ON s.id=o.session WHERE c.copy_pos IS NOT NULL"
+                         " AND o.agent=(SELECT agent FROM sessions WHERE id=c.session) AND o.pos=c.copy_pos"
+                         " AND o.hidden=0 AND s.kind!='private'))<=?", (sid, upto_pos))[0]
         return seq
 
     def orphaned_copies(self, sid: str, upto_seq: int) -> list[Message]:
         return [from_dict(Message, json.loads(r["data"]), strict=False) for r in self._q(
             "SELECT c.data FROM sessions f JOIN messages c ON c.session=f.id WHERE f.id=? AND c.seq<=MIN(?, COALESCE(f.fork_seq, 0))"
-            " AND c.pos IS NULL AND json_extract(c.data, '$.meta.local')='fork' AND json_extract(c.data, '$.meta.pos') IS NOT NULL"
+            " AND c.pos IS NULL AND c.copy_pos IS NOT NULL"
             " AND NOT EXISTS (SELECT 1 FROM messages o JOIN sessions s ON s.id=o.session WHERE o.agent=f.agent AND o.hidden=0"
-            " AND o.pos=json_extract(c.data, '$.meta.pos') AND s.kind!='private') ORDER BY c.seq", (sid, upto_seq))]
+            " AND o.pos=c.copy_pos AND s.kind!='private') ORDER BY c.seq", (sid, upto_seq))]
 
     def agents(self) -> list[str]:
         return [r[0] for r in self._q("SELECT DISTINCT agent FROM messages WHERE pos IS NOT NULL ORDER BY agent")]

@@ -20,6 +20,13 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
 ## 1. Install and first run
 
+**Continuing after interruption.** Exo automatically includes a short index of recent
+tool and job records when the same ordinary conversation continues. `/checkpoint`
+shows it in the TUI or `exo chat`. Interrupted tool effects remain unknown until
+checked. It never replays work. Disable with
+`exo config set work_checkpoint.enabled false` and restart. See
+[automatic continuity checkpoints](WORK-CHECKPOINT.md) for limits and privacy.
+
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
@@ -71,6 +78,10 @@ copy that keeps the old name hides the pack's skill or is hidden by it. Then del
 each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5.
 
 ## 2. The two clients
+
+The web chat status strip wraps to fit the conversation width in either layout. Model names and values remain
+readable as the window narrows; notices appear on their own wrapped row. In a short window, scroll the chat column
+to reach the status, message box and thread.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
@@ -129,6 +140,17 @@ The web page has its own sub-pages for Tasks, Schedule, Command and Providers. I
 `/layout` does. Use Rename beside a thread to edit its title, then Save or Cancel. Enter saves and Escape cancels.
 Double-click opens the same editor. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
+
+Web conversation drafts stay with each thread while the page is open, including when you visit another
+view. A pending send lets you keep writing and blocks duplicate Enter submissions. If a send is unconfirmed,
+your text remains recoverable in that thread without replacing newer edits. Check the transcript before
+sending again; a lost reply may still have reached the core. Reloading or closing the page discards drafts.
+See [conversation drafts](ui/WEB.md#conversation-drafts-and-unconfirmed-sends-d-045).
+
+Find a conversation searches the loaded titles, IDs and agent names. Use the status selector to show
+working conversations or those waiting for an approval. It does not search message contents. Show latest
+messages returns to the newest message when you have scrolled away. Appearance offers Dark, Light or
+System; that preference is saved in this browser. Back and Forward move between the web views.
 
 ## 3. Slash commands
 
@@ -192,7 +214,9 @@ your recent threads by title, `/tutorial ` the words `on`, `off` and `reset`, `/
 running a shell command. A mistyped `/comand` is not sent: Exo says "did you mean /compact?" and leaves the fixed
 line in the box. Up arrow brings back earlier lines, and as you type, the rest of an earlier line shows dim; press
 right arrow to take it. With the box empty, a dim line sometimes suggests a next step (`/providers` after a failed
-call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help. Inspired by the
+call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help, except that its
+line after a failed call reads the error: a refused key or login points at the Providers page, a network failure or
+timeout says the model could not be reached, and anything else points at `/trace` (D-092). Inspired by the
 Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance".
 
 ## 4. Memory
@@ -287,7 +311,8 @@ The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
 - **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
 
 Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
-appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+appears on the Tasks page) and remove it. Remove cannot be undone, so it asks for a second click on Confirm remove.
+Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
@@ -316,8 +341,10 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
-press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. Both clients show the answer sequence: `Ctrl+F`, then `o` once, `a` followed by Enter
+for always, or `d` followed by Enter to deny. The web card lists its available choices and changes its help during
+confirmation or note entry. Press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays
+in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
@@ -351,7 +378,8 @@ What the gate asks about, and why:
   it cannot read asks instead (#208, above).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
-  function, `source`, or a program the gate does not know: each asks once, for that exact command. Read the whole
+  function, `source`, or a program the gate does not know: each asks once, for that exact command, also beside a
+  push or post that would only log (#471). Read the whole
   command before you allow it: the card names only the most severe part of the line, and approving runs all of it,
   including code the gate could not see into. Plain work still
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
@@ -365,12 +393,20 @@ What the gate asks about, and why:
   `export PATH="$HOME/.local/bin:$PATH"`, asks. So does `hash -p /tmp/x ls`, which makes `ls` run another file
   (#330). A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
   like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
-  `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
-  (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
-  parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
-  #158). A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
-  `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579), and `p=x; echo ${p@P}` stays a read when the line
-  assigns `p` a literal value with no `$`, backtick or backslash. A command nested more than four levels deep
+  `setsid`, `flock` or `watch` (#160, fixed in #196), a heredoc or pipe into a group such as `{ bash; }`
+  (#161, fixed in #198), and a pipe, here-string or heredoc into the shell `sudo -s` or `sudo -i` starts
+  (#491). The gate finds programs only in the shell forms its parser reads. A command inside a
+  parameter expansion such as `${x:-$(...)}` is read too, and a quote or brace in such a word no longer hides the
+  command after it (#143, fixed in #158), down to three levels of `$( )` inside it; a deeper one, or one past the
+  24 such parts a call may open (a word inside a `$( )` counts again for each pass over it), asks. Such a word is
+  read in an `env -S` text and in what a `sudo -s` or `sudo -i` shell reads from its stdin too, and behind or
+  inside a quoted prefix assignment (`X='a b' echo ${v:-$(...)}`, `echo ${v:-$(X='a b' ...)}`, #471), and in a loop
+  that `cd`s into your store it is read as running there on the loop's next pass (#479). `${!name}` and
+  `${name@P}`, which run code a variable holds, ask, also for the positional parameters (`${@@P}`, `${!@}`, #554).
+  A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
+  `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579); `p=x; echo ${p@P}`, which the reading before #158
+  keeps a read because the line assigns `p` a literal value, asks too, as bash's reading of the word does not see
+  the value. A command nested more than four levels deep
   (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
@@ -468,7 +504,8 @@ Details: `docs/GATE.md`.
 
 Peers are other live sessions on the machine: Exo sessions, Hermes agents and bus seats.
 
-- `/peers` lists them. `/send <peer> <text>` sends a message from you.
+- `/peers` lists them. `/send <peer> <text>` sends a message from you. Malformed discovery records
+  are ignored and removed during normal discovery so other live peers remain available.
 - An agent can message a peer with its `peer_send` tool.
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
@@ -520,6 +557,7 @@ folder is not inside a git repo.
 - `/trace` shows one row per turn: time, model that served, calls, fallbacks, tools, tokens and cost.
 - `exo trace [SESSION] [--last N] [--calls] [--json]` shows the same from a shell.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
+- `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
 
 Details and the cost rules: `docs/TRACE.md`.
 
@@ -528,7 +566,8 @@ Details and the cost rules: `docs/TRACE.md`.
 | Symptom | Try |
 |---|---|
 | No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
-| The error says a provider "rejected the key" | The key is wrong, revoked or out of credit. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "rejected the key" | The key is wrong, revoked or refused. Replace it in `/providers` (`a`), or fix the environment variable the message names and restart Exo. Waiting does not help, so Exo does not retry. Some providers also send HTTP 403 for flagged input. The provider's text in the parentheses then says so. |
+| The error says a provider "is over its provider spend limit" | The provider stopped billing this key: top up the account or raise the limit in the provider's own console, then test it in `/providers` (`t`). A new key does not help. |
 | The error says a local model "is not running" | Start the server it names (for Ollama, `ollama serve`), then test it in `/providers` (`t`). A passing test lets the next message through at once. |
 | The error says "next route reopens in" some seconds | The provider failed and Exo rests it for a while. Wait, or test it in `/providers` (`t`): a passing test retries it at once. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |

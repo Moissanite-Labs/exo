@@ -175,11 +175,13 @@ def test_the_command_behind_a_split_assignment_decides_when_the_shell_around_is_
     "gh pr comment 5 -R myorg/app --body $'ok\\nF' && gh pr comment 6 -R myorg/app --body 'Zork leaked'",
 ])
 def test_a_post_behind_a_split_assignment_decides_as_the_spelling_without_the_split(line):
-    # forbid_words names a post's body, so neither spelling trips it; the hidden post is read all the same.
-    pol = normalize_policies({"gates": {"forbid_words": ["Zork"]}})
+    # posting.forbid_words is the key the policy reads (a `gates:` one is dropped): the hidden post trips it as the
+    # spelling without the split does.
+    pol = normalize_policies({"posting": {"forbid_words": ["Zork"]}})
     c = classify(sh(line))
     assert any("myorg/app#6" in p.summary for p in gate._each_part(c)), c
-    assert decide(c, pol).outcome == "ask", (line, decide(c, pol))
+    d = decide(c, pol)
+    assert d.outcome == "ask" and any("forbidden word: Zork" in v for v in d.violations), (line, d)
 
 
 @pytest.mark.parametrize("line, expected", [
@@ -190,8 +192,9 @@ def test_a_post_behind_a_split_assignment_decides_as_the_spelling_without_the_sp
     # an unknown program first, or one behind an assignment: its arguments run nothing
     ("env -S \"frobnicate rm -rf /srv/data\"", "ask"),
     ("env -S \"X=1 frobnicate rm -rf /srv/data\"", "ask"),
-    # after `--` a quoted NAME=value is the command, not an assignment
-    ("env -S \"-- 'X=a b' rm -rf /srv/data\"", "ask"),
+    # after `--` env still reads a NAME=value as an assignment (`env -- prog= true` runs true), so rm runs: the
+    # follow-up to #634 reads it, where #634 took the quoted word for the command and asked
+    ("env -S \"-- 'X=a b' rm -rf /srv/data\"", "deny"),
 ])
 def test_the_split_reading_keeps_its_old_decisions(line, expected):
     c = classify(sh(line))

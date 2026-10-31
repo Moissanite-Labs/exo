@@ -30,6 +30,16 @@ def test_no_local_storage_anywhere():
         if f.name == "layout.js":  # D-046: the one exception, the layout choice. It never sees keys or text.
             assert "setItem(KEY" in body.replace("(store || localStorage).setItem(KEY", "setItem(KEY") and 'const KEY = "xc-layout"' in body
             continue
+        if f.name == "appearance.js":  # Only the enum display preference, never arbitrary text.
+            assert 'const KEY = "xc-appearance"' in body
+            assert 'const CHOICES = ["dark", "light", "system"]' in body
+            assert ".setItem(KEY, choice)" in body and "CHOICES.includes(value)" in body
+            continue
+        if f.name == "desktop_prefs.js":  # Native display enums only; the bridge validates every outgoing key.
+            assert "localStorage.setItem(storage, values[key] || fallback)" in body
+            assert "Object.hasOwn(choices, key)" in body and "choices[key].includes(value)" in body
+            assert "if (valid(key, value))" in body
+            continue
         assert "localStorage" not in body, f.name
 
 
@@ -62,7 +72,7 @@ def test_app_strips_the_token_from_the_url():
     assert "history.replaceState" in js
     i = js.index("takeToken();")
     assert i < js.index("show((location.hash")           # before the first view reads the hash
-    assert i < js.index("await bus.start()")
+    assert i < js.index("connecting = bus.start()")
 
 
 def test_token_goes_with_every_request():
@@ -122,3 +132,15 @@ process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, s
                           capture_output=True, text=True, timeout=10)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"]]
+
+
+def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps():
+    """D-091: a refused core is not a broken core. The page shows the sentence the route sent and puts the retry
+    button behind ``retryable``, so a refusal cannot be answered with a button that changes nothing."""
+    js = text("providers.js")
+    assert "modelsError" in js and "error_class" in js and "retryable" in js
+    assert "modelsError.retryable ?" in js                       # the button is conditional on the class
+    assert '"Try again"' in js and "loadModels" in js
+    assert "console." not in js
+    # the old silent swallow is gone: a failure used to become an empty list, which reads as "no models"
+    assert 'catch(() => ({ models: [], available: [] }))' not in js

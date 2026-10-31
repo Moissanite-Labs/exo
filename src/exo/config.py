@@ -73,6 +73,12 @@ def _secret_path(path: Sequence[str]) -> bool:
     return any(_is_secret_name(p) or p in ('env', 'headers') for p in path)
 
 
+def _is_secret(path: Sequence[str], v: str) -> bool:
+    """Whether the string `v` at this key path is a secret: a value shaped like a key, even beside a `${VAR}`, or a
+    literal at a secret path. `check_not_secret` refuses and `redact` masks exactly these strings."""
+    return bool(v) and bool(_SECRET_VALUE.search(v) or (_secret_path(path) and not _VAR_REF.search(v)))
+
+
 def check_not_secret(key: str, value: Any) -> None:
     """Raise ConfigError when (key, value) would put a secret into config.json."""
     def walk(path: list[str], v: Any) -> None:
@@ -82,10 +88,9 @@ def check_not_secret(key: str, value: Any) -> None:
         elif isinstance(v, list):
             for x in v:
                 walk(path, x)
-        elif isinstance(v, str) and v:
-            if _SECRET_VALUE.search(v) or (_secret_path(path) and not _VAR_REF.search(v)):
-                raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
-                                  f'use "${{VAR}}" or a *_env key naming an environment variable')
+        elif isinstance(v, str) and _is_secret(path, v):
+            raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
+                              f'use "${{VAR}}" or a *_env key naming an environment variable')
     walk(key.split('.'), value)
 
 
@@ -96,7 +101,7 @@ def redact(data: Any, path: Sequence[str] = ()) -> Any:
         return {k: redact(v, [*path, str(k)]) for k, v in data.items()}
     if isinstance(data, list):
         return [redact(v, path) for v in data]
-    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_secret_path(path) or _SECRET_VALUE.search(data)):
+    if isinstance(data, str) and _is_secret(path, data):
         return '***'
     return data
 
@@ -336,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog='exo config', description='read and write $EXO_HOME/config.json')
     sp = ap.add_subparsers(dest='op', required=True)
-    sp.add_parser('show', help='every key with its effective value')
+    sp.add_parser('show', help='every key with its effective value, secrets masked')
     sp.add_parser('path', help='where the file lives')
     sp.add_parser('roles', help='resolved model route per role (no secrets)')
     p = sp.add_parser('get'); p.add_argument('key')

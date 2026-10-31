@@ -110,7 +110,9 @@ optimized but not at the cost of functionality and robustness and product-market
    module boundaries (`loop._state`, `store._q`, the tree's `_view` and `_agent_key`), no product imports into the
    engine (the inward imports listed under "Progress"), and one responsibility per module. Two of the counts are
    asserted, and they ratchet down like the floor (D-083): `INWARD_IMPORTS_MAX = 39` imports of
-   a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. Neither may be raised
+   a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. Relative imports
+   such as `from .. import envscrub` count like `from exo import envscrub`. Exported symbols such as `__version__`
+   are not modules, and repeated forms in one file count once. Neither cap may be raised
    to pass a false positive; fix the reader. The test also prints the largest counted files and flags any above 1,000
    lines. That report is information, not an assertion.
 6. **The `CORE` list is never edited to dodge the count,** as before. Excluding an existing counted module to make a

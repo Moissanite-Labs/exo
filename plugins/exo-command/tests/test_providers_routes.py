@@ -300,3 +300,99 @@ def test_passing_test_reloads_the_core_so_the_chat_retries_at_once(monkeypatch):
     assert reloads_after_failure == []
     assert st2 == 200 and up["ok"] and up["core_reloaded"] is True
     assert [c.args for c in src.calls if isinstance(c, s.CommandRun)] == ["reload ollama"]
+
+
+# ------------------------------------------------- D-091: the model list says which failure it was
+
+
+class Failing(Src):
+    """The core fails the model list itself; every other call behaves."""
+
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    async def call(self, body):
+        if type(body).TYPE == "models.list":
+            raise self.exc
+        return await super().call(body)
+
+
+@pytest.mark.parametrize("case, kind, retryable, says", [
+    ("connect", "transport", True, "not reachable"),
+    ("no-socket", "transport", True, "not reachable"),
+    ("forbidden", "authority", False, "principal"),
+    ("unauthorized", "authority", False, "principal"),
+    ("internal", "other", False, "router is busy"),
+    ("source-internal", "other", False, "OSError: disk full"),
+    ("http-401", "authority", False, "token"),
+    ("http-403", "authority", False, "token"),
+])
+def test_model_list_names_the_failure_and_only_offers_a_retry_it_can_honour(case, kind, retryable, says):
+    """A transport failure can be retried; a core that answered and refused cannot, so the page must not offer it
+    one. The picker keeps its shape either way (200, both lists present), so the caller never sees a bare error."""
+    from exo.server.engine import CommandFailed
+    from exo_command.source import SourceError
+    exc = {"connect": ConnectionError("core down"),
+           "no-socket": FileNotFoundError(2, "no such socket"),
+           "forbidden": SourceError("forbidden", "only the principal may list models"),
+           "unauthorized": SourceError("unauthorized", "token expired"),
+           "internal": CommandFailed("internal", "router is busy"),
+           "source-internal": SourceError("internal", "OSError: disk full"),
+           "http-401": SourceError("http_401", '{"error": "bearer token required"}'),
+           "http-403": SourceError("http_403", "forbidden by a proxy")}[case]
+
+    async def go(web, port):
+        return await raw(port, "GET", "/api/providers/models", ok_headers(port))
+    status, data, text = serve(go, Failing(exc))
+    assert status == 200 and data["models"] == [] and data["available"] == []
+    assert data["error_class"] == kind and data["retryable"] is retryable
+    assert says in data["error"] and "Traceback" not in data["error"]
+    assert "ConnectError" not in text and "Errno" not in text
+    # #856: the sentence never carries the exception's class name, nor the core's raw JSON
+    assert not any(n in data["error"] for n in ("CommandFailed", "SourceError", "ClientError", '{"error"'))
+
+
+def test_a_core_on_tcp_that_refuses_the_bearer_token_is_an_authority_failure(tmp_path):
+    """#856: `exo web --url URL --token-file FILE` with a stale token. A real core on TCP answers HTTP 401 before it
+    reads the command; that is a refusal, not a core failure, so the page gets the token sentence and no retry."""
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+    from exo_command.source import ClientSource
+
+    async def go():
+        core = HttpServer(Dispatcher(EchoEngine()), token="the-core-token-0123456789")
+        core_port = await core.start_tcp("127.0.0.1", 0)
+        serving = asyncio.create_task(core.serve_forever())
+        src = ClientSource(url=f"http://127.0.0.1:{core_port}", token="a-stale-token-0123456789")
+        web = make_server(src)
+        port = await web.start("127.0.0.1", 0)
+        try:
+            return (await raw(port, "GET", "/api/providers/models", ok_headers(port)),
+                    await raw(port, "POST", "/api/chat/sessions", ok_headers(port), {"title": "x"}))
+        finally:
+            await web.close()
+            await src.aclose()
+            serving.cancel()
+            await core.close()
+
+    (status, data, text), (chat_status, chat, chat_text) = asyncio.run(go())
+    assert status == 200 and data["models"] == [] and data["available"] == []
+    assert data["error_class"] == "authority" and data["retryable"] is False
+    assert "token" in data["error"] and "exod.token" in data["error"]
+    assert "bearer token required" not in text and "SourceError" not in text and "a-stale-token" not in text
+    # the chat routes relay a core error through error_reply(): the same sentence, not the core's 401 body
+    assert chat_status == 502 and chat["code"] == "http_401" and "exod.token" in chat["error"]
+    assert "bearer token required" not in chat_text and "a-stale-token" not in chat_text
+
+
+def test_a_key_value_in_a_failed_model_list_never_reaches_the_page(monkeypatch):
+    """D-091: the failure sentence reaches a browser, so a key value the core echoed in its error is cut out."""
+    from exo.server.engine import CommandFailed
+    monkeypatch.setenv("OPENAI_API_KEY", FAKE)
+
+    async def go(web, port):
+        return await raw(port, "GET", "/api/providers/models", ok_headers(port))
+    status, data, text = serve(go, Failing(CommandFailed("internal", f"router failed with key {FAKE} for openai")))
+    assert status == 200 and data["error_class"] == "other"
+    assert FAKE not in text and "[redacted]" in data["error"] and "router failed with key" in data["error"]

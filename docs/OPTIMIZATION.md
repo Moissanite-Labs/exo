@@ -20,6 +20,10 @@ its run; measure it per wave here.
 
 ## 1. Repo snapshot (as reported by every lens, consistent)
 
+Current measurement work is in [OPTIMIZATION-BASELINE.md](OPTIMIZATION-BASELINE.md).
+Its synthetic harness records the checked-out revision and does not claim the
+optimizations below are complete. Keep the historical audit numbers separate.
+
 - Audit snapshot: branch `main`, HEAD `eaf35f09` (2026-10-18). Every number
   in sections 1-2 is "at `eaf35f09`". Re-verify each finding on current
   `main` before starting work on it; the Wave 0 baseline (#266) is taken

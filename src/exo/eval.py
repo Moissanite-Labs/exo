@@ -810,11 +810,14 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
 
     `incumbent` and each candidate are {"id", "config", "domains"?, "note"?}; `responder_for(config)` builds the
     Responder. At most `budget.candidates` are tried. A candidate replaces the incumbent only if it is better
-    on dev by the margin and the incumbent's noise band, is not worse on held-out, and passes `gate`. Only
-    items in a candidate's `domains` are rescored; the rest reuse the incumbent's cached rows. Items built from
-    the ledger events in a candidate's `exclude` (its lesson's own evidence) never count for or against it, and a
-    candidate with no other held-out item in its domains cannot pass: pinned items are gated too, but they are
-    not held out, so they never make up for it. The incumbent's scores are cached in `<store>/eval/incumbent.json`,
+    on dev by the margin and the incumbent's noise band, and passes `gate` on the held-out items of its `domains`
+    plus the pinned items, and again on each other domain's held-out items alone. Dev is scored only in its
+    `domains`; every held-out and pinned item is scored for each candidate, and an accepted one rescores every
+    dev, held-out and pinned item (when the call budget runs out first, the merged rows are cached under a key
+    the next night will not trust). Items built from the ledger events in a candidate's `exclude` (its lesson's
+    own evidence) never count for or against it, and a candidate with no other held-out item in its domains
+    cannot pass: pinned items are gated too, but they are not held out, so they never make up for it. The
+    incumbent's scores are cached in `<store>/eval/incumbent.json`,
     keyed on its config, the items' contents, the rules, `weights`, `seed` and `fingerprint` (whatever else
     changes scores, such as the models and the rubric behind the responder and `grader`). The decision is a
     ledger note with both scores when a writable `ledger` is given. Returns the report: incumbent id, one record
@@ -846,6 +849,9 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
             raise RuntimeError("call budget spent")
         return res
 
+    def every(cfg: Any) -> dict:   # every dev, held-out and pinned item, as the cache holds them
+        return {"dev": score(cfg, dev), "held": score(cfg, held), "pinned": score(cfg, pinned) if pinned else {"rows": []}}
+
     inc = dict(incumbent)
     cache_path = root / "eval" / "incumbent.json"
     key = {"cfg": _cfg_hash(inc.get("config")), "items": _cfg_hash(sorted(pool, key=lambda i: str(i["id"]))),
@@ -857,11 +863,9 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
     except (OSError, ValueError):
         pass
     if cache.get("key") != key:
-        s_dev = score(inc["config"], dev)
-        s_held = score(inc["config"], held)
-        s_pin = score(inc["config"], pinned) if pinned else {"rows": []}
-        runs = [s_dev["composite"]] + [score(inc["config"], dev)["composite"] for _ in range(budget.noise_runs)]
-        cache = {"key": key, "dev": s_dev, "held": s_held, "pinned": s_pin, "noise": noise_band(runs)}
+        cache = {"key": key, **every(inc["config"])}
+        runs = [cache["dev"]["composite"]] + [score(inc["config"], dev)["composite"] for _ in range(budget.noise_runs)]
+        cache["noise"] = noise_band(runs)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
     report: dict[str, Any] = {"incumbent": inc["id"], "start_composite": cache["dev"]["composite"],
@@ -886,15 +890,25 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
                 continue
             affected_held = [i for i in held if not doms or domain_of(i) in doms]
             # Pinned items are gated too, but they are not held out: alone they cannot show it is not worse.
-            if not {i["id"] for i in affected_held} & fair:
+            aff_ids = {i["id"] for i in affected_held}
+            if not aff_ids & fair:
                 rec["status"], rec["reason"] = "gate_failed", "no held-out cases"
                 continue
             gate_items = affected_held + [i for i in pinned if i not in affected_held]
-            gate_ids = {i["id"] for i in gate_items} & fair
-            inc_held = {"rows": [r for r in cache["held"]["rows"] + cache["pinned"]["rows"] if r["id"] in gate_ids]}
-            cand_held = score(cand["config"], gate_items)
-            cmp_held = compare(inc_held, cand_held, margin=0.0)
-            g = gate(cmp_held, policy)
+            other = [i for i in held if i["id"] not in aff_ids]
+            cand_held = {"rows": score(cand["config"], gate_items)["rows"] + score(cand["config"], other)["rows"]}
+            inc_rows = cache["held"]["rows"] + cache["pinned"]["rows"]
+
+            def gated(ids: set) -> tuple[dict, dict]:
+                keep = ids & fair
+                cmp = compare({"rows": [r for r in inc_rows if r["id"] in keep]}, cand_held, margin=0.0)
+                return cmp, gate(cmp, policy)
+            cmp_held, g = gated({i["id"] for i in gate_items})
+            # Every rule reaches every domain, so each other domain's held-out is gated on its own too (issue 13):
+            # pooled with the candidate's own domains, a gain there would hide a drop here.
+            for d in sorted({domain_of(i) for i in other}):
+                g["failures"] += [{**f, "domain": d} for f in gated({i["id"] for i in other if domain_of(i) == d})[1]["failures"]]
+            g["pass"] = not g["failures"]
             rec["held"] = {k: cmp_held[k] for k in ("inc", "cand", "delta")}
             rec["gate"] = g
             if not g["pass"]:
@@ -906,18 +920,26 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
         rec["status"] = "accepted"
         report["accepted"].append(cand["id"])
         inc = dict(cand)
-        # The accepted candidate becomes the incumbent: its cached rows are its scored rows over the old ones.
+        # The accepted candidate becomes the incumbent. Re-score every dev/held/pinned item under the new
+        # config so the cache is not stale for domains the candidate did not touch (issue 13): a global rule
+        # (render_system injects every rule) can shift held-out items in any domain, and the next compare and
+        # check_regression must see the new incumbent's scores everywhere. If the call budget is spent, fall
+        # back to merging the already-scored rows, under a key the next night cannot match.
         newkey = {**key, "cfg": _cfg_hash(inc.get("config"))}
-        merged = {r["id"]: r for r in cache["dev"]["rows"]}
-        merged.update({r["id"]: r for r in cand_dev["rows"]})
-        dev_rows = list(merged.values())
-        held_map = {r["id"]: r for r in cache["held"]["rows"]}
-        pin_map = {r["id"]: r for r in cache["pinned"]["rows"]}
-        for r in cand_held["rows"]:
-            (pin_map if r["pinned"] and r["id"] not in held_map else held_map)[r["id"]] = r
-        cache = {"key": newkey, "dev": {"composite": _round(_mean(r["score"] for r in dev_rows)), "rows": dev_rows},
-                 "held": {"composite": _round(_mean(r["score"] for r in held_map.values())), "rows": list(held_map.values())},
-                 "pinned": {"rows": list(pin_map.values())}, "noise": cache["noise"]}
+        try:
+            cache = {"key": newkey, **every(inc["config"]), "noise": cache["noise"]}
+        except RuntimeError:
+            merged = {r["id"]: r for r in cache["dev"]["rows"]}
+            merged.update({r["id"]: r for r in cand_dev["rows"]})
+            dev_rows = list(merged.values())
+            held_map = {r["id"]: r for r in cache["held"]["rows"]}
+            pin_map = {r["id"]: r for r in cache["pinned"]["rows"]}
+            for r in cand_held["rows"]:
+                (pin_map if r["pinned"] and r["id"] not in held_map else held_map)[r["id"]] = r
+            cache = {"key": {**newkey, "partial": True},
+                     "dev": {"composite": _round(_mean(r["score"] for r in dev_rows)), "rows": dev_rows},
+                     "held": {"composite": _round(_mean(r["score"] for r in held_map.values())), "rows": list(held_map.values())},
+                     "pinned": {"rows": list(pin_map.values())}, "noise": cache["noise"]}
         key = newkey
         cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
         cb = cand.get("on_accept")

@@ -239,6 +239,86 @@ def test_who_may_answer_a_line_read_two_ways_may_answer_both_readings(tmp_path, 
     assert r["approvers"] == ["principal", "seat:saga-divan"], r
 
 
+# #143: a line read two ways (bash's reading of a ${..} word and the reading before, at the end of its `also` chain)
+# binds an approval to its exact text, as a line with a floor does: a grant keyed on its first reading (read) must
+# not cover a later line whose other reading is a push. The lines are data for the gate; none is run.
+TWO_WAYS_FIRST = "echo \"${x:-'}\" ; rm -rf ./work ; echo \"'}\""
+TWO_WAYS_LATER = "x=$(echo ${x:-<(} )\ngit push --force origin main\n})"
+
+
+def _read_grant_on_any_target(g):
+    """A standing read grant whose target glob is `*` (GrantStore.add escapes the target it is given)."""
+    g.grants.persist({**g.grants.prepare("read", "", "", 30, "principal:tui"), "target": "*"})
+
+
+def test_an_always_on_a_line_read_two_ways_covers_no_other_line(tmp_path):
+    store = tmp_path / "st143"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("version: 1\n")
+    key = tmp_path / "k143.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    for line, other in ((TWO_WAYS_FIRST, "delete"), (TWO_WAYS_LATER, "force_push")):
+        c = gate.classify(("terminal", {"command": line}))
+        assert [r.category for r in gate.readings(c)] == ["read", other] and gate.binds_exact(c), line
+    r = call(ctx, "terminal", {"command": TWO_WAYS_FIRST})
+    assert r["action"] == "approve" and r["binding"][:16] in r["rule_key"], r
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": TWO_WAYS_FIRST}) is None          # the exact approved line runs
+    assert call(ctx, "terminal", {"command": TWO_WAYS_LATER})["action"] == "approve"
+    _read_grant_on_any_target(g)
+    assert call(ctx, "terminal", {"command": TWO_WAYS_LATER})["action"] == "approve"
+
+
+# Its other reading (the one before #143) runs a value, which is neither outward nor irreversible: only binds_exact
+# reading every reading keeps a grant keyed on the first reading (read) from covering it.
+TWO_WAYS_EVAL = "echo \"${x:-'}\" ; eval \"$y\" ; echo \"'}\""
+
+
+def test_a_line_whose_other_reading_runs_a_value_binds_to_its_text(tmp_path):
+    store = tmp_path / "st143e"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("version: 1\n")
+    key = tmp_path / "k143e.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": TWO_WAYS_EVAL}))
+    assert [r.category for r in gate.readings(c)] == ["read", "opaque_exec"]
+    assert not gate.is_outward(c) and gate.binds_exact(c)
+    _read_grant_on_any_target(g)
+    assert g.grants.match("read", "terminal", "", False) is not None               # the grant covers read lines
+    r = call(ctx, "terminal", {"command": TWO_WAYS_EVAL})
+    assert r is not None and r["action"] == "approve", r
+
+
+# Merge of main f28934a3 (review 5678114763): a ${..} word in an `env -S` text (#591's split readings) or in the stdin
+# of a sudo -s or -i shell (#491). The store write in the word is read in each reading, so only the principal
+# answers the card and a standing read grant does not let the line run. Main f28934a3 reads none of the word: the
+# line is an opaque_exec ask, which the seat's table lets it answer.
+@pytest.mark.parametrize("line", [
+    "env -S 'echo ${{v:-$(cp /var/tmp/x {store}/policies/gates.yaml)}}'",
+    "env --split='echo ${{v:-`cp /var/tmp/x {store}/policies/gates.yaml`}}'",
+    "sudo -s <<< 'echo ${{v:-$(cp /var/tmp/x {store}/policies/gates.yaml)}}'",
+    "sudo -i <<'END'\necho ${{x:-'}}'}} ; cp /var/tmp/x {store}/policies/gates.yaml\nEND",
+])
+def test_a_store_write_in_a_word_in_env_s_or_sudo_stdin_is_answered_by_the_principal_only(tmp_path, line):
+    store = tmp_path / "st158"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(SEATS)
+    key = tmp_path / "k158.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    line = line.format(store=store)
+    c = gate.classify(("terminal", {"command": line}))
+    assert gate.no_grant(c) and gate.binds_exact(c)
+    assert "store_write" in {p.category for r in gate.readings(c) for p in [r, *gate._each_part(r)]}
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+    _read_grant_on_any_target(g)
+    assert call(ctx, "terminal", {"command": line})["action"] == "approve"
+
+
 @pytest.fixture
 def floor_is(monkeypatch):
     """Give a line a floor read from another line: the hook's checks past `decide` must read it as well."""
@@ -291,6 +371,218 @@ def test_a_line_read_before_with_an_unseen_body_is_answered_once(tmp_path, floor
     _, ctx = make_gate(store, key)
     r = call(ctx, "terminal", {"command": line})
     assert r and r["action"] == "approve" and r.get("once") is True, r
+
+
+# #471: a line with a quoted prefix assignment is also read as before, each such word the program (``before``), and
+# that reading may have a floor of its own (#399). The hook's checks past `decide` read both, as for the floor.
+@pytest.fixture
+def before_is(monkeypatch):
+    """Give a line a reading as before #471 read from another line, with that line's floor."""
+    real = gate.classify
+
+    def set_before(line, before, **more):
+        def classify(action, *a, **k):
+            c = real(action, *a, **k)
+            args = action[1] if isinstance(action, tuple) else action.get("args") or {}
+            if args.get("command") == line:
+                c.before = real({"tool": "terminal", "args": {"command": before, **more}})
+            return c
+        monkeypatch.setattr(gate, "classify", classify)
+    return set_before
+
+
+def _seat_gate(tmp_path, name):
+    store = tmp_path / name
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(SEATS)
+    key = tmp_path / f"{name}.key"
+    crypto.save_key(crypto.keygen(), key)
+    return store, key
+
+
+@pytest.mark.parametrize("before", ["gh secret set X -b v", "gh -R myorg/app secret set X -b v"])
+def test_a_line_read_as_before_471_as_credentials_is_answered_once(tmp_path, before_is, before):
+    store, key = _seat_gate(tmp_path, "st12")
+    line = "gh pr view 5 -R myorg/app"
+    before_is(line, before)
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.category == "read" and "credentials" in (c.before.category, getattr(c.before.floor, "category", "")), c
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []                                              # no grant was kept
+    assert gate.binds_exact(c, gate.decide(c, g.policies()))
+
+
+def test_a_line_read_as_before_471_with_an_unseen_body_is_answered_once(tmp_path, before_is):
+    store, key = _seat_gate(tmp_path, "st13")
+    line = "gh pr comment 5 -R myorg/app -b x"
+    before_is(line, 'gh pr comment 5 -R myorg/app -b "$X"')
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r
+
+
+def test_who_may_answer_a_line_read_as_before_471_may_answer_that_reading(tmp_path, before_is):
+    store, key = _seat_gate(tmp_path, "st14")
+    line = "gh pr comment 5 -R myorg/app -b x"
+    before_is(line, "gh pr -b x comment 5 -R myorg/app")             # read as a read, with a post for its floor
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+DELEGATED = 'approvers:\n  default: [principal, "seat:saga-divan"]\n  categories:\n    credentials: [principal]\n'
+
+
+@pytest.mark.parametrize("before, more", [
+    ("env; echo x > ~/.exo/policies/gates.yaml", {}),            # #447: a store write part beside a secret read
+    ("cp /tmp/evil.yaml ~/.exo/policies/default.yaml", {}),
+    ("cat config", {"workdir": "~/.kube"}),                       # #311: a store read from the call's own folder
+])
+def test_a_store_part_only_in_the_line_read_as_before_471_keeps_the_principal_once(tmp_path, before_is, before, more):
+    # gate.readings lists the line read as before #471 after the line's own readings, so call_approvers and no_grant
+    # (#447, #311) read its parts too: a seat every other category is delegated to does not answer, and no grant is
+    # kept.
+    store, key = _seat_gate(tmp_path, "st16")
+    (store / "policies" / "approvals.yaml").write_text(DELEGATED)
+    line = "gh pr view 5 -R myorg/app"
+    before_is(line, before, **more)
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert not any(p.category in gate.NO_GRANT for p in gate._each_part(c)), c     # only that reading has one
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []
+
+
+def test_who_may_answer_a_sudo_write_read_as_before_471_may_answer_its_displaced_part(tmp_path, before_is):
+    # #454: as read before #471 the line is a sudo write that displaced a gh read on myorg/app. Only those who may
+    # answer that read may answer the line, as for the line read as before #399.
+    store, key = _seat_gate(tmp_path, "st17")
+    (store / "policies" / "gates.yaml").write_text("categories: {local_write: ask, read: ask}\n")
+    (store / "policies" / "approvals.yaml").write_text(
+        'approvers:\n  default: [principal]\n  categories:\n    local_write: [principal, "seat:saga-divan"]\n')
+    line = "echo hi > /tmp/f"
+    before_is(line, "sudo gh pr view 9 -R myorg/app > /tmp/f")
+    _, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.displaced is None and c.before.displaced is not None, c
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+def test_who_may_answer_a_real_line_read_as_before_471_may_answer_that_reading(tmp_path):
+    # The curl behind the quoted word is a web post a seat may answer; read as before, the word is the program and
+    # the gh post decides the line, which only the principal answers.
+    store = tmp_path / "st15"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(
+        'approvers:\n  default: [principal]\n  categories:\n    web_post: [principal, "seat:saga-divan"]\n')
+    key = tmp_path / "k15.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    line = "X='a b' curl -X POST -d @notes.md https://example.com/hook && gh pr comment 5 -R myorg/app --body hi"
+    c = gate.classify(("terminal", {"command": line}))
+    assert (c.category, c.before.category) == ("web_post", "github_post"), c
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+@pytest.mark.parametrize("prefix", ["X='a b'", 'X="$Y"'])
+@pytest.mark.parametrize("gates, line", [
+    ("reserved: [local_write]\n", "{p} sudo git commit -m x; sudo git commit -m x"),
+    ("reserved: [schedule]\n", "{p} systemctl enable foo.timer; systemctl enable foo.timer"),
+    ("reserved: [web_read]\n", "{p} sudo curl https://example.com/x; sudo curl https://example.com/x"),
+    ("reserved: [local_write]\n", "git commit -m x; {p} sudo git commit -m x")])
+def test_a_reserved_hit_off_the_act_of_the_line_read_as_before_471_keeps_its_ask(tmp_path, prefix, gates, line):
+    # D-075 with #471: read as before, the quoted word is an unknown program that leads the line, and the commit, the
+    # timer or the curl is another part of it, so main asks every time. The command behind the word leads the line
+    # now (a costly act ties with the unknown program and comes first), but the grant check still reads the line as
+    # before against that reading's own act. An "always" still leaves the line asking.
+    line = line.format(p=prefix)
+    _, _, ctx = _store454(tmp_path, "st471r", gates)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.before is not None and c.category != c.before.category, c
+    for _ in range(2):
+        r = call(ctx, "terminal", {"command": line})
+        assert r is not None and r["action"] == "approve" and not r.get("once"), r
+        answer(ctx, r, "always")
+
+
+@pytest.mark.parametrize("gates, line", [
+    ("reserved: [local_write]\n", "X=ab sudo git commit -m x; sudo git commit -m x"),
+    ("reserved: [vcs_push]\n", "X='a b' git push origin main")])
+def test_a_reserved_hit_on_the_act_of_each_reading_471_takes_the_grant_as_on_main(tmp_path, gates, line):
+    # An unquoted prefix is read one way, with the commit leading it. Read as before, `X='a b' git push origin main` is
+    # an unknown program with no reserved hit, and the push it reads now is the act of the line. Main takes the grant
+    # on both, and so does the hook.
+    _, _, ctx = _store454(tmp_path, "st471g", gates)
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve", r
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+
+
+def test_a_pending_reserved_entry_holds_off_a_grant_on_the_line_read_as_before_471(tmp_path):
+    # D-038: a reserved entry not yet accepted reaches the check on the line read as before too.
+    line = "X='a b' sudo git commit -m x; sudo git commit -m x"
+    store, g, ctx = _store454(tmp_path, "st471p", "categories: {opaque_exec: ask}\n")
+    r = call(ctx, "terminal", {"command": line})
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+    p = store / "policies" / "gates.yaml"
+    p.write_text("categories: {opaque_exec: ask}\nreserved: [local_write]\n")
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 10_000_000))
+    assert g.changed_policies() is not None
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve" and "policy files changed this session" in r["message"], r
+
+
+# Guard rows (review 5659099075): with main's joined reading (#584) and its reading as before D-074 (the home's
+# config.json), the line read as before #471 keeps both, and so does the new reading. A config.json store write in
+# any of them stays the principal's, once, and an "always" on a push read joined behind the quoted word covers that
+# exact line only, as on main. With main 58503282 (review 5661669883): a store name split by quotes or a
+# backslash-newline, or in another letter case (#601), behind a quoted prefix, also as the folder of a `cd` there; a
+# camelCase tool that writes the home's config.json (#515, its floor); and a `$((` bash reads as a command
+# substitution (#553).
+@pytest.mark.parametrize("tool, line", [
+    ("terminal", "X='a b' cp /tmp/x ~/.exo/con$\\\nfig.json"),
+    ("terminal", "X='a b' cp /tmp/x \"$\\\n{HOME}/.exo/config.json\""),
+    ("terminal", "git push origin feature && X=\"$Y\" cp /tmp/x ~/.exo/config.json"),
+    ("terminal", "X='a b' cp /tmp/x ~/.E''XO/con\\\nfig.json"),
+    ("terminal", "X='a b' cd ~/.e\\\nxo && cp /tmp/x config.json"),
+    ("terminal", "git push origin feature && X=\"$Y\" cd ~/'.exo' && cp /tmp/x config.json"),
+    ("writeFile", "X='a b' rm -rf /srv/data")])
+def test_a_config_store_write_behind_a_quoted_assignment_keeps_the_principal_once(tmp_path, monkeypatch, tool, line):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "home" / ".exo"))
+    store, key = _seat_gate(tmp_path, "st471c")
+    (store / "policies" / "approvals.yaml").write_text(DELEGATED)
+    g, ctx = make_gate(store, key)
+    args = {"command": line} if tool == "terminal" else {"path": "~/.exo/config.json", "content": line}
+    r = call(ctx, tool, args)
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []
+
+
+@pytest.mark.parametrize("line", ["X='a b' echo \"$\\\n(git push --force origin main)\"",
+                                  "X='a b' echo $((echo '((' ; git push --force origin main) )",
+                                  "git push origin feature && X=a\\ b echo $((echo '((' ; git push -f origin main) )"])
+def test_an_always_on_a_joined_push_behind_a_quoted_assignment_covers_that_line_only(tmp_path, line):
+    store, key = _seat_gate(tmp_path, "st471j")
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+    r = call(ctx, "terminal", {"command": line.replace("main", "release")})
+    assert r and r["action"] == "approve", r
 
 
 # --- standing grants ------------------------------------------------------------------------
@@ -497,6 +789,36 @@ def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     r = call(ctx, "terminal", {"command": "git push origin feature && gh pr merge 3 --squash"})
     assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
     assert events(store)[-1]["decision"]["reserved"] == [["vcs_merge", "#3"]]
+
+
+@pytest.mark.parametrize("gates", ['reserved: ["target:*/shared/*"]\n', "reserved: [local_write]\n"])
+def test_a_grant_on_a_linked_spelling_never_covers_the_reserved_place_it_lands_in(tmp_path, gates):
+    # exo-desktop #52 with D-075: a write through a linked folder is also a write of the place it lands in, a part of
+    # its own. A grant is keyed on the path as spelt, so a reserved entry that matches the place keeps the principal's
+    # ask: the link may lead elsewhere by the next call. The place spelt as itself is the call's own act, so a grant on
+    # it covers it. On main the linked write was allowed under the entry on the place, and a grant covered it under
+    # the entry on the category.
+    _, _, ctx = _store454(tmp_path, "st52", gates)
+    shared, work = tmp_path / "shared", tmp_path / "work"
+    shared.mkdir()
+    work.mkdir()
+    (work / "o").symlink_to(shared)
+    place = os.path.join(os.path.realpath(shared), "plain.txt")
+    [cb] = ctx.hooks["pre_tool_call"]
+
+    def write(path):
+        return asyncio.run(cb(tool_name="write_file", args={"path": path, "content": "x"}, session_id="s1",
+                              tool_call_id="c1", turn_id="t1", cwd=str(work)))
+
+    r = write(place)
+    assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
+    answer(ctx, r, "always")
+    assert write(place) is None
+    for _ in range(2):
+        r = write("o/plain.txt")
+        assert r is not None and r["action"] == "approve" and "reserved for the principal" in r["message"], r
+        assert f"a link leads it to {place}" in r["message"], r
+        answer(ctx, r, "always")
 
 
 def test_a_grant_for_one_push_does_not_cover_a_second_push_with_other_credentials(tmp_path):

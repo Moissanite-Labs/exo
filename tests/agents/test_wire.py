@@ -129,8 +129,9 @@ def test_negotiate_prefers_the_line_and_falls_back_to_json():
 def test_detached_signature(signer):
     line = encode(RECEIPT)
     sig = sign(line, signer)
-    assert sig["by"] == "tester" and verify(line, sig) and verify(line, sig, signer.pub)
-    assert not verify(line.replace("Partial", "Complete"), sig)
+    assert sig["by"] == "tester" and verify(line, sig, signer.pub)
+    assert not verify(line, sig)  # the key the packet claims is never trusted on its own
+    assert not verify(line.replace("Partial", "Complete"), sig, signer.pub)
     other = crypto.Signer("other", crypto.keygen())
     assert not verify(line, sig, trusted_pub=other.pub)  # a trusted key overrides the key the packet claims
 

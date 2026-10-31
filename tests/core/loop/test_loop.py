@@ -1231,3 +1231,29 @@ def test_a_send_that_waited_for_a_session_locked_meanwhile_runs_no_turn(tmp_path
     s = run(go())
     assert [e.type for e in seen].count("turn.started") == 1
     assert "queued behind the turn" not in [m.text() for m in store.messages(s.id)]
+
+
+def test_bash_failure_reaches_next_model_call_events_and_error_totals(tmp_path):
+    from exo.core.tools import ToolContext, default_registry
+
+    registry = default_registry()
+    command = "false && touch nonexistent"
+    provider = Script(reply("", [ToolCall(id="shell-failure", name="bash", arguments={"command": command})]),
+                      reply("recorded failure"))
+
+    async def shell_tool(call, ctx):
+        return await registry.call(call, ToolContext(cwd=str(tmp_path)))
+
+    store, loop, seen = make(tmp_path, provider, tool_specs=registry.specs(names=["bash"]), run_tool=shell_tool)
+
+    async def go():
+        session = await loop.create_session()
+        return await loop.send(session.id, "run the synthetic command")
+
+    result = run(go())
+    assert result.stop_reason == "end" and not (tmp_path / "nonexistent").exists()
+    model_result = next(m.tool_results[0] for m in provider.calls[1] if m.role == "tool")
+    assert model_result.is_error and model_result.text() == "(no output)\n[exit 1]"
+    completed = next(e.body for e in seen if e.type == "tool.completed")
+    assert completed.is_error and completed.result.is_error
+    assert next(e.body.timing for e in seen if e.type == "turn.completed")["tool_errors"] == 1

@@ -271,7 +271,9 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        if (task := self._started) is not None and task.done() and (task.cancelled() or task.exception() is not None):
+            self._started = None  # it raised (the _main_status provider probe, say) or was cancelled. A running one stays.
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -360,9 +362,8 @@ class CoreRuntime:
                 self.scheduler.close()
 
     async def _close_mcp(self) -> None:
-        if self._started is not None:
-            await self.mcp.close()
-            self._started = None
+        await self.mcp.close()  # always: a start cleared after failing may have left servers running
+        self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
@@ -738,6 +739,8 @@ class CoreRuntime:
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]
+        if getattr(self, "work_checkpoint", None) is not None:
+            own.append({"name": "checkpoint", "description": "record-derived continuity index", "args": ""})
         if getattr(self, "work_notebook", None) is not None:
             own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}

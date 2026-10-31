@@ -59,7 +59,7 @@ def test_register_wires_both_hooks(keyed_store):
 def test_internal_error_on_read_tool_fails_closed(keyed_store):
     # An internal error in the gate's own classification (e.g. a malformed policy
     # regex) must not silently allow a read tool. It must fall through to an
-    # approval card. Regression for issue 11.
+    # approval card. Regression for aska-digital/exo-desktop issue 11 (D-084).
     store, key = keyed_store
     g, ctx = make_gate(store, key)
 
@@ -695,6 +695,41 @@ def test_internal_error_fails_closed_including_reads(keyed_store, monkeypatch):
     assert r["action"] == "approve" and "boom" in r["message"] and r.get("once") is True
     r = call(ctx, "terminal", {"command": "ls"})
     assert r["action"] == "approve" and "boom" in r["message"]
+
+
+def _raise(*a, **k):
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("decision_model", [False, True])
+def test_internal_error_card_is_once_only_for_every_call(keyed_store, monkeypatch, decision_model):
+    """D-084: in enforce mode a gate error asks for every call, reads, a search and non-dict arguments included, and
+    the card offers no "always"."""
+    store, key = keyed_store
+    _, ctx = make_gate(store, key, decision_model=decision_model)
+    monkeypatch.setattr(hook.gate, "classify", _raise)
+    for tool, args in [("read_file", {"path": "README.md"}), ("search_files", {"pattern": "x", "path": "."}),
+                       ("read_file", ["README.md"]), ("terminal", {"command": "ls"})]:
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["once"] is True and r["rule_key"] == f"exo-gate:error:{tool}", r
+
+
+@pytest.mark.parametrize("decision_model", [False, True])
+def test_internal_error_in_observe_mode(keyed_store, monkeypatch, decision_model):
+    """D-084: observe mode lets a call ahead on a gate error, as before, unless the gate reads it as a store write or
+    a secret. Those ask the principal alone, once, and a secret check that raises counts as a secret."""
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, mode="observe", decision_model=decision_model)
+    monkeypatch.setattr(g, "_rules", _raise)
+    assert call(ctx, "read_file", {"path": "README.md"}) is None
+    assert call(ctx, "terminal", {"command": "ls"}) is None
+    for tool, args in [("read_file", {"path": "~/.exo/keys/seat.key"}),
+                       ("write_file", {"path": "~/.exo/policies/gates.yaml", "content": "x"})]:
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["once"] is True and r["approvers"] == ["principal"], (tool, r)
+    monkeypatch.setattr(hook.gate, "args_sensitive", _raise)
+    r = call(ctx, "read_file", {"path": "README.md"})
+    assert r["action"] == "approve" and r["once"] is True and r["approvers"] == ["principal"], r
 
 
 def test_settings_resolution(tmp_path):

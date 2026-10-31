@@ -134,24 +134,6 @@
       "count": 1
     },
     {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[str, str]\", variable has type \"dict[str, str] | None\")",
-      "code": "assignment",
-      "count": 3
-    },
-    {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"get\"",
-      "code": "union-attr",
-      "count": 5
-    },
-    {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"items\"",
-      "code": "union-attr",
-      "count": 1
-    },
-    {
       "path": "clients/tui/exo_tui/widgets.py",
       "message": "\"App[Any]\" has no attribute \"action_ctrl_c\"",
       "code": "attr-defined",
@@ -821,7 +803,7 @@
       "path": "src/exo/learn/climb.py",
       "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
       "code": "union-attr",
-      "count": 9
+      "count": 7
     },
     {
       "path": "src/exo/learn/climb.py",

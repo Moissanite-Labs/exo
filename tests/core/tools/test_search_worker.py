@@ -41,6 +41,9 @@ def test_pathological_pattern_times_out_without_stopping_loop(tmp_path, monkeypa
         (deepest / "a.txt").write_text("ordinary")
         pattern = "**/" * 30 + "absent"
         args = {"pattern": pattern} if name == "glob" else {"pattern": ".", "glob": pattern}
+    # Built before the clock starts: the first build imports the built-in tools, which is not the search and on a
+    # loaded runner took the call past its 3 s bound.
+    registry = default_registry()
     async def run():
         ticks = []
 
@@ -52,11 +55,15 @@ def test_pathological_pattern_times_out_without_stopping_loop(tmp_path, monkeypa
         tick = asyncio.create_task(ticker())
         try:
             start = time.monotonic()
-            result = await _call("grep" if name == "grep-include" else name, tmp_path, **args)
+            call = ToolCall("c", "grep" if name == "grep-include" else name, args)
+            result = await registry.call(call, ToolContext(cwd=str(tmp_path)))
             assert result.is_error and result.text() == "Search stopped after 1 s; narrow the pattern"
             assert time.monotonic() - start < 3
             assert len(ticks) > 5
-            assert max(b - a for a, b in zip(ticks, ticks[1:])) < .1
+            # The search runs in a worker process, so the loop keeps ticking. A search that held the loop would
+            # stall it for the whole 1 s timeout; half that leaves room for a busy runner's process start
+            # (0.26 s seen on a macOS CI runner, #907).
+            assert max(b - a for a, b in zip(ticks, ticks[1:])) < .5
         finally:
             tick.cancel()
             await asyncio.gather(tick, return_exceptions=True)
