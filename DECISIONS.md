@@ -234,6 +234,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
   captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
   and each later turn under 1 ms.
+  *Amendment 2026-10-28 (exo-desktop #54):* no client asks a `belief_conflict` question yet, so an answer cannot
+  release a held conflict proposal in normal use. A direct `exo proposals accept` or `reject` is how it ends, and it
+  now records the question id, which closes the question. A hand-written `answer` that refs the question still
+  works. Putting the question in the ask queue is a follow-up.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -6391,6 +6395,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - **Limit:** union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk, and union keeps both sides' copy of that hunk with the lines between. When both sides add under one heading and under the next one just below it, an entry can move to the next heading and the lines between repeat, with no conflict. `tests/test_merge_attributes.py` makes the repeat visible: it fails when a version section of `CHANGELOG.md` holds a bullet twice or a `###` heading with nothing under it. Main has neither today. Where an entry sits stays a reviewer's check.
   - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
   - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
+- **Proposed guidance 2026-10-30 (#1008):** Document GitHub's native stacks, issue artifacts and CLI media alongside the existing author-owned workflow. This guidance is advisory until the principal accepts it. Until then the author and review flow in `docs/REPOSITORY-WORKFLOW.md` governs.
+  - These tools do not change independent current-head review, required checks, merge authority, desktop sync or installation boundaries.
+  - Inventory and coordinate any existing stack with its owners before modifying it. A tool's ability to rebase or merge several branches is not authorization to do so.
+  - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md` "GitHub collaboration tools (proposed guidance)", developer guide section 8. No runtime or user-guide change.
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.

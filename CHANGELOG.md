@@ -308,6 +308,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `muse-cli` keeps earlier tool calls and results in its flattened prompt, as text. It used to drop them, and
   an assistant turn that only called tools (exo-desktop #52).
 
+- Accepting a lesson is all or nothing. When the node or skill file write stops partway (a full disk), or indexing
+  or the ledger write fails after it, the file goes back to what it was. A retry then adds the lesson once, not
+  twice. The file stays when Ctrl-C lands after the ledger committed the accept. With a ledger authority, it also
+  stays when the authority committed the accept despite the error, or may have committed it and cannot be reached
+  to check (exo-desktop #54).
+
+- An accept given when its answer was not in the transcript no longer becomes an eval replay whose gold answer is
+  the placeholder text "(answer not in the transcript)". An accept whose answer was found still counts
+  (exo-desktop #54).
+
+- A held conflict proposal can be decided. No client asks its `belief_conflict` question yet, so the docs now
+  name `exo proposals accept` or `reject` as the way to end it, and either one closes the question in the ledger
+  (exo-desktop #54).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
@@ -457,6 +471,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
+
+- The Hermes import's watermark now records which session sources it read. A run that reads a source the last
+  one skipped (cron, say) starts again from the first row, so the older rows of that source are no longer missed.
+  Rows already imported are not added twice (exo-desktop #54).
 
 - Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
   the connection without a response. They send no approval answer to the core (#740).
