@@ -84,6 +84,8 @@ lines it replaced before you go on.
 - anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
 
 A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`.
+Explicit GitHub host mode uses this filtered environment too. It never restores tokens or `GH_CONFIG_DIR`
+from the core process environment. Approved supplied values are kept. See `docs/GITHUB-AUTH.md`.
 Allowing `BASH_ENV`, `ENV` or an exported function (`env_allow = ["BASH_FUNC_module%%"]` for Lmod, for example)
 also allows shell startup code; only allow a startup file or function you trust. The bash tool and background
 jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set and `SHLVL` unset or 0, a plain

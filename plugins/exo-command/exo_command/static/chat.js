@@ -152,8 +152,7 @@ export function mount(root) {
     // Keep background threads current too: returning to one must not revive a
     // cached "idle" or "live" flag from before its last turn event.
     if (ev.type === "turn.started" || ev.type === "turn.completed") {
-      rememberStatus(ev.session, ev.type === "turn.started" ? "live" : "idle");
-      drawSessions();
+      if (rememberStatus(ev.session, ev.type === "turn.started" ? "live" : "idle")) drawSessions();
     }
     if (!mine) return;
     switch (ev.type) {
@@ -375,11 +374,12 @@ export function mount(root) {
   }
 
   function rememberStatus(id, status) {
-    if (status !== "live" && status !== "idle") return;
+    if (!id || (status !== "live" && status !== "idle")) return false;
     const session = sessions.find(s => s.id === id);
-    if (!session && id !== current) return;
+    const changed = !!session && session.status !== status;
     statusUpdates.set(id, { version: ++statusVersion, status });
     if (session) session.status = status;
+    return changed;
   }
 
   function snapshotBusy(info, fallback) {
@@ -392,7 +392,7 @@ export function mount(root) {
   function drawStatus() {
     const cell = (label, ...v) => h("span", null, h("span", { class: "xc-i" }, label), h("span", { class: "xc-v" }, ...v));
     const confirmedBusy = busy && coreUsable && activityFresh;
-    const activity = busy ? "working" : "idle";
+    const activity = busy ? (waitingForApproval(current) ? "waiting for approval" : "working") : "idle";
     const stateText = !coreUsable ? (!webUsable ? "web reconnecting" : coreState === "connecting" ? "connecting to core" : "core unavailable") + " · last known " + activity
       : !activityFresh ? (loading ? "checking activity" : "activity unavailable") + " · last known " + activity : activity;
     const out = [h("span", { class: "xc-state" + (confirmedBusy ? " on" : "") }, h("span", { class: "xc-dot" + (confirmedBusy ? " on" : "") }), stateText)];
@@ -434,20 +434,32 @@ export function mount(root) {
     el.replaceChildren(...(s ? [h("b", null, s.agent || s.seat || "exo"), " \u00B7 " + short(s.title || s.id, 36)] : []));
   }
 
+  function waitingForApproval(session) {
+    return Object.values(approvals).some((a) => !a.session || a.session === session);
+  }
+
+  function sessionPhase(session) {
+    if (session.status !== "live") return "";
+    const phase = waitingForApproval(session.id) ? "waiting for approval" : "running";
+    return !coreUsable || (session.id === current && !activityFresh) ? "last known " + phase : phase;
+  }
+
   function drawSessions() {
-    const waiting = new Set(Object.values(approvals).map((a) => a.session));
+    const focused = listEl.contains(document.activeElement) ? document.activeElement.closest(".xc-sess")?.dataset.session : null;
     listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
+      h("button", { "data-session": s.id, class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
         title: "Double-click to rename (also /rename <title>)",
         ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+        h("span", { class: "xc-dim" }, [sessionPhase(s), waitingForApproval(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+    if (focused) Array.from(listEl.querySelectorAll(".xc-sess")).find(el => el.dataset.session === focused)?.focus({ preventScroll: true });
     drawWhere();
   }
 
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
     approvalView.draw(mine);
+    drawStatus();
   }
 
   function gaugeRow(label, n, max, hot) {
@@ -796,6 +808,7 @@ export function mount(root) {
       coreState = st.core_state || (coreUsable ? "connected" : "unavailable");
       if (!coreUsable || !wasUsable) activityFresh = false;
       drawStatus();
+      if (wasUsable !== coreUsable) drawSessions();
     }
     const restored = coreUsable && !wasUsable && st.synced > 0;
     if (st.synced !== synced || restored) { synced = st.synced; recover(); }

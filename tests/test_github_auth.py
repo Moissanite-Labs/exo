@@ -340,3 +340,55 @@ def test_git_header_inspection_timeout_reaps_child(tmp_path):
     git.chmod(0o700)
     with pytest.raises(auth.AuthError, match='timed out'):
         auth._git_header_names(str(git), {}, tmp_path)
+
+
+HOST_AUTH_NAMES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR')
+
+
+def test_host_mode_never_restores_globals_removed_by_common_scrub(tmp_path, monkeypatch):
+    auth.configure(tmp_path, 'alice', 'host')
+    fake_global = {name: 'fake-global-' + name for name in HOST_AUTH_NAMES}
+    monkeypatch.setattr(os, 'environ', fake_global)
+    provided = tool_env(fake_global)
+    assert all(name not in provided for name in HOST_AUTH_NAMES)
+    result = auth.child_env(provided, tmp_path, 'alice')
+    assert result == {**provided, 'GH_HOST': 'github.com'}
+    assert fake_global == {name: 'fake-global-' + name for name in HOST_AUTH_NAMES}
+
+
+def test_host_mode_preserves_provided_auth_and_stored_config_selection(tmp_path, monkeypatch):
+    auth.configure(tmp_path, 'alice', 'host')
+    fake_global = {name: 'fake-global-' + name for name in HOST_AUTH_NAMES}
+    monkeypatch.setattr(os, 'environ', fake_global)
+    provided = {name: 'fake-approved-' + name for name in HOST_AUTH_NAMES}
+    provided.update(HOME=str(tmp_path / 'fake-host-home'), XDG_CONFIG_HOME=str(tmp_path / 'fake-xdg'))
+    expected = {**provided, 'GH_HOST': 'github.com'}
+    assert auth.child_env(provided, tmp_path, 'alice') == expected
+    # No supplied token/config override: gh can still use its ordinary stored host configuration.
+    base = {'HOME': provided['HOME'], 'XDG_CONFIG_HOME': provided['XDG_CONFIG_HOME']}
+    assert auth.child_env(base, tmp_path, 'alice') == {**base, 'GH_HOST': 'github.com'}
+    assert provided == {key: value for key, value in expected.items() if key != 'GH_HOST'}
+
+
+@pytest.mark.parametrize('pattern,denied', [
+    ('GITHUB_*', {'GITHUB_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'}),
+    ('GH_ENTERPRISE_TOKEN', {'GH_ENTERPRISE_TOKEN'}),
+    ('*ENTERPRISE_TOKEN', {'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'}),
+])
+@pytest.mark.parametrize('as_iterator', [False, True])
+def test_host_mode_direct_deny_removes_optional_provided_auth(tmp_path, monkeypatch, pattern, denied, as_iterator):
+    auth.configure(tmp_path, 'alice', 'host')
+    monkeypatch.setattr(os, 'environ', {name: 'fake-global-' + name for name in HOST_AUTH_NAMES})
+    provided = {name: 'fake-approved-' + name for name in HOST_AUTH_NAMES}
+    result = auth.child_env(provided, tmp_path, 'alice', deny=iter([pattern]) if as_iterator else [pattern])
+    assert all(name not in result for name in denied)
+    assert result == {**{name: value for name, value in provided.items() if name not in denied}, 'GH_HOST': 'github.com'}
+    assert all(name in provided for name in denied)
+
+
+@pytest.mark.parametrize('pattern', ['GH_TOKEN', 'GH_*', 'GH_CONFIG_DIR', 'GH_HOST', 'GH_PROMPT_DISABLED'])
+@pytest.mark.parametrize('as_iterator', [False, True])
+def test_host_mode_required_environment_deny_still_fails_closed(tmp_path, pattern, as_iterator):
+    auth.configure(tmp_path, 'alice', 'host')
+    with pytest.raises(auth.AuthError, match='blocked by tools.env_deny'):
+        auth.child_env({'HOME': '/fake/host'}, tmp_path, 'alice', deny=iter([pattern]) if as_iterator else [pattern])

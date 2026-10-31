@@ -7,6 +7,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Explicit GitHub host mode respects the scrubbed tool environment and `env_deny`, rather than restoring core-process credentials or overwriting approved supplied values (aska-digital/exo-desktop#50).
+- Chat identifies pending approval waits for the current thread or global requests, preserving last-known connection qualifiers (aska-digital/exo-desktop#37, partial).
+- Switching back to a running web thread restores its working indicators and Stop button. Background turn updates keep keyboard focus on the same thread.
+- Web approval cards show the keyboard sequence for their available answers and the current confirmation or deny-note
+  step. Ctrl+F focuses the first approval without losing the composer draft, and the focused card has an accent outline.
+
+- Web Chat separates core loss from a reconnecting page and labels last known activity. Drafts survive,
+  Retry activity refreshes a failed snapshot, and Try stop remains available during a feed-only outage.
+
+- Chat panes can be hidden, moved and resized without remounting the conversation. Validated layout preferences
+  persist in the browser or desktop pane bridge, with visible save failures and a reset control.
+
+- The Command page refreshes its snapshot when its event stream opens again, even if no new event arrives (#708).
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
 - A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
   outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text
