@@ -272,3 +272,77 @@ def test_deterministic_output_and_no_improvement(tmp_path, monkeypatch, capsys):
     code, report, _ = invoke(tmp_path, monkeypatch, capsys, data)
     assert code == 1 and report["status"] == "no_improvement" and "proposal" not in report
     assert "held_out" not in report
+
+
+@pytest.mark.parametrize("adapter,baseline,expected", [
+    ("text-normalize-v1", "trim", "trim lower"),
+    ("text-normalize-v1", "lower", "trim lower"),
+    ("signed-decimal-v1", "signed", "signed decimal"),
+    ("signed-decimal-v1", "decimal", "signed decimal"),
+])
+def test_partial_baseline_capabilities_survive_propose_and_compose(tmp_path, monkeypatch, capsys, adapter, baseline, expected):
+    data = fixture(adapter)
+    data["baseline"] = {"notes": baseline}
+    code, report, _ = invoke(tmp_path, monkeypatch, capsys, data, adapter=adapter)
+    assert code == 0 and report["proposal"]["notes"] == expected
+    for stage in report["development"]["stages"]:
+        assert set(baseline.split()) <= set(stage["proposal"]["notes"].split())
+    assert report["held_out"]["comparison"]["delta"] > 0
+
+
+def negative_fixture():
+    data = fixture("signed-decimal-v1")
+    for task, amounts, total in zip(data["development"] + data["held_out"],
+                                  ["1.25,-3.50", "2.25,-5.50", "4.25,-9.50", "7.25,-15.50"],
+                                  ["-2.25", "-3.25", "-5.25", "-8.25"]):
+        task["input"] = amounts
+        data["references"][task["id"]] = "Total: " + total
+    return data
+
+
+@pytest.mark.parametrize("wrong_split", ["development", "held_out"])
+def test_wrong_sign_arithmetic_never_passes_gate(tmp_path, monkeypatch, capsys, wrong_split):
+    data = negative_fixture()
+    for task in data[wrong_split]:
+        key = task["id"]
+        data["references"][key] = data["references"][key].replace("-", "")
+    code, report, _ = invoke(tmp_path, monkeypatch, capsys, data, adapter="signed-decimal-v1")
+    assert code == 1 and "proposal" not in report
+    assert report["status"] == ("no_improvement" if wrong_split == "development" else "held_out_rejected")
+    if wrong_split == "held_out":
+        assert all(r["observation"].startswith("Total: -") and r["score"] == 0 for r in report["held_out"]["candidate"]["rows"])
+
+
+def test_correct_negative_totals_pass(tmp_path, monkeypatch, capsys):
+    code, report, _ = invoke(tmp_path, monkeypatch, capsys, negative_fixture(), adapter="signed-decimal-v1")
+    assert code == 0 and report["status"] == "review_ready"
+    assert all(r["score"] == 1 for r in report["held_out"]["candidate"]["rows"])
+
+
+@pytest.mark.parametrize("reference", ["Total: 2.25", "Total: -2.250", "Total: -2.2", "Total -2.25", "total: -2.25"])
+def test_arithmetic_grader_preserves_sign_and_format(reference):
+    probe = O.callbacks("signed-decimal-v1", {"x": reference})[2]
+    result = probe({"id": "x", "input": "1.25,-3.50"}, {"notes": "signed decimal"})
+    assert result["observation"] == "Total: -2.25" and result["score"] == 0
+
+
+def test_failed_export_releases_empty_reservation_and_can_retry(tmp_path, monkeypatch, capsys):
+    import exo.core.private as private
+    writer = private.atomic_write
+    def fail(*args, **kwargs):
+        raise OSError("injected write failure")
+    monkeypatch.setattr(private, "atomic_write", fail)
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "retry"))[0] == 2
+    assert not (tmp_path / "improvement-runs" / "retry").exists()
+    monkeypatch.setattr(private, "atomic_write", writer)
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "retry"))[0] == 0
+
+
+def test_failed_export_preserves_nonempty_reservation(tmp_path, monkeypatch, capsys):
+    def fail(path, *args, **kwargs):
+        (path.parent / "keep.txt").write_text("preserve unexpected contents")
+        raise OSError("injected write failure")
+    monkeypatch.setattr("exo.core.private.atomic_write", fail)
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2
+    assert (tmp_path / "improvement-runs" / "nonempty" / "keep.txt").read_text() == "preserve unexpected contents"
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2

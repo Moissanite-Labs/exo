@@ -5,11 +5,12 @@ import json
 import os
 import re
 import stat
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from exo.eval import compare, exact_grader, gate
+from exo.eval import compare, gate
 from exo.improvement.harness2 import UPSTREAM, UPSTREAM_COMMIT, Limits, _digest, _evidence, run_cycle
 
 HELP = "offline Harness² proposals from explicit public fixtures (review only)"
@@ -131,15 +132,22 @@ def load_fixture(filename, adapter, max_tasks):
 
 def callbacks(adapter, references):
     """Only trusted built-in functions; evaluator references never enter editors."""
+    choices = ("signed", "decimal") if adapter == "signed-decimal-v1" else ("trim", "lower")
+
+    def extend(baseline, additions):
+        capabilities = set(baseline.split())
+        for notes in additions:
+            capabilities.update(notes.split())
+        return " ".join(c for c in choices if c in capabilities) or baseline
+
     def propose(context):
-        choices = ("signed", "decimal") if adapter == "signed-decimal-v1" else ("trim", "lower")
-        return {"notes": choices[context["dimension"] == "domain"]}
+        baseline = context["baseline"]["proposal"]["notes"]
+        return {"notes": extend(baseline, [choices[context["dimension"] == "domain"]])}
 
     def compose(context):
         base = context["baseline"]["observations"]
         changed = [c["proposal"]["notes"] for c in context["candidates"] if c["observations"] != base]
-        notes = " ".join(changed)
-        return {"notes": notes or context["baseline"]["proposal"]["notes"]}
+        return {"notes": extend(context["baseline"]["proposal"]["notes"], changed)}
 
     def probe(task, harness):
         notes = harness["notes"]
@@ -153,8 +161,9 @@ def callbacks(adapter, references):
                 answer = answer.strip()
             if "lower" in notes:
                 answer = answer.lower()
-        # Exact bytes matter for formatting/whitespace fixture tasks.
-        score = exact_grader({"gold": references[task["id"]]}, answer) if adapter == "signed-decimal-v1" else float(answer == references[task["id"]])
+        # Exact bytes preserve arithmetic signs and two-decimal formatting, as well
+        # as text whitespace. The generic QA grader intentionally normalizes these.
+        score = float(answer == references[task["id"]])
         return {"observation": answer, "score": score, "rule_ok": True}
     return propose, compose, probe
 
@@ -234,7 +243,14 @@ def cmd_improve(args):
             from exo.core.private import atomic_write, private_dir
             private_dir(target.parent)
             target.mkdir(mode=0o700)  # exclusive directory; never replace an existing run
-            atomic_write(target / "artifact.json", text)
+            try:
+                atomic_write(target / "artifact.json", text)
+            except BaseException:
+                # Only our newly reserved empty run can be removed. rmdir refuses
+                # nonempty directories and links; existing runs never reach here.
+                with suppress(OSError):
+                    target.rmdir()
+                raise
         print(text, end="")
         return 0 if report["status"] == "review_ready" else 1
     except (ValueError, TypeError, OSError, UnicodeError, RecursionError):

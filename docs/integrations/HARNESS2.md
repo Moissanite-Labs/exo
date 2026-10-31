@@ -24,7 +24,9 @@ fixture directory. There is no default fixture, provider or principal lookup.
 `--offline` and an explicit trusted adapter name are required. The two built-in
 adapters are ordinary reviewed Python functions: signed-decimal reconciliation
 and trim/lower text normalization. Their editors propose those transformations,
-probe actual transformed outputs, and compose changes that altered behavior.
+probe actual transformed outputs, and add changes that altered behavior while
+preserving the baseline transformations. Both adapters grade exact output bytes;
+arithmetic signs, two-decimal formatting and text whitespace remain significant.
 JSON cannot supply callbacks, import paths, code, tools or extra authority fields.
 These adapters cover these fixture domains only; they are not model-driven
 improvers for arbitrary Exo tasks.
@@ -40,7 +42,9 @@ Stdout is the default output and creates no files. `--output text-check` creates
 `./improvement-runs/text-check/artifact.json` with owner-only file/directory modes,
 using Exo's private atomic persistence primitive. Existing run names, symlinks,
 paths/traversal, hidden/protected working directories and Exo-home workspaces are
-refused. Output names come only from the explicit CLI flag, never fixture contents.
+refused. A failed write releases its newly reserved run directory only if empty;
+preexisting runs and nonempty output are preserved. Output names come only from
+the explicit CLI flag, never fixture contents.
 This path policy is not an OS sandbox against another same-user process altering
 the workspace concurrently. Normal agent-tool authorization still applies: no new
 Gate allowance, principal identity, permission bypass or ledger authority is added.
