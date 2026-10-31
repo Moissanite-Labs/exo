@@ -12,6 +12,8 @@ from exo import cli
 from exo.improvement import offline as O
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKSPACE_REFUSED = "exo improve: run only in an explicit public workspace\n"
+NEW_RUN_REFUSED = "exo improve: output must be a new run; links and overwrites are refused\n"
 
 
 def fixture(adapter="text-normalize-v1"):
@@ -134,12 +136,12 @@ def test_output_name_cannot_escape_or_name_state(tmp_path, monkeypatch, capsys, 
 def test_no_overwrite_or_linked_output(tmp_path, monkeypatch, capsys):
     assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "one"))[0] == 0
     original = (tmp_path / "improvement-runs" / "one" / "artifact.json").read_bytes()
-    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "one"))[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "one")) == (2, None, NEW_RUN_REFUSED)
     assert (tmp_path / "improvement-runs" / "one" / "artifact.json").read_bytes() == original
     outside = tmp_path / "outside"
     outside.mkdir()
     (tmp_path / "improvement-runs" / "linked").symlink_to(outside, target_is_directory=True)
-    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "linked"))[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "linked")) == (2, None, NEW_RUN_REFUSED)
     assert not list(outside.iterdir())
 
 
@@ -147,7 +149,7 @@ def test_linked_output_parent_rejected(tmp_path, monkeypatch, capsys):
     outside = tmp_path / "outside"
     outside.mkdir()
     (tmp_path / "improvement-runs").symlink_to(outside, target_is_directory=True)
-    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "one"))[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "one")) == (2, None, NEW_RUN_REFUSED)
     assert not list(outside.iterdir())
 
 
@@ -234,7 +236,13 @@ def test_malformed_held_out_evidence_fails_closed(tmp_path, monkeypatch, capsys,
 
 def test_refuses_principal_workspace(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("EXO_HOME", str(tmp_path))
-    assert invoke(tmp_path, monkeypatch, capsys)[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys) == (2, None, WORKSPACE_REFUSED)
+
+
+def test_protected_workspace_is_a_boundary_refusal(tmp_path, monkeypatch, capsys):
+    workspace = tmp_path / "credentials"
+    workspace.mkdir()
+    assert invoke(workspace, monkeypatch, capsys) == (2, None, "exo improve: workspace is a protected location\n")
 
 
 def test_no_new_gate_allowance():
@@ -371,7 +379,36 @@ def test_refuses_recorded_explicit_principal_root_before_fixture_read(tmp_path, 
     monkeypatch.setattr("exo.store.PrincipalStore.__init__", forbidden)
     code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
                      "--fixture", "public.json", "--output", "rejected"])
-    assert code == 2 and not capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert code == 2 and not captured.out and captured.err == WORKSPACE_REFUSED
+    assert not (cwd / "improvement-runs").exists()
+
+
+@pytest.mark.parametrize("variant", ["root", "descendant", "home", "unicode"])
+def test_case_variant_spelling_of_a_protected_location_is_refused(tmp_path, monkeypatch, capsys, variant):
+    # A case-insensitive volume (default APFS) opens one folder under both spellings, and path
+    # resolution keeps the spelling as written. On a case-sensitive volume the variant is made as
+    # its own folder here, and the check refuses that too: the fail-closed reading, as in D-087.
+    home = tmp_path / "exo-home"
+    home.mkdir()
+    spelled, recorded = ("caf\u00e9", "CAFE\u0301") if variant == "unicode" else ("alice", "ALICE")
+    store = tmp_path / "stores" / spelled
+    cwd = store / "reports" if variant == "descendant" else store
+    cwd.mkdir(parents=True)
+    alias = tmp_path / "Stores" / recorded
+    alias.mkdir(parents=True, exist_ok=True)
+    if variant == "home":
+        monkeypatch.setenv("HOME", str(alias))
+    else:
+        (home / "config.json").write_text(json.dumps({"principals": {"alice": str(alias)}}))
+    monkeypatch.chdir(cwd)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("fixture must not be read")
+    monkeypatch.setattr(O, "load_fixture", forbidden)
+    code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
+                     "--fixture", "public.json", "--output", "rejected"])
+    captured = capsys.readouterr()
+    assert code == 2 and not captured.out and captured.err == WORKSPACE_REFUSED
     assert not (cwd / "improvement-runs").exists()
 
 
@@ -383,7 +420,7 @@ def test_recorded_store_symlink_is_resolved(tmp_path, monkeypatch, capsys):
     alias = tmp_path / "registered"
     alias.symlink_to(store, target_is_directory=True)
     (home / "config.json").write_text(json.dumps({"principals": {"alice": str(alias)}}))
-    assert invoke(store, monkeypatch, capsys)[0] == 2
+    assert invoke(store, monkeypatch, capsys) == (2, None, WORKSPACE_REFUSED)
 
 
 def test_positive_held_out_mean_cannot_hide_one_individual_regression(tmp_path, monkeypatch, capsys):
@@ -440,7 +477,7 @@ def test_unrelated_root_list_runtime_error_is_not_swallowed(tmp_path, monkeypatc
         invoke(tmp_path, monkeypatch, capsys)
 
 
-@pytest.mark.parametrize("recorded", ["parent", "parent-alias", "ancestor", "env-store", "env-home"])
+@pytest.mark.parametrize("recorded", ["parent", "parent-alias", "ancestor", "case-variant", "env-store", "env-home"])
 def test_output_parent_cannot_be_a_protected_store(tmp_path, monkeypatch, capsys, recorded):
     home = tmp_path / "exo-home"
     home.mkdir()
@@ -457,6 +494,10 @@ def test_output_parent_cannot_be_a_protected_store(tmp_path, monkeypatch, capsys
         child = output_parent / "existing"
         child.mkdir()
         root = child / ".."
+    elif recorded == "case-variant":
+        # One folder on a case-insensitive volume, a second folder on a case-sensitive one.
+        root = workspace / "Improvement-Runs"
+        root.mkdir(exist_ok=True)
     if recorded == "env-store":
         monkeypatch.setenv("EXO_PRINCIPAL_STORE", str(root))
     elif recorded == "env-home":
@@ -477,6 +518,34 @@ def test_output_parent_cannot_be_a_protected_store(tmp_path, monkeypatch, capsys
     assert "output is inside a protected principal location" in captured.err
     assert str(root) not in captured.err
     assert set(output_parent.iterdir()) == before
+
+
+@pytest.mark.parametrize("broken", ["home-loop", "recorded-root"])
+def test_default_exo_home_diagnostics_name_the_default_home(tmp_path, monkeypatch, capsys, broken):
+    home = tmp_path / "home"
+    exo = home / ".exo"
+    if broken == "home-loop":
+        home.mkdir()
+        exo.symlink_to(".exo")
+        expected = "cannot resolve the default Exo home ~/.exo; repair that path"
+    else:
+        exo.mkdir(parents=True)
+        (exo / "config.json").write_text(json.dumps({"principals": {"alice": str(tmp_path / "unmounted" / "alice")}}))
+        expected = "cannot resolve principal root 'alice'; repair or remove principals.alice in ~/.exo/config.json"
+    monkeypatch.delenv("EXO_HOME")
+    monkeypatch.setenv("HOME", str(home))
+    workspace = tmp_path / "public"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("fixture must not be read")
+    monkeypatch.setattr(O, "load_fixture", forbidden)
+    code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
+                     "--fixture", "public.json", "--output", "refused"])
+    captured = capsys.readouterr()
+    assert code == 2 and not captured.out and captured.err == f"exo improve: {expected}\n"
+    assert "EXO_HOME" not in captured.err and str(tmp_path) not in captured.err
+    assert not (workspace / "improvement-runs").exists()
 
 
 @pytest.mark.parametrize("variable", ["EXO_HOME", "EXO_PRINCIPAL_STORE"])
