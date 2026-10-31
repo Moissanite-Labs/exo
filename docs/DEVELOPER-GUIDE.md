@@ -1034,3 +1034,8 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+
+### Core-wide run-limit controls (D-070 amendment)
+
+The principal-only `limits` built-in updates a process-local policy. Main turns snapshot it at admission, and delegated workers snapshot it at actual startup after concurrency waiting. Status is read-only. Both clients probe support before changing it. Round and worker wall limits are independent of tokens, permissions and spending. See [Run limits](RUN-LIMITS.md) for precedence and fake-provider tests.

@@ -23,7 +23,7 @@ from .core.private import atomic_write
 # name -> argument shape shown after the name. Descriptions live with each client's own table (the TUI COMMANDS
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
-    "rounds": "[default|off|number]", "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
+    "limits": "[rounds|worker-timeout default|off|number]", "rounds": "[default|off|number]", "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
     "cwd": "", "context": "", "compact": "", "restart": "", "stop": "[task]", "tasks": "", "open": "<task>", "steer": "<task> <text>", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",

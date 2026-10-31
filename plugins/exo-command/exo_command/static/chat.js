@@ -604,8 +604,8 @@ export function mount(root) {
       else if (/^[0-9]+$/.test(value) && Number.isSafeInteger(Number(value))) maxRounds = Number(value);
       else if (value) { flash("usage: /rounds [default|off|nonnegative number]"); return; }
       input.value = ""; help.sent(text);
-      flash("tool-round limit for new turns in this window: " + (maxRounds === null ? "default" : maxRounds === 0 ? "unlimited" : maxRounds) +
-        ". The limit counts tool rounds, not time. A turn can continue after this window closes; /stop stops it.");
+      flash("window tool-round choice for new turns: " + (maxRounds === null ? "default" : maxRounds === 0 ? "unlimited" : maxRounds) +
+        ". The core /limits policy may override this window choice. The limit counts tool rounds, not time. A turn can continue after this window closes; /stop stops it.");
       return;
     }
     const lay = command && command.name === "layout" ? [null, command.args] : null;
@@ -630,7 +630,7 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
-    const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
+    const slash = command && ["context", "findings", "trace", "limits"].includes(command.name) ? [null, command.name, command.args] : null;
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
       input.value = ""; help.sent(text);
