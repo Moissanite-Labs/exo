@@ -143,7 +143,8 @@ async def test_job_with_masked_pipe_stage_is_noted_and_env_is_filtered(tmp_path,
     seen = (tmp_path / "env.out").read_text()
     assert "GH_TOKEN=fake-gh" in seen and "OPENROUTER_API_KEY" not in seen
     job = eng.jobs.start("true | false | cat", str(tmp_path), sid)
-    await until(lambda: state(eng, job["id"]) == "done")
+    await until(lambda: state(eng, job["id"]) == "failed")
+    assert eng.jobs.get(job["id"])["exit_code"] == 0
     assert "stage 2 exited 1" in eng.jobs.get(job["id"])["detail"]
     await eng.close()
 

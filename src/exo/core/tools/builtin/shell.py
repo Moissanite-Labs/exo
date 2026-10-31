@@ -226,7 +226,7 @@ def raise_nofile_limit(cap: int = 10240) -> int | None:
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
                 emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = (),
-                env_deny: Iterable[str] = ()) -> tuple[int, str, str]:
+                env_deny: Iterable[str] = (), failure_notes: list[str] | None = None) -> tuple[int, str, str]:
     """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
 
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
@@ -276,6 +276,8 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     code = {"timeout": 124, "interrupted": 130}.get(status, proc.returncode or 0)
     note = masked_note(side_path)
     if note and status == "ok":
+        if failure_notes is not None:
+            failure_notes.append(note)
         out.add("\n" + note)
     return code, out.render(), status
 
@@ -309,17 +311,18 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str | ToolResult:
         raise ToolError(f"cwd is not a folder: {cwd}")
     if background:
         return _start_job(args, ctx, cwd)
+    failure_notes: list[str] = []
     code, output, status = run_command(args["command"], str(cwd), timeout,
                                        cancel=ctx.cancel, emit=ctx.emit,
                                        env_allow=ctx.meta.get("env_allow") or (),
-                                       env_deny=ctx.meta.get("env_deny") or ())
+                                       env_deny=ctx.meta.get("env_deny") or (), failure_notes=failure_notes)
     output = output.rstrip("\n")
     if status == "timeout":
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"
     elif status == "interrupted":
         output += "\n[Command interrupted]"
     text = f"{output.lstrip() if output.strip() else '(no output)'}\n[exit {code}]"
-    return ToolResult.of_text(ctx.call_id, text, is_error=code != 0)
+    return ToolResult.of_text(ctx.call_id, text, is_error=code != 0 or bool(failure_notes))
 
 
 def register(reg: Registry) -> None:

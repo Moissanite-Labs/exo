@@ -6409,3 +6409,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+#### D-032 recorded-stage result amendment — 2026-10-29 (#831)
+
+A successful final shell exit does not erase a recorded non-SIGPIPE earlier-stage
+failure. The bash ToolResult carries is_error while retaining the final exit code
+and side-channel note. Background jobs likewise finish failed with the final code
+and stage detail. Never infer this state from process-controlled output text.
+The trace title names earlier/final stages rather than assuming a bare pipeline.

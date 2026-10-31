@@ -217,3 +217,12 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).
+
+### Earlier shell-stage failures (#831)
+
+When bash records an earlier non-SIGPIPE stage failure and a successful final
+stage, the result is marked as an error and includes the stage number/code while
+preserving `[exit 0]` for the actual final exit. Background jobs report failed with
+that same final exit and detail. Printed note-like output cannot spoof this flag.
+The shell wrapper does not promise to detect every historical failure in an
+arbitrary compound command; only failures retained by its existing side channel.
