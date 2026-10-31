@@ -10,6 +10,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
+  it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
+  `printf 'r\x6d -rf /srv/data' | bash` hid its delete. They are now a store write and a delete.
+
+  The text as written is still read, so nothing decides lower (main's `scripts/gate_diff.py`: 0 lowered pairs on
+  three corpora). A word bash may change, another printf conversion or option, and `echo` without `-e` are read as
+  before. Tests: `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.

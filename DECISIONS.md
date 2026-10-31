@@ -1353,6 +1353,39 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
+  writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did
+  not fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, the same line piped to `sudo -s`,
+  and the `echo -e` and `\x0a` forms were only `opaque_exec`.
+
+  The target read as a file named `config.json\n`, and `printf 'r\x6d -rf /srv/data' | bash` hid its delete the
+  same way. Under `deny: [store_write]` or `deny: [delete]` these lines asked, and a policy that allows
+  `opaque_exec` let them run. The default policy asked for each of them.
+
+  Now `_piped_text` gives such a pipe's text as a `_Printed`: the text as written, which every reader reads as
+  before, with `out`, what bash's builtin writes. printf expands its format's escapes and fills `%s`, `%b` and `%%`,
+  using the format again while arguments last. `echo -e` (and `-ne`, `-en`, `-Ee`) expands its escapes. A `\c` ends
+  the output in `echo -e` and in a `%b` argument, not in a format.
+
+  A shell that runs its stdin reads both texts (`_stdin_texts`): `bash` or `sh` with no script, the shell `sudo -s`
+  starts and `ssh host` with no command. Interpreters and SQL clients still read only the text as written, and a gh
+  body with an escape stays unseen (#208). The line's parts are those of both readings, so no decision is lower than
+  main's, and a `\c` that cuts the output short hides nothing.
+
+  `out` is set only where the gate is sure of it. Every word must be literal (no expansion, glob, brace, leading `~`
+  or `$".."`). printf may take `--` but no other option, and no conversion but `%s`, `%b` and `%%`. Output past four
+  times the text and 4 KB is not read. A `\u` past ASCII stays as written, and a NUL is dropped, as bash and dash
+  drop one from a script they read.
+
+  Chosen over reading only what the command writes: the reading as written backs it up wherever bash and the gate
+  differ, so the change only adds. `echo` without `-e` keeps main's reading, since bash writes its words as they
+  are. dash and zsh expand them, a known limit. The expansion matches bash 5.2's builtins on 7,500 random formats and
+  texts, but for a `\u` past ASCII.
+
+  Main's `scripts/gate_diff.py` against main d995d667 lowers 0 pairs: of 1,265,352 without variants, of 8,106,032
+  with them, and of 29,040 for an aimed corpus of 165 printf, `echo -e`, `echo`, `%b`, `%s`, octal, hex, `\c` and
+  nested shell lines. It tightens 1,356, 1,970 and 1,158 pairs, nearly all from `opaque_exec` to a store write or a
+  delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a

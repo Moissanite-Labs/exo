@@ -4454,10 +4454,12 @@ def _literal_pipe(w: _Cmd | None) -> str | None:
     return None
 
 
-def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
+def _stdin_texts(k: _Cmd, piped: str | None, shell: bool = False) -> list[str]:
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
         out.append(piped)
+    if shell:       # a shell also reads what printf or `echo -e` writes, beside the text as written (#1047)
+        out = [x for t in out for x in ([t, t.out] if isinstance(t, _Printed) else [t])]
     return list(dict.fromkeys(out))
 
 
@@ -4622,11 +4624,12 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
     spends the call's budgets (_brace_budget) and a second read could find them spent."""
     memo = ctx.setdefault("stdin", {})
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, getattr(piped, "out", ""), ambiguous)
     if whole in memo:
         return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
-    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
+    shell = key[0] is classify_shell
+    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped, shell):
         if (*key, text) not in memo:
             memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
         got += memo[(*key, text)]
@@ -6245,8 +6248,121 @@ def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
             memo[key] = "\n".join([h.body for h in k.heredocs] + [w.text for w in k.herestrings])
         return memo[key]
     if prog in ("echo", "printf"):
-        return " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        text = " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        return _printed(text, prog, words[1:])
     return None
+
+
+class _Printed(str):
+    """A pipe's text as written, which every reader reads as before. ``out`` is what `printf` or `echo -e` writes
+    there once bash expands its escapes and fills its format (#1047). A shell reads both (_stdin_texts), so the
+    line decides at least as it did before."""
+    out = ""
+
+
+def _printed(text: str, prog: str, words: list) -> str:
+    """``text`` with what `printf` or `echo -e` writes as its ``out``, when the gate is sure of it and it differs
+    (#1047). Every word must be one bash leaves as it is: no expansion, glob, brace, leading `~` or `$".."`. Bash
+    drops a NUL in the commands it reads, so ``out`` has none. Else ``text`` alone, read as before."""
+    if any(_expands(w) or w.locale for w in words):
+        return text
+    args = [w.text for w in words]
+    out = _printf_out(args, 4 * len(text) + 4096) if prog == "printf" else _echo_out(args)
+    out = (out or "").replace("\0", "")
+    if not out or out == text:
+        return text
+    p = _Printed(text)
+    p.out = out
+    return p
+
+
+# The one-letter escapes of bash's printf and `echo -e` (#1047).
+_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+            "\\": "\\"}
+
+
+def _escape(s: str, i: int, where: str) -> tuple[str | None, int]:
+    """The escape at s[i], a backslash, as bash reads it in a printf format (``where`` "f"), in a `%b` argument
+    ("b") or after `echo -e` ("e"), and where the text goes on (#1047). None ends the output (`\\c` in "b" and "e").
+    An escape bash keeps as written gives the backslash alone, and the next character is read as usual. So does a
+    `\\u` past ASCII, which bash writes as the locale says (as written in the C locale): to a shell it is the letters
+    of a word either way. A byte from `\\x` or octal past ASCII is the character of that number."""
+    e = s[i + 1:i + 2]
+    if e and e in _ESCAPES:
+        return _ESCAPES[e], i + 2
+    if e == "c" and where != "f":
+        return None, i + 2
+    if e and e in "'\"?" and where == "f":
+        return e, i + 2
+    pat = {"x": "[0-9A-Fa-f]{1,2}", "u": "[0-9A-Fa-f]{1,4}", "U": "[0-9A-Fa-f]{1,8}"}.get(e)
+    if e and e in "01234567" and (where != "e" or e == "0"):
+        # a format takes up to three octal digits; `%b` and `echo -e` take \0 and up to three more, `%b` also \NNN
+        pat = "[0-7]{0,%d}" % (3 if e == "0" and where != "f" else 2)
+    m = re.compile(pat).match(s, i + 2) if pat else None    # from i + 2 without a copy of the rest of the text
+    if m and e in "01234567":
+        return chr(int(e + m.group(), 8) & 0xFF), m.end()
+    if m and (e == "x" or int(m.group(), 16) < 0x80):
+        return chr(int(m.group(), 16)), m.end()
+    return "\\", i + 1
+
+
+def _unescape(s: str, where: str) -> tuple[str, bool]:
+    """``s`` with its escapes expanded as _escape reads them, and whether a `\\c` ended the output in it (#1047)."""
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        j = s.find("\\", i)
+        if j < 0:
+            out.append(s[i:])
+            break
+        out.append(s[i:j])
+        t, i = _escape(s, j, where)
+        if t is None:
+            return "".join(out), True
+        out.append(t)
+    return "".join(out), False
+
+
+def _printf_out(args: list[str], room: int) -> str | None:
+    """What bash's printf writes for these literal words (#1047): its format's escapes expanded, `%%`, and `%s` and
+    `%b` filled from the arguments, the format used again while they last. None for an option, another conversion,
+    a flag or a width, and for output longer than ``room``: the gate is not sure of it then, or would read too much."""
+    if args[:1] == ["--"]:
+        args = args[1:]
+    if not args or args[0].startswith("-"):
+        return None
+    fmt = re.split(r"(%.?)", args[0], flags=re.S)
+    if any(p not in ("%%", "%s", "%b") for p in fmt[1::2]):
+        return None
+    fmt = [p if n % 2 else _unescape(p, "f")[0] for n, p in enumerate(fmt)]
+    rest, k, size, stop = args[1:], 0, 0, False
+    out: list[str] = []
+    while not stop:
+        took = False
+        for n, p in enumerate(fmt):
+            if n % 2 == 0 or p == "%%":
+                text = "%" if n % 2 else p
+            else:                           # an argument, or nothing once they run out
+                text, took, k = (rest[k] if k < len(rest) else ""), took or k < len(rest), k + 1
+                if p == "%b":
+                    text, stop = _unescape(text, "b")
+            out.append(text)
+            size += len(text)
+            if stop:
+                break
+        stop = stop or not took or k >= len(rest) or size > room
+    return "".join(out) if size <= room else None
+
+
+def _echo_out(args: list[str]) -> str | None:
+    """What bash's `echo -e` writes for these literal words (#1047), None without `-e`: echo then writes its words as
+    they are. Its options are the leading words of `n`, `e` and `E` alone (`-ne`, `-eE`), the last `e` or `E`
+    deciding, and a `\\c` ends the output."""
+    n, esc = 0, False
+    while n < len(args) and re.fullmatch(r"-[neE]+", args[n]):
+        esc = {"e": True, "E": False}.get(args[n].replace("n", "")[-1:], esc)
+        n += 1
+    return _unescape(" ".join(args[n:]), "e")[0] if esc else None
 
 
 # Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).

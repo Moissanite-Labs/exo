@@ -1346,6 +1346,34 @@ gate does not read:
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
   see "Known limits"). The result is the most severe part, and it keeps the `indirection`
   signal, so `decide` asks even when the inner part alone would only log.
+- A pipe from `printf` or `echo -e` into a shell is read as written, as before, and also as the
+  command writes it (#1047). Bash's printf expands the escapes of its format (`\n`, `\x0a`, `\012`)
+  and fills `%s`, `%b` and `%%` from its arguments, using the format again while they last.
+  `echo -e` (also `-ne` or `-en`) expands its escapes. A `\c` ends the output of `echo -e` and of a
+  `%b` argument.
+
+  So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` are a
+  store write, as the line without `\n` is, and `printf 'r\x6d -rf /srv/data' | bash` is a delete.
+  Before, both were only `opaque_exec`. `deny: [store_write]` and `deny: [delete]` asked for them,
+  and a policy that allows `opaque_exec` let them run.
+
+  The text as written is still read, so no line decides lower than before:
+  `printf '%b' 'echo hi\c; rm -rf /srv/data' | bash` is still a delete, though bash writes only
+  `echo hi`.
+
+  Only a shell that runs its stdin reads what the command writes: `bash` or `sh` with no script,
+  the shell `sudo -s` starts and `ssh host` with no command. An interpreter and a SQL client read
+  the text as written only, and a gh body with an escape stays unseen (#208).
+
+  The gate reads what the command writes only where it is sure of it. Every word must be literal:
+  no expansion, glob, brace, leading `~` or `$".."`. printf may take `--` but no other option, and
+  no conversion but `%s`, `%b` and `%%`. Output past four times the text and 4 KB is not read. A
+  `\u` past ASCII stays as written, as bash writes it in the C locale. A NUL is dropped, as the
+  shell drops it.
+
+  `echo` without `-e` writes its words as they are in bash, so its text is read as written only.
+  dash and zsh expand the escapes of a plain `echo`. A line one of them runs is still read as bash
+  runs it, a known limit.
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
