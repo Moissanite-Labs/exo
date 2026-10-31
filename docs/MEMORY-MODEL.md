@@ -294,8 +294,10 @@ summary row, up to the last pin's lead. Each request that sends `incoming_messag
 of a session that an engine runs checks the pins. The transcript before the turn's own message must end at one of the
 noted leads, so it is the noted transcript with its tail cut. A pin goes when its lead is that one or a later one, no
 principal message holds it, and no summary row carries it. An undo cuts the tail, so it passes, also an `/undo N` that
-takes turns before the ruling's. A transcript cut short at its start fails at its first row, and one that opens with
-the same words as a lead but goes on past it fails at its end. A pin said in the session's first message stays, as it
+takes turns before the ruling's. A transcript cut short at its start fails at its first row when that row differs
+from the session's first row. One whose rows read word for word like the session's first rows is not covered
+(see below). One that opens with the same words as a lead but goes on past it fails at its end. A pin said in the
+session's first message stays, as it
 has no lead. So does a pin a compaction folded while the transcript holds the summary row, which comes after the pin's
 lead or replaces part of it. So does a folded pin the principal said again: its lead moves to the later message, but
 the summary row before it still carries the pin. The core sends no `incoming_message`, so its requests note no leads
@@ -306,10 +308,13 @@ Some cases are not covered. An undo no one reports waits for a new engine: while
 notice drops pins. If that engine runs a turn after the undo, no later engine drops them either, as the transcript
 then goes on past the noted lead. A host that runs exo-context without exo-memory passes no notice, so its undone pins
 stay unless a new engine runs the next turn. A compaction after the last request that noted the leads keeps the pins.
-An undo of every turn keeps every pin. A transcript cut short at its start whose rows read word for word like the
-session's first rows looks the same as an undo, so it drops the pins after them. A `/compress` between the last turn
-and the undo can keep the earlier undone turns' pins. A summary row or handoff file written before the drop keeps the
-ruling until the next compaction.
+An undo of every turn keeps every pin. A host may leave the turn's own message out of its transcript. Only a
+transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an undo has
+none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary row comes
+before that row, every pin stays too: the engine takes that row for the turn's own message. A transcript cut short
+at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
+pins after them. A `/compress` between the last turn and the undo can keep the earlier undone turns' pins. A summary
+row or handoff file written before the drop keeps the ruling until the next compaction.
 
 ## Who wrote it: every message has an author (D-040)
 

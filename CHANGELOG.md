@@ -66,8 +66,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   before its message, and the file keeps the digests of the transcript's rows up to the last lead. The first turn
   of a new engine drops a pin when the host's transcript is the noted one with its tail cut at or before the
   pin's lead, no longer holds the pin, and has no summary row that carries it. So an `/undo N` that also takes
-  earlier turns drops it too. A transcript cut short at its start, a folded pin (also one said again after the
-  fold) and a ruling in the session's first message stay. The same turn settles a CLI `/undo` in the no-agent gap.
+  earlier turns drops it too. A transcript cut short at its start (unless its rows read word for word like the
+  session's first rows), a folded pin (also one said again after the fold) and a ruling in the session's first
+  message stay. The same turn settles a CLI `/undo` in the no-agent gap.
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
