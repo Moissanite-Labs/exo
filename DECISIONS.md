@@ -1372,7 +1372,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   such option values after the real one still push it out, and that line asks as on main (#1041). gh api's
   `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as gh's
   `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
-  `GH_REPO=myorg/app gh pr comment 5` still asks. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
+  `GH_REPO=myorg/app gh pr comment 5` still asks. A `$".."` word also reads the line as `opaque_exec` (#136), and
+  the stricter of the two readings stood, the first one on a tie. The copy on a `GH_REPO` value is public, so on each
+  other target it could raise the post's reading to the ask of a reserved `opaque_exec` reading, and that reading's
+  reserved hits then dropped out (`export GH_REPO=pub/repo; gh pr comment <URLs> -b $"ok"` under
+  `reserved: [opaque_exec]`, found by gate_diff's aimed corpus in #1042's fourth round). Now on a tie the reserved
+  hits of both readings stand, so each still keeps a standing grant from covering the call (D-075). That lists more
+  hits on some lines than main does, never fewer. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
   change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
   `editor` commands. So it asks, as `opaque_exec` named in the summary. Left open, each still asking as on a repo
   the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command that starts a nested

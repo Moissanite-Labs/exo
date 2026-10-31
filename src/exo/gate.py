@@ -10418,6 +10418,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
                               signals=["indirection"], own=None), pol, ctx, passed)
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
+        if alt.outcome == d.outcome and alt.reserved:
+            # On a tie the reserved hits of both readings stand. A copy of a gh post on another target (#399, a
+            # GH_REPO value since #566) can raise the line's own reading to tie this one, and the hits this reading
+            # met must not drop out then: each keeps a standing grant from covering the call (D-075).
+            d = replace(d, reserved=list(dict.fromkeys(d.reserved + alt.reserved)))
     return d
 
 

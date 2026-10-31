@@ -23,7 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays. An
   export in a `{ }` group or an `if`, or before a `$( )` or `bash -c`, counts too. gh api's `{owner}` and
   `{repo}`, and its `:owner` and `:repo`, are filled from it. The gate keeps the last four values, so a line of
-  thousands of prefix values and URL operands stays linear.
+  thousands of prefix values and URL operands stays linear. When a `$".."` word's `opaque_exec` reading ties the
+  line's own, the reserved hits of both now stand, so a `GH_REPO` copy cannot drop them.
   `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
 - Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
   Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other

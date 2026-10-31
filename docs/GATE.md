@@ -1192,7 +1192,10 @@ target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and 
 still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
 expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
 `opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
-stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc ends on the
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. When the two outcomes
+are the same, the reserved hits of both readings stand (#566). A copy of a gh post on another
+target can raise the line's own reading to the outcome of the `opaque_exec` one, and a reservation
+on `opaque_exec` still keeps a standing grant from covering the line then. A heredoc ends on the
 line that equals its delimiter exactly, and the delimiter is the opener word after quote removal, so
 whitespace or any other character in it is part of it (#328): `cat <<'EOF '` (and `<<"EOF "`,
 `<<' EOF'`, `<<EOF\ `) ends on the line `EOF ` (with the space), never on bare `EOF`. The gate

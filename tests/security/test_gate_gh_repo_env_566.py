@@ -151,6 +151,37 @@ def test_a_gh_api_placeholder_is_filled_in_one_pass():
     assert gate._gh_api_env("repos/:owner/:repo/x", ["{repo}/y"]) == [("repos/{repo}/y/x", "")]
 
 
+# A `$".."` body is also read as opaque_exec (#136). The copy of the post on the GH_REPO value is public, so on each
+# other target it raised the post's own reading to the ask of that reading, and on that tie the opaque_exec
+# reading's reserved hits dropped out (#1042 round 4, gate_diff's aimed corpus). Each one keeps a standing grant from
+# covering the call (D-075).
+RESERVE_OPAQUE = gate.normalize_policies({"gates": {"scopes": {"private": ["git.example/*", "ghe.corp/*"]},
+                                                    "categories": {"opaque_exec": "allow"},
+                                                    "reserved": ["opaque_exec"]},
+                                          "posting": {"footer": "REQUIRED"}})
+HOSTS = ["git.example/a/b", "ghe.corp/o/r", "github.com/myorg/app"]
+
+
+@pytest.mark.parametrize("pre", ["export GH_REPO=pub/repo; ", "GH_REPO=pub/repo "])
+@pytest.mark.parametrize("urls", [
+    "https://git.example/a/b/pull/2 https://github.com/myorg/app/pull/4",
+    " ".join(f"https://{HOSTS[i % 3]}/pull/{i + 2}" for i in range(11)),
+], ids=["two-urls", "past-eight"])
+def test_a_gh_repo_value_keeps_the_reserved_hits_of_the_opaque_exec_reading(pre, urls):
+    line = f'gh pr comment {urls} -b $"ok"'
+    _, without = run(line, RESERVE_OPAQUE)
+    _, d = run(pre + line, RESERVE_OPAQUE)
+    assert without.reserved and d.outcome == without.outcome == "ask", (without, d)
+    assert set(without.reserved) <= set(d.reserved), (without.reserved, d.reserved)
+    assert ("opaque_exec", "pub/repo#4") in d.reserved, d.reserved
+
+
+def test_on_a_tie_the_opaque_exec_reading_keeps_its_reserved_hit():
+    # the post asks as public with a third party, and so does the reserved opaque_exec reading: both readings' hits
+    _, d = run('gh pr comment 4 -R myorg/app -b $"ok"', RESERVE_OPAQUE)
+    assert d.outcome == "ask" and ("opaque_exec", "myorg/app#4") in d.reserved, d
+
+
 @pytest.mark.parametrize("line", [
     "GH_REPO=$R gh pr comment 5 --body ok",
     "export GH_REPO=\"$R\"; gh pr comment 5 --body ok",
