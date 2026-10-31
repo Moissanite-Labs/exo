@@ -20,6 +20,7 @@ import shutil
 import threading
 import time
 import tomllib
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
@@ -30,11 +31,13 @@ from exo.core.models.base import error_event
 from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
+from exo.core.models.deepseek import DeepSeekProvider
 from exo.core.models.keys import lookup_key
 from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
 from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.models.responses import OpenAIResponsesProvider
 from exo.core.models.urls import display_url
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -53,7 +56,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
-              "decision": DecisionProvider}
+              "decision": DecisionProvider, "responses": OpenAIResponsesProvider, "deepseek": DeepSeekProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
@@ -158,7 +161,8 @@ class Router:
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
                  breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None,
-                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None) -> None:
+                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None,
+                 provider_auth: Mapping[str, tuple[Callable, ...]] | None = None) -> None:
         selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
                                          principal=principal)
         if selection.source is not None and spend is not None:
@@ -172,6 +176,7 @@ class Router:
             self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
+        self.provider_auth = dict(provider_auth or {})
         self.instances = dict(instances or {})
         self.env = os.environ if env is None else env
         # Keychain and keys file are read only for the real environment, or when asked.
@@ -185,6 +190,7 @@ class Router:
         self.breaker_failures = max(1, int(b.get("failures") or BREAKER_FAILURES))
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
+        self._auth_context: dict[str, str | None] = {}
         self._creds: dict[str, list[Credential]] = {}
         self._cred_lock = threading.Lock()
         self._cred_versions: dict[str, int] = {}
@@ -264,6 +270,9 @@ class Router:
     def credentials(self, provider: str) -> list[Credential]:
         """Synchronous cached lookup. Coordinate workers without holding a lock across secret-store I/O.
         Reload advances a generation so an in-flight lookup cannot restore credentials that were invalidated."""
+        if (self.providers.get(provider) or {}).get("auth") == "chatgpt":
+            self._refresh_auth_context(provider)
+            return self._load_credentials(provider)  # current selected registration; never cache disconnected []
         while True:
             with self._cred_lock:
                 if provider in self._creds:
@@ -289,11 +298,47 @@ class Router:
                 pending.set_result(None)
             # A reload during I/O discards this result and resolves the new generation.
 
+    def _refresh_auth_context(self, provider: str) -> None:
+        try:
+            auth = self.provider_auth.get(provider, ())
+            context = str(auth[2]()) if len(auth) > 2 and self.auth_available(provider) else (
+                '' if self.auth_available(provider) else None)
+        except Exception:
+            context = None
+        with self._cred_lock:
+            changed = provider not in self._auth_context or self._auth_context[provider] != context
+            self._auth_context[provider] = context
+        if changed:
+            self.reload_credentials(provider)  # only this provider: a new grant inherits no old refusal/breaker
+
+    async def _outcome_current(self, route: Route, cred: Credential) -> bool:
+        if (self.providers.get(route.provider) or {}).get("auth") != "chatgpt":
+            return True
+        await asyncio.to_thread(self._refresh_auth_context, route.provider)
+        context = self._auth_context.get(route.provider)
+        expected = route.provider + "#" + hashlib.sha256((context or '').encode()).hexdigest()[:16]
+        return context is not None and cred.id == expected
+
+    def auth_available(self, provider: str) -> bool:
+        try:
+            return provider in self.provider_auth and self.provider_auth[provider][0]() is True
+        except Exception:
+            return False
+
     def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
         spec = self.providers.get(provider)
         timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
-        if provider in self.instances:
+        if spec is not None and spec.get("auth") == "chatgpt":
+            if (spec.get("base_url") == "https://api.openai.com/v1" and self.auth_available(provider)):
+                prov = OpenAIResponsesProvider(spec["base_url"], name=provider, client=self.client,
+                                               header_resolver=self.provider_auth[provider][1], subscription=True,
+                                               continuation_scope=self.provider_auth[provider][2] if len(self.provider_auth[provider]) > 2 else None,
+                                               **timeout)
+                scope = str(self.provider_auth[provider][2]()) if len(self.provider_auth[provider]) > 2 else ""
+                cid = provider + "#" + hashlib.sha256(scope.encode()).hexdigest()[:16]
+                creds = [Credential(cid, None, prov)]
+        elif provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
         elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
             # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
@@ -308,8 +353,10 @@ class Router:
             keys = [k for e in envs if (k := self._key(e))] if envs else [None]
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
+                response_opts = ({"prompt_cache_retention": spec.get("prompt_cache_retention")}
+                                 if spec.get("transport") == "responses" else {})
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout, **response_opts)
                 creds.append(Credential(cid, key, prov))
         return creds
 
@@ -423,6 +470,11 @@ class Router:
         failed_credentials: set[str] = set()
         attempted_credentials: set[tuple[str, str]] = set()
         chain = self.chain(role)
+        if chain and (self.providers.get(chain[0].provider) or {}).get("auth") == "chatgpt":
+            # A selected subscription is a billing boundary, including missing/expired authorization.
+            chain = [r for r in chain if (self.providers.get(r.provider) or {}).get("auth") == "chatgpt"]
+        for provider in {r.provider for r in chain if (self.providers.get(r.provider) or {}).get("auth") == "chatgpt"}:
+            await asyncio.to_thread(self._refresh_auth_context, provider)  # invalidate before reading route breakers
         # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
         skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
         pending_routes, i = chain, 0
@@ -555,7 +607,7 @@ class Router:
                 retry_after = ev.retry_after
                 # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
-                if fallback:
+                if fallback and await self._outcome_current(route, cred):
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole, error=ev.error or "",
                                         model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
                     if ev.status == 429:
@@ -581,8 +633,9 @@ class Router:
                 if ev.kind == "done":
                     note("ok")
                     ev.attempts = attempts
-                    self.record_success(cred.id, route.model)
-                    self.route_ok(route.ref)
+                    if await self._outcome_current(route, cred):
+                        self.record_success(cred.id, route.model)
+                        self.route_ok(route.ref)
                     if ev.message is not None:
                         ev.message.meta.setdefault("model", route.ref)
             yield ev
@@ -664,7 +717,8 @@ class Router:
             out.append({"provider": name, "base_url": display_url(spec.get("base_url", "")),
                         "transport": spec.get("transport", "openai"),
                         "local": bool(spec.get("local")), "key_env": envs,
-                        "key": ("n/a" if not envs else "yes" if found else "no"),
+                        "key": ("yes" if self.auth_available(name) else "no") if spec.get("auth") == "chatgpt" else
+                        ("n/a" if not envs else "yes" if found else "no"),
                         "roles": list(spec.get("roles") or [])})
         return out
 

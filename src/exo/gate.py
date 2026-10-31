@@ -5860,7 +5860,7 @@ _CODE_PATTERNS = [
     (re.compile(r"\b(requests|httpx|session|client|aiohttp\.ClientSession\(\))\.(post|put|patch|delete)\("), "web_post"),
     (re.compile(r"\burllib\.request\.urlopen\([^)]*data="), "web_post"),
     (re.compile(r"\bsmtplib\.SMTP"), "email_send"),
-    (re.compile(r"\bproviders_setup\b|/api/providers\b|\bsecret-tool\b|\bremember_secret\b"), "credentials"),
+    (re.compile(r"\bproviders_setup\b|\bchatgpt_auth\b|/api/providers\b|\bsecret-tool\b|\bremember_secret\b"), "credentials"),
     (re.compile(r"\bstripe\.\w+\.create\("), "payment"),
 ]
 _CODE_STRINGS = re.compile(r"(['\"])((?:(?!\1).){2,400})\1")

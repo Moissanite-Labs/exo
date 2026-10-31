@@ -95,9 +95,9 @@ def test_stop_on_the_fallback_route_keeps_the_timeout_of_the_route_before(tmp_pa
     assert res.stop_reason == "interrupted"
     (call,) = [e.body for e in seen if e.type == "model.call"]
     assert call.stop_reason == "interrupted" and [(a["route"], a["outcome"]) for a in call.attempts] == [("hang:m", "timeout")]
-    assert next(e.body.timing for e in seen if e.type == "turn.completed")["fallbacks"] == 1
+    assert next(e.body.timing for e in seen if e.type == "turn.completed")["fallbacks"] == 0
     t = trace.last_turn(store, s.id)
-    assert not t.derived and t.fallbacks == 1  # before, the call had no attempts and the timeout was lost
+    assert not t.derived and t.fallbacks == 0  # interruption never confirmed a served fallback route
     assert "model.timeout:hang:m" in [f.signature for f in trace.detect(t, trace.Thresholds())]
     # The stop came on ok:m: neither hang:m's wait nor ok:m's stream is charged to hang:m as a slow call.
     scaled = [f.signature for f in trace.detect(t, trace.Thresholds(model_call_s=0.001))]

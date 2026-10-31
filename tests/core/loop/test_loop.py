@@ -273,7 +273,7 @@ def test_stop_during_retry_backoff_records_the_failed_tries(tmp_path):
     s, res = _stop_when(loop, seen, "notice", after=0.3)
     assert res.stop_reason == "interrupted" and len(prov.calls) == 1  # the retry never ran
     timing = next(e.body.timing for e in seen if e.type == "turn.completed")
-    assert timing["model_calls"] == 1 and timing["fallbacks"] == 1 and timing["model_ms"] >= 250
+    assert timing["model_calls"] == 1 and timing["fallbacks"] == 0 and timing["model_ms"] >= 250
     (call,) = [e.body for e in seen if e.type == "model.call"]
     assert call.stop_reason == "interrupted" and call.retries == 1 and call.attempts == tried
 
@@ -666,6 +666,11 @@ def test_usage_updated_model_names_the_route_that_served_after_fallback(tmp_path
     asyncio.run(go())
     usage = [e.body for e in store.events_since(0) if isinstance(e.body, ev.UsageUpdated)]
     assert usage and usage[-1].model == "b:small"
+    notices = [e.body for e in store.events_since(0) if isinstance(e.body, ev.Notice)]
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert notices and calls and calls[-1].call_id
+    assert notices[0].source == "model_route" and notices[0].call_id == calls[-1].call_id
+
 
 
 def test_session_updated_publishes_model_in_use(tmp_path):
@@ -1226,3 +1231,73 @@ def test_a_send_that_waited_for_a_session_locked_meanwhile_runs_no_turn(tmp_path
     s = run(go())
     assert [e.type for e in seen].count("turn.started") == 1
     assert "queued behind the turn" not in [m.text() for m in store.messages(s.id)]
+
+
+@pytest.mark.parametrize('case,expected_attempts,recovered', [
+    ('terminal', ['error'], False),
+    ('exhausted', ['fallback', 'error'], False),
+    ('timeout', ['timeout'], False),
+    ('recovered', ['fallback', 'ok'], True),
+])
+def test_failed_call_does_not_claim_successful_fallback_recovery(tmp_path, case, expected_attempts, recovered):
+    from exo.core.models import FakeProvider, Router
+    from exo.core.models.fake import rate_limited
+    terminal = ProviderEvent(kind='error', error='fixture terminal refusal', status=400, retryable=False)
+    first = ProviderEvent(kind='error', error='ReadTimeout fixture', retryable=True) if case == 'timeout' else (
+        terminal if case == 'terminal' else rate_limited())
+    chain = ['primary:x'] + (['backup:y'] if case in ('exhausted', 'recovered') else [])
+    router = Router(roles={'main': chain}, catalog={'providers': {}, 'models': {}, 'roles': {}}, env={},
+                    instances={'primary': FakeProvider([first]),
+                               'backup': FakeProvider(['recovered' if recovered else terminal])})
+    store = SessionStore(tmp_path / 'sessions.sqlite')
+    loop = Loop(store, router.provider('main'), model='primary:x', max_retries=0)
+    async def go():
+        info = await loop.create_session()
+        result = await loop.send(info.id, 'fixture request')
+        return info.id, result
+    sid, result = run(go())
+    events = store.events_since(0, session=sid)
+    call = next(e.body for e in events if e.type == 'model.call')
+    timing = next(e.body.timing for e in events if e.type == 'turn.completed')
+    assert [a['outcome'] for a in call.attempts] == expected_attempts
+    assert bool(call.route) == recovered and call.retries == 0
+    assert result.stop_reason == ('end' if recovered else 'error')
+    assert timing['fallbacks'] == int(recovered)
+    turn = trace.last_turn(store, sid)
+    assert turn.fallbacks == int(recovered)
+    flags = trace.detect(turn, trace.Thresholds())
+    fallback = [f for f in flags if f.signature.startswith('model.fallback:')]
+    assert bool(fallback) == recovered
+    if not recovered:
+        assert not any('fell back' in f.title for f in flags)
+        assert any(f.signature.startswith('model.timeout:' if case == 'timeout' else 'model.error:') for f in flags)
+
+
+def test_actual_router_same_route_retry_success_is_not_a_fallback(tmp_path):
+    from exo.core.models import FakeProvider, Router
+    from exo.core.models.fake import rate_limited
+    now = [0.0]
+    provider = FakeProvider([rate_limited(), 'retry recovered'])
+    router = Router(roles={'main': ['primary:x']}, instances={'primary': provider},
+                    catalog={'providers': {}, 'models': {}, 'roles': {}}, env={}, clock=lambda: now[0])
+    store = SessionStore(tmp_path / 'sessions.sqlite')
+    bus = EventBus(store)
+    def retry_clock(event):
+        if event.type == 'notice' and event.body.text.startswith('retrying model call'):
+            now[0] = 1000.0  # expire the fake credential cooldown, without a real wait
+    bus.subscribe(retry_clock)
+    loop = Loop(store, router.provider('main'), bus=bus, model='primary:x', max_retries=1, retry_delay=0)
+    async def go():
+        session = await loop.create_session()
+        result = await loop.send(session.id, 'fixture retry')
+        return session.id, result
+    sid, result = run(go())
+    events = store.events_since(0, session=sid)
+    call = next(e.body for e in events if e.type == 'model.call')
+    assert len(provider.calls) == 2 and result.stop_reason == 'end'
+    assert [a['outcome'] for a in call.attempts] == ['error', 'ok']
+    assert call.retries == 1 and call.route == 'primary:x' and not call.error
+    assert next(e.body.timing['fallbacks'] for e in events if e.type == 'turn.completed') == 0
+    turn = trace.last_turn(store, sid)
+    assert turn.fallbacks == 0
+    assert not any(f.signature.startswith('model.fallback:') for f in trace.detect(turn, trace.Thresholds()))

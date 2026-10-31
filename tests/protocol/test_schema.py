@@ -185,3 +185,16 @@ def test_response_roundtrip():
     bad = Response(id="c2", ok=False, error=s.ErrorInfo(code="unknown_command", message="nope"))
     assert Response.from_json(ok.to_json()) == ok
     assert Response.from_json(bad.to_json()) == bad
+
+
+def test_model_call_preserves_legacy_positional_constructor_order():
+    usage = Usage(input_tokens=7)
+    attempts = [{"route": "fixture:served", "outcome": "ok"}]
+    call = s.ModelCall(2, "main", "fixture:asked", "fixture:served", attempts, 10, 20,
+                       usage, "end", "", 3)
+    assert (call.iteration, call.role, call.requested, call.route) == (
+        2, "main", "fixture:asked", "fixture:served")
+    assert call.attempts is attempts and call.usage is usage
+    assert (call.ttft_ms, call.total_ms, call.stop_reason, call.error, call.retries) == (10, 20, "end", "", 3)
+    assert call.call_id == ""
+    assert s.ModelCall(call_id="m_fixture").call_id == "m_fixture"

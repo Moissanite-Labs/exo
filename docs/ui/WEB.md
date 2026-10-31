@@ -156,10 +156,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   Repeated status events leave its button in place. Returning to a thread reads its fresh running status,
   so a running turn restores the working indicators and enables Stop.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
-  that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
-  against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
-  `/context` reports), cache share of that call, session cost. While busy a
+  that served differs from the one asked, from `model.call`), memory gauge (the last next-call estimate and capacity from structured `/context`,
+  with an unknown capacity kept unknown), separately labelled last-call input tokens from
+  `model.call`, cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
+  A new turn, route change or context refresh invalidates the previous estimate. While the report is
+  pending or unavailable, both memory displays say so and may show the current route capacity alone.
+  They show no utilization gauge until a matching report supplies both the estimate and its capacity.
+  The next-model label comes from that report and can differ from the last-served fallback model.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
   and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with
@@ -198,8 +202,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
-- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
-  the core `rename` built-in, principal only (D-069).
+- **Thread list.** Each thread has a visible Rename button. It opens a labeled title field with Save and Cancel.
+  Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
+  current composer draft. A refused save keeps the title draft and shows the error.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -224,7 +230,7 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   time with motion, 0.0 percent with reduced motion.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
-  ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
+  ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers are labelled as the last estimate and come from `/context`, read
   after a thread opens, after each turn and after a memory event. The last calls come from `model.call`
   events, so they start empty when a thread is opened.
 - Typing `/context`, `/findings` or `/trace` in the composer runs that report and shows it in the transcript.
@@ -391,3 +397,12 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+### Chat notice ownership
+
+The chat status strip shows notices for the selected session only. Unscoped notices do not replace its
+status. Model retry and fallback notices carry `source: model_route` and a `call_id` matching the
+`model.call` record. A successful matching call clears that transient warning; another call cannot.
+Turn completion clears any remaining route warning, while newer general notices and command errors
+remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
+notices until another status message or thread selection replaces them.

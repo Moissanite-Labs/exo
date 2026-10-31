@@ -300,6 +300,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Later:** tiers for aux side calls; tier auto-selection from past receipts.
 
 ## D-018 (2026-10-12) Provider agnostic; users choose models; default eval and decision models
+- **Amendment 2026-10-28:** the first-party DeepSeek catalog entry uses its API key and discovered model IDs.
+  Tools retain the provider's required prior reasoning history. Default roles, prices and saved-effort
+  capability policy are unchanged.
 - **A's rulings:** "exo should be model and provider agnostic"; "users config which models are used. by
   default, the decision model used is laya (locally run) and the evaluation model is same model as what's
   configured and being used in the harness/chat"; "i have a typesafe api as well so we can experiment with
@@ -404,6 +407,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   feature building continue in the main session. Promotion of lessons still needs held-out wins (D-022).
 
 ## D-025 (2026-10-12) Harness self-observation: trace, findings, re-verification
+- **Amendment 2026-10-28 (#749):** the primary loop detects repeated normalized tool calls during a turn, with
+  bounded recent state and the existing file-change epochs. After three repeats it warns and files once per tool
+  per turn. It does not infer semantic progress, stop a turn or change routing and round limits.
+- **Amendment 2026-10-28 (#748):** recorded fallback counts require a serving route without a terminal error.
+  Failed attempts remain observable as errors or timeouts instead of claiming recovery. Legacy traces without
+  model-call records retain their notice-derived semantics. Routing, cooldowns and retry policy are unchanged.
 - **Why:** A asked the first agent (exo-razi) to evaluate its environment. It missed the biggest problems
   because it could not see how the harness performed: an 8 min 20 s first turn with no event saying why, no record of
   which route served a call or of fallbacks, a shown model that disagreed with the served one, a test suite
@@ -1074,6 +1083,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
+  connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
+  only status crosses the web boundary. The application supplies credential callbacks to the core router,
+  so provider transport does not import product setup code. The account's model list supplies subscription
+  routes. Selecting ChatGPT plan usage prevents automatic fallback into API-key billing. Browser sign-in
+  and a real tool continuation remain live acceptance checks, separate from fixture tests.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
@@ -3207,6 +3222,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Amendment 2026-10-28 (#753):** direct bound shell calls redact final output by default. The Registry-owned bash handler leaves final-output redaction to the Registry, so that strict pass runs once. Stream redaction remains separate and protects read boundaries. The Registry does not trust literal redaction markers in raw tool output; credentials containing those markers still match. Secret lookup or final redaction failures withhold the entire result and return a generic error, never raw output or exception text. See `docs/GITHUB-AUTH.md`.
+- **Amendment 2026-10-27 (bound GitHub fallback):** token and disabled modes seed their private gh configuration
+  with a public invalid token. Removing token environment variables while retaining that directory fails authentication
+  instead of consulting the machine's gh keyring. Actual credentials are not written there. Deliberate configuration
+  replacement or secure-storage lookup remains a trusted-shell override.
 - **Amendment 2026-10-27 (aska-digital/exo-desktop#50):** explicit GitHub host mode respects the supplied, commonly
   scrubbed child environment. It does not restore core-process tokens or `GH_CONFIG_DIR`, overwrite approved
   supplied values, or retain variables matching `env_deny`. Stored host gh configuration remains available.
@@ -3789,6 +3809,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
+  enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
+  receives no new ID and changes no queued message. No command or protocol field changes.
 - **Amendment 2026-10-27 (aska-digital/exo-desktop#37, partial):** Chat distinguishes a busy thread waiting for its own or a
   global approval from other active work. Events, snapshots and navigation refresh this phase. Unavailable core
   or activity state keeps the last-known qualifier. Existing busy, Stop, Send and approval authority remain.
@@ -3802,6 +3825,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-27 (#708):** Command refreshes its snapshot on every current stream open, using the
   existing event debounce. A quiet reopen no longer waits for another event. Superseded or disposed stream
   handles cannot schedule the refresh, and unmount cancels a queued refresh. No user or extension step changes.
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
@@ -4451,6 +4477,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
+  editor with Save, Cancel, Enter and Escape. This uses the existing principal-only rename command without
+  selecting that thread or replacing the current composer draft. Native JavaScript prompts are not required.
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
   stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
@@ -4873,6 +4902,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/ui/WEB.md`, `plugins/exo-command/README.md`, `CHANGELOG.md`.
 
 ## D-080 (2026-10-16) One meaning for `Usage.input_tokens`, and what the per-child token budget counts
+
+- **Amendment (2026-10-27, #732):** the web keeps last-call input usage separate from the last `/context`
+  next-call estimate. Usage events never overwrite that estimate or its reported capacity. Both labels
+  identify their source state. Parent usage rollups do not count as one model call.
+  The estimate and its capacity come from one matching report. New turns, route changes and refreshes
+  invalidate the estimate. A known current-route capacity can remain visible while the estimate is pending
+  or unavailable, without a utilization gauge. Session, route and request-generation checks reject late reports. No provider limit, routing or token accounting rule changes.
+
 - **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
 - **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,
   with cache reads and writes apart. The OpenAI transport copied `prompt_tokens`, which already holds the cached

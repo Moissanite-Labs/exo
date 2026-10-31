@@ -201,7 +201,7 @@ def test_add_test_remove_and_default_with_every_check_passing(caplog, capsys):
     out = capsys.readouterr()
     blob = "\n".join(texts) + caplog.text + out.out + out.err + "".join(repr(c) for c in src.calls)
     assert FAKE not in blob
-    reloads = [c for c in src.calls if isinstance(c, s.CommandRun)]
+    reloads = [c for c in src.calls if isinstance(c, s.CommandRun) and c.args.startswith("reload ")]
     assert [c.args for c in reloads] == ["reload openai", "reload openai"]
     sets = [c for c in src.calls if isinstance(c, (s.ModelsSet, s.ConfigSet))]
     assert sets[0].model == "openai:gpt-5" and sets[1].key == "models.roles.main"

@@ -159,6 +159,7 @@ class Loop:
         st = self.state(session)
         if not st.accepting_steers:
             return False
+        msg.id = msg.id or new_id("m")
         st.steer.append(msg)
         return True
 
@@ -392,7 +393,7 @@ class Loop:
                       st: _SessionState, result: TurnResult) -> bool:
         """Record the call and its usage. On a provider error keep the text the user saw, emit the Error coded
         by attempt outcome and set result.error; True then (the caller sets stop_reason)."""
-        await self._record_call(session, stream, iteration, st)
+        await self._record_call(session, stream, iteration, st, call_id=msg_id)
         if stream.usage is not None:
             result.usage, result.last_usage = result.usage + stream.usage, stream.usage
             st.total = st.total + stream.usage
@@ -411,15 +412,15 @@ class Loop:
         await self._emit(ev.Error(code=code, message=result.error, retryable=stream.error.retryable), session)
         return True
 
-    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState, stop: str = "") -> None:
+    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState, stop: str = "", call_id: str = "") -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
         role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
         st.stats["model_calls"] += 1
         st.stats["model_ms"] += s.total_ms
-        st.stats["fallbacks"] += sum(1 for a in s.attempts if a.get("outcome") not in ("ok", None))
         served = ""
         if s.error is None:  # the route the router stamped, else the attempt that succeeded (D-025)
             served = s.route or next((a.get("route", "") for a in reversed(s.attempts) if a.get("outcome") == "ok"), "")
+        st.stats["fallbacks"] += trace.recovered_fallbacks(s.attempts, served)
         selection = st.reasoning_opts.get("_exo_reasoning")
         reasoning = next((a["reasoning"] for a in reversed(s.attempts) if "reasoning" in a),
                          {"requested": selection["requested"], "sent": None, "requested_route": selection["route"],
@@ -428,7 +429,7 @@ class Loop:
             reasoning = {"requested": "preference unavailable", "sent": None, "route": served,
                          "status": "inherited existing settings; saved preference unavailable"}
         await self._emit(ev.ModelCall(
-            iteration=iteration + 1, role=role, requested=self.model or "", route=served,
+            call_id=call_id, iteration=iteration + 1, role=role, requested=self.model or "", route=served,
             attempts=s.attempts, reasoning=reasoning, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
             stop_reason=(s.done.stop_reason or "") if s.done is not None else stop,
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
@@ -474,7 +475,7 @@ class Loop:
                 await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
             except _Interrupted:  # the wait up to the stop is model time, not harness time (like f_8e7f52cd)
                 s.total_ms, s.retries, s.attempts = int((time.monotonic() - t0) * 1000), attempt, history + s.attempts
-                await self._record_call(session, s, iteration, st, stop="interrupted")
+                await self._record_call(session, s, iteration, st, stop="interrupted", call_id=msg_id)
                 if s.text or s.reasoning:
                     partial = self._assemble(_Stream(text=s.text, reasoning=s.reasoning), msg_id)
                     partial.meta["interrupted"] = True
@@ -493,7 +494,7 @@ class Loop:
             attempt += 1
             history = s.attempts
             await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"
-                                       f" {s.error.error}", level="warn"), session)
+                                       f" {s.error.error}", level="warn", source="model_route", call_id=msg_id), session)
 
     async def _consume(self, session: str, messages: list[Message], specs: list[ToolSpec],
                        opts: dict[str, Any], msg_id: str, s: _Stream) -> None:
@@ -510,7 +511,7 @@ class Loop:
                     await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
                 elif pe.kind == "notice":  # a fallback notice carries the router's tries: a stop on the next route keeps them
                     s.attempts = pe.attempts or s.attempts
-                    await self._emit(ev.Notice(text=pe.text, level="warn"), session)
+                    await self._emit(ev.Notice(text=pe.text, level="warn", source="model_route", call_id=msg_id), session)
                 elif pe.kind == "tool_call" and pe.tool_call is not None:
                     s.calls.append(pe.tool_call)
                 elif pe.kind == "usage" and pe.usage is not None:

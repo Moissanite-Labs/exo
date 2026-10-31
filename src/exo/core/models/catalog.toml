@@ -25,6 +25,25 @@ transport = "openai"
 base_url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
 
+# First-party stateless Responses. No model list/prices are guessed; discover them with the selected credential.
+[providers.meta]
+transport = "responses"
+base_url = "https://api.meta.ai/v1"
+key_env = "META_API_KEY"
+prompt_cache_retention = "24h"  # documented retention hint, not a cache-hit guarantee
+
+# ChatGPT plan usage uses SIWC OAuth only, resolved per core home/seat. Never OPENAI_API_KEY.
+[providers.chatgpt]
+transport = "responses"
+base_url = "https://api.openai.com/v1"
+auth = "chatgpt"
+
+# First-party DeepSeek. Discover account-authorized IDs; do not guess model aliases or prices.
+[providers.deepseek]
+transport = "deepseek"
+base_url = "https://api.deepseek.com/v1"
+key_env = "DEEPSEEK_API_KEY"
+
 # Local OpenAI-compatible servers: no key, the small-model and device path.
 [providers.llamacpp]
 transport = "openai"

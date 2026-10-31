@@ -1,16 +1,43 @@
 # Changelog
 
+- Web: distinguish known route capacity from a pending or unavailable next-call estimate (#732).
+
+- Web: keep last-call usage separate from the labelled last next-call context estimate (#732).
+
 All notable changes to Exo. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions
 follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJOR (0.x is egg).
 
 ## [Unreleased]
 
 ### Added
+- Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
+  registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
+  do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport
+  for streamed replies, reasoning and local tool calls. Both require live provider acceptance after
+  user sign-in or key entry (`docs/CHATGPT-PROVIDER.md`, discussions #802 and #804).
+- First-party DeepSeek API setup and model discovery, with full thinking history for tool calls and documented effort mapping. Existing role defaults stay unchanged.
 
 - Full-access audits redact raw command strings before JSON encoding and preserve entries whose masked keys collide. Grant changes record the previous session. Terminal restarts do not reapply `--full-access`.
 - Principal-only `/permissions full <session-id>` authorizes all tool calls in one selected session, including background turns, with a required redacted audit before each allow. Other sessions remain gated unless the principal explicitly selects `full all`. Ask revokes full (#623).
+- Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
+
+
+### Changed
+
+- Chat notices stay with their session. Matching successful model calls clear retry and fallback warnings
+  without clearing newer command errors or general notices.
 
 ### Fixed
+
+- Bound bash results no longer mask ordinary text twice across redaction markers (#753). The Registry keeps one strict final-output pass and withholds results if secret lookup or redaction fails; direct bound shell calls and streamed output retain redaction.
+
+- Repeated tool-call warnings and findings can appear during an active turn, rather than waiting for completion. The argument-based warning is deduplicated per tool and turn and does not stop work or change round limits (#749).
+
+- Failed model calls no longer count as recovered fallbacks or produce findings claiming the call fell back. Successful recovery and legacy trace inference remain visible (#748).
+
+- Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
+
+- Bound GitHub token and disabled modes prevent ordinary gh host-keyring fallback after a command removes token environment variables. Only a public invalid fallback is written to private gh configuration.
 
 - Explicit GitHub host mode respects the scrubbed tool environment and `env_deny`, rather than restoring core-process credentials or overwriting approved supplied values (aska-digital/exo-desktop#50).
 - Chat identifies pending approval waits for the current thread or global requests, preserving last-known connection qualifiers (aska-digital/exo-desktop#37, partial).
@@ -25,6 +52,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   persist in the browser or desktop pane bridge, with visible save failures and a reset control.
 
 - The Command page refreshes its snapshot when its event stream opens again, even if no new event arrives (#708).
+
+- Providers refreshes the default readout and provider marker after a save without clearing the model search or losing its focus.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
 - A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
   outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text

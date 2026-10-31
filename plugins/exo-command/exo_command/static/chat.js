@@ -17,17 +17,56 @@ import { attachPaneLayout } from "./pane_layout.js";
 export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
-  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
+  let contextGeneration = 0, contextState = "unknown";
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let coreUsable = true, activityFresh = true, coreState = "connected", webUsable = true;
   let statusVersion = 0;
   const statusUpdates = new Map();
-  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
+  let requested = "", ctxTokens = null, lastCallTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // estimates from /context; completed-call instruments from model.call
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
   const listEl = h("div", { class: "xc-sessions" });
+  let renameTarget = null, renameSaving = false, renameActive = true;
+  const renameButtons = new Map();
+  const renameInput = h("input", { type: "text", "aria-label": "Thread title", autocomplete: "off", maxlength: "200" });
+  const renameError = h("div", { role: "alert", class: "xc-rename-error" });
+  const renameSave = h("button", { type: "submit", class: "xc-btn xc-primary" }, "Save");
+  const renameCancel = h("button", { type: "button", class: "xc-btn", onclick: () => closeRename() }, "Cancel");
+  const renameEditor = h("form", { class: "xc-rename-editor", hidden: true, "aria-label": "Rename thread",
+    onsubmit: (e) => { e.preventDefault(); saveRename(); },
+    onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); closeRename(); } } },
+    h("label", null, "Thread title", renameInput), renameError, h("div", { class: "xc-btnrow" }, renameSave, renameCancel));
+  function beginRename(s) {
+    if (renameSaving) return;
+    renameTarget = s.id; renameInput.value = s.title || ""; renameError.textContent = "";
+    renameEditor.hidden = false; renameInput.focus(); renameInput.select();
+  }
+  function closeRename() {
+    if (renameSaving) return;
+    const id = renameTarget; renameTarget = null; renameEditor.hidden = true; renameInput.value = "";
+    renameError.textContent = ""; renameButtons.get(id)?.focus();
+  }
+  async function saveRename() {
+    if (!renameTarget || renameSaving) return;
+    const title = renameInput.value.trim(), id = renameTarget;
+    if (!title) { renameError.textContent = "Enter a thread title."; renameInput.focus(); return; }
+    renameSaving = true; renameInput.disabled = renameSave.disabled = renameCancel.disabled = true;
+    renameError.textContent = "Saving…";
+    try {
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(id) + "/rename", { title });
+      if (!renameActive) return;
+      sessions = sessions.map((s) => s.id === id ? { ...s, title } : s); drawSessions();
+      renameSaving = false; closeRename();
+    } catch (e) {
+      if (renameActive) renameError.textContent = e && e.message ? e.message : "Could not rename this thread.";
+    } finally {
+      renameSaving = false; renameInput.disabled = renameSave.disabled = renameCancel.disabled = false;
+      if (renameActive && !renameEditor.hidden) renameInput.focus();
+    }
+  }
   const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
@@ -72,7 +111,7 @@ export function mount(root) {
     layout = v; setLayout(v); arrange(); drawLog();
   }
   arrange();
-  const threadsEl = h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn);
+  const threadsEl = h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), renameEditor, listEl, layoutBtn);
   const paneControls = h("nav", { "aria-label": "Pane layout" });
   const chatPanes = h("div", { class: "xc-chat" }, threadsEl, mainEl, sideEl);
   root.replaceChildren(h("section", { class: "xc-pane-workspace", "aria-label": "Conversation workspace" }, paneControls, chatPanes));
@@ -84,7 +123,7 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- items
 
-  function flash(msg) { notice = msg || ""; drawStatus(); }
+  function flash(msg) { notice = msg || ""; routeNotice = null; drawStatus(); }
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
   // A context note (meta.note: other threads' news) is for the model, not a message the user typed (D-028), so the
@@ -145,8 +184,11 @@ export function mount(root) {
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
       case "notice":
+        if (!mine) return;
         if (mine && /^tip\b/i.test(b.text || "")) { push({ kind: "sys", id: "tip" + ev.seq, tone: "tip", text: b.text.replace(/^tip:?\s*/i, "") }); return; }
-        flash(b.text); return;
+        flash(b.text);
+        if (b.source === "model_route" && b.call_id) routeNotice = b.call_id;
+        return;
       default: break;
     }
     // Keep background threads current too: returning to one must not revive a
@@ -156,8 +198,9 @@ export function mount(root) {
     }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
+      case "turn.started": invalidateContext(); setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); drawSide(true); break;
       case "turn.completed": {
+        if (routeNotice) flash("");
         setBusy(false); drawStatus(); loadContext();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
@@ -166,12 +209,15 @@ export function mount(root) {
       case "usage.updated": {
         if (b.session_total) { costSeen = true; cost = b.session_total.cost_usd == null ? null : b.session_total.cost_usd; }   // null = unpriced, never $0
         if (b.model && !model) model = b.model;
-        instruments(b.usage); drawStatus(); break;
+        // Usage updates can roll up several child calls; only model.call identifies one prompt.
+        drawStatus(); break;
       }
       case "model.call":
+        if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
         help.note({ providerError: !!b.error });
-        if (b.route) { model = b.route; capacity = capacities[model] || null; }
+        if (b.route) { if (model !== b.route) invalidateContext(); model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
+        lastCallTokens = null; cacheShare = null;
         if (b.usage) instruments(b.usage);
         calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, cost: b.usage ? b.usage.cost_usd : undefined, error: b.error });
         calls = calls.slice(0, 6);
@@ -188,7 +234,7 @@ export function mount(root) {
         loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
-        capacity = null; loadContext();
+        loadContext();
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
@@ -236,11 +282,11 @@ export function mount(root) {
     }
   }
 
-  // What the next call carries (input + cached) and how much of it came from the cache.
+  // What the last completed model call carried; never overwrite the /context estimate.
   function instruments(u) {
     if (!u) return;
     const total = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
-    if (total > 0) { ctxTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
+    if (total > 0) { lastCallTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
   }
   function cacheOf(u) {
     const t = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
@@ -251,24 +297,36 @@ export function mount(root) {
     const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/command", { name, args: args || "" });
     return d.output;
   }
+  function invalidateContext(state = "unknown") {
+    ++contextGeneration;
+    ctx = null; ctxTokens = null; contextState = state;
+    capacity = model ? (capacities[model] ?? null) : null;
+  }
   function applyContext(out) {
     const metrics = contextMetrics(out);
-    if (!metrics) return;
-    ctx = metrics; ctxTokens = ctx.total; capacity = ctx.capacity;
+    if (!metrics) return false;
+    ctx = metrics; ctxTokens = ctx.total; contextState = "ready";
     capacities[ctx.model] = ctx.capacity;
+    capacity = model ? (capacities[model] ?? null) : null;
     drawStatus(); drawSide(true);
+    return true;
   }
   async function loadContext() {
     const id = current;
     if (!id) return;
-    capacity = null;
-    drawStatus();
+    invalidateContext("pending");
+    const generation = contextGeneration, route = model;
+    drawStatus(); drawSide(true);
     try {
       const out = await runCommand("context", "json");
-      if (id !== current) return;
-      applyContext(out);
+      if (id !== current || generation !== contextGeneration || route !== model) return;
+      if (!applyContext(out)) contextState = "unavailable";
       drawStatus(); drawSide(true); if (!items.length) drawHero();
-    } catch (e) { if (id === current) { capacity = null; drawStatus(); } }
+    } catch (e) {
+      if (id !== current || generation !== contextGeneration || route !== model) return;
+      contextState = "unavailable";
+      drawStatus(); drawSide(true);
+    }
     try {
       const out = await runCommand("findings", "count");
       if (id === current && out && typeof out.open === "number") { findings = out.open; help.note({ findings }); drawStatus(); }
@@ -403,14 +461,18 @@ export function mount(root) {
       m.classList.add("xc-model");
       if (fell) m.appendChild(h("span", { class: "xc-via", title: "asked " + requested }, "\u2190 fallback"));
       out.push(m);
+      if (model.startsWith("chatgpt:")) out.push(h("a", { href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer" }, "Using ChatGPT plan · Manage usage"));
     }
     if (ctxTokens != null) {
-      const pct = capacity ? Math.min(100, Math.round(100 * ctxTokens / capacity)) : 0;
-      const remaining = capacity ? Math.max(0, capacity - ctxTokens) : 0;
+      const estimateCapacity = ctx ? ctx.capacity : null;
+      const pct = estimateCapacity ? Math.min(100, Math.round(100 * ctxTokens / estimateCapacity)) : 0;
+      const remaining = estimateCapacity ? Math.max(0, estimateCapacity - ctxTokens) : 0;
       out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
-        capacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(capacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
-        h("span", { class: "xc-v" }, capacity ? fmtTok(ctxTokens) + " of " + fmtTok(capacity) + ". " + fmtTok(remaining) + " left." : "About " + fmtTok(ctxTokens) + " on the next call. Limit unknown.")));
+        estimateCapacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(estimateCapacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
+        h("span", { class: "xc-v" }, (estimateCapacity ? "Estimated next call: " + fmtTok(ctxTokens) + " of " + fmtTok(estimateCapacity) + ". " + fmtTok(remaining) + " left." : "Estimated next call: about " + fmtTok(ctxTokens) + ". Limit unknown.") + (ctx.model ? " Next model: " + ctx.model + "." : ""))));
     }
+    if (ctxTokens == null) out.push(cell("memory", contextUnknown()));
+    if (lastCallTokens != null) out.push(cell("last call", fmtTok(lastCallTokens) + " input tokens"));
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
     if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
@@ -446,12 +508,16 @@ export function mount(root) {
 
   function drawSessions() {
     const focused = listEl.contains(document.activeElement) ? document.activeElement.closest(".xc-sess")?.dataset.session : null;
-    listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { "data-session": s.id, class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
-        title: "Double-click to rename (also /rename <title>)",
-        ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
+    renameButtons.clear();
+    listEl.replaceChildren(...(sessions.length ? sessions.map((s) => {
+      const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
+      renameButtons.set(s.id, button);
+      return h("div", { class: "xc-session-row" }, h("button", { "data-session": s.id, class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
+        title: "Open thread",
+        ondblclick: () => beginRename(s) },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [sessionPhase(s), waitingForApproval(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+        h("span", { class: "xc-dim" }, [sessionPhase(s), waitingForApproval(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x])))), button);
+    }) : [empty("No threads yet.")]));
     if (focused) Array.from(listEl.querySelectorAll(".xc-sess")).find(el => el.dataset.session === focused)?.focus({ preventScroll: true });
     drawWhere();
   }
@@ -465,15 +531,19 @@ export function mount(root) {
   function gaugeRow(label, n, max, hot) {
     return h("div", { class: "xc-gr" }, h("span", { class: "xc-i" }, label), h("span", { class: "xc-gauge" + (hot ? " hot" : "") }, h("i", { style: "width:" + Math.max(n ? 2 : 0, Math.min(100, Math.round(100 * n / max))) + "%" })), h("span", { class: "xc-v" }, fmtTok(n)));
   }
+  function contextUnknown() {
+    return "Next-call estimate " + (contextState === "pending" ? "pending" : contextState === "unavailable" ? "unavailable" : "unknown") +
+      (capacity ? ". Capacity " + fmtTok(capacity) + " tokens." : ". Limit unknown.");
+  }
   function instrumentColumn() {
     const mem = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Memory"));
     if (ctx) {
       const max = Math.max(ctx.total, 1);
-      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "tokens on the next call")),
+      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "estimated tokens for next call" + (ctx.model ? " · " + ctx.model : ""))),
         gaugeRow("system", ctx.system, max), gaugeRow("tree", ctx.tree, max), gaugeRow("threads", ctx.notes, max), gaugeRow("tail", ctx.tail, max),
         h("div", { class: "xc-pm" }, "tree \u00B7 " + ctx.summaries + " summaries over " + ctx.nodes + " nodes" + (ctx.pending ? " \u00B7 " + ctx.pending + " pending" : "")),
         h("div", { class: "xc-pm" }, "log \u00B7 " + ctx.log + " entries, folded up to " + ctx.frontier));
-    } else mem.append(h("div", { class: "xc-pm" }, ctxTokens != null ? fmtTok(ctxTokens) + " tokens on the last call" : "no report yet"));
+    } else mem.append(h("div", { class: "xc-pm" }, contextUnknown()));
     const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
     if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
       h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
@@ -511,10 +581,11 @@ export function mount(root) {
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
+    invalidateContext();
     capacity = null;
     current = id; loading = true; pending = []; items = [];
     setBusy(snapshotBusy(null, sessions.find(s => s.id === id)));
-    cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    cost = null; requested = ""; ctxTokens = null; lastCallTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -548,6 +619,9 @@ export function mount(root) {
       const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
       if (id !== current || generation !== snapshotGeneration) return;
       sessions = freshSessions;
+      // A transcript snapshot cannot restore missed per-call usage; replay newer events below.
+      lastCallTokens = null; cacheShare = null;
+      invalidateContext();
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
         dropSteers(id, had, d.steers);
@@ -613,7 +687,7 @@ export function mount(root) {
       const lan = defaults && e.status === 403 && !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
       throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
     } finally { changingModel = false; }
-    if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    if (!defaults && current === sid) { invalidateContext(); model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); drawSide(true); }
     if (sid !== current || generation !== pickerGeneration) { await refreshSessions(); return; }
     closePicker();
     await refreshSessions();
@@ -714,11 +788,19 @@ export function mount(root) {
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
       input.value = ""; help.sent(text);
+      const reportSession = current, reportRoute = model;
+      if (slash[1] === "context") { invalidateContext("pending"); drawStatus(); drawSide(true); }
+      const reportGeneration = contextGeneration;
       try {
         const out = await runCommand(slash[1], slash[1] === "context" ? "json" : slash[2]);
-        if (slash[1] === "context") applyContext(out);
+        if (reportSession !== current || (slash[1] === "context" && (reportRoute !== model || reportGeneration !== contextGeneration))) return;
+        if (slash[1] === "context" && !applyContext(out)) { contextState = "unavailable"; drawStatus(); drawSide(true); }
         push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : (out && out.text) || JSON.stringify(out, null, 1) });
-      } catch (e) { fail(e); }
+      } catch (e) {
+        if (reportSession !== current || (slash[1] === "context" && reportGeneration !== contextGeneration)) return;
+        if (slash[1] === "context") { contextState = "unavailable"; drawStatus(); drawSide(true); }
+        fail(e);
+      }
       return;
     }
     try {
@@ -813,7 +895,7 @@ export function mount(root) {
     const restored = coreUsable && !wasUsable && st.synced > 0;
     if (st.synced !== synced || restored) { synced = st.synced; recover(); }
   });
-  const off = () => { stopPaneLayout(); ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { renameActive = false; renameInput.value = ""; stopPaneLayout(); ++contextGeneration; ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");

@@ -181,6 +181,7 @@ export interface ModelCall {
   error?: string;
   retries?: number;
   reasoning?: Record<string, unknown>;
+  call_id?: string;
 }
 
 export interface ModelsList {
@@ -195,6 +196,8 @@ export interface ModelsSet {
 export interface Notice {
   text: string;
   level?: "info" | "warn";
+  source?: string;
+  call_id?: string;
 }
 
 export interface PeerDelivery {

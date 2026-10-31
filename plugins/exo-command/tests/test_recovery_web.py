@@ -81,19 +81,56 @@ await settle();
 const input=nodes.find(x=>x.tagName==="TEXTAREA"), send=nodes.find(x=>x.attrs.class==="xc-btn xc-primary" && x.textContent==="Send");
 const log=nodes.find(x=>x.attrs.class==="xc-log"), strip=nodes.find(x=>x.attrs.class==="xc-strip");
 assert.match(strip.textContent,/4.2k of 8.2k/); assert.ok(!strip.textContent.includes("200k"));
+// Usage describes the completed call, not the independent next-call estimate.
+bus.emit({seq:101,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:5000,cache_read_tokens:2000}}});
+assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
+assert.match(strip.textContent,/last call7\.0k input tokens/);
+const side=nodes.find(x=>x.attrs.class==="xc-side");
+assert.match(side.textContent,/4.2kestimated tokens for next call/);
+// A parent usage update can be the sum of a delegated child's calls.
+bus.emit({seq:102,session:"s1",type:"usage.updated",body:{usage:{input_tokens:3000,cache_read_tokens:500}}});
+assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
+assert.match(strip.textContent,/last call7\.0k input tokens/);
+// A newer call with absent, empty, or zero usage must not retain the prior call's counts.
+for (const [seq, usage] of [[104,undefined],[106,{}],[108,{input_tokens:0,cache_read_tokens:0}]]) {
+  bus.emit({seq:seq-1,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:5000,cache_read_tokens:2000}}});
+  assert.match(strip.textContent,/last call7\.0k input tokens/);
+  bus.emit({seq,session:"s1",type:"model.call",body:{route:"fake:x",usage}});
+  assert.match(strip.textContent,/Estimated next call: 4.2k of 8.2k/);
+  assert.ok(!strip.textContent.includes("last call"));
+  assert.ok(!strip.textContent.includes("cache29%"));
+}
+// Healthy call instruments become unknown at an accepted recovery baseline.
+bus.emit({seq:109,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:12000,cache_read_tokens:3000}}});
+assert.match(strip.textContent,/last call15k input tokens/);
+assert.match(strip.textContent,/cache20%/);
 input.value="draft survives";
-bus.emit({seq:101,session:"s1",type:"message.delta",body:{message_id:"live",text:"one"}});
+bus.emit({seq:111,session:"s1",type:"message.delta",body:{message_id:"live",text:"one"}});
 status="live"; let release; hold=new Promise(r=>release=r); bus.recover();
-bus.emit({seq:102,session:"s1",type:"message.delta",body:{message_id:"live",text:" two"}});
+bus.emit({seq:112,session:"s1",type:"message.delta",body:{message_id:"live",text:" two"}});
+// A new call received during the held snapshot must replay after the baseline clears usage.
+bus.emit({seq:113,session:"s1",type:"model.call",body:{route:"fake:x",usage:{input_tokens:9000,cache_read_tokens:1000}}});
 messages=messages.concat({id:"a2",role:"assistant",content:[{text:"missed durable answer"}]});
-snapshotSeq=102;release();hold=null;await settle();
+snapshotSeq=112;release();hold=null;await settle();
 assert.match(log.textContent,/missed durable answer/); assert.match(log.textContent,/one two/);
 assert.equal(input.value,"draft survives"); assert.match(strip.textContent,/working/);
+assert.match(strip.textContent,/last call10k input tokens/);
+assert.match(strip.textContent,/cache10%/);
+assert.ok(!strip.textContent.includes("15k input tokens"));
 // An already completed snapshot ignores an old delta arriving during a refresh.
-bus.emit({seq:103,session:"s1",type:"message.delta",body:{message_id:"a1",text:" duplicated"}});
+bus.emit({seq:114,session:"s1",type:"message.delta",body:{message_id:"a1",text:" duplicated"}});
 assert.ok(!log.textContent.includes("duplicated"));
 status="idle"; report.capacity=null;bus.recover();await settle();
 assert.match(strip.textContent,/idle/);assert.match(strip.textContent,/Limit unknown/);
+assert.match(strip.textContent,/Estimated next call: about 4.2k/);
+assert.ok(!strip.textContent.includes("last call"));
+assert.ok(!strip.textContent.includes("cache10%"));
+// A new report replaces only the estimate; subsequent usage cannot relabel it.
+report.tokens.total=5800;report.capacity=16384;bus.recover();await settle();
+assert.match(strip.textContent,/Estimated next call: 5.8k of 16k/);
+assert.match(side.textContent,/5.8kestimated tokens for next call/);
+assert.ok(!strip.textContent.includes("last call"));
+
 // D-037: a /word that names no command, and is near none, is message text (#150 review: paths and /me are not held).
 for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken",
                    "/tmp is full, what can I delete?", "/home is on another disk", "/var keeps growing", "/me waves", "/v2 is out",
@@ -187,12 +224,12 @@ let releaseModel;holdModel=new Promise(r=>releaseModel=r);
 input.value="/model fake:y";const slowModel=send.attrs.onclick();await settle();
 input.value="a newer draft";releaseModel();await slowModel;holdModel=null;
 assert.equal(input.value,"a newer draft");
-bus.emit({seq:104,session:"s1",type:"turn.started",body:{model:"fake:x"}});
+bus.emit({seq:115,session:"s1",type:"turn.started",body:{model:"fake:x"}});
 const interrupts=requests.filter(x=>x.path.endsWith("/interrupt")).length;
 input.value="/model fake:y";await send.attrs.onclick();await settle();
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
 assert.equal(requests.filter(x=>x.path.endsWith("/interrupt")).length,interrupts);
-bus.emit({seq:105,session:"s1",type:"turn.completed",body:{}});
+bus.emit({seq:116,session:"s1",type:"turn.completed",body:{}});
 input.value="/new private";await send.attrs.onclick();await settle();
 assert.equal(requests.findLast(x=>x.path==="/api/chat/sessions" && x.method==="POST").body.kind,"private");
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
@@ -200,6 +237,31 @@ input.value="/new private extra";await send.attrs.onclick();assert.match(strip.t
 input.value="/context broken";await send.attrs.onclick();assert.match(strip.textContent,/usage: \/context/);
 input.value="/contex help";await send.attrs.onclick();assert.equal(input.value,"/context");
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+// Notices belong to a thread. Only the exact completed call clears a route warning.
+input.value="draft survives";
+let eventSeq=1000;
+const emit=(type,body,session="s1")=>bus.emit({seq:eventSeq++,session,type,body});
+const has=t=>strip.textContent.includes(t);
+emit("notice",{text:"selected general"});assert.ok(has("selected general"));
+emit("notice",{text:"foreign warning",source:"model_route",call_id:"foreign"},"other");
+emit("notice",{text:"unscoped warning"},null);assert.ok(has("selected general"));assert.ok(!has("foreign warning"));
+emit("notice",{text:"route retry",source:"model_route",call_id:"call1"});
+emit("model.call",{call_id:"other-call",route:"fake:x"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x"},"other");assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",error:"failed"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",stop_reason:"interrupted"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x",stop_reason:"end"});assert.ok(!has("route retry"));
+emit("notice",{text:"route retry2",source:"model_route",call_id:"call2"});
+emit("notice",{text:"new general notice"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("new general notice"));emit("turn.completed",{});assert.ok(has("new general notice"));
+emit("error",{message:"persistent command failure"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("persistent command failure"));
+emit("notice",{text:"unfinished route",source:"model_route",call_id:"call3"});
+emit("turn.completed",{},"other");assert.ok(has("unfinished route"));
+emit("turn.completed",{});assert.ok(!has("unfinished route"));
+emit("notice",{text:"legacy general warning",level:"warn"});
+emit("model.call",{route:"fake:x"});emit("turn.completed",{});assert.ok(has("legacy general warning"));
+assert.equal(input.value,"draft survives");
 off();console.log("ok");
 ''')
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)

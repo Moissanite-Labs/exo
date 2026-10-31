@@ -249,6 +249,8 @@ def test_background_status_changes_preserve_focused_thread_and_keyboard_navigati
     browser.wait('!window.thread("s2").querySelector(".xc-dim").textContent.includes("running")')
     assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's1'
     browser.press('Tab')
+    assert browser.eval('document.activeElement.matches(".xc-rename") && document.activeElement.getAttribute("aria-label") === "Rename s1"')
+    browser.press('Tab')
     assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's2'
     browser.press(' ')
     expect(browser, 's2', False)

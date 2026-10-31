@@ -594,6 +594,7 @@ def test_an_older_harness_recurrence_restarts_the_clock(monkeypatch):
     ("model.wait:p:a", tt(calls=[Call(route="")]), tt()),  # no route recorded: the shown model is the route
     ("model.timeout:p:a", tt(calls=[Call(route="p:b", attempts=[{"route": "p:a", "outcome": "timeout"}])]),
      tt(calls=[Call(route="p:b")])),
+    ("model.error:p:a", tt(calls=[Call(route="p:a")]), tt(calls=[Call(route="p:b")])),
     ("model.fallback:p:a", tt(children=[tt(calls=[Call(route="p:a")])]), tt(calls=[Call(route="p:b")])),
     ("model.mismatch", tt(), tt(served=[])),
     ("tool.error:read_file:not-found", tt(tools=[ToolRow("read_file")]), tt(tools=[ToolRow("bash")])),
@@ -951,3 +952,19 @@ def test_trace_text_lists_open_findings_by_default(tmp_path):
     assert "open findings:" in out and "Open thing" in out
     assert "Fixed thing" not in out  # fixed is counted, not listed
     assert "1 open, 1 fixed" in out
+
+
+@pytest.mark.parametrize('served', ['p:a', 'p:b'])
+def test_recorded_error_then_ok_is_not_guessed_to_be_a_fallback(served):
+    store = SessionStore()
+    session = store.create_session().id
+    attempts = [{'route': 'p:a', 'outcome': 'error', 'error': 'fixture failure'},
+                {'route': served, 'outcome': 'ok'}]
+    for body in (s.TurnStarted(turn_id='t', model='p:a'),
+                 s.ModelCall(requested='p:a', route=served, attempts=attempts), s.TurnCompleted(turn_id='t')):
+        store.append_event(body, session)
+    turn = trace.last_turn(store, session)
+    assert not turn.derived and turn.fallbacks == 0
+    flags = trace.detect(turn, TH)
+    assert 'model.error:p:a' in {f.signature for f in flags}
+    assert not any(f.signature.startswith('model.fallback:') for f in flags)

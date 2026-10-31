@@ -82,7 +82,8 @@ def test_legacy_exports_signatures_and_type_hints_remain_resolvable():
     old_keywords = {"home", "models", "registry", "plugins", "executor", "executor_required", "cwd",
                     "system_prompt", "env", "delegation", "seat", "skill_folders", "mcp", "channels",
                     "tree_cfg", "schedule", "trace_cfg", "peers", "jobs", "peers_dir", "loop_kw"}
-    assert set(inspect.signature(CoreEngine).parameters) == old_keywords | {"context_factory", "attach_peers", "attach_scheduler"}
+    assert set(inspect.signature(CoreEngine).parameters) == old_keywords | {"context_factory", "attach_peers", "attach_scheduler", "provider_auth"}
+    assert inspect.signature(CoreEngine).parameters["provider_auth"].default is None
     exports = {}
     exec("from exo.core.engine import *", exports)
     assert exports["CoreEngine"] is CoreEngine and exports["ContextAdapter"] is ContextAdapter

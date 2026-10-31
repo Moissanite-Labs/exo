@@ -218,6 +218,11 @@ class Thresholds:
 # ---------------------------------------------------------------- trace rows
 
 
+def recovered_fallbacks(attempts: list[dict[str, Any]], served: str) -> int:
+    """Recorded fallback failures count as recoveries only when a route actually served the call."""
+    return sum(a.get("outcome") in ("fallback", "timeout") for a in attempts) if served else 0
+
+
 @dataclass
 class Call:
     iteration: int = 0
@@ -398,6 +403,73 @@ def _args_key(args: Any) -> str:
     return hashlib.sha1(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
+class RepeatWatch:
+    """Incremental primary-loop repeat warning. Keep only active turns and bounded recent call keys."""
+    LIMIT = 256
+
+    def __init__(self) -> None:
+        self.turns: dict[str, dict[str, Any]] = {}
+        self.completed: dict[tuple[str, str], set[str]] = {}
+
+    def feed(self, event: ev.Event) -> Flag | None:
+        body, session = event.body, event.session
+        if not session:
+            return None
+        if isinstance(body, ev.TurnStarted):
+            self.turns[session] = {"turn": body.turn_id, "model": body.model, "pending": {},
+                                   "counts": {}, "warned": set(), "filed": set()}
+            return None
+        state = self.turns.get(session)
+        if state is None:
+            return None
+        if isinstance(body, ev.TurnCompleted):
+            if body.turn_id != state["turn"]:
+                return None
+            self.completed[session, state["turn"]] = state["filed"]
+            if len(self.completed) > self.LIMIT:
+                self.completed.pop(next(iter(self.completed)))
+            del self.turns[session]
+        elif isinstance(body, ev.ToolStarted):
+            pending = state["pending"]
+            pending[body.call.id] = (body.call.name, _args_key(body.call.arguments),
+                                     _changes_files(body.call.name, body.call.arguments, False))
+            if len(pending) > self.LIMIT:
+                pending.pop(next(iter(pending)))
+        elif isinstance(body, ev.ToolCompleted):
+            call = state["pending"].pop(body.result.call_id, None)
+            if call is None:
+                return None
+            name, key, changes = call
+            counts = state["counts"]
+            n = counts.pop((name, key), 0) + 1
+            counts[name, key] = n
+            if len(counts) > self.LIMIT:
+                counts.pop(next(iter(counts)))
+            if changes and not (body.is_error or body.result.is_error):
+                counts.clear()  # the same normalization and successful-file-change epoch as detect()
+            elif n >= 3 and name not in state["warned"] and len(state["warned"]) < self.LIMIT:
+                state["warned"].add(name)
+                return Flag(f"tool.repeat:{name}", "papercut", f"Tool {scrub(name, 80)} repeated the same call {n} times",
+                            "Repeated calls detected during the active turn. This argument-based heuristic does not measure progress or stop the turn.",
+                            session, state["turn"], state["model"])
+        return None
+
+    def filed(self, flag: Flag) -> None:
+        state = self.turns.get(flag.session)
+        if state and state["turn"] == flag.turn:
+            state["filed"].add(flag.signature)
+
+    def already_filed(self, flag: Flag) -> bool:
+        state = self.turns.get(flag.session)
+        return bool((state and state["turn"] == flag.turn and flag.signature in state["filed"]) or
+                    flag.signature in self.completed.get((flag.session, flag.turn), set()))
+
+    def finish(self, session: str, turn: str) -> None:
+        self.completed.pop((session, turn), None)
+        if (state := self.turns.get(session)) and state["turn"] == turn:
+            del self.turns[session]
+
+
 def _norm(text: str) -> str:
     """A tool error reduced to its kind: lower case, paths and numbers blanked, first line, 50 chars."""
     line = (text.strip().splitlines() or [""])[0].lower()
@@ -506,7 +578,7 @@ class _Parse:
         t.calls, t.derived = (self.recorded or self.guess), not self.recorded
         if self.recorded:
             t.served = list(dict.fromkeys(c.route for c in self.recorded if c.route))
-            t.fallbacks = sum(1 for c in t.calls for a in c.attempts if a.get("outcome") not in ("ok", None))
+            t.fallbacks = sum(recovered_fallbacks(c.attempts, c.route if not c.error else "") for c in t.calls)
         else:
             t.fallbacks = self.fell
 
@@ -574,7 +646,7 @@ def eligible(signature: str, t: TurnTrace) -> bool | None:
     rule = {"turn.slow": t.complete, "turn.wall": t.complete, "subagent.slow": any(x.tasks for x in xs),
             "model.mismatch": any(x.shown and x.served for x in xs), "shell.masked_exit": "bash" in tools,
             "tool.error": key.split(":")[0] in tools, "tool.repeat": key in tools}
-    if kind in ("model.wait", "model.slow", "model.fallback", "model.timeout"):
+    if kind in ("model.wait", "model.slow", "model.fallback", "model.timeout", "model.error"):
         return any(key in (c.route or x.shown, *(a.get("route") for a in c.attempts)) for x in xs for c in x.calls)
     return rule.get(kind)
 
@@ -626,7 +698,10 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
                     f"{a.get('error', '')} (after {_fmt_ms(a.get('ms', 0))})".strip())
             elif a.get("outcome") in ("fallback", "error"):
                 cool = a.get("cooldown_s")  # the route's circuit breaker opened on this failure
-                add(f"model.fallback:{a['route']}", "bug", f"{a['route']} failed; the call fell back",
+                recovered = bool(c.route and not c.error)
+                kind = "model.fallback" if a.get("outcome") == "fallback" and (recovered or t.derived) else "model.error"
+                title = f"{a['route']} failed" + ("; the call fell back" if kind == "model.fallback" else "")
+                add(f"{kind}:{a['route']}", "bug", title,
                     str(a.get("error", "")) + (f" (route skipped for {_fmt_ms(cool * 1000)})" if cool else ""))
     for tr in t.tools:
         if tr.is_error:

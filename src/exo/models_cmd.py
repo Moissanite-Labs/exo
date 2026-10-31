@@ -34,29 +34,55 @@ def render(router: Router) -> str:
     return '\n'.join(lines)
 
 
-def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | None = None) -> list[str]:
-    """Model ids from ``{base_url}/models`` of an OpenAI-compatible provider."""
+def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
+    """Public model endpoint. SIWC catalog is account-specific and deliberately never cached."""
+    import asyncio
     spec = router.providers.get(provider)
     if spec is None:
         raise ValueError(f'unknown provider {provider!r}')
-    if spec.get('transport', 'openai') != 'openai':
+    if spec.get('transport', 'openai') not in ('openai', 'responses', 'deepseek'):
         raise ValueError(f'provider {provider!r} has no OpenAI-style /models endpoint')
-    envs = spec.get('key_env') or []
-    envs = [envs] if isinstance(envs, str) else list(envs)
-    key = next((k for e in envs if (k := router._key(e))), None)
-    headers = {'authorization': f'Bearer {key}'} if key else {}
+    subscription = spec.get('auth') == 'chatgpt'
+    scope_callback = router.provider_auth.get(provider, (None, None, lambda: ''))
+    scope_callback = scope_callback[2] if len(scope_callback) > 2 else lambda: ''
+    scope = scope_callback() if subscription else ''
+    if subscription:
+        if spec.get('base_url') != 'https://api.openai.com/v1' or not router.auth_available(provider):
+            raise ValueError('ChatGPT plan usage is not connected')
+        try:
+            headers = asyncio.run(router.provider_auth[provider][1]())
+        except Exception:
+            raise ValueError('ChatGPT authorization unavailable') from None
+    else:
+        envs = spec.get('key_env') or []
+        envs = [envs] if isinstance(envs, str) else list(envs)
+        key = next((k for e in envs if (k := router._key(e))), None)
+        headers = {**({'authorization': f'Bearer {key}'} if key else {}), **(spec.get('headers') or {})}
     if get is None:
         import httpx
         get = httpx.get
     try:
-        resp = get(spec['base_url'].rstrip('/') + '/models', headers={**headers, **(spec.get('headers') or {})},
-                   timeout=20.0)
+        resp = get(spec['base_url'].rstrip('/') + '/models', headers=headers, timeout=20.0)
         resp.raise_for_status()
         data = resp.json()
-    except Exception as e:  # never echo request headers
-        raise ValueError(f'{provider}: could not list models ({type(e).__name__})') from None
-    items = data.get('data') if isinstance(data, dict) else data
-    return sorted(str(m.get('id', m)) if isinstance(m, dict) else str(m) for m in items or [])
+        if subscription:
+            if scope != scope_callback():
+                raise ValueError('Selected account changed')
+            items = data['models']
+            if not isinstance(items, list):
+                raise ValueError()
+            return [{'id': item['slug'], 'display_name': item.get('display_name', item['slug'])}
+                    for item in items if isinstance(item, dict) and item.get('visibility') == 'list'
+                    and isinstance(item.get('slug'), str) and item['slug']]
+        items = data.get('data') if isinstance(data, dict) else data
+        return sorted([{'id': str(m.get('id', m)) if isinstance(m, dict) else str(m)} for m in items or []],
+                      key=lambda item: item['id'])
+    except Exception as exc:
+        raise ValueError(f'{provider}: could not list models ({type(exc).__name__})') from None
+
+
+def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | None = None) -> list[str]:
+    return [row['id'] for row in _remote_catalog(router, provider, get=get)]
 
 
 CACHE_TTL = 6 * 3600.0
@@ -73,11 +99,19 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     cache_dir = Path(home) / 'cache' / 'models'
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
+        if spec.get('auth') == 'chatgpt':
+            if router.auth_available(name) and router._allows(name, 'main'):
+                try:
+                    out += [{'route': f"{name}:{row['id']}", 'provider': name,
+                             'display_name': row['display_name']} for row in _remote_catalog(router, name, get=get)]
+                except ValueError:
+                    pass  # never reuse another account's catalog after an authorization failure
+            continue
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
             continue
-        if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'
+        if (spec.get('transport', 'openai') not in ('openai', 'responses', 'deepseek') or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
         f = cache_dir / f'{name}.json'

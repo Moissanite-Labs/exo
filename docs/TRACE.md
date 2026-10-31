@@ -3,13 +3,32 @@
 Exo watches itself, so a fix can be measured and an agent can judge its environment from data (D-025).
 The loop: record, read, report, verify.
 
+## Warnings during a turn
+
+The primary core loop checks completed tool calls incrementally. After three calls with the same normalized
+arguments in one file-change epoch, it files a `tool.repeat:<tool>` finding and sends a warning Notice to Chat.
+Each tool warns at most once per turn. Completion still runs the existing trace observer without counting that
+same finding twice. Shorter repetitions can still appear in the existing retrospective report.
+
+This is an argument heuristic, not a measure of progress. Legitimate polling can repeat. Successful file-changing
+tools start a new epoch, using the same normalization and change rules as the retrospective detector. Changes
+outside those tools may be invisible. The warning does not stop a turn, change its round limit, retry or switch models.
+
+The live check retains at most 256 recent call keys per active turn and does not reread historical events after
+each call. Turn completion clears its state. Disabling trace observation disables these warnings too. Finding-store
+failures are reported as diagnostic errors without stopping tool execution.
+
 ## What is recorded
 - `model.call` (event): per model call, the role and route asked for, the route that served it, every attempt
   (`route`, `outcome` ok, timeout, error or fallback, short `error`, `ms`), time to first token, total time,
   tokens (cache reads and writes too), the estimated cost in USD, loop retries. A call that a stop cuts short is
   recorded too, with `stop_reason` `interrupted`. It keeps the attempts of routes that timed out or failed before
-  the stop, so a stop on the fallback route still raises `model.timeout` or `model.fallback` for the route before.
+  the stop. A failed route remains visible as `model.timeout` or `model.error` without claiming that a fallback recovered.
   When its only tries timed out, it raises no `model.slow`, because `model.timeout` already names that route.
+  Recorded `fallbacks` counts require a serving route without a terminal error. Failed or exhausted calls do not
+  count as recoveries. An `error` attempt is not a fallback marker, including a same-route loop retry that later
+  succeeds. Old sessions without `model.call` retain their notice-derived fallback counts and flags. Those are
+  inferred handoffs, not proof of successful recovery.
 - `turn.started.soul`: a short hash of the seat's `SOUL.md` text the turn ran under (empty without one), so the trace
   shows which instructions a turn used after an edit.
 - `tool.completed`: `duration_ms` and `is_error` on every call.
@@ -65,7 +84,9 @@ rest fall back to config.json (`exo trace` reads the seat of the session it show
 | `model.slow:<route>` | one model call (one try on one route) took longer in total than the limit. It flags the route, not the harness. A try that timed out is `model.timeout` instead. Bug at 5 times the limit. A route can have its own limit in `model_call_routes`, for example `{"nous:stepfun/step-5-preview:free": 180}` | 60 s (`model_call_s`) |
 | `turn.wall` | total turn wall time, work included, over a separate high cap | 30 min (`turn_total_wall_s`) |
 | `model.wait:<route>` | time to first token over the limit | 30 s (`model_wait_s`) |
-| `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on. If the failure opened the route's circuit breaker the flag says how long the route is skipped, and that attempt in `model.call` carries `cooldown_s` (config `[models.breaker]`: `failures`, `cooldown_s`, `max_cooldown_s`; see PROVIDERS.md) | any; breaker 2 failures, 10 min, up to 1 h |
+| `model.fallback:<route>` | a recorded fallback attempt was followed by a serving route with no terminal error. Legacy traces retain notice-derived handoffs. If the failure opened the route's circuit breaker the flag says how long the route is skipped, and that attempt in `model.call` carries `cooldown_s` (config `[models.breaker]`: `failures`, `cooldown_s`, `max_cooldown_s`, documented in PROVIDERS.md) | any. Breaker: 2 failures, 10 min, up to 1 h |
+| `model.error:<route>` | an attempt failed without a confirmed fallback recovery. A successful same-route retry does not turn an `error` marker into a fallback | any |
+| `model.timeout:<route>` | a try timed out, whether or not another route recovered | any |
 | `tool.error:<tool>:<kind>` | a tool returned an error | any |
 | `harness.error:<where>:<type>` | a caught exception | any |
 | `shell.masked_exit` | a bash result carried `note: pipeline stage N exited C`: an earlier stage failed but the last one succeeded, so the reported exit was 0 | any |
@@ -99,7 +120,7 @@ as part of their parent's turn):
 | signature | an eligible turn |
 |---|---|
 | `turn.slow`, `turn.wall` | any finished turn |
-| `model.slow:<route>`, `model.wait:<route>`, `model.fallback:<route>`, `model.timeout:<route>` | made a model call that tried that route |
+| `model.slow:<route>`, `model.wait:<route>`, `model.fallback:<route>`, `model.timeout:<route>`, `model.error:<route>` | made a model call that tried that route |
 | `model.mismatch` | had a served model call |
 | `tool.error:<tool>:<kind>`, `tool.repeat:<tool>` | called that tool |
 | `shell.masked_exit` | called `bash` |

@@ -20,6 +20,10 @@ On macOS, the default is Keychain. Missing, disabled or refusing Keychain storag
 
 Keychain account names include a hash of the resolved data home, seat and hostname. Binding metadata contains no token. The selected store is authoritative: host environment tokens and stale copies in other stores do not override it.
 
+Token and disabled modes write only a public invalid fallback token to their private 0600 `hosts.yml`. The selected credential remains in its store and child environment. If a command removes the token variables but keeps this configuration directory, ordinary gh lookup fails authentication instead of selecting the machine's OS-keyring identity. An unsafe or unwritable fallback configuration refuses the spawn.
+
+This is not a shell sandbox: replacing `GH_CONFIG_DIR`, explicit secure-storage lookup and other deliberate credential overrides remain outside this boundary.
+
 Replacing a token in the same host and store affects the next tool or job spawn. Existing children retain their original credential until they exit. Changing mode, hostname or store requires removing the existing binding and completing cleanup first. A refused change leaves the current credential intact.
 
 ## Separate gh login
@@ -66,3 +70,7 @@ A configured token that is missing or unavailable fails before bash or a job sta
 This covers ordinary gh commands and HTTPS Git authentication for the selected host. SSH keys, URL-embedded credentials, explicit `git -c` or environment overrides, and changing directories inside a command can bypass that setup.
 
 Arbitrary shell access remains trusted: code can use, transform or export its environment credential. Raw-value redaction removes known tokens from foreground output and bound job logs, including split reads. It is not a sandbox against encoded output or deliberate exfiltration.
+
+Direct bound `run_command` calls redact their final output by default. The Registry-owned bash handler defers that final-output pass to the Registry, which applies strict redaction once.
+
+If final secret lookup or redaction fails, the Registry withholds the entire result and returns a generic error without the raw output or exception text. Streaming still redacts across reads. This avoids masking ordinary text a second time across an inserted marker, while still removing raw credentials that contain the literal `[redacted]` marker, quotes or backslashes (#753).
