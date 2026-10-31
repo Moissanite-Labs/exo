@@ -6479,3 +6479,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   "An internal gate error asks once". #510 had merged into #508's branch, so its change now comes to #500
   in a new PR, and it takes D-085. Main does not use D-085, and no open PR outside this stack does. #511
   used D-085 too, and it takes a new number when it is rebased onto this change.
+- **Amendment 2026-10-31 (#982 review, reference shape):** The gate reads a `tool_output` page as `read`
+  only when its `reference` has the `te1:` shape that the view issues, `te1:m_<id>:<index>:<64 hex>`.
+  Before, any string passed. A call with the reference `../../.ssh/id_rsa` or `$(rm -rf /)` went from
+  `unknown` to `read` under `categories_deny`, `categories_ask` and `categories_log`. The tool refused such a
+  string and opened no file, but the gate lowered more than this decision names. Any other string now keeps
+  the generic classification. The gate imports no other Exo module, so it holds its own copy of the pattern,
+  and a test keeps it equal to the one in `exo.tool_evidence`.
+  - *Gate comparison.* Main's `scripts/gate_diff.py` at `6491bcea` compared #500 at `faf39447`, the commit
+    this change is based on, with this change. The corpus was the built-in one with variants, the 62 saved
+    `tool_output` cases, four page-limit cases (511, 512, 24,000 and 24,001) and 28 calls whose reference is
+    not in the `te1:` shape: paths, a command string and near misses, each alone and with an offset and limit.
+    That is 91,745 actions against 88 policies, 8,073,560 pairs. It found 18 lowered pairs on six actions.
+    All six are supported page calls with a `te1:` reference, each from `unknown` to `read` under the three
+    policies above. These are the lowerings this decision names. None of the 28 other calls lowered. No
+    reserved hit or violation was lost, no pair tightened, and neither tree had an error.
+  - *Against the previous head.* On the 93 `tool_output` cases alone, the previous head `a30d1005` against
+    this change lowers no pair and tightens 84: the 28 other calls, each from `read` to `unknown` under the
+    three policies.

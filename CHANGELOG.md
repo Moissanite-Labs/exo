@@ -81,6 +81,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`docs/TOOL-OUTPUT.md`, D-085, #501 stage 1; in progress).
   Expansion refuses a reference to a result that the view would not excerpt.
   A test keeps the gate's page limit at the top of the `page_chars` range.
+  The gate reads a page as `read` only for a reference in the `te1:` shape. Any other string, such as a
+  file path, keeps the generic classification.
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

@@ -618,14 +618,36 @@ def test_real_gate_classifies_pages_as_reads_and_enforces_read_deny(tmp_path, mo
     asyncio.run(run())
 
 
+SHAPED = "te1:m_example:0:" + "0" * 64  # the shape render issues; no stored result has it
+
+
 @pytest.mark.parametrize("args", [{}, {"reference": None}, {"reference": []}, {"reference": 7},
-    {"reference": "ref", "offset": True}, {"reference": "ref", "offset": -1},
-    {"reference": "ref", "offset": "0"}, {"reference": "ref", "limit": True},
-    {"reference": "ref", "limit": 0}, {"reference": "ref", "limit": 24001},
-    {"reference": "ref", "session": "other"}])
+    {"reference": SHAPED, "offset": True}, {"reference": SHAPED, "offset": -1},
+    {"reference": SHAPED, "offset": "0"}, {"reference": SHAPED, "limit": True},
+    {"reference": SHAPED, "limit": 0}, {"reference": SHAPED, "limit": 24001},
+    {"reference": SHAPED, "session": "other"},
+    {"reference": "ref"}, {"reference": "../../.ssh/id_rsa"}, {"reference": "~/.aws/credentials"},
+    {"reference": "/etc/shadow", "limit": 512}, {"reference": "$(rm -rf /)", "offset": 0},
+    {"reference": SHAPED + "\n"}, {"reference": " " + SHAPED}, {"reference": SHAPED[:-1]},
+    {"reference": SHAPED.upper()}, {"reference": SHAPED.replace(":0:", ":1000:")},
+    {"reference": SHAPED.replace("m_example", "m_../x")}])
 def test_malformed_tool_output_arguments_keep_generic_gate_classification(args):
     from exo import gate
     assert gate.classify((TOOL, args)).category == "unknown"
+
+
+def test_gate_reads_only_the_reference_shape_render_issues(evidence):
+    """The gate imports no other Exo module, so it keeps its own copy of the pattern, and this test keeps them equal."""
+    from exo import gate
+    from exo.tool_evidence import _REF
+    assert (gate._TOOL_OUTPUT_REF.pattern, gate._TOOL_OUTPUT_REF.flags) == (_REF.pattern, _REF.flags)
+    obj, sid = evidence
+    ref = reference(obj.render(sid, recorded(obj, sid, source("log")))[-1].tool_results[0].text())
+    assert gate.classify((TOOL, {"reference": ref})).category == "read"
+    for path in ("../../.ssh/id_rsa", "~/.aws/credentials", "/etc/shadow", "$(rm -rf /)"):
+        assert gate.classify((TOOL, {"reference": path})).category == "unknown"
+        with pytest.raises(ToolError, match="unavailable"):
+            obj.read(sid, path)
 
 
 def test_gate_page_limit_ceiling_is_the_top_of_the_page_chars_range():
@@ -637,13 +659,13 @@ def test_gate_page_limit_ceiling_is_the_top_of_the_page_chars_range():
     for bad in (low - 1, top + 1):
         with pytest.raises(ConfigError):
             Options.parse({"page_chars": bad})
-    assert gate.classify((TOOL, {"reference": "ref", "limit": top})).category == "read"
-    assert gate.classify((TOOL, {"reference": "ref", "limit": top + 1})).category == "unknown"
+    assert gate.classify((TOOL, {"reference": SHAPED, "limit": top})).category == "read"
+    assert gate.classify((TOOL, {"reference": SHAPED, "limit": top + 1})).category == "unknown"
 
 
 @pytest.mark.parametrize("category", ["credentials", "store_write"])
 @pytest.mark.parametrize("key", ["path", "file_path"])
-@pytest.mark.parametrize("reference_arg", [{}, {"reference": "ref", "limit": 512}])
+@pytest.mark.parametrize("reference_arg", [{}, {"reference": SHAPED, "limit": 512}])
 def test_unsupported_tool_output_paths_preserve_generic_gate_floors(tmp_path, monkeypatch, category, key, reference_arg):
     from exo import gate
     home = tmp_path / "exo-home"

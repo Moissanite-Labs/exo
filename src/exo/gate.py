@@ -9250,6 +9250,10 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
+# The reference shape tool_evidence issues (D-085). A test keeps the two patterns equal.
+_TOOL_OUTPUT_REF = re.compile(r"te1:(m_[A-Za-z0-9_-]{1,80}):(\d{1,3}):([0-9a-f]{64})\Z")
+
+
 def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
@@ -9303,9 +9307,10 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
     # A tool_output page is a read (D-085). The gate cannot see the configured page_chars, so its limit ceiling is
-    # the top of tool_evidence.PAGE_CHARS; the tool refuses a limit above the configured value.
+    # the top of tool_evidence.PAGE_CHARS. The tool refuses a limit above the configured value. Only a reference in
+    # the te1: shape is a page, so any other string keeps the generic classification.
     elif (tool == "tool_output" and set(args) <= {"reference", "offset", "limit"}
-          and isinstance(args.get("reference"), str)
+          and isinstance(args.get("reference"), str) and _TOOL_OUTPUT_REF.fullmatch(args["reference"])
           and type(args.get("offset", 0)) is int and args.get("offset", 0) >= 0
           and type(args.get("limit", 1)) is int and 1 <= args.get("limit", 1) <= 24000):
         c = _make("read", tool=tool, summary="expand retained tool output")
