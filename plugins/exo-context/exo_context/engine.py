@@ -615,13 +615,17 @@ class ExoContextEngine(ContextEngine):
         transcript on ``/undo``, builds a new agent and tells no one, so the pins file still holds the undone pins.
         The host's transcript (``conversation_messages``) before the turn's own message must end at one of the leads
         noted last (``_note_reach``), so it is the noted transcript with its tail cut. A transcript cut short at its
-        start fails at its first row, and one that opens like the noted one but goes on past where a lead ended fails
-        at its end. A pin then goes when its lead is that one or a later one, no principal message holds it, and no
-        summary row carries it (``_folded``). That last test is for a pin a compaction folded and the principal then
-        said again: its lead moved to the later message, so an undo of that message alone leaves the summary row
-        before the lead. A summary row after a pin's lead cannot be in such a transcript. A pin with no lead (one said
-        in the session's first message, or never seen in a host's transcript) stays, and so does every pin when
-        nothing comes before the turn's own message. The drop is an undo's: logged as counts, its digests kept out
+        start fails at its first row when that row differs from the session's first row, and one that opens like the
+        noted one but goes on past where a lead ended fails at its end. One whose rows read word for word like the
+        session's first rows passes, as an undo does (not covered, D-041). A pin then goes when its lead is that one
+        or a later one, no principal message holds it, and no summary row carries it (``_folded``). That last test is
+        for a pin a compaction folded and the principal then said again: its lead moved to the later message, so an
+        undo of that message alone leaves the summary row before the lead. A summary row after a pin's lead cannot be
+        in such a transcript. A pin with no lead (one said in the session's first message, or never seen in a host's
+        transcript) stays, and so does every pin when nothing comes before the turn's own message. The last user row
+        is taken for the turn's own message when the two read the same. So a host that leaves the message out of the
+        transcript keeps every pin when that message repeats the last user row an undo left and no user or summary
+        row comes before that row (not covered, D-041). The drop is an undo's: logged as counts, its digests kept out
         of every later carry (#592)."""
         sid, live = self._x_session_id, kwargs.get('conversation_messages')
         if not sid or sid in self._x_ran or kwargs.get('incoming_message') is None or not isinstance(live, list):

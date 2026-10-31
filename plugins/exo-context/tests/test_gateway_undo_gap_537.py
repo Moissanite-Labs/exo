@@ -111,9 +111,11 @@ class Gateway:
         engine.on_session_start(self.sid)
         return engine
 
-    def turn(self, text):
+    def turn(self, text, listed=True):
+        """`listed=False` leaves the turn's message out of conversation_messages, as a host may."""
         self.history.append(mine(text))
-        out = self.engine.select_context([SYS, *self.history], conversation_messages=list(self.history),
+        sent = self.history if listed else self.history[:-1]
+        out = self.engine.select_context([SYS, *self.history], conversation_messages=list(sent),
                                          incoming_message=self.history[-1], budget_tokens=0)
         self.history.append(ok())
         self.engine.on_turn_complete(list(self.history), usage=None)
@@ -209,6 +211,24 @@ def test_an_undo_the_same_engine_runs_past_is_not_settled_by_a_later_engine():
     gw.engine = gw.agent()
     gw.turn('next step')
     assert gw.file()['ruling'] == [RULING] and not gw.file().get('dropped')
+
+
+@pytest.mark.parametrize('turns, listed, again, kept', [
+    (('continue', RULING, 'x'), False, 'continue', [RULING]),  # not covered: the row left is taken for the message
+    (('continue', RULING, 'x'), True, 'continue', []),  # the message in the transcript, as the gateway sends it
+    (('continue', RULING, 'x'), False, 'next step', []),  # a message that repeats no row
+    (('start', 'continue', RULING, 'x'), False, 'continue', []),  # a user row before the repeated one
+])
+def test_a_turn_message_left_out_that_repeats_the_last_row_left(turns, listed, again, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). A host may leave the turn's message out of
+    conversation_messages. The engine takes the last user row for the turn's message when the two read the same.
+    With no user or summary row before that row, nothing comes before the turn's own message, so the ruling stays."""
+    gw = Gateway('gw-left-out-537')
+    for text in turns:
+        gw.turn(text)
+    gw.undo(2)
+    gw.turn(again, listed=listed)
+    assert gw.file()['ruling'] == kept
 
 
 @pytest.mark.parametrize('again', [RULING, f'As I said: {RULING}'])
