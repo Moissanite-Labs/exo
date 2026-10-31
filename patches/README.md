@@ -89,3 +89,9 @@ EXO_HERMES_DIR=/tmp/exo-pin-test scripts/pin-hermes.sh <tag>
 
 If a PR does not apply to the tag, rebase the PR branch on the tag in a scratch clone and store that
 diff here instead. Note the base tag in the header.
+
+## Optional gateway undo notification (#537)
+
+`0006-gateway-undo-notice.patch` is an unapplied Exo integration proposal. Its provenance JSON records the exact source and method hashes; the reviewed archive has no Git metadata. It adds an optional `exo.host_undo.report(session)` before cached-agent eviction, while the old listener can still record the surviving window. A fresh context engine consumes that record on the next turn. Missing Exo or a failing optional hook does not prevent the host undo.
+
+The tests apply the shipped patch to the recorded method fixture and execute the callback with isolated context state. An unpatched control restores the removed ruling; the patched flow drops it. No installed host was changed. Applying/upstreaming this host patch and native host acceptance remain pending. The existing handoff file rewrite limit in #537 is not repaired here.
