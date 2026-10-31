@@ -177,6 +177,7 @@ class Registry:
                  executor_required: bool = False) -> None:
         self._tools: dict[str, Tool] = {}
         self._hooks: dict[str, list[Hook]] = {p: [] for p in HOOK_POINTS}
+        self.workers: dict[asyncio.Task, ToolContext] = {}  # sync handlers outlive cancellation of their awaiter
         self.executor = validate_executor(executor) if executor is not None else None
         self.executor_required = executor_required or executor is not None
 
@@ -334,8 +335,10 @@ class Registry:
             if inspect.iscoroutinefunction(tool.handler):
                 out = await tool.handler(args, ctx)
             else:
-                out = await asyncio.to_thread(tool.handler, args, ctx)
-                out = await maybe_await(out)
+                worker = asyncio.create_task(asyncio.to_thread(tool.handler, args, ctx))
+                self.workers[worker] = ctx
+                worker.add_done_callback(self._worker_done)
+                out = await maybe_await(await asyncio.shield(worker))
         except asyncio.CancelledError:
             ctx.cancel.set()
             raise
@@ -348,6 +351,11 @@ class Registry:
             out.call_id = call.id
             return _cap_result(out)
         return _cap_result(ToolResult.of_text(call.id, str(out)))
+
+    def _worker_done(self, worker: asyncio.Task) -> None:
+        self.workers.pop(worker, None)
+        if not worker.cancelled():
+            worker.exception()  # consume a late failure after its cancelled caller has gone
 
     async def _post(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> ToolResult:
         for hook in list(self._hooks[POST_TOOL_CALL]):

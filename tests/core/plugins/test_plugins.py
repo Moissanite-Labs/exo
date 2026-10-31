@@ -299,12 +299,12 @@ def test_custom_hook_registry_can_supply_its_own_fire_site():
     assert h.fire("pre_llm_call", text="custom") == ["custom"]
 
 
-def test_default_supported_hooks_match_core_fire_sites():
-    source = (REPO / "src/exo/core/engine.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+def test_default_supported_hooks_match_runtime_fire_sites():
+    trees = [ast.parse((REPO / path).read_text(encoding="utf-8"))
+             for path in ("src/exo/core/engine.py", "src/exo/core/plugin_lifecycle.py")]
     fired = {
         call.args[0].value
-        for call in ast.walk(tree)
+        for tree in trees for call in ast.walk(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
         and call.func.attr in {"fire", "afire"}

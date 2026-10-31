@@ -93,6 +93,22 @@ its own cap (section 2).
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
 
+**Harness composition (D-088).** `exo.harness.resolve` builds a side-effect-free capability plan.
+`exo.compose` selects services and plugins before constructing the runtime. `exo harness show --json`
+explains the configuration without importing plugins. New optional services belong behind composition
+seams, as jobs/delegation factories do. Disabling a feature must remove its tools and resource startup,
+and reject direct execution attempts. Test seat overrides and alternate executor paths too.
+Profiles are runtime selection, not an OS sandbox or separate installation distributions.
+See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
+
+**Plugin runtime binding (D-088).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
+`exo.core.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
+Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
+`ApprovalDesk`, preserving bindings, approvers and standing-grant behavior. It does not change the
+execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
+construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 
@@ -106,9 +122,12 @@ commands. Its collaborators have small interfaces:
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
   `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
-  `close()` closes schedule.sqlite and is final.
+  `close()` closes schedule.sqlite and is final. `tasks()` lists its loop and running jobs, which the engine's
+  close cancels first.
 - `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
-  session store. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
+  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. A
+  command that waited on a start that close cancelled fails the same way, unless its own task was cancelled. The
+  store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
   it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
   session store closes.
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
@@ -299,6 +318,27 @@ To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. T
 `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`). A call whose arguments did not parse as
 a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
 did not parse").
+
+**Dependencies and cleanup (D-088).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
+The loader orders selected dependencies first and blocks missing, failed or cyclic dependencies before
+importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
+available only after import and is checked before registration. Pair resources created in `register`
+with `ctx.register_cleanup(sync_callback)`: failed registration or final shutdown calls each once in
+reverse order. Cleanup failures do not skip remaining callbacks, and neither does Ctrl-C or
+`SystemExit`, which is raised after them. This is final resource cleanup, not live unloading.
+It does not remove gate registrations. Plugin tool handlers get no cancellation signal, so bound
+their blocking work. `CoreRuntime.close()` stops jobs and transports, then waits five seconds for
+tool workers. If one is still running it raises `ShutdownTimeout` and keeps plugin resources,
+the store and the writer claim. `exo.application.CoreEngine.close()` retries until the worker
+returns. It does not retry after a hard stop in the stop steps or the wait (a second Ctrl-C or
+SIGTERM): it raises that error once the wait ends. A hard stop does not cut the wait short, so
+plugin cleanups still run when the work ends within the bound. Embedders that need one bounded attempt call
+`CoreRuntime.close`. See [HARNESS.md](HARNESS.md).
+
+Workspace prompt providers use the per-session `Loop.workspace_extra(session, cwd)` callback.
+Delegated loops inherit the callable and resolve their own cwd. The bounded Markdown provider is
+outside the core in `exo.workspace_context`. Install it with `attach(engine, settings)`, which
+`exo.compose` uses too. See [WORKSPACE-INSTRUCTIONS.md](WORKSPACE-INSTRUCTIONS.md).
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,

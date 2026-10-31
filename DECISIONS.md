@@ -6203,13 +6203,6 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   issue's five rows added to the corpus as tightened pairs.
 - **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
   `CHANGELOG.md`.
-- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
-  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
-  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
-  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
-  extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
-  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
-  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
 
 ## D-086: Optional session working notes
 
@@ -6441,3 +6434,188 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+## D-088 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
+- **Status:** Built ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+  letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
+- **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
+  Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest
+  immediate fit is composition of Exo's already substantial capabilities, predictable extension ownership,
+  and repository instruction compatibility. No competitor implementation was copied.
+- **Decision:** Optional `harness` configuration selects `lean`, `coding` or `full`, with explicit capability
+  enables/disables, dependency resolution and `EXO_PROFILE` override. The CLI can explain or dry-run the plan
+  without importing plugins or contacting providers. The no-profile path preserves legacy discovery.
+  Runtime overlays retain suppressed configuration on disk. The gate is mandatory for explicit profiles.
+  Executor-required plugins and trusted inventories remain authoritative. Seats cannot revive disabled
+  services or built-in plugins. Jobs/delegation use inert adapters when disabled. Background calls are
+  blocked before local or broker execution. Learning's lazy feedback path honors the same profile.
+- **Plugins:** Folder `requires` declarations are planned before import. Entry-point declarations are
+  available after import and checked before registration. Missing/excluded/failed/cyclic requirements fail
+  the dependent, not independent plugins. `register_cleanup` owns synchronous resources, unwound once in
+  reverse order on registration failure or final shutdown. Shutdown is not live unload and retains gate
+  registrations. Startup failures release constructed resources.
+  Shutdown drains turns and tracks actual synchronous workers before releasing plugins. If work exceeds
+  the five-second shutdown bound, close fails with resources and writer ownership retained for retry.
+- **Instructions:** A session-scoped provider reads root-to-cwd `AGENTS.override.md` or `AGENTS.md`, with
+  optional `CLAUDE.md` fallback, bounded to 32 KiB total. It never executes project code, refuses symlink
+  files, and labels guidance as project input rather than approval. Child loops resolve their own cwd.
+  Required-executor mode refuses this host-read provider until an executor-backed reader exists.
+- **Rejected:** Enabling every feature by default for existing users. A profile that merely hides tools
+  while services continue running. Silently installing dependencies. Treating plugin filtering as sandbox
+  isolation. Promising live reload without an active-work lifecycle. Claiming market leadership without
+  a controlled evaluation. Profiles do not yet minimize installed package size or eliminate all shared
+  core imports. Remaining repository maps, workflow recipes, ACP and provider evaluations have explicit
+  acceptance gates in the roadmap.
+- **Validation:** Profile/CLI resolution and dry runs. Actual composition with fake models and real gate.
+  Disabled broker dispatch. Workspace scope including delegated sessions. Plugin dependency/rollback and
+  resource cleanup. Learning feedback exclusion. Existing root/plugin suites, Ruff, type baseline,
+  protocol export and core budget checks. Test outcomes are reported with the change.
+- **Docs:** `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, user guide §1,
+  developer guide §1/§4, command reference, README and changelog. Whitepaper coverage remains a future batch.
+- **Research follow-up (2026-10-23):** `docs/HERMES-PLUGIN-OPPORTUNITIES.md` reviews the Hermes plugin
+  catalog and proposes eleven optional additions, with pinned sources and acceptance criteria. Reuse
+  existing context, ingestion, questions, memory, operations views and spend accounting. Add capability
+  packs and observer contracts through the existing roadmap. This amendment changes no runtime behavior.
+- **Amendment 2026-10-26 (review round on #500):** reviews 5634123763, 5634152980, 5654964041 and 5659059900.
+  - *Shutdown.* `close()` first refuses new turns, tools and background jobs, and job wakes. It then stops
+    channels, peers, background jobs, the scheduler and MCP. Only then does it wait, up to five seconds, for
+    turns, synchronous tool workers and learning reviews. A sync tool that outlives the wait no longer leaves
+    jobs running: `ShutdownTimeout` is raised with jobs and transports already stopped. Plugin resources, the
+    store and the writer claim stay until the tool returns. `exo.application.CoreEngine.close`, which exod and
+    the terminal use, closes again until then, so cleanups run once and exod exits normally. A job that ends
+    during close no longer files a false bug finding. Ctrl-C or `SystemExit` in `register` or in a cleanup no
+    longer loses cleanups. A close during `start()`'s peer start stops that service. Close now ends learning
+    reviews and closes the learner, as startup rollback did.
+  - *Validation.* Each statement of `stop_admission`, `drain` and the startup rollback was deleted in turn. Every
+    such mutant fails a test. Two statements no mutant could fail were redundant and are gone: the scheduler
+    loop reset (`Scheduler.stop` does it) and a second cancel signal in `drain`. The scheduler's tasks are still
+    cancelled at admission. If they wait for `Scheduler.stop`, the scheduler can claim a slot that comes due
+    while close stops transports. A test now pins this.
+  - *Plugin tools.* Plugin tool handlers get no cancellation signal, so the docs now ask for bounded blocking
+    work instead of cancellation-aware work.
+  - *Instructions.* Git's ownership rule, eased for a mounted repository: a marker or file another user owns,
+    in a place others can write, is not read. The rendered block has a total bound and at most 16 warnings.
+    Secret-store filenames are refused. A session with no stored cwd reads the engine cwd. `attach()` takes a
+    built provider and refuses required executor mode, and compose uses it.
+  - *CLI and composition.* `enable` and `disable` need a saved profile. `show` and `use` name discovered plugins
+    a profile will not load. Without a profile, `jobs.enabled` and `delegation.enabled` stay inert, as before.
+    Entry points keep their discovery order. The executor's plugin refusal names the plugin and `core_plugins`.
+  - *Deferred.* Calling the memory provider's `shutdown()` at close is a follow-up. Main never called it, and it
+    changes exo-memory's shared runtime lifetime.
+- **Amendment 2026-10-27 (number):** this decision was D-082 until #235 merged its canary operating decisions
+  under that number. #601 then merged a second D-082, which #725 moved to D-087, and #613 merged D-083. #510
+  holds D-084 on #508's branch, open PR #511 holds D-085 and #512 merged D-086. So this decision is D-088. The
+  messages of #500's first two commits still say D-082. #508's text, taken in later, is renumbered the same way.
+  On 2026-10-28 #742 merged a second D-084 into main, and #747 merged D-089. No other PR uses D-088.
+- **Amendment 2026-10-27 (checker round on #500):** four more routes past the shutdown steps, each now tested.
+  A learner that failed to close skipped plugin cleanup, the writer release and the store close. It is now
+  recorded like a failed step. A step that failed before the bound was lost when the drain timed out, so a job
+  that could not be stopped went unreported. `ShutdownTimeout` now names it and carries it in `errors`. A hard
+  stop (a second Ctrl-C) while channels stopped skipped every later step and left jobs running. Channels now
+  stop inside the step loop. A hard stop while jobs were killed one by one left the later jobs running. They are
+  now killed all at once, under a shield. A hard stop during the wait itself still ends `close()` at once, with
+  jobs and transports already stopped. The last two gaps were on main too. The count does not change: the
+  channel step takes one line out of `close()`, and `JobManager.close` gains one.
+- **Amendment 2026-10-27 (fresh review on #500):** an independent review of the checker round's head.
+  - *Instructions.* The 2026-10-26 rule still read a marker or file that another user owns, when nobody else
+    could write it or its folder. That user controls it. Now a marker or file counts only when the user or root
+    owns it and its folder, and nobody else can write either. Group write counts as someone else, except for the
+    user's private group: named after the user, its primary group, no other member. That is the usual umask 002
+    setup. The upward search stops at the first folder that fails this test. This drops the mounted-repository
+    case: root no longer reads a repository that another user owns. Git refuses it as well. The tests fake stat
+    results, so they run the same as root or as a plain user.
+  - *Hard stop.* `CoreEngine.close` retried every `ShutdownTimeout`, also one that carried a `CancelledError`
+    from a stop step. So a second SIGTERM while peers stopped, with a sync tool past the bound, was lost:
+    `close()` returned normally once the tool did. A `CancelledError`, `KeyboardInterrupt` or `SystemExit` in
+    `errors` is now raised after the bounded attempt, and the rest stays as after a timeout.
+  - *Commands during close.* `handle()` awaits `start()`, which returned at once while MCP was still up. So a
+    `peers` command handled while close killed jobs started the peer service again, and close returned with
+    it running. Main does the same. `start()` now fails with `CommandFailed` `closed` once close has begun,
+    so every command is refused.
+  - *Smaller items.* An unknown `EXO_PROFILE` was reported as a bad `harness.profile`. The error now names
+    the variable that held it. Five guards survived deletion with every test passing. Tests now pin four: a
+    steer sent after close began is refused, `run_turn` refuses before its turn hooks fire, the owner check
+    runs again on the opened file, and a file below a secret-store folder is skipped. The fifth, the closing
+    check before the peer start, is gone, because `start()` now refuses first.
+- **Amendment 2026-10-27 (second checker round on #500):** the private-group exception read only the mode.
+  With an extended POSIX ACL, the group bits are the ACL mask. An entry that lets another user write, as a
+  shared folder's default ACL does for each new file, then looked like private group write, and its text was
+  read. An entry with an ACL now gets no exception. Exo checks the open file and folder by descriptor. Where
+  it cannot read ACLs, it makes no exception at all. Accounts whose primary group is the private group are
+  not looked up: that takes a full account listing, which can be slow on directory-backed systems.
+
+- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
+  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
+  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
+  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
+  extraction: no approval policy, binding, private-thread rule or protocol contract changed.
+  Broader private-state query cleanup remains open.
+  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+- **Amendment 2026-10-27 (#508 taken in):** #508 merged into this PR's branch on 2026-10-27. Its two commits
+  now follow the review commits, so the bridge carries the shutdown work: sync plugin handlers stay sync, and
+  the registry still tracks their workers. Main added the turn's author to the hook keywords (#598) after
+  #508 was written. The bridge's `hook_kw` keeps it, so the gate still lowers only for the principal's turn.
+- **Amendment 2026-10-27 (rebased onto #512):** #512 merged the work notebook (D-086) into main first, with
+  this PR's `Loop.workspace_extra` hook and a copy of the plugin binding paragraph above under D-087 (#601).
+  The copy is removed there. compose attaches workspace instructions before the notebook, so the notebook's
+  prompt callback keeps the instructions in the prompt. The notebook test that waited for this PR runs again.
+- **Amendment 2026-10-27 (rebased onto #613):** D-083 dropped the line ceiling and caps two step 4 counts in
+  `src/exo/core` instead: 39 imports of a product module and 8 reads of another module's private state. This PR
+  kept its lifecycle helpers out of the count as `exo.plugin_lifecycle` and `exo.runtime_shutdown`, and the core
+  imported both, so the rebased tree counted 42 imports. They now live in the core as
+  `exo.core.plugin_lifecycle` and `exo.core.shutdown`. They read no other module's private state: the engine
+  passes its own tasks and the learner, and `Loop.interrupt_all`, `Loop.busy`, `Scheduler.tasks` and
+  `PluginManager.closed` are public. The counts are 39 and 8 again. The counted lines rise to 16,252 (main
+  15,833), which D-083 reports and does not assert. Behaviour is unchanged.
+- **Amendment 2026-10-28 (rebased onto main `f28934a3`):** two merged changes meet this PR's code.
+  - *Start retry (#726, D-010 amendment).* Main clears a start that failed or was cancelled, so the next
+    command starts again, and close always closes MCP. `start()` keeps this PR's refusal first. close()
+    cancels a start in progress, and main's code then clears it. A command after that fails with `closed`,
+    so peers and MCP do not start again. Outside close, the retry works as on main.
+  - *Continuity checkpoint (#761, D-086 amendment).* Main attaches a default-on `work_checkpoint` in compose.
+    It is not a profile capability. Like the work notebook, its own setting decides in every profile and
+    without one. It reads the durable session records, which every profile keeps, and adds no tool, process
+    or network use. Its setting is checked before plugins load, as on main. It attaches after the notebook,
+    inside the startup rollback. Scheduled and delegated loops share the workspace prompt here, and the
+    checkpoint still records ordinary root threads only.
+  - *Count.* The counted core is 16,267 lines (main `f28934a3`: 15,847), which D-083 reports and does not
+    assert. Product imports and private-state reads stay at 39 and 8.
+- **Amendment 2026-10-28 (third review):** the rebases since main `5486af21` met no code conflict. A fresh
+  review found one change from main's behaviour and two smaller items.
+  - *No profile, odd `core_plugins`.* `resolve()` checked `core_plugins` before it returned the plan for an
+    install without a profile. compose and the learner both call it. So an empty name in that list, or a string
+    value, stopped startup, though main skips such an entry and starts. Only a profile checks the list now.
+    Without one, startup reads it as main does, and `exo harness show` names the plugins it can select.
+  - *Child prompts and the checkpoint.* Delegated and scheduled loops share the workspace prompt, and main's
+    checkpoint is part of it. Its capture opened a write transaction before it saw that such a session takes
+    no checkpoint, then committed nothing. It now reads the session first, and the transaction checks again.
+  - *A command waiting on the first start.* close() cancels that start. The command that waited on it ended
+    with `CancelledError`, so an HTTP client saw a dropped request. It now fails with `closed`, like every
+    command once close has begun. A caller that cancelled its own command still gets `CancelledError`.
+  - *Count.* The counted core is 16,370 lines (main `080e87ba`: 15,945), which D-083 reports and does not
+    assert. Product imports and private-state reads stay at 39 and 8.
+- **Amendment 2026-10-30 (hosted CI on #500):** the hosted test cells ran this PR's tests for the first time.
+  - *Scheduler cancel on Python 3.11.* close() cancels the scheduler's loop at admission. On Python 3.11,
+    `asyncio.wait_for` drops a cancel when the event it waits on is set in the same pass. The loop then
+    claimed a slot that came due while close stopped transports, and `Scheduler.stop()` could wait for the
+    loop forever. Main has the same loop. It now checks for a cancel after each wait. The test that pins the
+    admission cancel waits for the loop to end, not a fixed time, and a scheduler test pins `stop()`. Both
+    fail on Python 3.11 without the check.
+  - *Tests on macOS.* Six of the new tests failed on the macOS cells, with no code fault. Three built folder
+    trees deeper than macOS's 1,024-byte path limit. One bound the peer socket under a temporary folder too
+    long for a socket. One expected the private-group exception, which macOS never makes: its Python cannot
+    read ACLs. They now use short folders under `/tmp` and state the ACL answer.
+  - *Hard stop during the wait.* A second Ctrl-C or SIGTERM while close waited for running work ended
+    `close()` at once, before plugin cleanups. The owner's close does not retry a hard stop, so those cleanups
+    never ran, and a plugin that owns a subprocess left it running. Main had no cleanup API, so this was not a
+    regression. The wait now runs in its own task under a shield. A cancel of the caller is added to the step
+    errors, and the wait goes on within the same bound. When the work ends in time, the final steps run and
+    the cancel is raised after them. When a tool outlives the bound, `ShutdownTimeout` carries the cancel, and
+    the owner's close raises it, as for a hard stop in the stop steps. This replaces the 2026-10-27 ruling
+    that a hard stop during the wait ends `close()` at once.
+  - *No total bound for the owner's close (kept).* While a sync tool never returns, the owner's close tries
+    again every five seconds. A total deadline would not end the process sooner: the interpreter waits for
+    the worker thread at exit, as on main. It would only skip plugin cleanups. #954 tracks a bound for the
+    stop steps.
+  - *Count.* With main `74fe9332` merged, the counted core is 16,475 lines (main: 16,028). D-083 reports this
+    and does not assert it. Product imports and private-state reads stay at 39 and 8.

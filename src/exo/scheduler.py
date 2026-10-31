@@ -232,6 +232,7 @@ class Scheduler:
                 return soul or ""
 
             loop.before_turn, loop.system_extra = refresh_prompt, e.loop.system_extra
+            loop.workspace_extra = e.loop.workspace_extra
             info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
@@ -297,6 +298,10 @@ class Scheduler:
         self.engine.hub.publish(s.Notice(text="The scheduler stopped; scheduled jobs will not run until restart.",
                                          level="warn"))
 
+    def tasks(self) -> tuple[asyncio.Future[Any], ...]:
+        """The scheduler's own loop and the jobs it runs, for an owner that cancels them (the engine's close)."""
+        return tuple(t for t in (self._main, *self.running.values()) if t is not None)
+
     async def stop(self) -> None:
         main, self._main = self._main, None
         tasks = [t for t in [main, *self.running.values()] if t is not None]
@@ -333,6 +338,9 @@ class Scheduler:
                 await asyncio.wait_for(self._wake.wait(), min(delay, self.poll) + 0.05)
             except asyncio.TimeoutError:
                 pass
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():  # Python 3.11's wait_for returns when a wake meets a cancel
+                raise asyncio.CancelledError  # so close() and stop() still end the loop before it claims a slot
 
 
     async def edit(self, body: Any) -> dict[str, Any]:

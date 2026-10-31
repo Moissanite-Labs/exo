@@ -14,13 +14,13 @@ Adapters kept here so the parts stay independent of each other:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
-import inspect
 import os
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 from exo import diagnostics, provenance
 from exo.core import trace, workspace
@@ -37,17 +37,19 @@ from exo.model_spend import resolve_spend_policy
 from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
-from exo.core.plugins import PluginManager, call_plugin, safe_plugin_call
+from exo.core.plugins import PluginManager, call_plugin as call_plugin, safe_plugin_call as safe_plugin_call
+from exo.core.plugin_lifecycle import plugin_handler
+from exo.core.shutdown import drain, stop_admission
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
-from exo.core.slots import NotConfigured
+from exo.core.slots import NotConfigured as NotConfigured
 from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
-from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
+from exo.core.tools.registry import Block as Block, Registry, ToolContext, default_registry
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutorConfigurationError, load_executor, validate_executor,
 )
@@ -107,7 +109,9 @@ class CoreRuntime:
                  context_factory: Callable[[ContextTree], TurnContext] | None = None,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
-                 attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
+                 attach_peers: Any = None, attach_scheduler: Any = None,
+                 attach_jobs: Any = jobs_mod.attach, attach_agents: Any = Delegator,
+                 skills_enabled: bool = True, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -193,14 +197,15 @@ class CoreRuntime:
             self.router.set_role("main", list(self.router.roles[seat.tier]))
         self.skills = SkillIndex.discover([*(seat.skill_folders if seat else []), self.home / "skills"]
                                           if skill_folders is None else skill_folders, self.plugins.skills.values(),
-                                          only=seat.skill_load if seat else None)
-        register_skill_tool(self.registry, self.skills)
+                                          only=seat.skill_load if seat else None) if skills_enabled else SkillIndex()
+        if skills_enabled:
+            register_skill_tool(self.registry, self.skills)
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
         self._peer_target = EngineTarget(self)  # peers, bus and job notices reach sessions through it
         self.peers = attach_peers(self) if attach_peers else None  # D-026: exo.peers.PeerService, from exo.compose
-        self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
+        self.jobs = attach_jobs(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager(mcp_cfg, env)
         self._started: asyncio.Future | None = None
@@ -227,7 +232,7 @@ class CoreRuntime:
                 signer = crypto.Signer.from_file(seat.name, ensure_key(seat.key_path(self.home)))
             except Exception:
                 signer = None
-        self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
+        self.agents = attach_agents(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
         self.scheduler = attach_scheduler(self) if attach_scheduler else None  # exo.scheduler, from exo.compose
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
@@ -271,18 +276,32 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start).
+        Refused once close() has begun, so a start that close() cancelled is not retried. A command that waited on
+        that start fails with closed too, unless its own task was cancelled."""
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         if (task := self._started) is not None and task.done() and (task.cancelled() or task.exception() is not None):
             self._started = None  # it raised (the _main_status provider probe, say) or was cancelled. A running one stays.
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
+            if getattr(self, "_closing", False):  # close() began during that await and missed what it opened
+                await self._stop_peers()
+                raise CommandFailed("closed", "the engine is closing")
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
             self._started = asyncio.ensure_future(self._start_runtime())
             if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
-        await asyncio.shield(self._started)
+        try:
+            await asyncio.shield(self._started)
+        except BaseException as exc:
+            caller = asyncio.current_task()
+            if (isinstance(exc, asyncio.CancelledError) and getattr(self, "_closing", False)
+                    and not (caller is not None and caller.cancelling())):  # close() cancelled the start, not the caller
+                raise CommandFailed("closed", "the engine is closing") from exc
+            raise
 
     async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         from exo import providers_setup
@@ -332,21 +351,24 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
-        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
-        agentlog.release_writer(self._writer)
-        self._writer = None
-        await self.stop_channels()
-        errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        if asyncio.current_task() in self._tasks:
+            raise RuntimeError("close must be called by the engine owner, outside a running turn or tool")
+        self._closing = True  # no new command, turn, tool or job from here
+        owned = stop_admission(self, self._tasks, self._started)  # no job wake either; owned turns are cancelled
+        errors: list[BaseException] = []  # every step runs, also after a hard stop; the first error is raised last
+        for step in (self.stop_channels, self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
             try:
-                await step()  # jobs end with exod
+                await step()  # jobs end with exod, also when a sync tool outlives the drain below
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
-        trace.remove_sink(self._on_harness_error)  # after the steps: a notice that fails in jobs.close is recorded
-        try:
-            self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
+        await drain(self, owned, errors, getattr(self, "_learn", None))  # a timeout keeps resources, store, writer
+        for final in (self.plugins.close, lambda: trace.remove_sink(self._on_harness_error),
+                      lambda: agentlog.release_writer(self._writer), self.store.close):  # the store last
+            try:
+                final()  # the sink goes after jobs.close, so a notice that failed there is recorded
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                errors.append(exc)
+        self._writer = None
         if errors:
             raise errors[0]
 
@@ -372,106 +394,32 @@ class CoreRuntime:
     # ------------------------------------------------------------ tools and plugins
 
     def _bridge_plugins(self) -> None:
-        pm = self.plugins
-        for name, entry in sorted(pm.tools.items()):
-            self.registry.register(entry.spec, self._plugin_handler(entry.handler), entry.available, replace=True)
-        for slot in (pm.slots.memory, pm.slots.context):
-            if slot is None:
-                continue
-            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028), lazy start too
-                fn = getattr(slot, "initialize", None)
-                if fn is not None:
-                    try:
-                        call_plugin(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
-                              agent_log=self.log_view)
-                    except NotConfigured as exc:
-                        self.memory_off = str(exc)
-                    except Exception as exc:
-                        # Loud at session start, not on the first exo_note: record why memory is down.
-                        trace.report("memory.initialize", exc, None)
-                        self.memory_init_error = str(exc) or type(exc).__name__
-            for schema in safe_plugin_call(slot, "get_tool_schemas") or []:
-                spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
-                                parameters=schema.get("parameters") or {"type": "object", "properties": {}},
-                                toolset="memory" if slot is pm.slots.memory else "context")
-                handler = (lambda o, n, mem: lambda args, ctx: o.handle_tool_call(
-                    n, args, session_id=ctx.session, **(self._memory_kw(ctx.session) if mem else {})))(
-                    slot, spec.name, slot is pm.slots.memory)
-                self.registry.register(spec, handler, replace=True)
+        self._plugin_tools = self.plugins.bind_tools(self.registry, home=self.home, agent_log=self.log_view,
+            private=self.store.private, approvals=self.approvals, required=lambda: self.executor_required)
+        self.memory_off, self.memory_init_error = self._plugin_tools.memory_off, self._plugin_tools.memory_init_error
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
 
     def _memory_kw(self, session: str | None) -> dict[str, Any]:
-        """A memory tool call's keywords; ``agent_context="private"`` in or under a private thread: write nothing
-        (D-028)."""
-        kw = {"exo_home": str(self.home), "agent_log": self.log_view}
-        return {**kw, "agent_context": "private"} if self.store.private(session) else kw
+        return self._plugin_tools.memory_kw(session)
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
-        async def run(args: dict[str, Any], ctx: ToolContext) -> Any:
-            kw = {"session_id": ctx.session or "", "task_id": ctx.session or "", "tool_call_id": ctx.call_id}
-            if inspect.iscoroutinefunction(fn):
-                return await fn(args, **kw)
-            return await asyncio.to_thread(fn, args, **kw)
-        return run
+        return plugin_handler(fn)
 
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
-        return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
-                "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
-                "author": ctx.meta.get("author", ""),   # who started the turn (D-040): the gate lowers only for
-                                                        # the principal's turn (#598)
-                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
-                "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
+        return self._plugin_tools.hook_kw(call, ctx)
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        bound_mode = self.registry.executor_required
-        if not self.executor_required and not self.plugins.hooks.has("pre_tool_call"):  # required: create() checks
-            return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
-                         "in core_plugins (and the seat's plugins list), then restart Exo.")
-        # A configured broker binds arguments without relaxing optional policy hooks.
-        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
-        for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
-                                                     _isolate_arguments=bound_mode,
-                                                     **self._hook_kw(call, ctx)):
-            if not isinstance(verdict, dict):
-                continue
-            if verdict.get("action") == "block":
-                return Block(str(verdict.get("message") or "blocked by a plugin"))
-            if verdict.get("action") == "approve":
-                key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
-                once = bool(verdict.get("once"))  # e.g. credentials: asked every time, never a standing allow
-                if key in self.approvals.always and not once:
-                    continue
-                who: list[str] = []
-                decision = await self.approvals.ask(  # D-033: who may answer, and the exact text it binds to
-                    ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
-                    options=["allow", "deny"] if once else None, approvers=[str(a) for a in verdict.get("approvers") or []],
-                    binding=str(verdict.get("binding") or ""))
-                choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
-                correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
-                # Never dispatch a broker-bound call after its gate approval callback failed.
-                await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               _fail_closed_plugins=frozenset({"exo-gate"}) if bound_mode else frozenset(),
-                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
-                                               **correlation)
-                if decision == "allow_always" and not once:
-                    if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
-                        self.approvals.always.add(key)
-                elif decision != "allow":
-                    return Block("the user denied this call")
-        return None
+        return await self._plugin_tools.pre_hook(call, spec, ctx)
 
     async def _post_hook(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> Any:
-        kw = {**self._hook_kw(call, ctx), "result": result.text()}
-        await self.plugins.hooks.afire("post_tool_call", **kw)
-        for text in await self.plugins.hooks.afire("transform_tool_result", **kw):
-            if isinstance(text, str):
-                return ToolResult.of_text(call.id, text, result.is_error)
-        return None
+        return await self._plugin_tools.post_hook(call, result, ctx)
 
     async def run_tool(self, call: ToolCall, lctx: dict[str, Any]) -> ToolResult:
         """The loop's tool runner: a fresh ToolContext per call."""
+        if getattr(self, "_closing", False):
+            return ToolResult.of_text(call.id, "The engine is closing", True)
         sid = lctx.get("session")
         info = self.store.get_session(sid) if sid else None
         loop = asyncio.get_running_loop()
@@ -505,7 +453,21 @@ class CoreRuntime:
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
                                            "jobs": self.jobs, "env_allow": self.env_allow,
                                            "env_deny": self.env_deny})
-        return await self.registry.call(call, ctx)
+        with self._owned():
+            return await self.registry.call(call, ctx)
+
+    @contextlib.contextmanager
+    def _owned(self) -> Iterator[None]:
+        """The running task joins ``_tasks`` while it runs, so close() drains direct callers as it drains turns."""
+        task = asyncio.current_task()
+        owned = task if task is not None and task not in self._tasks else None
+        if owned is not None:
+            self._tasks.add(owned)
+        try:
+            yield
+        finally:
+            if owned is not None:
+                self._tasks.discard(owned)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
         """Running background jobs of this agent (jobs belong to the agent, not one thread), for /handoff."""
@@ -638,6 +600,8 @@ class CoreRuntime:
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -645,16 +609,18 @@ class CoreRuntime:
     async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         meta = dict(meta or {})
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
-        await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
-        try:
-            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
-                                                 meta=meta)
-        finally:
-            await hooks.afire("on_turn_end", session_id=b.session)
+        with self._owned():  # public direct callers need the same shutdown ownership as dispatched turns
+            try:
+                await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+                return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
+            finally:
+                await hooks.afire("on_turn_end", session_id=b.session)
 
     # ------------------------------------------------------------ peers (D-026)
 

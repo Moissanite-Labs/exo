@@ -316,6 +316,7 @@ class Delegator:
                      run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
+        child.workspace_extra = e.loop.workspace_extra
         child._state = e.loop._state  # one lock, steer queue and running flag per session, whichever loop runs it
         return child
 

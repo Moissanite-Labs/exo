@@ -142,6 +142,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+- Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
+  explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
+  The approval gate and required executor constraints remain enforced. Existing configurations
+  without a profile retain legacy behavior, `core_plugins` included (`docs/HARNESS.md`, D-088).
+  `exo harness enable` and `disable` need a saved profile, and `show` and `use` name each discovered plugin
+  that a profile will not load. An unknown preset names its source, `EXO_PROFILE` or `harness.profile`.
+- Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
+  final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
+- Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
+  main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`). Exo reads a
+  `.git` marker or a guidance file only when the user or root owns it and its folder, and nobody else can write
+  them, also when it runs as root. Group write counts only for the user's private group, and not when an ACL
+  could lend those bits to someone else. It bounds the whole rendered block, and refuses secret-store filenames.
+- A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed
 - The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
@@ -168,6 +182,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   private-state reads (`PRIVATE_STATE_MAX`). The floor and both counts keep their rule, they only ratchet
   down. Docs updated together: `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md`,
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
+- Engine shutdown is ordered, and its wait for running work is bounded (D-088, `docs/HARNESS.md`). `close()`
+  refuses new turns, tools, background jobs and job wakes. It stops channels, peers, background jobs, the
+  scheduler and MCP. Then it waits up to five
+  seconds for turns, synchronous tool workers and learning reviews, and only then runs plugin cleanups. A sync tool
+  that outlives the wait keeps plugin resources, the store and the writer claim in place, and `close()` raises
+  `ShutdownTimeout`. exod and the terminal close again until the tool returns. Call `close()` from the engine's
+  owner, not from inside a turn or tool. A failed step, or a second Ctrl-C while close stops channels and jobs,
+  no longer skips the steps after it, and background jobs are killed all at once. A second Ctrl-C during the
+  wait does not cut it short, so plugin cleanups still run when the work ends in time. That second Ctrl-C or
+  SIGTERM is not retried away: exod and the terminal raise it once the wait ends.
+- A failed startup releases what it opened: the writer lock, the stores, the job worker pool, the scheduler, the
+  learner and plugin resources.
+- The harness work's plugin lifecycle and shutdown helpers live in the counted core, as `exo.core.plugin_lifecycle`
+  and `exo.core.shutdown`. As product modules the core imported them, which D-083's cap of 39 product imports
+  does not allow. They read no other module's private state (D-088, `docs/ENGINE-SPLIT.md`).
 
 ### Fixed
 - The gate reads `${...}` words and `$((` as bash's parser reads them (#143, #553, #554, PR #158). The lexer ended a
@@ -516,6 +545,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   arguments), follows argparse's abbreviated long flags, and the client posts one warning naming the
   flags it dropped and where the core's mode stands. Warning only: the flags are still dropped, which
   stays the safe default.
+- Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
+  explicit runtime collaborators and compatibility shims (#508). Approval behavior is unchanged, and hooks still
+  get the turn's author (D-088, #498).
+- A command that reaches the engine after `close()` has begun fails with `closed`. Before, a `peers` command
+  handled while close killed background jobs started the peer service again, and close returned with it
+  running (D-088, `docs/HARNESS.md`). This holds after main's start retry (#726): a start that close cancelled
+  is not retried, so peers and MCP do not start again. A command that waited on that start fails with `closed`
+  too. Before, it ended with a dropped request.
+- Harness profiles keep main's continuity checkpoint: `work_checkpoint.enabled` decides in every profile, as
+  `work_notes.enabled` does (D-088, `docs/HARNESS.md`, `docs/WORK-CHECKPOINT.md`). A delegated or scheduled
+  session takes no checkpoint and opens no write transaction for it.
+- On Python 3.11, the scheduler's timer could miss the cancel from close or `Scheduler.stop()` when a wake came
+  at the same moment (D-088, `docs/SCHEDULE.md`). It then claimed a slot that came due during close, and
+  `stop()` could wait for it forever. The timer now checks for a cancel after each wait.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.

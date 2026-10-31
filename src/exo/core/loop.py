@@ -116,6 +116,7 @@ class Loop:
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self.workspace_extra: Callable[[str | None, str], str] | None = None
+        self.closing = False
         self._state: dict[str, _SessionState] = {}
 
     # ---------------------------------------------------------------- public
@@ -150,6 +151,15 @@ class Loop:
             st.interrupt.set()
         return st.running
 
+    def interrupt_all(self) -> None:
+        """Interrupt every running turn (the engine's close)."""
+        for session in tuple(self._state):
+            self.interrupt(session)
+
+    def busy(self) -> bool:
+        """True while a turn still runs, its final hooks and writes included."""
+        return any(state.running for state in self._state.values())
+
     def steer(self, session: str, msg: Message) -> bool:
         """Put a message into the running turn at its next tool round. False when no round can take it (no turn runs,
         or the running one is finishing): the caller queues it. Unlike ``send(mode="steer")`` this never starts a turn."""
@@ -175,6 +185,8 @@ class Loop:
                    mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn still takes steers injects the message between tool rounds and returns None
         (the newest of ``state(session).steer``); otherwise, as ``queue`` and ``send`` do, it waits for the running turn."""
+        if self.closing:
+            raise RuntimeError("the loop is closing")
         if self.store.get_session(session) is None:
             raise KeyError(session)
         self.store.assert_open(session)
@@ -192,6 +204,8 @@ class Loop:
             st.steer.append(msg)
             return None
         async with st.lock:
+            if self.closing:
+                raise RuntimeError("the loop is closing")
             self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
             st.running = st.accepting_steers = True
             st.interrupt.clear()

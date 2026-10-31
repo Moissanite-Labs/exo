@@ -196,6 +196,8 @@ class JobManager:
                                 "foreground")
         wall = min(float(timeout or self.cfg.max_wall_s), float(self.cfg.max_wall_s))
         with self._lock:
+            if self.target.closed:  # close() takes what is live under this lock, so nothing starts after it
+                raise ToolError("exod is shutting down; background jobs cannot start now")
             if len(self.live) >= self.cfg.max_concurrent:
                 raise ToolError(f"{len(self.live)} jobs are already running (limit {self.cfg.max_concurrent}). Wait for "
                                 "one to finish or stop one with job_kill; `jobs` lists them.")
@@ -358,6 +360,13 @@ class JobManager:
         kill_process_group(h.proc)
         return True
 
+    def abort_startup(self) -> None:
+        """Release the unstarted worker pool; a running manager needs async close()."""
+        if self.loop is not None or self.live or self._tasks:
+            raise RuntimeError("cannot abort a started job manager")
+        self.target.closed = True
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
     async def close(self) -> None:
         """Jobs end with exod: stop every running job's process group, then record it once, with no notice."""
         self.target.closed = True
@@ -367,8 +376,9 @@ class JobManager:
                 self.live.clear()
             for h in handles:
                 h.reason, h.kill_by = "killed", "exod shutting down"
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(kill_process_group, h.proc)
+            await asyncio.shield(asyncio.gather(*(asyncio.to_thread(kill_process_group, h.proc) for h in handles),
+                                                return_exceptions=True))  # all at once; a hard stop here still ends each
+            for h in handles:
                 if h.timer:
                     h.timer.cancel()
                 masked_note(h.side)  # removes the side file, as _finish would

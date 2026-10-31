@@ -37,6 +37,26 @@ evidence in its working notes. `/work` shows them in the TUI or `exo chat`, and
 snapshot. Forks start with empty notes. Undo marks affected notes stale. These
 are the agent's notes and never grant approval. See [working notes](WORK-NOTEBOOK.md).
 
+### Choose how much Exo loads
+
+Run `exo harness list` to see `lean`, `coding`, and `full`. Preview a change with
+`exo harness use coding --dry-run`, then save it with `exo harness use coding`.
+Run `exo stop` and launch Exo again to apply it. `exo harness show` explains the selection.
+Once a profile is saved, `exo harness enable jobs` adds one capability, and
+`exo harness disable jobs` removes it. Without a saved profile they ask you to run `use` first.
+The approval gate stays enabled in every profile. Profiles do not change the gate's mode or
+policy. Existing installs keep their behavior until you select a profile. A profile loads only
+the plugins it names and those in `core_plugins`. `show` and `use` list any other plugin
+you installed that it will not load. Profiles retain your saved integration settings and
+conversation history. They do not turn working notes or continuity checkpoints on or off:
+`work_notes.enabled` and `work_checkpoint.enabled` decide in every profile.
+
+`coding` and `full` also read repository `AGENTS.md` guidance for each session's working
+directory. `AGENTS.override.md` takes priority at the same directory. This reads instructions.
+It does not run project setup code or change tool permissions. It skips a file that another
+user owns or can write, also when you run Exo as root. See [profiles](HARNESS.md) and
+[workspace instructions](WORKSPACE-INSTRUCTIONS.md) for settings and scope.
+
 If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the
 main model has no key (by default Anthropic, then OpenRouter) and you have not chosen one, Exo uses your Claude
 Code login as the main model: `claude-cli:sonnet`. The status line shows it. Cost reads `unknown`, because a

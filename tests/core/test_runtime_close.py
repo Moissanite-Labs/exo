@@ -13,6 +13,7 @@ import pytest
 from exo.core.engine import CoreEngine
 from exo.model_spend.journal import SpendJournal
 from exo.scheduler import Scheduler
+from exo.server.engine import CommandFailed
 
 MODELS = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 needs_fd_dir = pytest.mark.skipif(not os.path.isdir("/dev/fd"), reason="counts handles through /dev/fd")
@@ -403,3 +404,313 @@ def test_close_closes_the_scheduler_and_store_when_scheduler_stop_raises(tmp_pat
     assert eng.store._conn is None
     with pytest.raises(sqlite3.ProgrammingError):
         eng.scheduler.db.execute("SELECT 1")
+
+
+def _resource_engine(tmp_path, handler=None):
+    from exo.core.plugins import Manifest, PluginManager
+    order = []
+    manager = PluginManager()
+
+    def register(ctx):
+        ctx.register_cleanup(lambda: order.append("cleanup"))
+        ctx.register_hook("pre_tool_call", lambda **kw: None)
+        ctx.register_hook("on_turn_end", lambda **kw: order.append("turn end"))
+        if handler is not None:
+            ctx.register_tool("hold", "test", handler=handler)
+
+    assert manager._run_register(Manifest("resource"), "test", register).ok
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, plugins=manager)
+    return engine, order
+
+
+def test_close_drains_accepted_turn_before_plugin_cleanup(tmp_path):
+    from exo.core.models.fake import FakeProvider
+    from exo.protocol import schema as s
+    started = asyncio.Event()
+    exited = asyncio.Event()
+
+    class WaitingProvider:
+        name = "fake"
+
+        async def stream(self, messages, tools, **opts):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                exited.set()
+            async for event in FakeProvider(["unreachable"]).stream(messages, tools):
+                yield event
+
+    engine, order = _resource_engine(tmp_path)
+    engine.loop.provider = WaitingProvider()
+
+    async def run():
+        session = await engine.loop.create_session()
+        engine.start_turn(session.id, "wait")
+        await asyncio.wait_for(started.wait(), 1)
+        await engine.close()
+        assert exited.is_set() and not engine._tasks
+        assert order == ["turn end", "cleanup"]
+        assert engine.store._conn is None
+        with pytest.raises(CommandFailed, match="closing"):
+            engine.start_turn(session.id, "late")
+        with pytest.raises(CommandFailed, match="closing"):  # refused before its turn hooks fire
+            await engine.run_turn(s.TurnSend(session=session.id, text="late"))
+        assert order == ["turn end", "cleanup"]
+
+    asyncio.run(run())
+
+
+def test_close_waits_for_actual_sync_plugin_worker_after_turn_cancellation(tmp_path):
+    import threading
+    from exo.core.models.fake import FakeProvider, tool_turn
+    started, release, exited = threading.Event(), threading.Event(), threading.Event()
+
+    def hold(args, **kwargs):
+        started.set()
+        try:
+            assert release.wait(2)
+            assert "cleanup" not in order
+            return "finished"
+        finally:
+            exited.set()
+
+    engine, order = _resource_engine(tmp_path, hold)
+    engine.loop.provider = FakeProvider([tool_turn("hold", {}), "done"])
+
+    async def run():
+        session = await engine.loop.create_session()
+        engine.start_turn(session.id, "use resource")
+        assert await asyncio.to_thread(started.wait, 1)
+        closing = asyncio.create_task(engine.close())
+        try:
+            await asyncio.sleep(0.02)
+            assert not closing.done() and "cleanup" not in order
+        finally:
+            release.set()
+        await closing
+        assert exited.is_set() and order[-1] == "cleanup"
+        assert not engine.registry.workers and not engine._tasks
+
+    asyncio.run(run())
+
+
+def test_shutdown_timeout_retains_resources_and_writer_until_retry(tmp_path, monkeypatch):
+    import threading
+    from exo.core.models.fake import FakeProvider, tool_turn
+    import exo.core.shutdown as shutdown
+    started, release = threading.Event(), threading.Event()
+
+    def hold(args, **kwargs):
+        started.set()
+        assert release.wait(2)
+        return "finished"
+
+    engine, order = _resource_engine(tmp_path, hold)
+    engine.loop.provider = FakeProvider([tool_turn("hold", {}), "done"])
+    engine.claim_writer()
+    writer = engine._writer
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.02)
+
+    async def run():
+        session = await engine.loop.create_session()
+        engine.start_turn(session.id, "hold resource")
+        assert await asyncio.to_thread(started.wait, 1)
+        from exo.core.engine import CoreRuntime
+        try:
+            with pytest.raises(shutdown.ShutdownTimeout, match="tool workers; jobs and transports are stopped"):
+                await CoreRuntime.close(engine)  # one bounded attempt; CoreEngine.close retries it
+            assert engine._writer is writer and engine.store._conn is not None
+            assert "cleanup" not in order and engine.registry.workers
+        finally:
+            release.set()
+        await asyncio.gather(*list(engine.registry.workers))
+        await CoreRuntime.close(engine)
+        assert engine._writer is None and engine.store._conn is None
+        assert order.count("cleanup") == 1
+
+    asyncio.run(run())
+
+
+def test_cancelled_sync_tool_gets_cancel_event_and_finishes_before_cleanup(tmp_path):
+    import threading
+    from exo.core.models.fake import FakeProvider, tool_turn
+    from exo.core.types import ToolSpec
+    started, stopped = threading.Event(), threading.Event()
+    engine, order = _resource_engine(tmp_path)
+
+    def cooperative(args, ctx):
+        started.set()
+        assert ctx.cancel.wait(2)
+        assert "cleanup" not in order
+        stopped.set()
+        return "cancelled cooperatively"
+
+    engine.registry.register(ToolSpec(name="cooperative", description="test"), cooperative)
+    engine.loop.provider = FakeProvider([tool_turn("cooperative", {}), "done"])
+
+    async def run():
+        session = await engine.loop.create_session()
+        engine.start_turn(session.id, "use worker")
+        assert await asyncio.to_thread(started.wait, 1)
+        await engine.close()
+        assert stopped.is_set() and order[-1] == "cleanup"
+
+    asyncio.run(run())
+
+
+def test_async_plugin_handler_keeps_event_loop_and_direct_queued_turns_stop(tmp_path):
+    from exo.core.models.fake import FakeProvider, tool_turn
+    started = asyncio.Event()
+    handler_loops = []
+
+    async def hold(args, **kwargs):
+        handler_loops.append(asyncio.get_running_loop())
+        started.set()
+        await asyncio.Event().wait()
+
+    engine, order = _resource_engine(tmp_path, hold)
+    engine.loop.provider = FakeProvider([tool_turn("hold", {}), "done"])
+
+    async def run():
+        session = await engine.loop.create_session()
+        first = asyncio.create_task(engine.loop.send(session.id, "first"))
+        await asyncio.wait_for(started.wait(), 1)
+        queued = asyncio.create_task(engine.loop.send(session.id, "queued"))
+        await asyncio.sleep(0)
+        await engine.close()
+        [result] = await asyncio.gather(first, return_exceptions=True)
+        assert isinstance(result, asyncio.CancelledError) or result.stop_reason == "interrupted"
+        with pytest.raises(RuntimeError, match="closing"):
+            await queued
+        assert handler_loops == [asyncio.get_running_loop()] and order == ["cleanup"]
+        assert not engine.registry.workers
+
+    asyncio.run(run())
+
+
+def test_close_drains_direct_run_turn_final_hook_before_cleanup(tmp_path):
+    from exo.core.models.fake import FakeProvider
+    from exo.protocol import schema as s
+    finishing, exited = asyncio.Event(), asyncio.Event()
+    engine, order = _resource_engine(tmp_path)
+    engine.loop.provider = FakeProvider(["done"])
+
+    async def finish(**kwargs):
+        finishing.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.set()
+
+    engine.plugins.hooks.register("on_turn_end", finish, "test")
+
+    async def run():
+        session = await engine.loop.create_session()
+        task = asyncio.create_task(engine.run_turn(s.TurnSend(session=session.id, text="direct")))
+        await asyncio.wait_for(finishing.wait(), 1)
+        assert not engine.loop.state(session.id).running
+        await engine.close()
+        assert task.cancelled() and exited.is_set()
+        assert order[-1] == "cleanup" and not engine._tasks
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", ["delegated", "scheduled"])
+def test_close_drains_child_and_scheduled_tools_before_cleanup(tmp_path, mode):
+    from exo.core.models.fake import FakeProvider, tool_turn
+    started, exited = asyncio.Event(), asyncio.Event()
+
+    async def hold(args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.set()
+
+    engine, order = _resource_engine(tmp_path, hold)
+
+    class DelegateProvider:
+        name = "fake"
+
+        async def stream(self, messages, tools, **opts):
+            text = next(message.text() for message in reversed(messages) if message.role == "user")
+            spec = tool_turn("hold", {}) if "CHILD_HOLD" in text else tool_turn("delegate", {"goal": "CHILD_HOLD"})
+            async for event in FakeProvider([spec]).stream(messages, tools):
+                yield event
+
+    engine.loop.provider = DelegateProvider()
+
+    async def run():
+        if mode == "delegated":
+            session = await engine.loop.create_session(cwd=str(tmp_path))
+            engine.start_turn(session.id, "parent")
+        else:
+            engine.scheduler = Scheduler(engine)
+            job = engine.scheduler.add("every 1h", "CHILD_HOLD")
+            engine.scheduler.launch(job)
+        await asyncio.wait_for(started.wait(), 1)
+        await engine.close()
+        assert exited.is_set() and order[-1] == "cleanup"
+        assert not engine._tasks and not engine.agents.loops and not engine.registry.workers
+        if engine.scheduler:
+            assert not engine.scheduler.running and not engine.scheduler.loops
+            with pytest.raises(sqlite3.ProgrammingError):
+                engine.scheduler.db.execute("SELECT 1")
+
+    asyncio.run(run())
+
+
+def test_direct_tool_dispatch_drains_and_late_tools_or_start_cannot_reopen_resources(tmp_path):
+    from exo.core.types import ToolCall
+    started, exited = asyncio.Event(), asyncio.Event()
+    invocations = []
+
+    async def hold(args, **kwargs):
+        invocations.append("called")
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            exited.set()
+
+    engine, order = _resource_engine(tmp_path, hold)
+
+    async def run():
+        call = ToolCall("direct", "hold", {})
+        task = asyncio.create_task(engine.run_tool(call, {}))
+        await asyncio.wait_for(started.wait(), 1)
+        await engine.close()
+        assert task.cancelled() and exited.is_set() and order == ["cleanup"]
+        late = await asyncio.wait_for(engine.run_tool(call, {}), 2)  # a lost closing guard fails, never hangs
+        assert late.is_error and "closing" in late.text()
+        with pytest.raises(CommandFailed, match="closing"):
+            await engine.start()
+        assert invocations == ["called"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_plugin_callback_cannot_close_its_own_live_resources(tmp_path):
+    from exo.protocol import schema as s
+    engine, order = _resource_engine(tmp_path, lambda args, **kwargs: "done")
+    refusals = []
+
+    async def finish(**kwargs):
+        try:
+            await engine.close()
+        except RuntimeError as exc:
+            refusals.append(str(exc))
+
+    engine.plugins.hooks.register("on_turn_end", finish, "test")
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        await engine.run_turn(s.TurnSend(session=session.id, text="hello"))
+        assert refusals and "engine owner" in refusals[0]
+        assert order == ["turn end"] and not engine.jobs.target.closed
+        await engine.close()
+        assert order == ["turn end", "cleanup"]
+
+    asyncio.run(run())

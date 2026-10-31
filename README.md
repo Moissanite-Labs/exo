@@ -28,6 +28,7 @@ Exo is early and in active build. Waves 1 to 3 are built and in daily use on one
 
 | | |
 |---|---|
+| **Choose its size** | `exo harness use lean`, `coding`, or `full`. Add individual capabilities with `exo harness enable`. Inspect selection and dependencies before restarting. Existing installations keep their defaults. [`docs/HARNESS.md`](docs/HARNESS.md) |
 | **One agent, one memory** | A seat is one agent with one append-only, hash-chained log and one summary tree. Windows, channels, scheduled runs and peer messages are threads of it. `/context` shows what the next call carries. [`docs/MEMORY-MODEL.md`](docs/MEMORY-MODEL.md) |
 | **A harness that watches itself** | Every model call records its route, timing and cost. Anomaly rules turn the trace into findings. A finding marked fixed is measured again and reopens if it returns. [`docs/TRACE.md`](docs/TRACE.md) |
 | **A gate with exact-text approvals** | For outward acts the gate hashes the exact text, target and arguments. Edit one character and it asks again. Seats sign their answers, and standing grants belong to the principal and expire. [`docs/GATE.md`](docs/GATE.md) |
@@ -107,6 +108,12 @@ tutorial mode: small tips the first time something comes up. `/tutorial off` tur
 Commands you will use in the terminal (`/help` lists all): `/new`, `/sessions`, `/fork`, `/undo`, `/cwd`,
 `/context`, `/compact`, `/model`, `/default`, `/usage`, `/trace`, `/findings`, `/peers`, `/send`, `/handoff`,
 `/intro`, `/tutorial`.
+
+Choose which capabilities the shared core loads with `exo harness list`, then
+`exo harness use coding --dry-run`. The `coding` profile includes scoped `AGENTS.md` instructions,
+memory, skills, MCP, background jobs and subagents. `lean` keeps coding tools, sessions, tracing and the
+approval gate. Changes take effect after `exo stop` and the next launch. See the
+[profile guide](docs/HARNESS.md) and [harness comparison and roadmap](docs/HARNESS-LANDSCAPE.md).
 
 ## Versions
 
