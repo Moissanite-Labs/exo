@@ -7,6 +7,8 @@ principal memory, nightly climb, provider registry, or activation paths. The
 `exo improve --offline` CLI makes the experiment usable without a principal store.
 No model, benchmark, or upstream package is installed.
 
+Decision: [D-096](../../DECISIONS.md#d-096-2026-10-31-harness-improvement-starts-as-an-offline-review-only-experiment).
+
 ## Use the offline CLI
 
 From a development checkout:
@@ -41,8 +43,9 @@ and 2,048 total calls. Saturated or non-improving later rounds discard the candi
 Stdout is the default output and creates no files. `--output text-check` creates
 `./improvement-runs/text-check/artifact.json` with owner-only file/directory modes,
 using Exo's private atomic persistence primitive. Existing run names, symlinks,
-paths/traversal, hidden/protected working directories and Exo-home workspaces are
-refused. A failed write releases its newly reserved run directory only if empty;
+paths/traversal, hidden/protected working directories, Exo-home workspaces and
+all principal roots recorded by `exo init --root` (including their descendants)
+are refused. A failed write releases its newly reserved run directory only if empty;
 preexisting runs and nonempty output are preserved. Output names come only from
 the explicit CLI flag, never fixture contents.
 This path policy is not an OS sandbox against another same-user process altering
@@ -65,8 +68,10 @@ The supplied JSON examples show the exact schema. It requires `schema: 1`,
 baseline notes, nonempty `development` and `held_out` task lists, and a `references`
 mapping exactly covering all task IDs. Each task has exactly `id`, `domain`, and
 `input`. Classification is a caller declaration, not proof that content is public;
-do not put secrets or private examples in the explicitly supplied file. No other
-file, memory, store or credentials are loaded.
+do not put secrets or private examples in the explicitly supplied file. The
+workspace guard additionally reads only the recorded principal-root list from
+Exo configuration via `store.explicit_roots()`. No principal store is
+constructed, and no store contents, memories or credentials are loaded.
 
 Fixture input must be a plain non-hidden JSON filename in the current directory,
 a regular file up to 256 KiB; symlinks/FIFOs and duplicate JSON keys are refused.

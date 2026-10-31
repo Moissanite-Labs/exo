@@ -58,13 +58,21 @@ def test_subprocess_command_needs_no_active_principal_or_provider(tmp_path):
     assert not (tmp_path / "never-open").exists()
 
 
-def test_no_store_or_config_authority_is_loaded(tmp_path, monkeypatch, capsys):
+def test_only_recorded_roots_are_read_without_store_or_runtime_config(tmp_path, monkeypatch, capsys):
     def forbidden(*args, **kwargs):
         raise AssertionError("private store access")
     monkeypatch.setattr(cli, "resolve_store", forbidden)
     monkeypatch.setattr("exo.config.Config.load", forbidden)
-    monkeypatch.setattr("exo.store.explicit_roots", forbidden)
+    import exo.store as store
+    roots = store.explicit_roots
+    calls = []
+    def recorded_roots(home):
+        calls.append(home)
+        return roots(home)
+    monkeypatch.setattr(store, "explicit_roots", recorded_roots)
+    monkeypatch.setattr(store.PrincipalStore, "__init__", forbidden)
     assert invoke(tmp_path, monkeypatch, capsys)[0] == 0
+    assert calls == [tmp_path / "exo-home"]
 
 
 @pytest.mark.parametrize("mutation", [
@@ -346,3 +354,57 @@ def test_failed_export_preserves_nonempty_reservation(tmp_path, monkeypatch, cap
     assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2
     assert (tmp_path / "improvement-runs" / "nonempty" / "keep.txt").read_text() == "preserve unexpected contents"
     assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_refuses_recorded_explicit_principal_root_before_fixture_read(tmp_path, monkeypatch, capsys, nested):
+    home = tmp_path / "exo-home"
+    home.mkdir()
+    store = tmp_path / "stores" / "alice"
+    cwd = store / "reports" if nested else store
+    cwd.mkdir(parents=True)
+    (home / "config.json").write_text(json.dumps({"principals": {"alice": str(store)}}))
+    monkeypatch.chdir(cwd)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("fixture or store content must not be read")
+    monkeypatch.setattr(O, "load_fixture", forbidden)
+    monkeypatch.setattr("exo.store.PrincipalStore.__init__", forbidden)
+    code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
+                     "--fixture", "public.json", "--output", "rejected"])
+    assert code == 2 and not capsys.readouterr().out
+    assert not (cwd / "improvement-runs").exists()
+
+
+def test_recorded_store_symlink_is_resolved(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "exo-home"
+    home.mkdir()
+    store = tmp_path / "store"
+    store.mkdir()
+    alias = tmp_path / "registered"
+    alias.symlink_to(store, target_is_directory=True)
+    (home / "config.json").write_text(json.dumps({"principals": {"alice": str(alias)}}))
+    assert invoke(store, monkeypatch, capsys)[0] == 2
+
+
+def test_positive_held_out_mean_cannot_hide_one_individual_regression(tmp_path, monkeypatch, capsys):
+    data = fixture()
+    # Baseline wins Carol, composition wins Dave and Eve: mean delta +1/3.
+    carol = data["held_out"][0]
+    data["references"][carol["id"]] = carol["input"]
+    data["held_out"].append({"id": "held-eve", "domain": "text", "input": " EVE Black "})
+    data["references"]["held-eve"] = "eve black"
+    code, report, _ = invoke(tmp_path, monkeypatch, capsys, data)
+    held = report["held_out"]
+    assert held["comparison"]["better"] and held["comparison"]["delta"] == .3333
+    assert held["gate"]["pass"]  # This generic mean/domain gate alone is insufficient.
+    assert held["comparison"]["worse"] == ["fixture:normalize-names-v1:held:held-carol"]
+    assert code == 1 and report["status"] == "held_out_rejected" and "proposal" not in report
+
+
+def test_iteration_help_explains_saturation_rollback(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["improve", "--help"])
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "later non-improvement discards earlier proposals" in help_text
+    assert "built-in fixtures saturate after one round" in help_text

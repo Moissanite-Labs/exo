@@ -1,4 +1,4 @@
-"""Explicit public-fixture CLI; no principal state, callback loading or activation."""
+"""Explicit public fixtures; root-list guard only, no store contents or activation."""
 from __future__ import annotations
 
 import json
@@ -46,13 +46,15 @@ def _local_file(value):
 
 
 def _workspace():
-    # No Config.load, store resolution, keys or principal files. The normal tool
-    # authorizer remains in force when the CLI is invoked through an agent tool.
+    # Read only configured store locations, never instantiate or read a store.
+    # Normal tool authorization remains in force for agent CLI invocations.
     from exo.gate import is_sensitive_path
+    from exo.store import explicit_roots
     cwd = Path.cwd().resolve()
     homes = [Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser().resolve()]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         homes.append(Path(os.environ["EXO_PRINCIPAL_STORE"]).expanduser().resolve())
+    homes.extend(root.resolve() for root in explicit_roots(homes[0]).values())
     if cwd in (Path(cwd.anchor), Path.home().resolve()) or any(cwd == p or p in cwd.parents for p in homes) or any(p.startswith(".") for p in cwd.parts[1:]):
         raise ValueError("run only in an explicit public workspace")
     if is_sensitive_path(str(cwd)):
@@ -225,7 +227,9 @@ def register(sp, common):
     p.add_argument("--adapter", choices=ADAPTERS, required=True)
     p.add_argument("--fixture", required=True, help="public JSON filename in current directory")
     p.add_argument("--output", help="new run ID under ./improvement-runs (default: stdout only)")
-    p.add_argument("--iterations", type=int, default=1)
+    p.add_argument("--iterations", type=int, default=1,
+                   help="rounds (default: 1); later non-improvement discards earlier proposals; "
+                        "built-in fixtures saturate after one round")
     p.add_argument("--max-tasks", type=int, default=16)
     p.add_argument("--max-calls", type=int, default=64)
     p.add_argument("--margin", type=float, default=.01)
