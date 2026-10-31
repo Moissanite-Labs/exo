@@ -732,6 +732,20 @@ system or bash will.
   folders' absolute and resolved forms are also compared with Exo's key stores and run folders, so a relative `run`
   read in a session whose folder is `$EXO_HOME` is the run folder. A `.pub` name exempts a path only when the
   resolved path ends in `.pub` too: `key.pub` pointing at `~/.ssh/id_rsa` asks.
+  A write by `write_file`, `edit_file` or `apply_patch` through a linked folder keeps the path as spelt for its
+  target, and adds a `local_write` part for the place it lands (exo-desktop #52). That place is the folders
+  resolved as the kernel resolves them, with the last name kept, since the tools refuse a link there. The question
+  names it in full: `write cfg/authorized_keys (a link leads it to <home>/.ssh/authorized_keys)`. So a `target:` entry
+  on the place applies: `deny: ["target:*/shared/*"]` denies `write_file o/plain.txt` with `o` a link to that
+  folder, as it denies the absolute path. Before, the link was the one spelling no entry on the place could reach,
+  and the question named only the link. A relative path is read from the session's folder as resolved, so a link
+  to that folder itself adds nothing. The call's own target, which its grants are keyed on, stays as spelt.
+  The gate cannot tell a planted link from a system one. On macOS `/tmp` is a link to `/private/tmp`, and an allow
+  rule matches the call as spelt while the part is decided on its own (#191). So a policy that denies `local_write`
+  and allows `target:/tmp/*` denies `write_file /tmp/x` until it allows `target:/private/tmp/*` too.
+  A reserved entry that matches another part of a call keeps the principal's ask from any grant (D-075). So a
+  reserved entry on the place, or on `local_write`, asks for such a write each time: an "always" for `o/plain.txt`
+  does not cover the next one, since the link may lead elsewhere by then.
 - **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes

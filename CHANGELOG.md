@@ -463,6 +463,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - Restore the reviewed relative-import coupling counter and its regressions on main. `from .. import envscrub` counts like its absolute form. Existing exclusions, duplicate handling and caps are unchanged (refs #741).
 
+- A file tool's write through a linked folder is read where it lands (exo-desktop #52). `write_file`, `edit_file`
+  and `apply_patch` follow a link in a path's folders, and the gate matched the resolved path against the stores,
+  but the call's target and question named only the path as spelt. So `deny: ["target:*/shared/*"]` denied the
+  absolute path yet allowed `o/plain.txt` with `o` a link to that folder, and the ask for `cfg/authorized_keys`
+  never named `~/.ssh`. Each such path now adds a `local_write` part whose target is where the write lands, and
+  the question names that place. A system link counts too: on macOS a policy that denies `local_write` and allows
+  `target:/tmp/*` must now allow `target:/private/tmp/*` as well. A standing grant on the path as spelt no longer
+  covers such a write when a reserved entry matches the place it lands in.
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
