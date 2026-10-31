@@ -8594,6 +8594,34 @@ def _patch_paths(text: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+def _linked_writes(paths: list[str]) -> dict[str, str]:
+    """Where a file tool's write lands, for each path whose folders a link leads elsewhere (exo-desktop #52), as
+    {path as spelt: place}. The tools follow a link in the folders, as the kernel does, and refuse one at the last
+    name, so the folders are resolved and the name is kept. A relative path is read from the session's folder as
+    resolved (the gate's own when the core passed none), so a link to that folder itself adds nothing."""
+    scope = _scope.get()
+    out: dict[str, str] = {}
+    for base in (scope.cwds if scope is not None and scope.cwds else ("",)):
+        try:
+            base = base or os.getcwd()
+            real = os.path.realpath(base)
+        except (OSError, ValueError):                   # no folder to read from: each path as spelt
+            continue
+        for p in paths:
+            x = os.path.expanduser(p)                   # the tools expand ~ and nothing else
+            try:
+                full = os.path.join(base, x)
+                head, name = os.path.split(full)
+                landed = os.path.realpath(full) if name in ("", ".", "..") else \
+                    os.path.join(os.path.realpath(head), name)
+                spelt = re.sub(r"^//", "/", os.path.normpath(os.path.join(real, x)))
+            except (OSError, ValueError):               # unresolvable, or a NUL in it: as spelt
+                continue
+            if landed != spelt:
+                out.setdefault(p, landed)
+    return out
+
+
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", "files", "directory", "dir", "root",
                   "source", "src", "from", "old_path", "dest", "dst", "destination", "to", "target")
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
@@ -9365,14 +9393,17 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             path = next((p for p in paths if is_store_path(p, from_cwd=True)), "")
             cat = "store_write" if path else "local_write"
         path = path or (paths[0] if paths else "")
-        c = _make(cat, summary=f"write {path}", target=path, link=path)
+        landed = _linked_writes(paths)
+        c = _make(cat, summary=f"write {path}" + (f" (a link leads it to {landed[path]})" if path in landed else ""),
+                  target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
         # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply. A local write of more
         # than one file too, so an exact target entry reaches a path that only the reading on one line found (#559).
-        if cat != "local_write" or len(set(paths)) > 1:
+        # So does the place a link in a path's folders leads it to (exo-desktop #52), which no spelling names.
+        if cat != "local_write" or len(set(paths)) > 1 or landed:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
-                       for p in dict.fromkeys(paths or [path])]
+                       for p in dict.fromkeys([*(paths or [path]), *landed.values()])]
         # #447: a store file it writes beside a secret is a part, so only the principal answers. #514: so is each store
         # file past the first, so a target entry on any of them matches, as for the other file tools.
         if cat != "local_write":

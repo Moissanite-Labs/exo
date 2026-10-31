@@ -184,6 +184,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
   cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
   `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-29 (exo-desktop #2, follow-up to #726):** the next command clears a failed start before it
+  waits. The 2026-10-27 change cleared a start that raised or was cancelled only in a command that was waiting on
+  it. When the only waiting command was cancelled and the start then failed, no command cleared it. The next
+  command got that old error once more, and only the command after that started again. Now `start()` first drops
+  a finished start task that raised or was cancelled, then starts again. A start that is still running stays, so a
+  cancelled command still never causes a second start, and every command that waits on a failed start still gets
+  its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
+  Tests: `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -4279,6 +4287,37 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (2 rows that fail on main a1dd4fec).
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
+  *Amendment 2026-10-27 (exo-desktop #52):* a file tool's write through a linked folder is read where it lands.
+  `write_file`, `edit_file` and `apply_patch` follow a link in a path's folders, as the kernel does, and refuse
+  only a link at the last name. The store and secret checks already resolved the path (#209), so such a write into
+  a store asked, but the call's target, summary and parts named only the path as spelt. So the principal's question
+  for `cfg/authorized_keys` never named `~/.ssh`, `deny: ["target:*/.ssh/*"]` only asked there, and under
+  `deny: ["target:*/shared/*"]` the absolute path and `../shared/plain.txt` were denied while `o/plain.txt`, with
+  `o` a link to that folder, was an allowed local write: the link was the one spelling no entry on the place could
+  reach. Now each path whose folders a link leads elsewhere adds a `local_write` part whose target is the place it
+  lands (the folders resolved, the last name kept), and the call's summary names that place. The call keeps its
+  category and its target as spelt, so its approvers stay as before and a grant is keyed on the spelling. A
+  relative path is read from the session's folder as resolved, so a link to that folder itself adds nothing. The
+  tools are unchanged.
+  Chosen over a refusal in the tools: they take absolute paths and `..` by design, so a write outside the working
+  folder was never refused. A refusal of a link that leads out of it would refuse a store write the principal
+  approved, which the #241 amendment rules out, and every write through a system link such as macOS `/tmp`. The
+  issue's second finding, a secret-store check in the write tools, did not reproduce: the gate asks for every
+  store or secret write these tools make (each patch operation too), named or through a linked folder, with no
+  grant and the principal alone for the store, so a refusal in the tool would reverse #241. A session started
+  inside a store folder still writes it by relative names as before (the known limit under "The tool's own
+  folder" in `docs/GATE.md`). Main's `scripts/gate_diff.py`, run against main 080e87ba over 91,807 actions and 88
+  policies, finds nothing lowered and nothing tightened: 14 pairs keep their outcome with another detail changed.
+  That run is on Linux, where `/tmp` is not a link. The cost: the gate cannot tell a planted link from a system one.
+  On macOS `/tmp` is a link to `/private/tmp`, so `write_file /tmp/x` adds a part for `/private/tmp/x`. An allow
+  rule matches the call as spelt, and the part is decided on its own (#191). So a policy that denies `local_write`
+  and allows `target:/tmp/*` now denies that write, naming the place, until it allows `target:/private/tmp/*` too.
+  The default policy still allows it. A reserved entry that matches another part of a call keeps the principal's ask
+  from any grant (D-075). So under a reserved entry on the place, or `reserved: [local_write]`, an "always" for
+  `o/plain.txt` no longer covers the next such write, which asks each time: the link may lead elsewhere by then. On
+  main the entry on the place did not reach the write, and a grant covered it under `reserved: [local_write]`.
+  Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main) and the grant rows in
+  `plugins/exo-gate/tests/test_approvals.py` (both fail on main).
 
 ### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
 

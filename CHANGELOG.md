@@ -147,6 +147,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
+  Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
+  `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay
+  in exo.
 - A newer push to a pull request cancels that pull request's older `ci` and `gate preflight` runs, so a replaced
   run no longer holds hosted runners (#907, D-042 amendment). Each push to main keeps its own run.
 - `CHANGELOG.md` now merges with git's union driver (`.gitattributes`, #842, D-089 amendment). Two branches that
@@ -410,6 +414,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
   "Protocol".
 
+- The next command also retries a start that failed after its only command was cancelled (exo-desktop #2). No
+  command got that error, but the next command got it once more, and only the command after that started again.
+  The next command now drops a finished start that raised or was cancelled before it waits on it. A start still
+  running stays, so a cancelled command never causes a second start. Tests:
+  `tests/integration/test_engine_start_retry.py`. **Docs:** `DECISIONS.md` D-010, `docs/CORE-V2-INTERFACES.md`
+  "Protocol".
+
+- A local provider whose base URL has a bad port reads as not running (found in the exo-desktop #14 review).
+  `http://127.0.0.1:notaport/v1`, a port above 65535, a broken IPv6 host or a host name part over 63 letters made
+  the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
+  provider check failed. With no main role set, every start runs that check, so every command failed, retry or
+  not. The probe now reads such a URL as nothing listening. Tests:
+  `tests/core/test_providers_setup.py`.
+
+- `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
+  broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:
+  `tests/core/tools/test_codefind.py`. **Docs:** `docs/TOOLS.md` "code_find".
+
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).
 
 - Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
@@ -451,6 +473,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Shared changes have one canonical Exo PR, with reviewed desktop syncs instead of duplicate feature implementations or direct automatic main updates (D-089).
 
 - Restore the reviewed relative-import coupling counter and its regressions on main. `from .. import envscrub` counts like its absolute form. Existing exclusions, duplicate handling and caps are unchanged (refs #741).
+
+- A file tool's write through a linked folder is read where it lands (exo-desktop #52). `write_file`, `edit_file`
+  and `apply_patch` follow a link in a path's folders, and the gate matched the resolved path against the stores,
+  but the call's target and question named only the path as spelt. So `deny: ["target:*/shared/*"]` denied the
+  absolute path yet allowed `o/plain.txt` with `o` a link to that folder, and the ask for `cfg/authorized_keys`
+  never named `~/.ssh`. Each such path now adds a `local_write` part whose target is where the write lands, and
+  the question names that place. A system link counts too: on macOS a policy that denies `local_write` and allows
+  `target:/tmp/*` must now allow `target:/private/tmp/*` as well. A standing grant on the path as spelt no longer
+  covers such a write when a reserved entry matches the place it lands in.
 
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
