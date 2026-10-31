@@ -372,3 +372,27 @@
 .rm-more { margin-top: clamp(32px, 4vw, 56px); }
 .rm-more h3 { font-size: 24px; margin-bottom: 16px; }
 @media (prefers-reduced-motion: reduce) { .rm-hl, .rm-hl::after, .rm-chip { transition: none; } }
+
+/* Events, runs, SDK and the live egg */
+.rm-acts .card { min-width: 0; }
+.rm-acts h3 { font-size: 24px; margin-bottom: 16px; }
+.rm-mini { display: block; width: 100%; height: auto; margin: 0 0 16px; font: 500 11px/1 var(--mono); }
+.rm-mini text { fill: var(--fg-3); }
+.rm-mini__t text, text.rm-mini__t { fill: var(--fg-3); }
+.rm-mini .rm-mini__c, .rm-mini__c text { fill: var(--fg); font-size: 12px; }
+.rm-mini__l path, .rm-mini__l rect { fill: none; stroke: var(--line-2); stroke-width: 1; }
+.rm-mini__a { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.rm-mini__d { fill: none; stroke: var(--line-2); stroke-dasharray: 3 4; }
+.rm-mini__b, .rm-mini .rm-mini__b { fill: var(--bg); stroke: var(--line-2); stroke-width: 1; }
+g.rm-mini__b rect { fill: var(--bg); stroke: var(--line-2); }
+.rm-mini__hot { stroke: var(--accent) !important; }
+.rm-mini__bars rect { fill: rgba(236, 234, 228, .22); }
+.rm-mini__bars rect.rm-mini__hot { fill: var(--accent); }
+.rm-mini__credit { margin-top: 12px; font: 500 12px/1.5 var(--mono); color: var(--fg-3); }
+.rm-mini--egg { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 16px; }
+.rm-mini--egg canvas { width: 150px; height: 150px; }
+.rm-mini__key { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font: 400 13px/1.4 var(--sans, inherit); color: var(--fg-2); }
+.rm-mini__key b { font: 500 12px/1 var(--mono); color: var(--accent); margin-right: 6px; }
+@media (max-width: 560px) { .rm-mini--egg { grid-template-columns: 1fr; } .rm-mini--egg canvas { margin: 0 auto; } }
+.rm-mini .rm-mini__c, .rm-mini text.rm-mini__c { text-anchor: middle; }
+.rm-mini__c.rm-mini__t { text-anchor: start; }

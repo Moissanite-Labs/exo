@@ -94,6 +94,7 @@
       var narrow = W < 760;
       return { cx: narrow ? W * 0.8 : W * 0.72, cy: narrow ? H * 0.2 : H * 0.48, r: narrow ? Math.min(W, H) * 0.4 : Math.min(W * 0.28, H * 0.42) };
     } });
+    if (big) window.exoEgg = big;
     var aside = document.querySelector(".rm-pet"), cv = aside && aside.querySelector(".rm-pet__cv");
     var nEl = aside && aside.querySelector(".rm-pet__n"), nameEl = aside && aside.querySelector(".rm-pet__name");
     var small = null, shown = false;

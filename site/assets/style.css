@@ -544,3 +544,16 @@ html { scroll-padding-top: 80px; }
   .nav__links { width: max-content; }
   .nav__links a { min-height: 36px; display: flex; align-items: center; }
 }
+
+/* Live egg legend (home and roadmap hero). Shown only when a feed or demo mode is on. */
+.egg-legend { margin-top: 22px; max-width: 34em; padding: 12px 14px; border: 1px solid var(--line-2); background: rgba(8, 9, 10, .72); }
+.egg-legend[hidden], .egg-legend__demo[hidden] { display: none; }
+.egg-legend__k { margin: 0 0 8px; font: 500 11px/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3); }
+.egg-legend__demo { display: inline-block; margin-left: 8px; padding: 1px 6px; color: var(--accent); border: 1px dashed var(--accent); letter-spacing: .08em; }
+.egg-legend ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.egg-legend li { display: grid; grid-template-columns: 34px 112px 1fr; align-items: center; gap: 10px; font-size: 13px; line-height: 1.4; color: var(--fg-2); }
+.egg-legend b { font: 500 12px/1 var(--mono); color: var(--fg); letter-spacing: .04em; }
+.egg-pips { display: block; width: 34px; height: 6px; background: linear-gradient(90deg, var(--accent) calc(var(--n) * 33.34%), var(--line-2) 0); -webkit-mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); }
+@media (max-width: 560px) { .egg-legend li { grid-template-columns: 34px 1fr; } .egg-legend li span { grid-column: 2; margin-top: -4px; } }
+.egg-legend__live { margin: 10px 0 0; font: 400 12px/1.5 var(--mono); color: var(--fg-3); }
+.egg-legend__live:empty { display: none; }

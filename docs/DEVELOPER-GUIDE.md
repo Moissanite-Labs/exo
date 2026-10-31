@@ -727,6 +727,8 @@ list or a clean tree. It refuses a `site/` that is itself a symlink, untracked o
 not see through it while `rsync` follows it; symlinks inside `site/` are copied as links. The Vercel CLI is pinned to an exact version set at the top of the script. `EXO_VERCEL_CLI` may name
 another exact `X.Y.Z` (a tag such as `latest`, or an empty value, is refused with exit 2). To move the pin, change the script in a PR.
 
+Staging runs the live egg in demo mode by default (`?feed=off` turns it off); production shows no egg activity until `data-feed` names a real feed. See `docs/SITE-STATUS.md` "Live egg feed".
+
 Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
 `exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
 Check the change there, then promote with `scripts/deploy-site.sh --prod`, which names the target, asks you to type
