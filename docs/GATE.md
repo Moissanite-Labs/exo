@@ -3148,8 +3148,17 @@ reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) 
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
 shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the
 gate cannot pin to a path counts as well: a variable (`1< "$f"`), a substitution, a glob
-(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). `cat < f`,
-`cat 0< f`, `exec 3< "$f"` and `exec 2< /dev/null` stay reads.
+(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). A store file
+also reaches stdout or stderr by a copy, with no descriptor path written at all: what each descriptor
+holds is followed across the line (a compound's redirections bind the commands inside it and none
+outside it, an exec's persist, and a substitution's commands run with the descriptors held where it
+sits -- a `>( )` body is fed, so it does not inherit stdin), and a copy onto descriptor 1 or 2
+(`1<&0`, `>&0`, `2>&0`, `N<&M`, `N>&M`, `N<&M-`) from a descriptor holding one -- a store file opened
+on stdin (`< f`, `{ ...; } < f`), or on descriptor 3 and up through a spelling the gate cannot pin to
+a path -- is a `store_write` too, because the next write to stdout or stderr writes it back (#336). A
+copy source the gate cannot pin to one descriptor (a variable, a brace form naming several) fails
+closed instead of clearing the destination. `cat < f`, `cat 0< f`, `exec 3< "$f"` and
+`exec 2< /dev/null` stay reads, as does a copy from a descriptor that holds nothing the gate tracks.
 
 Known limits. A descriptor path is matched as written, not resolved (the gate's own realpath would run
 through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
@@ -3159,7 +3168,10 @@ followed by nothing: a store file opened on descriptor 3 or above through a spel
 read (a variable, a glob in a folder part, a named `{fd}`) and written back through that link passes
 (`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through a hardlink and
 opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink above. Both are
-tracked in #324. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
+tracked in #324. Known friction (fails closed, no grant): an `exec` inside a subshell whose closer
+carries no redirections (`( exec < f ); ...`) is read as persisting past the subshell, because the
+parser drops the empty command the closer would attach to, so a later copy from it asks where bash
+would read -- a false ask, not a missed write. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
 writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
 `cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
 out.json` does not. So does a post whose body file is a descriptor path written out
