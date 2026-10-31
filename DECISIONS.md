@@ -5998,6 +5998,52 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   and checking policy patterns when the policy loads (#466).
   A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
   so `target:*/.exo/keys/*` matches neither.
+  *Amendment 2026-10-30 (issue #458):* text a command does not run as written still named it for a rule that would
+  lower the line. A here-string's word was part of its command's own text, and a line of one command was matched on
+  its whole text, a here-doc body included. So under `categories: {force_push: deny}` and allow rules for `^ls` and
+  `npm test`, `ls; git push --force origin main <<< 'npm test'` was allowed, and so was `rm -rf build <<< 'npm test'`
+  under `categories: {delete: deny}`. Now a here-string, `<<<` and its word, is left out of a part's own text and of a
+  pipeline text, as a here-doc body and a comment already were. The text as written stays its `whole`
+  (`_OwnText`), and a rule names the own text only when it matches both, so an anchored rule for the bare command
+  (`'^rm -rf build$'`) lowers no line it did not lower before. A line whose text holds `<<` is not one text
+  (`_one_text`), so it goes through the #394 test, which now runs on a line with no parts too. Where the `<<` starts
+  no stdin, the own text is the line's, and the line is decided as before. A call with no own text at all, a tool
+  other than a shell, is one text as before. Like #394, this only passes more rules over, and the line is then also
+  decided as before, so no decision is looser. Rejected: dropping the here-string from the own text with no
+  `whole`. Main's `scripts/gate_diff.py` found that draft lowering 20 pairs: under
+  `['^ls', '^rm -rf build$']` it allowed `ls; rm -rf build <<< 'npm test'`, which main asks about or denies.
+  A string literal in code that the gate reads as a command has no own text, but it left a line of one command one
+  text, so a rule for the interpreter lowered it: with `opaque_exec: allow` and an allow rule for `^python3 -c`,
+  `python3 -c 'import os; os.system("git push --force origin main")'` was allowed under a force_push deny. Now a part
+  with no own text makes a line not one text, unless it is a secret path the command names (a `credentials` part):
+  the command's own text names that path, while a literal is only a guess at another command. The same holds for the
+  other parts with no own text: a reader a compound feeds (`{ bash; } < f`), a nest past a cap, and the reading of
+  a word bash rejects or the gate cannot read (an unclosed quote, `$(`, `${` or `$((`). So such a part
+  that decides the line, or would be stricter alone, is lowered by no rule keyed on `command`, on a line of one
+  command or in `execute_code` as beside a second command. A category or tool key still lowers it.
+  The command that `find -exec`, `-execdir`, `-ok`, `-okdir`, `xargs` or `git bisect run` runs carried the text of
+  the command around it, so a rule for `^find`, `xargs` or `^git bisect` lowered it: with `opaque_exec: allow`,
+  `find . -exec git push --force origin main \;`, `echo x | xargs git push --force origin main` and
+  `git bisect run git push --force origin main` were allowed under a force_push deny. Now that command has its words
+  as its own text (`_run_own`), as an `-x` value has, with the program's own text as its `whole`, which a rule must
+  match too: a rule for the bare push (`'^git push --force origin main$'`) lowers no line it did not lower before.
+  The program that runs it keeps its own text. A rule that names both still lowers it.
+  Main's `scripts/gate_diff.py` against main ef4d7252 lowers no pair: on the built-in corpus 8,097,936 pairs (92,022
+  actions under 88 policies), 1,274 of them tightened on 401 actions. On an aimed corpus of these lines under
+  unanchored and anchored rules (3,017 actions under 245 policies, 739,165 pairs) it lowers none and tightens 9,114.
+  Not done: a line of one command with a comment and no `<<` is still matched on its whole text
+  (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
+  argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches
+  its text still names the command. So are a here-doc's `<<` and its end word: under an allow rule for `npm test`,
+  `rm -rf build <<'npm test'` with `npm test` as its end line is still allowed. Leaving them out would also change the
+  own text of a reader of its here-doc (`python3 - <<'EOF'`, #394) and pass over rules that name `<<'EOF'`, so it
+  needs the same decision as a redirection target. Rejected: giving the command after `sudo`, `env` or `timeout` its
+  own text. Those prefixes stay part of the simple command as written (#394), so `'^sudo git push'` still names the
+  push it runs. Not done either: a wrapper that runs its words once as written (`setsid`, `flock`, `chroot`, `taskset`
+  and the rest of the #160 list) is read as `xargs` is, beside an opaque part, but runs its command as a prefix does.
+  Its command keeps the wrapper's text, as does the command after `coproc`, so under `opaque_exec: allow` a rule for
+  `^setsid` still names the push in `setsid git push --force origin main`. Whether these follow `xargs` or the
+  prefixes is left to a decision.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

@@ -1387,7 +1387,21 @@ gate does not read:
 - How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
   its simple command as written, with its redirections, after leading reserved words such as `then`
   (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
-  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
+  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`), and so does a
+  wrapper that runs its words once as written, such as `setsid`, `flock` or `chroot`, or `coproc`
+  (left open by #458). A here-string,
+  `<<<` and its word, is left out of it (#458), as a comment and a here-doc body are: a
+  here-string and a here-doc body are the command's stdin. So `rm -rf build <<< 'npm test'` has
+  `rm -rf build` as its own text. A here-doc's command keeps its operator and end word
+  (`rm -rf build <<EOF`), so an unanchored rule that matches the end word still names the command,
+  as one that matches a redirection target does (#458 leaves both open). A pipeline text leaves
+  its here-strings out too. A rule must still
+  match the text as written as well, as before, so `'^rm -rf build$'` does not lower
+  `ls; rm -rf build <<< 'npm test'`. The command that `find -exec`, `-execdir`, `-ok` or
+  `-okdir`, `xargs` or `git bisect run` runs has the words it runs as its own text (#458), as the
+  value of `git rebase -x` has: `git push --force origin main` in
+  `find . -exec git push --force origin main \;`. The program that runs it keeps its own, and a
+  rule must match that text as well, as before. A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
@@ -1461,14 +1475,25 @@ gate does not read:
   text. The regex sees the text as written: an allow rule for `git push` does not match
   `g''it push --force origin main`, and a deny rule for `git push` still denies it. A line the gate
   reads as one part is matched on its command text as before. So is a line of one simple command
-  whose other parts the gate made for it with no own text, a secret path it names
-  (`cat ~/.kube/config`) or a string literal in its code
-  (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
-  different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. The one exception is the part a
-  shell call's own folder added: it carries the `cd <folder>` stand-in among its setters (#516), so
-  a line with it is not one text, and a rule that would lower the line or lift the part's deny
-  names the folder, as it names the `cd` in the cd form ("The tool's own folder"). A command the gate finds run inside
+  beside a secret path it names (`cat ~/.kube/config`), a part the gate made for it with no own
+  text. No two of its parts have different own texts, so a rule that matches the line names its
+  one command, and the line is decided as before. There are three exceptions. A line whose text
+  holds `<<` goes through the own text test (#458), so a rule that names only a here-string or a
+  here-doc body lowers nothing: under `categories: {delete: deny}` and an allow rule for
+  `npm test`, `rm -rf build <<< 'npm test'` is denied. Where the `<<` starts neither (a quoted
+  `<<`, a shift), the own text is the line's and the line is decided as before. A part with no
+  own text other than a secret path is not beside the command as that path is (#458): a string
+  literal in code read as a command (only a guess at a command), a reader a compound feeds
+  (`{ bash; } < f`), a nest past a cap, or the reading of a word bash rejects or the gate cannot
+  read (`echo 'unclosed ; rm -rf ./work`). Where it decides the line or would be stricter alone,
+  no rule keyed on `command` lowers it, on a line of one command as beside a second
+  (`node -e "require('child_process').execSync('gh pr comment 3')"`, an `execute_code` call). A
+  call with no own text at all, a tool other than a shell, is matched on its command text as
+  before. And the part a shell call's own folder added carries the `cd <folder>` stand-in among
+  its setters (#516), so a line with it is not one text, and a rule that would lower the line or
+  lift the part's deny names the folder, as it names the `cd` in the cd form ("The tool's own
+  folder"). A line of one command with a comment and no `<<` is still matched on its whole text,
+  comment included (a row of #458 this change leaves open). A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`
@@ -1476,8 +1501,9 @@ gate does not read:
   heredoc a shell reads and a `$( )`. In code (`execute_code`, `python -c`) the code part and a
   call the gate recognizes carry the code's text, or the command that runs it
   (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal read as a
-  command (`os.system('rm -rf build')`) has none, so beside another command no `command` rule
-  lowers it: use a category or tool key. A rule written for a whole compound line, such as
+  command (`os.system('rm -rf build')`) has none, so where it decides the line or would be
+  stricter alone no `command` rule lowers it, alone or beside another command (#458): use a
+  category or tool key. A rule written for a whole compound line, such as
   `'^git push origin main && git push origin dev$'`, now has to name each command on it too, for
   example as `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`.
   Until it does, the line gets its matrix or category outcome (here log). The ledger view of a classification
