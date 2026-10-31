@@ -62,6 +62,7 @@ COMMANDS = {
     "model": ("model", "pick the model for this session; /model <ref> sets it"),
     "default": ("model", "set the default model for new sessions: /default <ref>, or /default alone to pick (same as /model default)"),
     "providers": ("model", "set up model providers: add or replace a key, test it, remove it, pick the default"),
+    "workers": ("model", "edit fast, standard and deep worker models and their ordered fallbacks"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
     "tasks": ("tools", "list the subagents this session handed work to, with their status"),
@@ -1391,6 +1392,12 @@ class ExoApp(App):
             self.note(f"model {self.model or '-'}  context {self.ctx_tokens} tokens  cost {self.cost_label()}")
         elif name == "default":
             await self.set_default(args)
+        elif name == "workers":
+            if args:
+                self.note("usage: /workers", "warn")
+                return
+            from exo_tui.worker_models import WorkerModelsScreen
+            self.push_screen(WorkerModelsScreen(self.client))
         elif name == "providers":
             word, _, rest = args.partition(" ")
             if word == "add" and rest.strip():
