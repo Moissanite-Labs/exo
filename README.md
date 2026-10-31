@@ -42,6 +42,10 @@ path that uses held-out evaluation, decision models for small choices, subagents
 can do the job, and a provider-agnostic model router with fallback. Other promotion paths use principal
 rulings or repeated, high-confidence evidence.
 
+The opt-in [`exo improve --offline` command](docs/integrations/HARNESS2.md) runs
+Harness² experiments on explicit public fixtures, checks disjoint held-out tasks,
+and exports typed proposals and evidence for review.
+
 ## Screenshots
 
 These are historical screenshots driven by scripted test data for a demo agent named `atlas`, fixing a failing
@@ -72,11 +76,10 @@ More on each client: [exo.askaconsult.com/cli](https://exo.askaconsult.com/cli/)
 
 ## Quick start
 
-The repository is a private preview during the early build. Access is on request from
-[Aska Digital](https://digital.askaconsult.com). Exo needs `git` and Python 3.11 or newer, on macOS or Linux
+The repository is public and remains an early preview. Exo needs `git` and Python 3.11 or newer, on macOS or Linux
 (tested on Arch with Python 3.14).
 
-    git clone https://github.com/aska-digital/exo && cd exo
+    git clone https://github.com/Moissanite-Labs/exo && cd exo
     scripts/install.sh --dry-run      # print the plan, change nothing
     scripts/install.sh                # install: puts `exo` on your PATH (~/.local/bin/exo)
     exo                               # the terminal client, in the current directory

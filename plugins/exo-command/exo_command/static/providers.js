@@ -63,11 +63,20 @@ export function mount(root) {
     if (alive) draw();
   }
 
+  // A retry redraws the section, which drops the focused Try again button. If focus is still lost after the
+  // reply, it goes to Try again when that is drawn again, else to the model select. A refusal with no list
+  // leaves neither, so its message takes focus. With no section left, the workspace takes it.
   async function retryModels() {
     modelsError = null;
     if (alive) draw();
     await loadModels();
     if (alive) draw();
+    if (!alive || document.activeElement !== document.body) return;
+    const again = [...body.querySelectorAll(".xc-prov-def button")].find((b) => b.textContent === "Try again");
+    const note = body.querySelector(".xc-prov-def .xc-warn");
+    const next = again || body.querySelector(".xc-prov-def select") || note || root;
+    if (next === note) note.tabIndex = -1;
+    next.focus();
   }
 
   function show(name, text, cls) { results[name] = { text, cls }; if (alive) draw(); }
@@ -216,6 +225,8 @@ export function mount(root) {
       h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
       h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
       modelsError ? h("div", { class: "xc-warn", role: "status" }, modelsError.text + " This list is from the last good read.") : null,
+      modelsError && modelsError.retryable ? h("div", { class: "xc-prov-def-act" },
+        h("button", { class: "xc-btn", type: "button", onclick: retryModels }, "Try again")) : null,
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 

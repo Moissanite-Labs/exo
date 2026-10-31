@@ -655,5 +655,42 @@ They need `--principal ID` or `--root DIR`, like the others.
 
 Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` for the loop that uses them.
 
+### Offline harness experiments
+
+To try a harness change on public synthetic examples, run `exo improve --offline`
+from the directory containing your fixture. The checkout supplies `text.json` and
+`ledger.json` in `examples/improvement`. With this version of Exo installed:
+
+```sh
+exo improve --offline --adapter text-normalize-v1 --fixture text.json
+```
+
+The command proposes and tests text transformations, combines the observed changes,
+then checks separate held-out examples. JSON on stdout includes its evidence and,
+if both checks pass, a proposal marked `review_only`. Add `--output trial-one` to
+save a new owner-only `improvement-runs/trial-one/artifact.json`; existing runs are
+never overwritten. Exit 0 means a review proposal is ready, 1 means the experiment
+did not pass, and 2 means invalid input or a file/output-policy error. Keep the
+default `--iterations 1` for the supplied fixtures: they saturate in one round, and
+a later non-improving round discards the candidate.
+
+This is separate from learning about you: it makes no model calls, reads no store
+contents and activates nothing. It reads the recorded principal-root list only to
+keep experiments out of stores. This also checks the export directory: a public
+working directory cannot export into `improvement-runs` if that directory is a
+recorded store. Choose a different public working directory in that case.
+
+A missing or unresolvable recorded root stops the experiment with exit 2. The
+message names the principal and its `principals.<id>` entry in
+`EXO_HOME/config.json`; repair/remount that location or remove an obsolete entry.
+The diagnostic does not print the private path. A symlink cycle in `EXO_HOME` or
+`EXO_PRINCIPAL_STORE` also exits 2 and identifies the environment setting to repair
+or unset. A not-yet-created Exo home remains usable; no store initialization is
+required for this command.
+
+Supply public synthetic data, not your memory or private examples. A successful synthetic check is evidence of the mechanism, not
+proof that Exo will improve on real tasks. Fixture format, other adapter and limits:
+[Harness² integration guide](integrations/HARNESS2.md).
+
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.

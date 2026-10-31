@@ -13,6 +13,39 @@ Navigation links support browser Back and Forward. The keyboard skip link moves 
 content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
 “Connected” describes the event connection, while the conversation reports its own work state.
 
+## Native display preferences
+
+An installed desktop host may inject `window.__exoDesktopPrefs` before scripts run. The shared web client
+validates its display choices and gives them priority over browser storage left behind on a reused loopback
+port. Browser-only sessions retain their current storage behavior. The host owns persistence and its seat/core
+scope; this bridge does not open a file or infer a seat from conversation data.
+
+Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scroll` fraction cross
+`window.webkit.messageHandlers.exoDesktop.postMessage`. Thread IDs accept letters, digits, underscores and
+hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
+No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
+Open request takes priority over the restored view/thread. The conversation list is bounded, so restoration fetches the saved thread directly and keeps its returned
+metadata visible in the chooser. Only an exact session 404 clears the saved pointer and leaves the chooser
+open. A failed list or other failed transcript read preserves the saved thread and fraction; a successful
+reconnect can finish the initial restore. Restoration uses the ordinary conversation-open event buffer, so
+live messages and tool state arriving during the snapshot read are reconciled afterward. A reconnect
+waits for an active open to finish; queued recovery belongs to that selection and is discarded on navigation
+or unmount. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+saved-thread response from changing a newer selection, and unmount cancels restoration.
+
+A host with no saved thread opens the latest conversation, as a browser does. That covers a first launch and a
+launch after a 404 cleared the pointer. Only the load whose exact read returned 404 leaves the chooser open.
+
+When the stream catches up, the redraw keeps the reader's place in a native page as in a browser ("Reading
+position" under "What is where"). The host then stores that place. While the reader scrolls, the page sends the
+scroll fraction at most once every 250 ms, because each message is a write to the host's preferences. It sends the
+latest fraction at once when the page is hidden or closed (`visibilitychange`, `pagehide`), the conversation
+changes or the view unmounts.
+
+`petMode` comes from the Exopet display control, a `select.xc-pet-mode` that Exopet (#826) adds to the page. The
+page listens for its change event from the start, so a choice made while start-up is loading is saved too. Until
+#826 lands, Exo has no such control and sends no `petMode`.
+
 ## Conversation drafts and unconfirmed sends (D-045)
 
 Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
@@ -347,7 +380,11 @@ refused this page, or one whose own call failed. A core on TCP that refuses this
 file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
-A failed retry keeps the last good list, so the default picker stays usable.
+A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
+"Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
+section, so focus then moves to "Try again" when it is offered again, or else to the model select. A refusal
+with no list leaves neither, so focus moves to the refusal message. An empty list removes the section, so focus
+moves to the workspace. Focus moved out of the Providers panel while the retry ran stays where it is.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.

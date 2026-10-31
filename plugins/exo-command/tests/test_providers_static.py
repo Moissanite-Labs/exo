@@ -36,6 +36,11 @@ def test_no_local_storage_anywhere():
             assert 'const CHOICES = ["dark", "light", "system"]' in body
             assert ".setItem(KEY, choice)" in body and "CHOICES.includes(value)" in body
             continue
+        if f.name == "desktop_prefs.js":  # Native display enums only; the bridge validates every outgoing key.
+            assert "localStorage.setItem(storage, values[key] || fallback)" in body
+            assert "Object.hasOwn(choices, key)" in body and "choices[key].includes(value)" in body
+            assert "if (valid(key, value))" in body
+            continue
         assert "localStorage" not in body, f.name
 
 
