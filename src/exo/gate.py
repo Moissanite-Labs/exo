@@ -10079,20 +10079,15 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
         # #399: decided on each target the gate cannot rule out. The line on its own target keeps every part. Past
-        # _ALTS_IN_FULL other targets, the line on most of them is decided without the copies of a gh action on its
-        # other targets (#550). With them each target cost a pass over every copy, and a line of many URL operands
-        # took seconds. Each copy is a part on its own target with the line's own text, so the first decision met it
-        # already and the outcome is the same. What the posting rules list of the copies turns only on how the
-        # policy reads the line's own target (_alt_key), so the first other target of each such reading keeps them.
+        # _ALTS_IN_FULL other targets, the line on each of them keeps only the first copy of a gh action of each
+        # reading the policy tells apart (_one_copy_each, #550). With every copy each target cost a pass over every
+        # copy, and a line of many URL operands took seconds. Copies of one reading decide alike, and the first one
+        # lists what they find, so each decision is the one every part gives. The reserved hits of the copies it
+        # leaves out are the line's own on its own target, which keeps them all.
         base = replace(c, alt_targets=[])
-        others = [replace(base, target=t) for t in c.alt_targets]
-        if len(others) > _ALTS_IN_FULL:
-            lean, scopes, globs = _without_copies(base), pol["gates"].get("scopes") or {}, _target_globs(pol["gates"])
-            met = {_alt_key(base, scopes, globs)}
-            for n, one in enumerate(others):
-                key = _alt_key(one, scopes, globs)
-                others[n] = one if key not in met else replace(lean, target=one.target)
-                met.add(key)
+        lean = base if len(c.alt_targets) <= _ALTS_IN_FULL else \
+            _one_copy_each(base, pol["gates"].get("scopes") or {}, _target_globs(pol["gates"]))
+        others = [replace(lean, target=t) for t in c.alt_targets]
         return _strictest([decide(base, pol, ctx)] + [decide(one, pol, ctx) for one in others],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
     if c.displaced is not None:
@@ -10128,14 +10123,33 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 _ALTS_IN_FULL = 8
 
 
-def _without_copies(c: Classification) -> Classification:
-    """``c`` without the copies of a gh action on its other targets (alt_copy), at any depth (#550). A part that
-    holds none stays the same object, so parts shared in ``c`` stay shared."""
+def _one_copy_each(c: Classification, scopes: Mapping, globs: list) -> Classification:
+    """``c`` with, among the parts of each part, only the first copy of a gh action on another target (alt_copy) of
+    each reading the policy tells apart (_alt_key), at any depth (#550). decide reads nothing else of a copy that
+    turns on its target, so the copies of one reading decide alike: each step that meets one meets the first. The
+    first one lists what they find, as the posting rules list a copy's finding once, under the first copy that finds
+    it. A copy that differs in anything else decide reads is kept apart too. A part that holds no copy left out
+    stays the same object, so parts shared in ``c`` stay shared."""
     seen: dict[int, Classification] = {}
+
+    def key(q: Classification) -> tuple:
+        if q.parts:
+            return (id(q),)
+        return (_alt_key(q, scopes, globs), q.category, q.reversibility, q.exposure, q.third_party, q.cost, q.tool,
+                q.text, q.title, q.text_file, q.command, q.own, tuple(q.signals), q.own_signals is None,
+                tuple(q.own_signals or ()), tuple(q.setters), tuple(q._command_views), tuple(q.alt_targets),
+                q.line_copy, q.other_store, q.inherits)
 
     def walk(p: Classification) -> Classification:
         if id(p) not in seen:
-            kids = [walk(q) for q in p.parts if not q.alt_copy]
+            met: set[tuple] = set()
+            kids = []
+            for q in p.parts:
+                if q.alt_copy:
+                    if (k := key(q)) in met:
+                        continue
+                    met.add(k)
+                kids.append(walk(q))
             same = len(kids) == len(p.parts) and all(a is b for a, b in zip(kids, p.parts))
             seen[id(p)] = p if same else replace(p, parts=kids)
         return seen[id(p)]
@@ -10156,10 +10170,8 @@ def _target_globs(gates: Mapping) -> list:
 
 
 def _alt_key(c: Classification, scopes: Mapping, globs: list) -> tuple:
-    """How the policy reads the line's own target (#550): its exposure and third party after the scopes, and which
-    target patterns match it. Nothing else decide reads turns on that target, so the line decides alike on two
-    targets of one key. A rule on one target can pick a reading of the line whose own post the posting rules skip (a
-    `$".."` word read as opaque_exec), and its copies then list their findings: the key keeps such a target apart."""
+    """How the policy reads a part's target (#550): its exposure and third party after the scopes, and which target
+    patterns of the policy match it. Nothing else decide reads turns on the target."""
     return apply_scopes(c, scopes), tuple(_glob_any(c.target, [g]) for g in globs)
 
 

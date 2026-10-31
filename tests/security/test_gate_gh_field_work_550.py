@@ -65,24 +65,31 @@ POLICIES = [
     {'gates': {'scopes': {'private': ['myorg/*']}},
      'scrub': {'enabled': True, 'exposures': ['public', 'private'],
                'rules': [{'label': 'home', 'pattern': '/home/[a-z]+'}]}},
+    # review 5722148651: the copies' deny on ghe.other made the github_post reading tie the $".." one on each target
+    {'gates': {**SCOPE, 'categories': {'opaque_exec': 'deny'}, 'rules': [{'match': {'command': '^gh'},
+                                                                          'decision': 'allow'}],
+               'reserved': ['target:git.example/*'], 'deny': ['target:ghe.other/*']}},
 ]
 URLS = ' '.join(f'https://ghe.corp/o/r/pull/{i}' for i in range(2, 12))
+CYCLE = ' '.join(f'https://{host}/pull/{i}' for i, host in
+                 enumerate(['ghe.corp/o/r', 'ghe.other/x/y', 'git.example/a/b', 'github.com/pub/r'] * 3, start=2))
 LINES = [
     f'gh pr comment https://github.com/myorg/app/pull/1 {URLS} -R pub/repo -b "Zork see /home/bob"',
     f'gh pr comment 1 -R myorg/app https://github.com/pub/r/pull/2 {URLS} -b "/home/bob Zork"',
     f'true && gh pr close {URLS} --comment Zork',
     f'gh pr comment {URLS} -b x; gh issue comment 4 -R pub/repo -b "/home/bob"',
     f'ssh h gh pr merge {URLS} --subject Zork',
+    f'export GH_REPO=pub/repo; gh pr comment {CYCLE} -b $"Zork"',
 ]
 
 
 @pytest.mark.parametrize('line', LINES)
 @pytest.mark.parametrize('n', range(len(POLICIES)))
 def test_past_eight_other_targets_each_decides_as_with_every_part(monkeypatch, line, n):
-    """Past eight other targets the line on most of them is decided without the copies of the action (#550). Each
-    copy is a part on its own target, which the line on its own target decides, and the first other target of each
-    exposure keeps the copies, so the decision is the one every part gives: the same outcome, exposure, third party
-    and reserved hits, and every finding as often as before."""
+    """Past eight other targets the line on each of them keeps one copy of the action of each reading the policy
+    tells apart (#550). Copies of one reading decide alike and the first one lists what they find, and the line on
+    its own target keeps every copy, so the decision is the one every part gives: the same outcome, exposure, third
+    party and reserved hits, in the same order, and every finding as often as before."""
     c = gate.classify({'tool': 'bash', 'args': {'command': line}})
     assert len(c.alt_targets) > gate._ALTS_IN_FULL
     pol = gate.normalize_policies(POLICIES[n])
@@ -90,9 +97,27 @@ def test_past_eight_other_targets_each_decides_as_with_every_part(monkeypatch, l
     monkeypatch.setattr(gate, '_ALTS_IN_FULL', 10 ** 6)
     full = gate.decide(c, pol)
     assert (lean.outcome, lean.exposure, lean.third_party) == (full.outcome, full.exposure, full.third_party)
-    assert sorted(lean.reserved) == sorted(full.reserved)
+    assert lean.reserved == full.reserved
     assert not Counter(full.violations) - Counter(lean.violations), (lean.violations, full.violations)
     assert (lean, lean.hidden) == (full, full.hidden)
+
+
+def test_past_eight_other_targets_each_keeps_one_copy_of_each_reading(monkeypatch):
+    """The line on each other target keeps the first copy of each reading the policy tells apart, so the work for a
+    line of many URL operands grows with the operands, not with their square (#550)."""
+    c = gate.classify(action(40))
+    sizes = []
+    original = gate._decide
+
+    def counted(c, pol, ctx, passed):
+        sizes.append(sum(1 for p in gate._each_part(c) if p.alt_copy))
+        return original(c, pol, ctx, passed)
+
+    monkeypatch.setattr(gate, '_decide', counted)
+    pol = gate.normalize_policies({'gates': {**SCOPE, 'reserved': ['target:ghe.corp/o/r#3?']}})
+    d = gate.decide(c, pol)
+    assert sizes[0] == len(c.alt_targets) == 40 and max(sizes[1:]) == 2, sizes
+    assert d.reserved == [('github_post', f'ghe.corp/o/r#{i}') for i in range(30, 40)], d.reserved
 
 
 MIXED = ' '.join(f'https://{host}/pull/{i}' for i, host in
@@ -103,8 +128,8 @@ MIXED = ' '.join(f'https://{host}/pull/{i}' for i, host in
 def test_a_rule_on_some_other_targets_keeps_their_copies(monkeypatch, line):
     """A `$".."` word is also read as opaque_exec (#136), whose own post the posting rules skip, so its copies list
     their findings. A rule that denies that reading on some other targets only picks it there, at the exposure the
-    line has on its own target too. So the targets a pattern of the policy matches keep the copies as well, and the
-    finding a copy lists there stays listed (#550)."""
+    line has on its own target too. The line on each other target keeps a copy of each reading, so the finding a copy
+    lists there stays listed (#550)."""
     c = gate.classify({'tool': 'bash', 'args': {'command': line}})
     assert len(c.alt_targets) > gate._ALTS_IN_FULL
     pol = gate.normalize_policies({'gates': {'rules': [{'match': {'target': 'git.example/*',
