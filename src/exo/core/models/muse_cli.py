@@ -8,7 +8,7 @@ What this provider is not, said plainly:
 - Text only. ``muse exec`` runs its own agent loop. Exo cannot hand it Exo's tools or stream tool calls out of
   it, so a call that carries tools is refused (status 501) and the router falls back to the next route.
 - One process per turn, so every turn pays process start-up and a fresh session. History is flattened into one
-  prompt. Output arrives when the run ends, not token by token.
+  prompt, earlier tool calls and results as text. Output arrives when the run ends, not token by token.
 - On macOS the native Muse binary must be code-signed for keychain access. ``signature_state`` checks a native
   executable directly; a shell launcher is ``unknown``, because its own signature says nothing about the binary
   it starts. Launchers may run, and an actual signing failure is classified from the CLI's error.
@@ -156,15 +156,27 @@ def _write(tmp: str, text: str) -> str:
     return path
 
 
+def _blocks(m: Message, names: dict[str, str]) -> list[str]:
+    """One message as labelled blocks. The CLI cannot take tool turns, so earlier tool calls and results go in as
+    text: dropping them would hide from the model what was done."""
+    if m.role == "tool":
+        return [f"[tool result {names.get(r.call_id, r.call_id)}{', error' if r.is_error else ''}]\n"
+                f"{r.text() or '(no output)'}" for r in m.tool_results]
+    lines = [m.text()] if m.text() else []
+    lines += [f"[tool call {c.name}] {json.dumps(c.arguments, ensure_ascii=False)}" for c in m.tool_calls]
+    return [f"[{m.role}]\n" + "\n".join(lines)] if lines else []
+
+
 def build_prompt(messages: list[Message]) -> str:
-    """Flatten the history to one prompt: system text first, then the turns with role labels. A lone user
-    message goes through as it is."""
+    """Flatten the history to one prompt: system text first, then the turns with role labels, tool calls and
+    results included. A lone user message goes through as it is."""
     system = [m.text() for m in messages if m.role == "system" and m.text()]
-    turns = [m for m in messages if m.role in ("user", "assistant") and m.text()]
+    names = {c.id: c.name for m in messages for c in m.tool_calls}
+    turns = [(m, b) for m in messages if m.role != "system" for b in _blocks(m, names)]
     if not turns:
         raise ValueError("history must contain at least one message")
-    body = turns[0].text() if len(turns) == 1 and turns[0].role == "user" else "\n\n".join(
-        f"[{m.role}]\n{m.text()}" for m in turns)
+    lone = len(turns) == 1 and turns[0][0].role == "user"
+    body = turns[0][0].text() if lone else "\n\n".join(b for _, b in turns)
     return ("\n\n".join(system) + "\n\n" + body) if system else body
 
 
