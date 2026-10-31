@@ -2,6 +2,7 @@
 `belief_accepted` event while the append still raises. The node or skill file stays when the event stands or may
 stand. It goes back only when the authority shows the event never landed. Synthetic keys and disposable stores only."""
 import errno
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -153,7 +154,8 @@ def test_an_accept_nobody_can_confirm_keeps_its_file(template_store, led, monkey
 
 
 # An interrupt (Ctrl-C) can land while the authority call is in flight. Then the outcome is unknown, as for a lost
-# reply, and the lookup decides. An interrupt before the ledger write, or on a plain ledger, puts the file back.
+# reply, and the lookup decides. An interrupt before the ledger write puts the file back. On a plain ledger the local
+# copy shows whether the accept committed.
 
 def _down(*args):
     raise AuthorityUnavailable("authority unreachable")
@@ -207,20 +209,52 @@ def test_an_interrupt_before_the_ledger_write_puts_the_file_back(template_store,
     assert not path.exists() and not _accepts(led, pid)
 
 
+def _interrupt(*args):
+    raise KeyboardInterrupt
+
+
+def _unreadable(*args, **kwargs):
+    raise sqlite3.OperationalError("disk I/O error")
+
+
 @pytest.mark.parametrize("path_kind", ["node", "skill"])
-def test_an_interrupted_accept_without_an_authority_puts_the_file_back(template_store, signer, monkeypatch,
-                                                                        path_kind):
-    """A plain ledger has nobody to ask, so an interrupt during its write puts the file back like any failure."""
+@pytest.mark.parametrize("where", ["_anchor_committed", "_catch_up"], ids=["after the commit", "before the commit"])
+def test_an_interrupted_accept_on_a_plain_ledger_reads_the_ledger(template_store, signer, monkeypatch, path_kind,
+                                                                   where):
+    """A plain append commits the event, then moves the head anchors. Ctrl-C in the anchor update keeps the file,
+    since the accept stands. Ctrl-C before the insert puts the file back like any failure."""
     with Ledger(template_store.ledger_path, signer) as local:
         pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, local)
-        real_append = local.append
-
-        def append(kind, *args, **kwargs):
-            if kind == "belief_accepted":
-                raise KeyboardInterrupt
-            return real_append(kind, *args, **kwargs)
+        _accept_another(template_store, local)   # an accept of another proposal is no proof for this one
+        commits = where == "_anchor_committed"
         with monkeypatch.context() as mp:
-            mp.setattr(local, "append", append)
+            mp.setattr(local, where, _interrupt)   # the accept's own append is the next ledger write
             with pytest.raises(KeyboardInterrupt):
                 C.proposal_accept(template_store, local, pid)
-        assert not path.exists() and not _accepts(local, pid)
+        assert path.is_file() == commits and len(_accepts(local, pid)) == int(commits)
+        if commits:
+            written = path.read_text(encoding="utf-8")
+            with pytest.raises(C.ConsolidateError, match="already accepted"):
+                C.proposal_accept(template_store, local, pid)
+            assert path.read_text(encoding="utf-8") == written
+        else:
+            assert C.proposal_accept(template_store, local, pid)["action"] == "create"
+        assert len(_accepts(local, pid)) == 1
+        assert path.read_text(encoding="utf-8").count(LESSON if path_kind == "skill" else "**Claim.**") == 1
+
+
+@pytest.mark.parametrize("path_kind", ["node", "skill"])
+def test_an_interrupted_accept_keeps_its_file_when_the_plain_ledger_cannot_be_read(template_store, signer,
+                                                                                     monkeypatch, path_kind):
+    """After Ctrl-C the ledger read fails too, so nothing shows whether the accept committed. The file stays, since a
+    lost lesson is worse than one added twice."""
+    with Ledger(template_store.ledger_path, signer) as local:
+        pid, path = (_node_proposal if path_kind == "node" else _skill_proposal)(template_store, local)
+        with monkeypatch.context() as mp:
+            def interrupt(*args):
+                mp.setattr(local, "iter", _unreadable)
+                raise KeyboardInterrupt
+            mp.setattr(local, "_anchor_committed", interrupt)
+            with pytest.raises(KeyboardInterrupt):
+                C.proposal_accept(template_store, local, pid)
+        assert path.is_file() and len(_accepts(local, pid)) == 1

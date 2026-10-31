@@ -272,8 +272,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - Accepting a lesson is all or nothing. When the node or skill file write stops partway (a full disk), or indexing
   or the ledger write fails after it, the file goes back to what it was. A retry then adds the lesson once, not
-  twice. With a ledger authority, the file stays when the authority committed the accept despite the error. It
-  also stays when the authority may have committed it and cannot be reached to check (exo-desktop #54).
+  twice. The file stays when Ctrl-C lands after the ledger committed the accept. With a ledger authority, it also
+  stays when the authority committed the accept despite the error, or may have committed it and cannot be reached
+  to check (exo-desktop #54).
 
 - An accept given when its answer was not in the transcript no longer becomes an eval replay whose gold answer is
   the placeholder text "(answer not in the transcript)". An accept whose answer was found still counts

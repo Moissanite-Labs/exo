@@ -1276,7 +1276,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
                     now: str | None = None) -> dict:
     """Write the proposal into its node (create or append), lint it, then log `belief_accepted`.
     The node file is restored if the edit would add lint errors, or if indexing or the ledger write fails. It stays
-    when a ledger authority holds the accept or may hold it (`_accept_may_stand`)."""
+    when the ledger holds the accept despite the error, or may hold it (`_accept_may_stand`)."""
     st = load_state(ledger)
     p = _find(st, pid)
     status = _status(st, p.id)
@@ -1316,7 +1316,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
                            refs=refs, operation_id=operation_id)
     except BaseException as exc:
         if sent and _accept_may_stand(ledger, p.id, operation_id, exc):
-            raise   # the authority holds the accept, or may: the node stays with it
+            raise   # the ledger holds the accept, or may: the node stays with it
         # Nothing is accepted until the ledger says so: put the node back, so a retry does not add the lesson twice.
         _put_back(path, old_text)
         store.reload()
@@ -1562,11 +1562,19 @@ def _accept_may_stand(ledger: Ledger, pid: str, operation_id: str, exc: BaseExce
     Only a ledger authority raises these (docs/LEDGER-AUTHORITY.md). ProjectionPending: the authority committed the
     event. AppendOutcomeUnknown: look the operation up and copy what it committed, or else sync and read the ledger.
     An interrupt (Ctrl-C) during the authority call leaves the outcome unknown too, so it is looked up the same way.
-    If neither answers, the outcome stays unknown and the file stays: a lesson twice can be fixed, a lost one cannot."""
+    If neither answers, the outcome stays unknown and the file stays: a lesson twice can be fixed, a lost one cannot.
+
+    A plain ledger commits the event, then moves its head anchors. An interrupt in either step is checked against
+    the local ledger. If the ledger cannot be read, the outcome stays unknown and the file stays, as above."""
     from .ledger_authority import AppendOutcomeUnknown, ProjectionPending
     if isinstance(exc, ProjectionPending):
         return True
-    interrupted = not isinstance(exc, Exception) and ledger.authority is not None
+    interrupted = not isinstance(exc, Exception)
+    if interrupted and ledger.authority is None:
+        try:
+            return _accepted(ledger, pid)
+        except Exception:
+            return True
     if not (interrupted or isinstance(exc, AppendOutcomeUnknown)):
         return False
     try:
@@ -1576,11 +1584,17 @@ def _accept_may_stand(ledger: Ledger, pid: str, operation_id: str, exc: BaseExce
             ledger.sync_authority()
         except Exception:
             return True
-        return any(e["body"].get("proposal_id") == pid for e in ledger.iter(kind="belief_accepted"))
+        return _accepted(ledger, pid)
     if record is not None:
         with contextlib.suppress(Exception):
             ledger.sync_authority()   # repair the local copy, so a retry sees the accept
     return record is not None
+
+
+def _accepted(ledger: Ledger, pid: str) -> bool:
+    """True when the local ledger holds a `belief_accepted` for proposal `pid`. An accept starts only while the
+    proposal is undecided, so any such event is this accept's own, or one that won a race with it."""
+    return any(e["body"].get("proposal_id") == pid for e in ledger.iter(kind="belief_accepted"))
 
 
 def _put_back(path: Path, before: str | None) -> None:
