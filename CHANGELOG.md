@@ -10,6 +10,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
+  plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
@@ -93,8 +95,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
   was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
   bound). Test-only.
-- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is not a list no longer loads. A string such
-  as `toolsets = "fs"` read as no list, and the seat got every toolset (exo-desktop #52, D-041 amendment).
+- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is a non-null value that is not a list no
+  longer loads. A string such as `toolsets = "fs"` read as no list, and the seat got every toolset
+  (exo-desktop #52, D-041 amendment).
 - Two folder plugins whose names differ only in punctuation, such as `a-b` and `a_b`, no longer share one module.
   The second replaced the first's package, so the first plugin's later relative imports ran the second's files.
   The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
