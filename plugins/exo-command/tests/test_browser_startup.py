@@ -2,6 +2,7 @@
 import builtins
 import os
 import sys
+import time
 
 import pytest
 
@@ -57,8 +58,10 @@ def test_early_exit_is_distinct_and_stderr_is_sanitized(fake_chrome, monkeypatch
         "sys.stderr.flush()\n"
         "sys.exit(17)\n"
     )
+    started = time.monotonic()
     with pytest.raises(RuntimeError) as exc:
         browser.Browser()
+    assert time.monotonic() - started < 5  # A dead process must not consume the 20 s startup timeout.
     msg = str(exc.value)
     assert "exited before DevTools was ready (exit 17)" in msg
     assert "sandbox" in msg and "synthetic-private" not in msg and "127.0.0.1" not in msg
@@ -75,6 +78,11 @@ def test_unknown_stderr_is_never_echoed(fake_chrome):
 
 
 def test_timeout_terminates_chrome_and_removes_profile(fake_chrome, monkeypatch):
+    hints = browser._StderrTail.hints
+    def finished_hints(tail):
+        assert not tail.thread.is_alive(), "drain must finish before reading diagnostics"
+        return hints(tail)
+    monkeypatch.setattr(browser._StderrTail, "hints", finished_hints)
     profiles, processes = fake_chrome(
         "import sys, time\n"
         "sys.stderr.write('dbus synthetic-private\\n'); sys.stderr.flush()\n"
