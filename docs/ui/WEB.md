@@ -380,7 +380,11 @@ refused this page, or one whose own call failed. A core on TCP that refuses this
 file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
-A failed retry keeps the last good list, so the default picker stays usable.
+A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
+"Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
+section, so focus then moves to "Try again" when it is offered again, or else to the model select. A refusal
+with no list leaves neither, so focus moves to the refusal message. An empty list removes the section, so focus
+moves to the workspace. Focus moved out of the Providers panel while the retry ran stays where it is.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.

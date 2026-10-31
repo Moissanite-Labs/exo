@@ -271,6 +271,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
   ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
   held (rule 3).
+- **Test clarification (2026-10-31):** the reinforcement regression measures decay 120 days after its last
+  evidence, with fixed event timestamps. This changes the test clock, not the learning rule.
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -6416,6 +6418,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
+- **Implementation correction (2026-10-29):** a retryable failure offers "Try again" beside a cached model list too. The existing picker and selection remain usable until a successful refresh replaces the list. Authority refusals still offer no retry.
+- **Focus after a retry (2026-10-30):** the retry redraws the section and drops the focused button. Focus then goes to "Try again" if it is drawn again, else to the model select. A refusal with no list leaves neither, so its message takes focus. An empty list leaves no section, so the workspace takes it. Focus the person moved out of the panel meanwhile is left alone.
 - **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
 - **Why:** the route answered `"core unreachable (<ExceptionName>)"` for every failure, including a core that answered and refused the caller. That reads as a broken connection, so the page could only offer a retry that changes nothing, and an exception class name was the whole diagnosis. Issue #756 is the same defect on the chat side: guidance must follow the failure class, not the fact of a failure.
 - **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
@@ -6463,3 +6467,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+
+## D-096 (2026-10-31) Harness improvement starts as an offline review-only experiment
+- **Decision:** `exo improve --offline` runs bounded Propose–Probe–Compose experiments on explicitly supplied public/synthetic fixtures through named trusted built-in adapters. Proposers and composers see development behavior, never hidden evaluator values, reference-derived identifiers or held-out inputs. A selected composition must improve on disjoint held-out fixtures without any individual regression before a typed `review_only` proposal is exported.
+- **Authority:** this command never activates notes, registers skills, schedules work or feeds principal learning/promotion. It constructs no principal store and reads no store contents. Its only configuration read is `store.explicit_roots()` to refuse a working directory or resolved export parent/target at or below any recorded principal root, including stores outside Exo home. Existing tool authorization stays in force; the callback API is trusted host code, not an OS/network sandbox.
+- **Why:** establish a usable, reproducible adaptation/evidence workflow before spending on live models or connecting candidate instructions to a person's learning state. Synthetic success proves mechanics, not live effectiveness or authority to promote.
+- **Rejected:** upstream executor defaults as an Exo trust boundary; arbitrary callbacks/code supplied by fixtures; score-bearing hashes in editor context; automatic adoption; treating an improved mean as sufficient when an individual held-out task regresses.
+- **Revisit if:** a separately authorized live pilot supplies explicit route/data/spending authority, executor isolation, real held-out evidence and a reviewed bridge into typed principal proposals with approval and rollback. This decision grants none of those capabilities.
+- **Docs and user impact:** `docs/integrations/HARNESS2.md`, `docs/COMMANDS.md` "Learning and review", `docs/USER-GUIDE.md` §11 "Offline harness experiments", `docs/DEVELOPER-GUIDE.md` §9 "Add an exo subcommand", `docs/DOCS-MAP.md`. Adds an opt-in CLI command and review artifact; ordinary learning and runtime defaults are unchanged.
+
+- **Path-resolution clarification (2026-10-31):** every recorded root must resolve before an experiment can run. A missing target, cyclic symlink or other root-resolution failure refuses the command through its documented path-error exit 2, without a traceback. This catches only the resolution operation; unrelated implementation errors remain errors.
+
+- **Export and diagnostic clarification (2026-10-31):** the command validates the resolved export parent/target against the same protected-root snapshot before reading fixtures or creating output. A store at `improvement-runs` cannot receive an export from its public parent. Resolution failures in `EXO_HOME` or `EXO_PRINCIPAL_STORE` refuse normally; absent environment roots remain allowed. Recorded-root failures name the principal/configuration key to repair or remove, never the full private path, and the user guide states this recovery step.
+
+- **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.
