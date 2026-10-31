@@ -10,6 +10,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
+  `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
+  in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the
+  `/proc/self/fd` write was never named and `deny: [target:/proc*]` asked instead of denying (also on main
+  69e33d50, d742d1bb, b3efb5e7 and 75d72a7f). The same held in both orders, with `&&`, `||` or a newline between
+  the loops, for `pushd`, `builtin cd` and `/dev/fd/3`, the pair in `$( )`, `bash -c` or a function body, the pair
+  inside one outer loop (`while :; do ..; done`, also `for`, `until`, `select`, `{ }` and two loops deep), and a
+  store loop after a descriptor loop (`deny: [target:*store*]` asked). `classify` now adds one more reading beside
+  main's, in which each loop's second pass, an inner loop's too, starts in its own folder; main's readings are
+  kept, so nothing decides lower: main's `scripts/gate_diff.py` against d3cbd874 lowers 0 of 1,258,576 built-in
+  pairs, 0 of 2,163,000 pairs on 21,000 aimed loop lines with `/dev*`, `/proc*` and `*store*` target rules kept
+  apart (34,612 tightened, ask to deny) and 0 of 117,420 pairs on 1,140 such lines with `${..}` words (3,776
+  tightened). The reading is also made in #853's opened reading, so it counts when each loop is behind its own
+  `time` or `!` (`time for ..; done; time for ..; done`), and in each of #158's two readings of a line with `${..}`
+  words, so a write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too (main
+  d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2 times main's CPU time. Known limits,
+  as on main (#888): a command run once after a second descriptor `cd`, outside a loop's second pass, keeps the line's
+  first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
+  Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
+  **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
+  `docs/DOCS-MAP.md`.
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.

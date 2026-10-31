@@ -1804,7 +1804,10 @@ _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gat
 # such a loop sets `met`, and classify then reads the call again with `again` on, where each such loop's second pass
 # adds its parts (_loop_again) and sets `met` when it adds any. A third item counts the lines classify_shell reads
 # afresh (#479 verify): up on the first reading, down from the second reading's budget (_LOOP_BUDGET) on the second,
-# which a line past it ends (_LoopBudget). None outside classify.
+# which a line past it ends (_LoopBudget). On the readings _loop_reading makes, a fourth item is 1 when the second
+# reading met a loop whose own folder is not the one that reading starts its second pass in (#867), and 2 on the
+# reading classify then adds, in which each such loop's second pass starts in its own folder (_loop_folder). None
+# outside classify.
 _loop_pass: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_loop_pass", default=None)
 # The second reading's budget (#479 verify), in lines classify_shell reads afresh: this many more than the first
 # reading read. A nest of loops in $( ) (`while :; do echo $(while ..; done); cp ..; cd ~/.exo/policies; done`)
@@ -7061,12 +7064,13 @@ def _brace_head(cmds: list[_Cmd], b: int) -> int:
         not x.quoted and x.text == "do" for x in words[w + 1:]) else -1
 
 
-def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int, int]]:
+def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]], inner: bool = False) -> list[tuple[int, int]]:
     """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder
-    (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A `for` or `select`
-    loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify). The first command counts
-    too: for `while` and `until` it is the condition's, which runs again on every pass, so a substitution in a
-    `while cd ~/.exo/policies$(..)` runs in the store from the second pass (#857); a `for` header holds no `cd`."""
+    (``went``: the command of each such `cd`, in order). A loop inside another is part of it; with ``inner`` each such
+    loop inside another is listed too (#867, _loop_again). A `for` or `select` loop with a `{ ..; }` body counts as
+    one with `do ..; done` (_brace_head, #479 verify). The first command counts too: for `while` and `until` it is
+    the condition's, which runs again on every pass, so a substitution in a `while cd ~/.exo/policies$(..)` runs in
+    the store from the second pass (#857); a `for` header holds no `cd`."""
     spans: list[tuple[int, int]] = []
     for e, k in enumerate(cmds):
         if k.opens is None:
@@ -7080,11 +7084,28 @@ def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int
             pass
         else:
             continue
-        while spans and spans[-1][0] >= s:      # an inner loop, closed before the one around it
+        while not inner and spans and spans[-1][0] >= s:      # an inner loop, closed before the one around it
             spans.pop()
         spans.append((s, e))
     at = [n for n, _ in went]
     return [(s, e) for s, e in spans if (i := bisect.bisect_left(at, s)) < len(at) and at[i] <= e]
+
+
+def _loop_folder(s: int, e: int, went: list[tuple[int, str]], at: list[int]) -> str:
+    """The descriptor folder that names the second pass of the loop from command s to its closer e (_loop_spans), or ""
+    when none does (a store folder): the loop's first `cd` into a descriptor folder after its first command (fd_cwd,
+    #217), else that first command's own (#857), when the loop holds no other `cd` into a store folder, as the second
+    pass starts where the last `cd` left. ``went`` is the line's (command, folder) of each such `cd`, ``at`` its
+    commands."""
+    i = bisect.bisect_right(at, s)
+    while i < len(at) and at[i] <= e and not went[i][1]:
+        i += 1
+    if i < len(at) and at[i] <= e:
+        return went[i][1]
+    i = bisect.bisect_left(at, s)
+    if i < len(at) and at[i] == s and not (i + 1 < len(at) and at[i + 1] <= e):
+        return went[i][1]
+    return ""
 
 
 def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple[int, str]], cmd: str, depth: int,
@@ -7092,7 +7113,11 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
     """#479: the parts of the second pass of each loop in ``spans`` (_loop_spans). bash runs a loop body again after
     its own `cd` into a store folder, so on a later pass every command in it runs there, those before the `cd` too.
     The line is read again in its order, with the store folder entered where each such loop starts, named by the
-    loop's first `cd` into a descriptor folder when it has one (fd_cwd, #217), and the loop's commands and the
+    loop's first `cd` into a descriptor folder when it has one (_loop_folder) and the line named none before it. On
+    the reading classify adds for #867 (_loop_pass) each loop is named by its own folder alone, so the second of two
+    loops into /dev/fd and /proc/self/fd names /proc/self/fd there; a loop inside one of them that holds such a `cd`
+    is named by its own folder from its first command on, and its substitutions are read in it too. The loop's
+    commands and the
     substitutions in them are taken from that reading. bash expands a `for` or `select` word list and the
     redirections of the loop's closer once, before the first pass, so those are left out. A substitution the line
     already read in that folder is not read again (``seed_of``: the folder _classify_shell read each one in). As on
@@ -7105,34 +7130,47 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
         if into[1]:
             ctx["fd_cwd"] = into[1]
     starts, at = dict(spans), [n for n, _ in went]
+    # #867: a loop inside one of them that holds a `cd` into a store folder of its own; its second pass starts where
+    # its own last `cd` left, whatever the loop around it entered
+    inner = {s: e for s, e in _loop_spans(cmds, went, True) if s not in starts}
     out: list[Classification] = []
     again: list[tuple[range, list[range], tuple]] = []    # per loop: its substitutions, those bash expands once, folder
     slot = _own_text.get() or [None]
     prev: _Cmd | None = None
-    end, once = -1, False
+    end, once, top = -1, False, (True, "")
+    note = _loop_pass.get()
+    own = note is not None and note[3] == 2       # #867: each loop's second pass starts in its own folder
     token = _cd_into.set(None) if into else None
     try:
         for n, k in enumerate(cmds[:spans[-1][1] + 1]):
-            if n in starts:
-                end, lo = starts[n], cmds[n - 1].subs_met if n else 0
-                ctx["store_cwd"] = True
-                i = bisect.bisect_right(at, n)
-                while i < len(at) and at[i] <= end and not went[i][1]:
-                    i += 1
-                if i < len(at) and at[i] <= end:
-                    ctx.setdefault("fd_cwd", went[i][1])
-                elif (i := bisect.bisect_left(at, n)) < len(at) and at[i] == n and went[i][1] and \
-                        not (i + 1 < len(at) and at[i + 1] <= end):
-                    # #857: a `while`/`until` condition's own descriptor `cd` names the folder when the loop holds no
-                    # other store `cd`; a body's `cd` keeps naming it, as the second pass starts where the last `cd` left
-                    ctx.setdefault("fd_cwd", went[i][1])
+            if n in starts or n in inner:
+                outer = n in starts
+                close = starts[n] if outer else inner[n]
+                lo = cmds[n - 1].subs_met if n else 0
+                if outer:
+                    end = close
+                    ctx["store_cwd"] = True
+                folder = _loop_folder(n, close, went, at)
+                if own:
+                    ctx.pop("fd_cwd", None)        # not the folder an earlier loop or `cd` on the line named
+                if folder and (outer or own):
+                    ctx.setdefault("fd_cwd", folder)
+                if note is not None and not own and folder != (ctx.get("fd_cwd") or ""):
+                    note[3] = 1          # #867: an earlier `cd` named this pass; classify reads it in its own too
                 w = _loop_word(k)
-                once = k.words[w].text in ("for", "select") and \
+                first = k.words[w].text in ("for", "select") and \
                     any(not x.quoted and x.text == "in" for x in k.words[w + 2:w + 3])
-                closer = cmds[end]
+                closer = cmds[close]
                 shut = closer.opens[1] if closer.opens else closer.subs_met     # _loop_spans: a closer has opens
-                skip = ([range(lo, k.subs_met)] if once else []) + [range(shut, closer.subs_met)]
-                again.append((range(lo, closer.subs_met), skip, (True, ctx.get("fd_cwd") or "")))
+                skip = ([range(lo, k.subs_met)] if first else []) + [range(shut, closer.subs_met)]
+                seed = (True, ctx.get("fd_cwd") or "")
+                if outer:
+                    once, top = first, seed
+                    again.append((range(lo, closer.subs_met), skip, seed))
+                elif own and seed != top:
+                    # #867: an inner loop's own substitutions, on its second pass, in its own folder (the loop around
+                    # it still reads them in its folder)
+                    again.append((range(lo, closer.subs_met), skip, seed))
             late = len(ctx.get("late", ()))
             got = _read_cmd(k, prev, cmd, depth, ctx, slot)
             if n < end and not (once and n in starts):
@@ -7229,10 +7267,18 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # The call's first reading only notes such a loop; its second reading (classify) adds that pass's parts.
     # A line read in a store folder already (a $( ) after the `cd`, into) read each command and $( ) there, so a second
     # pass reads nothing new unless a loop names a descriptor folder the line was not read in: it is not read again.
+    # #867: when a line read in a descriptor folder holds a loop (one inside another too) whose own folder is another,
+    # the reading classify adds for it reads that loop's second pass in its own folder; the second reading notes it.
     if went and (again := _loop_pass.get()) is not None and (spans := _loop_spans(cmds, went)):
+        read = False
         if not again[0]:
             again[1] = True
         elif not into or not into[1] and any(d and any(s <= n <= e for s, e in spans) for n, d in went):
+            read = True
+        elif any(_loop_folder(s, e, went, [n for n, _ in went]) != into[1] for s, e in _loop_spans(cmds, went, True)):
+            read = again[3] == 2
+            again[3] = again[3] or 1
+        if read:
             pass2 = _loop_again(cmds, spans, went, cmd, depth, (subs, stdin_unknown, inherits, given), into, seed_of)
             keys = {_part_key(p) for q in parts for p in _each_part(q)}
             pass2 = [m for m in pass2 if any(_part_key(p) not in keys for p in _each_part(m))]   # only what is new
@@ -9221,30 +9267,40 @@ def _loop_reading(c: Classification, calls: list, cwd: str | None, budget: int) 
     lower. When the second reading leads, it keeps the D-074 ``ordinary`` reading the reading as before had.
     A second reading that reads afresh more lines than ``budget`` (_LOOP_BUDGET, #479 verify) fails closed: in its
     place is one store write that stands for the passes it did not read, which asks the principal alone and denies
-    under `deny: [store_write]`."""
+    under `deny: [store_write]`.
+    #867: when the second reading met a loop whose second pass an earlier loop's or `cd`'s folder named, not its own
+    (two loops into /dev/fd and /proc/self/fd, also inside one outer loop), the call is read once more, each loop's
+    second pass in its own folder (_loop_folder), with the same budget, and that reading is beside them too: the second
+    reading stays as it is. Past the budget in that reading only, the joined form is still read, as on main."""
     for n, call in enumerate(calls):
-        added: list[int] = [True, False, budget]
-        left, memo = _brace_left.set(None), _shell_seen.set(None)
-        token, again = _joining.set([n > 0, False]), _loop_pass.set(added)
-        try:
-            x = _brace_budget(_read_core)(call, cwd)
-        except _LoopBudget:
-            x = _make("store_write", tool=c.tool, command=c.command, own=None,
-                      target="a path inside the store (after cd)",
-                      summary="a loop that enters the Exo store runs again there; past the gate's budget, not read")
-            x.signals += ["exo store", "unread loop pass"]
-            added[1], added[2] = True, -1
-        finally:
-            _loop_pass.reset(again)
-            _joining.reset(token)
-            _shell_seen.reset(memo)
-            _brace_left.reset(left)
-        if added[1]:
-            if x.ordinary is None:
-                x.ordinary = c.ordinary
-            c = _beside(c, x)
-        if added[2] < 0:
-            break                                  # its joined form has the same loops: one such reading is enough
+        own, past = 0, False
+        while True:
+            added: list[int] = [True, False, budget, own]
+            left, memo = _brace_left.set(None), _shell_seen.set(None)
+            token, again = _joining.set([n > 0, False]), _loop_pass.set(added)
+            try:
+                x = _brace_budget(_read_core)(call, cwd)
+            except _LoopBudget:
+                x = _make("store_write", tool=c.tool, command=c.command, own=None,
+                          target="a path inside the store (after cd)",
+                          summary="a loop that enters the Exo store runs again there; past the gate's budget, not read")
+                x.signals += ["exo store", "unread loop pass"]
+                added[1], added[2] = True, -1
+            finally:
+                _loop_pass.reset(again)
+                _joining.reset(token)
+                _shell_seen.reset(memo)
+                _brace_left.reset(left)
+            if added[1]:
+                if x.ordinary is None:
+                    x.ordinary = c.ordinary
+                c = _beside(c, x)
+            past = past or own == 0 and added[2] < 0
+            if added[2] < 0 or added[3] != 1:
+                break
+            own = 2                                # #867: once more, each loop in its own folder
+        if past:      # its joined form has the same loops: one such reading is enough (not when only the #867 one is)
+            break
     return c
 
 

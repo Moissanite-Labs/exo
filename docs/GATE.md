@@ -3213,7 +3213,23 @@ commands and substitutions of the loop on that reading are parts of a second rea
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no
 line decides lower than it did. The loop's first command counts too (#857): for `while` and `until` it is the
 condition's, which runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1;
-done` the `cp` runs in the store from the second pass and the line is a `store_write`. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
+done` the `cp` runs in the store from the second pass and the line is a `store_write`. Each loop's second pass is
+named by its own folder (#867): the second reading names a loop by the first descriptor folder the line entered, so
+of two loops into `/dev/fd` and `/proc/self/fd` on one line (`for i in 1; do cd /dev/fd; done; while cd
+/proc/self/fd < <(cp /tmp/evil 3); do break; done`) only `/dev/fd` was named, and `deny: [target:/proc*]` asked.
+When a loop's own folder (the store, for a loop with no descriptor `cd`) is not the one that reading gives it, the
+call is read once more with each loop's second pass in its own folder, beside the other readings, so both folders
+are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when
+each loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`), and in each of the two
+readings of a line whose `${..}` words are read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}`
+in the second loop's body names `/proc/self/fd` too. A loop inside another that
+holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). A command that runs once,
+outside any loop's second pass, after a second descriptor `cd` is still named by the line's first descriptor
+folder (`cd /dev/fd; for i in 1; do cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only): a known
+limit, as on main (#888). So is a loop whose own commands `cd` into two different descriptor folders: it is
+named by its first descriptor `cd`, though bash
+starts its second pass where the last one left (`while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done`
+names `/dev/fd` only). bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
 in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++))
 { ..; }`) and runs it once per pass in the same shell, so such a loop is read again as a `do ..; done` one is; a
 `{ ..; }` group that is no loop's body runs once and is not. A `for ((..))` header is found from its own `((..))`
