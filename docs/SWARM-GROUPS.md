@@ -74,3 +74,21 @@ across clients and processes, and isolate workspaces. Runners must finish cleanu
 before exiting. This layer cannot prove an adapter stopped detached processes.
 Persistent recovery, concurrency limits, pause/resume, streaming state and
 message consumption integration are not implemented by this supervisor.
+
+## Human messages and observation (G05, C04)
+
+The internal message store supports human messages with an explicit audience.
+The host can target one member or broadcast to all members. Human authorship is
+stored separately from member authorship, even when their names match. These
+messages do not grant permissions or approve actions.
+
+`observe` reads all group channels for the authorized human owner. `history`
+reads only a member's sent and addressed messages. Both page by sequence and
+leave delivery and consumption receipts unchanged. A worker cannot read another
+worker's private channel through member history. Human observation must never be
+exposed as a member tool.
+
+The host must authenticate human access and bind member identities before calling
+these methods. No public API or client controls are added here. Human input is
+queued for delivery, not injected into a running provider prompt. Pause/resume
+and safe-boundary consumption remain runtime work.
