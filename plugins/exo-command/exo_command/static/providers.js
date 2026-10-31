@@ -63,18 +63,31 @@ export function mount(root) {
     if (alive) draw();
   }
 
+  // Names a control in the panel by its provider row or section, its tag and its label. A redraw replaces the
+  // controls it draws, so this is how the new copy of the one that held focus is found. Empty for anything else.
+  function controlKey(el) {
+    if (!el || el === body || !body.contains(el)) return "";
+    const row = el.closest(".xc-prow");
+    const place = row ? row.querySelector(".xc-prow-name").textContent : (el.closest("section") || body).getAttribute("aria-label");
+    return [place, el.tagName, el.getAttribute("aria-label") || el.textContent].join("\n");
+  }
+
   // A retry redraws the section, which drops the focused Try again button. If focus is still lost after the
-  // reply, it goes to Try again when that is drawn again, else to the model select. A refusal with no list
-  // leaves neither, so its message takes focus. With no section left, the workspace takes it.
+  // reply, it goes back to the panel control the person moved to while the retry ran (#1014). Else it goes to
+  // Try again when that is drawn again, else to the model select. A refusal with no list leaves neither, so its
+  // message takes focus. With no section left, the workspace takes it.
   async function retryModels() {
     modelsError = null;
     if (alive) draw();
     await loadModels();
-    if (alive) draw();
-    if (!alive || document.activeElement !== document.body) return;
+    if (!alive) return;
+    const moved = controlKey(document.activeElement);
+    draw();
+    if (document.activeElement !== document.body) return;
+    const same = moved && [...body.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")].find((el) => controlKey(el) === moved);
     const again = [...body.querySelectorAll(".xc-prov-def button")].find((b) => b.textContent === "Try again");
     const note = body.querySelector(".xc-prov-def .xc-warn");
-    const next = again || body.querySelector(".xc-prov-def select") || note || root;
+    const next = same || again || body.querySelector(".xc-prov-def select") || note || root;
     if (next === note) note.tabIndex = -1;
     next.focus();
   }
