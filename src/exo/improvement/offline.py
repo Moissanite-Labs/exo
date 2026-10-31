@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+import sys
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -45,22 +46,54 @@ def _local_file(value):
     return p
 
 
-def _workspace():
-    # Read only configured store locations, never instantiate or read a store.
+class BoundaryError(ValueError):
+    """An actionable policy diagnostic containing identifiers, never private paths."""
+
+
+def _resolve_boundary(path, diagnostic, *, allow_missing=False):
+    try:
+        path = Path(path).expanduser()
+        try:
+            return path.resolve(strict=True)
+        except FileNotFoundError:
+            if not allow_missing:
+                raise
+            # A fresh Exo home/output directory need not exist, but cycles must
+            # still be detected by the strict resolution attempted above.
+            return path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise BoundaryError(diagnostic) from exc
+
+
+def _protected_roots():
+    # Only the recorded root list is read; no store is constructed or opened.
+    from exo.store import explicit_roots
+    home = _resolve_boundary(os.environ.get("EXO_HOME") or Path.home() / ".exo",
+        "cannot resolve EXO_HOME; repair its path or unset that environment variable",
+        allow_missing=True)
+    roots = [home]
+    if os.environ.get("EXO_PRINCIPAL_STORE"):
+        roots.append(_resolve_boundary(os.environ["EXO_PRINCIPAL_STORE"],
+            "cannot resolve EXO_PRINCIPAL_STORE; repair its path or unset that environment variable",
+            allow_missing=True))
+    for principal, root in explicit_roots(home).items():
+        roots.append(_resolve_boundary(root,
+            f"cannot resolve principal root '{principal}'; repair or remove "
+            f"principals.{principal} in EXO_HOME/config.json"))
+    return tuple(roots)
+
+
+def _at_or_below(path, roots):
+    return any(path == root or root in path.parents for root in roots)
+
+
+def _workspace(roots=None):
     # Normal tool authorization remains in force for agent CLI invocations.
     from exo.gate import is_sensitive_path
-    from exo.store import explicit_roots
-    cwd = Path.cwd().resolve()
-    homes = [Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser().resolve()]
-    if os.environ.get("EXO_PRINCIPAL_STORE"):
-        homes.append(Path(os.environ["EXO_PRINCIPAL_STORE"]).expanduser().resolve())
-    for root in explicit_roots(homes[0]).values():
-        try:
-            # strict=True detects symlink cycles consistently across Python versions.
-            homes.append(root.resolve(strict=True))
-        except (OSError, RuntimeError) as exc:
-            raise ValueError("cannot resolve a recorded principal root") from exc
-    if cwd in (Path(cwd.anchor), Path.home().resolve()) or any(cwd == p or p in cwd.parents for p in homes) or any(p.startswith(".") for p in cwd.parts[1:]):
+    roots = _protected_roots() if roots is None else roots
+    cwd = _resolve_boundary(Path.cwd(), "cannot resolve the working directory; choose a public workspace")
+    home = _resolve_boundary(Path.home(), "cannot resolve HOME; repair its path", allow_missing=True)
+    if cwd in (Path(cwd.anchor), home) or _at_or_below(cwd, roots) or any(p.startswith(".") for p in cwd.parts[1:]):
         raise ValueError("run only in an explicit public workspace")
     if is_sensitive_path(str(cwd)):
         raise ValueError("workspace is a protected location")
@@ -217,12 +250,17 @@ def experiment(fixture, adapter, limits):
     return report
 
 
-def _output_target(cwd, name):
+def _output_target(cwd, name, roots=None):
     if name is None:
         return None
     target = cwd / "improvement-runs" / _slug(name)
     if target.parent.is_symlink() or target.exists() or target.is_symlink():
         raise ValueError("output must be a new run; links and overwrites are refused")
+    roots = _protected_roots() if roots is None else roots
+    parent = _resolve_boundary(target.parent, "cannot resolve the output parent; choose a public workspace", allow_missing=True)
+    resolved = _resolve_boundary(target, "cannot resolve the output target; choose a public workspace", allow_missing=True)
+    if any(_at_or_below(path, roots) for path in (parent, resolved)):
+        raise BoundaryError("output is inside a protected principal location; choose a different public workspace")
     return target
 
 
@@ -242,8 +280,9 @@ def register(sp, common):
 
 def cmd_improve(args):
     try:
-        cwd = _workspace()
-        target = _output_target(cwd, args.output)
+        roots = _protected_roots()
+        cwd = _workspace(roots)
+        target = _output_target(cwd, args.output, roots)
         limits = Limits(args.iterations, args.max_tasks, args.max_calls, args.margin)
         fixture = load_fixture(args.fixture, args.adapter, limits.max_tasks)
         report = experiment(fixture, args.adapter, limits)
@@ -262,7 +301,9 @@ def cmd_improve(args):
                 raise
         print(text, end="")
         return 0 if report["status"] == "review_ready" else 1
+    except BoundaryError as exc:
+        print(f"exo improve: {exc}", file=sys.stderr)
+        return 2
     except (ValueError, TypeError, OSError, UnicodeError, RecursionError):
-        import sys
         print("exo improve: invalid public fixture, limits or output path", file=sys.stderr)
         return 2

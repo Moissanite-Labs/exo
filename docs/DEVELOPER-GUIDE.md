@@ -1164,8 +1164,10 @@ store. If the handler's second argument has a default, add the command to `OPTIO
 `exo improve --offline` (D-096) is a storeless CLI example in
 `src/exo/improvement/offline.py`: use the existing lazy registration path without
 `STORE_CMDS` or the common principal flags. Its workspace guard reads only the
-recorded root list through `store.explicit_roots()`; do not construct a store or
-load its contents. Fixture JSON cannot select imports or callbacks. Preserve
+recorded root list through `store.explicit_roots()` and checks the same resolved
+root snapshot for working and export paths; do not construct a store or load its
+contents. Boundary diagnostics identify configuration keys or environment settings,
+not private path values. Fixture JSON cannot select imports or callbacks. Preserve
 editor/evaluator separation and the disjoint held-out gate when changing the
 trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
 `tests/test_cli_lazy.py` and `tests/docs` after a change.

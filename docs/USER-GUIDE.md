@@ -671,8 +671,19 @@ a later non-improving round discards the candidate.
 
 This is separate from learning about you: it makes no model calls, reads no store
 contents and activates nothing. It reads the recorded principal-root list only to
-keep experiments out of stores. Supply public synthetic data, not your memory or
-private examples. A successful synthetic check is evidence of the mechanism, not
+keep experiments out of stores. This also checks the export directory: a public
+working directory cannot export into `improvement-runs` if that directory is a
+recorded store. Choose a different public working directory in that case.
+
+A missing or unresolvable recorded root stops the experiment with exit 2. The
+message names the principal and its `principals.<id>` entry in
+`EXO_HOME/config.json`; repair/remount that location or remove an obsolete entry.
+The diagnostic does not print the private path. A symlink cycle in `EXO_HOME` or
+`EXO_PRINCIPAL_STORE` also exits 2 and identifies the environment setting to repair
+or unset. A not-yet-created Exo home remains usable; no store initialization is
+required for this command.
+
+Supply public synthetic data, not your memory or private examples. A successful synthetic check is evidence of the mechanism, not
 proof that Exo will improve on real tasks. Fixture format, other adapter and limits:
 [Harness² integration guide](integrations/HARNESS2.md).
 

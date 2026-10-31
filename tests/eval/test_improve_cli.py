@@ -425,8 +425,10 @@ def test_unresolvable_recorded_root_is_cli_path_refusal(tmp_path, kind):
                              "--output", "refused"], cwd=tmp_path, env=env,
                             text=True, capture_output=True, timeout=30)
     assert result.returncode == 2 and not result.stdout
-    assert "invalid public fixture, limits or output path" in result.stderr
-    assert "Traceback" not in result.stderr
+    assert "cannot resolve principal root 'alice'" in result.stderr
+    assert "repair or remove principals.alice in EXO_HOME/config.json" in result.stderr
+    assert str(root) not in result.stderr and str(home) not in result.stderr
+    assert "fixture" not in result.stderr and "Traceback" not in result.stderr
     assert not (tmp_path / "improvement-runs").exists()
 
 
@@ -436,3 +438,68 @@ def test_unrelated_root_list_runtime_error_is_not_swallowed(tmp_path, monkeypatc
     monkeypatch.setattr("exo.store.explicit_roots", defect)
     with pytest.raises(RuntimeError, match="unrelated implementation error"):
         invoke(tmp_path, monkeypatch, capsys)
+
+
+@pytest.mark.parametrize("recorded", ["parent", "parent-alias", "ancestor", "env-store", "env-home"])
+def test_output_parent_cannot_be_a_protected_store(tmp_path, monkeypatch, capsys, recorded):
+    home = tmp_path / "exo-home"
+    home.mkdir()
+    workspace = tmp_path / "public"
+    workspace.mkdir()
+    output_parent = workspace / "improvement-runs"
+    output_parent.mkdir()
+    root = output_parent
+    if recorded == "parent-alias":
+        root = tmp_path / "registered-alias"
+        root.symlink_to(output_parent, target_is_directory=True)
+    elif recorded == "ancestor":
+        # Canonicalize a root whose spelling includes an existing child/.. .
+        child = output_parent / "existing"
+        child.mkdir()
+        root = child / ".."
+    if recorded == "env-store":
+        monkeypatch.setenv("EXO_PRINCIPAL_STORE", str(root))
+    elif recorded == "env-home":
+        monkeypatch.setenv("EXO_HOME", str(root))
+    else:
+        (home / "config.json").write_text(json.dumps({"principals": {"alice": str(root)}}))
+    before = set(output_parent.iterdir())
+    monkeypatch.chdir(workspace)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("protected output must be rejected before fixture reads or writes")
+    monkeypatch.setattr(O, "load_fixture", forbidden)
+    monkeypatch.setattr("exo.store.PrincipalStore.__init__", forbidden)
+    monkeypatch.setattr("exo.core.private.atomic_write", forbidden)
+    code = cli.main(["improve", "--offline", "--adapter", "text-normalize-v1",
+                     "--fixture", "public.json", "--output", "trial"])
+    captured = capsys.readouterr()
+    assert code == 2 and not captured.out
+    assert "output is inside a protected principal location" in captured.err
+    assert str(root) not in captured.err
+    assert set(output_parent.iterdir()) == before
+
+
+@pytest.mark.parametrize("variable", ["EXO_HOME", "EXO_PRINCIPAL_STORE"])
+def test_environment_root_cycles_are_cli_path_refusals(tmp_path, variable):
+    loop = tmp_path / "private-loop"
+    loop.symlink_to(loop)
+    (tmp_path / "public.json").write_text(json.dumps(fixture()))
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), variable: str(loop)}
+    result = subprocess.run([sys.executable, "-m", "exo.cli", "improve", "--offline",
+                             "--adapter", "text-normalize-v1", "--fixture", "public.json",
+                             "--output", "refused"], cwd=tmp_path, env=env,
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 2 and not result.stdout
+    assert f"cannot resolve {variable}" in result.stderr
+    assert "repair its path or unset that environment variable" in result.stderr
+    assert str(loop) not in result.stderr and "Traceback" not in result.stderr
+    assert not (tmp_path / "improvement-runs").exists()
+
+
+def test_future_environment_roots_do_not_require_initialization(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "not-created-home"))
+    monkeypatch.setenv("EXO_PRINCIPAL_STORE", str(tmp_path / "not-created-store"))
+    code, report, _ = invoke(tmp_path, monkeypatch, capsys)
+    assert code == 0 and report["status"] == "review_ready"
+    assert not (tmp_path / "not-created-home").exists()
+    assert not (tmp_path / "not-created-store").exists()
