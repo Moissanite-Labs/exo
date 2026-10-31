@@ -14,6 +14,8 @@ deliberately out of scope for this slice.
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 from typing import Callable, Collection, Mapping
 
 from exo.core.group_engine_adapter import GroupEngineAdapter
@@ -57,6 +59,16 @@ class GroupHost:
         self._profiles = profiles
         self._factory = engine_factory
         self._runtimes: dict[str, GroupRuntime] = {}
+        # Closing begins the moment aclose() is entered: no new start/create
+        # is accepted afterwards. A successful close flips ``_closed`` once;
+        # a failed close retains runtimes and drops the in-flight cleanup
+        # task so an explicit later ``aclose()`` starts a fresh attempt.
+        self._closing = False
+        self._closed = False
+        # Shared in-flight cleanup task: concurrent ``aclose()`` callers all
+        # shield-await this one task, so runtimes are settled and the factory
+        # is closed at most once per close attempt.
+        self._cleanup_task: asyncio.Task | None = None
 
     @property
     def owner(self) -> str:
@@ -65,6 +77,7 @@ class GroupHost:
     def create(self, *, mode: str, members: Collection[str],
                conductor: str | None = None) -> SavedGroup:
         """Persist a group restricted to the injected authorized profile set."""
+        self._ensure_accepting()
         try:
             return self._groups.create(owner=self._owner, mode=mode, members=members,
                                        known_profiles=self._profiles, conductor=conductor)
@@ -98,6 +111,7 @@ class GroupHost:
         inputs and start once. A partial start failure after the claim still
         blocks retry by design (GroupExecutions).
         """
+        self._ensure_accepting()
         group = self._group(group_id)
         if group_id in self._runtimes:
             raise HostError("group execution already started in this process")
@@ -183,3 +197,90 @@ class GroupHost:
                                              audience=audience, text=text)
         except ValueError as e:
             raise HostError(str(e)) from e
+
+    def _ensure_accepting(self) -> None:
+        """Reject new work once closing has begun."""
+        if self._closing or self._closed:
+            raise HostError("host is closing or closed; no new create/start")
+
+    async def aclose(self) -> None:
+        """Stop all local runtimes, await their settlement, then close the factory.
+
+        Closing begins the moment this is entered: ``create``/``start`` are
+        rejected from then on. The first caller spawns one shared cleanup
+        task; every concurrent caller shield-awaits that same task, so
+        runtimes are settled and the factory's async cleanup is invoked at
+        most once per close attempt. ``asyncio.shield`` keeps the shared
+        cleanup running when an individual caller is cancelled, and a
+        wrapper retrieves the task's exception when every waiter is gone, so
+        no cleanup failure is ever lost. A caller's ``CancelledError`` says
+        nothing about cleanup: poll ``closed`` and retry ``aclose()``
+        explicitly to await or re-drive the shared cleanup.
+
+        Fail-closed: a failed cleanup raises in every caller, runtimes are
+        retained and ``closed`` stays False; the failed task is dropped once
+        retrieved, so an explicit later ``aclose()`` starts a fresh attempt.
+        A fully successful close flips ``closed`` once and repeat calls
+        return immediately (idempotent).
+        """
+        if self._closed:
+            return  # idempotent: a prior successful close already settled
+        task = self._cleanup_task
+        if task is None:
+            # Closing begins now: reject new work synchronously at entry,
+            # then spawn the single shared cleanup task.
+            self._closing = True
+            task = asyncio.create_task(self._cleanup())
+            self._cleanup_task = task
+        try:
+            await asyncio.shield(task)
+        except BaseException:
+            if task.done():
+                # Outcome observed: a failed attempt is dropped so an
+                # explicit later aclose() starts a fresh cleanup. This also
+                # covers the no-waiter case: the wrapper retrieves the
+                # exception, sees task.done(), and clears the task here.
+                self._cleanup_task = None
+            raise
+
+    async def _cleanup(self) -> None:
+        """One shared close attempt: settle every runtime, then close the factory.
+
+        Every local runtime is stopped and awaited (engines are never
+        released while any runtime can still be running), and every runtime
+        is attempted even when an earlier one fails. Only after all runtimes
+        have settled is the engine factory's async cleanup (an
+        ``aclose``/``close`` attribute, when present) awaited; a plain
+        callable factory has no such attribute and is left untouched
+        (backward-compatible).
+        """
+        errors: list[BaseException] = []
+        # Stop and settle every runtime; never release engines beneath one that
+        # is still running. All runtimes are attempted despite individual error.
+        for group_id, runtime in list(self._runtimes.items()):
+            try:
+                runtime.stop()
+                await runtime.wait()
+            except BaseException as exc:  # noqa: BLE001 - every runtime still attempted
+                errors.append(exc)
+        if errors:
+            # Fail closed: retain runtimes for retry; do not release engines.
+            raise HostError(f"runtime settlement failed: {errors[0]}") from errors[0]
+
+        # Engines may be released only now that no runtime can still be running.
+        aclose = getattr(self._factory, "aclose", None) or getattr(self._factory, "close", None)
+        if aclose is not None:
+            try:
+                result = aclose()
+                if inspect.isawaitable(result):
+                    await result
+            except BaseException as exc:  # noqa: BLE001 - factory close failure is retriable
+                # Runtimes stay referenced; a retry re-settles (already
+                # settled) runtimes and re-attempts the factory close.
+                raise HostError(f"engine factory close failed: {exc}") from exc
+
+        self._runtimes.clear()
+        self._closed = True
+        # Successful close: drop the finished shared task synchronously (no
+        # loop tick needed) since ``closed`` now short-circuits new callers.
+        self._cleanup_task = None
