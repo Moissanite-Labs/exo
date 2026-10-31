@@ -26,6 +26,14 @@ def test_missing_empty_and_named_selection(data, expected):
     assert seats.parse(data, name="test").plugins == expected
 
 
+def test_null_plugin_selection_differs_from_the_three_other_name_lists():
+    st = seats.parse({"tools": {"toolsets": None, "env_deny": None}, "skills": {"load": None}}, name="test")
+    assert (st.toolsets, st.env_deny, st.skill_load) == (None, [], None)
+    for plugins in (None, {"enabled": None}):
+        with pytest.raises(seats.SeatError, match="plugins.*list"):
+            seats.parse({"plugins": plugins}, name="test")
+
+
 @pytest.mark.parametrize(("suffix", "content"), [
     ("toml", 'plugins = "exo-memory"\n'),
     ("toml", '[plugins]\nenabled = "exo-memory"\n'),

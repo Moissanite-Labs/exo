@@ -18,9 +18,13 @@ read keeps the last good text. A few shorter spellings are accepted (top-level `
 `toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
 does not read are ignored.
 
-When supplied, the top-level `plugins` value or `[plugins] enabled` must be a list; an invalid value stops the
-seat from loading, including JSON null. An empty list enables no plugins; an omitted value or a `[plugins]` table
-without `enabled` uses the config.json default.
+Four settings control name lists: `toolsets` (in `[tools]` or at the top level), `[tools] env_deny`, `[skills] load`,
+and top-level `plugins` or `[plugins] enabled`. A non-null non-list value such as `toolsets = "fs"` stops the seat from
+loading (`exo serve --seat` exits with the reason), rather than silently selecting a broader default. An empty list
+is an explicit selection. Omitted toolsets, env_deny and skills.load use every toolset, no additional environment
+denials and every skill respectively; omitted plugins, or a `[plugins]` table without `enabled`, uses the config.json
+default. For JSON files, null is treated as omitted for the first three settings, but an explicit null plugin
+selection is refused. TOML does not have a null value (exo-desktop #52, #988).
 
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name

@@ -69,6 +69,14 @@ def _strs(v: Any) -> list[str] | None:
     return [str(x) for x in v] if isinstance(v, list) else None
 
 
+def _names(v: Any, key: str) -> list[str] | None:
+    """A list of names, or None when the key is not set. For these keys no list means more (every toolset, every
+    skill, nothing more hidden), so a value of another type is refused, not read as no list (exo-desktop #52)."""
+    if v is not None and not isinstance(v, list):
+        raise SeatError(f"{key} must be a list of names, not {v!r}")
+    return _strs(v)
+
+
 @dataclass
 class Seat:
     name: str
@@ -134,8 +142,9 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         description=str(head.get("description") or data.get("description") or ""),
         principal=str(pr_id) if pr_id else None, principal_store=_table(pr).get("store") or None,
         tier=models.get("tier"), models={k: models[k] for k in ROUTER_KEYS if k in models},
-        toolsets=_strs(tools.get("toolsets")) if "toolsets" in tools else _strs(data.get("toolsets")),
-        env_allow=_strs(tools.get("env_allow")) or [], env_deny=_strs(tools.get("env_deny")) or [], skill_folders=folders, skill_load=_strs(skills.get("load")),
+        toolsets=_names(tools["toolsets"] if "toolsets" in tools else data.get("toolsets"), "toolsets"),
+        env_allow=_strs(tools.get("env_allow")) or [], env_deny=_names(tools.get("env_deny"), "env_deny") or [],
+        skill_folders=folders, skill_load=_names(skills.get("load"), "skills.load"),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugin_list), channels=channels,
         peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")),
