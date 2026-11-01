@@ -1,13 +1,16 @@
 import json
 import re
+from datetime import timedelta
 
 import pytest
 
+from exo import crypto
 from exo import eval as E
 from exo.consolidate import consolidate_run, load_state, proposal_accept, proposal_reject, proposals_list
 from exo.ingest import ingest
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
+from exo.taste import parse_ts
 
 from helpers import chatgpt_export, correction, propose, ruling, scripted_model, write_qa
 
@@ -299,13 +302,17 @@ def test_rule5_gate_blocks_a_skill_that_does_not_help(learner):
     assert d.action == "gate_failed" and not (rt.root / "skills").exists()
 
 
-def test_rule6_medium_is_a_hint_and_stale_becomes_a_question(learner):
+@pytest.mark.parametrize("anchor", ["2026-10-31T13:52:00.000000Z", "2030-02-01T00:00:00.000000Z"])
+def test_rule6_medium_is_a_hint_and_stale_becomes_a_question(learner, monkeypatch, anchor):
+    # Every time is the anchor or counted from it, so the result does not depend on the day the test runs.
+    monkeypatch.setattr(crypto, "now_ts", lambda: anchor)                 # the ledger stamps its events with this
     rt = learner.runtime
     c = correction(rt, "plain status lines please", "s1")
-    res = propose(rt, evidence=[c["id"]])
-    (d,) = apply_policy(learner)
+    res = propose(rt, evidence=[c["id"]], now=anchor)
+    (d,) = apply_policy(learner, now=anchor)
     assert d.action == "hint" and d.rule == 6
-    (d,) = apply_policy(learner, now="2027-01-01T00:00:00.000000Z")      # months later: stale and low weight
+    later = (parse_ts(anchor) + timedelta(days=64)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    (d,) = apply_policy(learner, now=later)                               # months later: stale and low weight
     assert d.action == "question" and d.rule == 6
     assert status(learner, res["id"]) == "proposed"
 
