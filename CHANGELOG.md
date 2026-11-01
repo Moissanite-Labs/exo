@@ -5,6 +5,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
+  supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
 - Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
 
 - Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
@@ -30,6 +33,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
+  (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
+  scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
+  tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
+  open request.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
