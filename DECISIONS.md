@@ -5856,11 +5856,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges made 16 reads, and now makes 2. These steps never await, so no other task can change the tree during one.
   A step that schedules a node drops its read of that tree, and the view is read after the overflow wait, so a
   summary that lands during the wait is in the view. One read for the whole build would have to outlive that wait,
-  so the build keeps two, and a third for the overflow check while a job runs. The view is unchanged. A merge
-  job finds its two halves with one read too (`_halves`), and `/compact` sizes all its new summaries with one
-  (`_folded`). With no cached text, a merge above five levels of skipped merges read the tree 31 times for its
-  halves, and `/compact` read it once for each merge it made. Bounding the verbatim cache (#899) and batching
-  deltas are separate work. Validation: `tests/core/test_context_reads_262.py`, `tests/core/test_turn_settle.py`.
+  so the build keeps two, and a third for the overflow check while a job runs. While a private thread's own
+  leaves run and its tail is over budget, each look for spans to cut (`cut_pending`, #244) reads that tree once
+  more. The view is unchanged. A merge job finds its two halves with one read too (`_halves`), and `/compact`
+  sizes all its new summaries with one (`_folded`). With no cached text, a merge above five levels of skipped
+  merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
+  verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
+  `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
