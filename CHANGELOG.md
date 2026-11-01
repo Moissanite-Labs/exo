@@ -34,6 +34,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
   the hosted CI failure `assert 49 == 129` in `test_classic_opens_at_the_latest_message_at_the_bottom`.
+- A turn no longer decodes its whole session twice (#254, W2-4). It loaded every message to count the user turns
+  it passes to memory, then loaded them all again to keep the last 40 for the memory checkpoint. The count is now
+  one SQL `COUNT` and the checkpoint reads only its 40 rows, with the same results. On a 10,000-message session the
+  count went from 196 ms to 7.8 ms and the tail from 190 ms to 0.9 ms. `/handoff` counts user turns
+  the same way (D-010 amendment).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every

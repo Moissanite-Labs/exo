@@ -321,6 +321,14 @@ class SessionStore:
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
         return self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0][0]
 
+    def user_turns(self, sid: str) -> int:
+        """Visible user messages that are not context notes, counted in SQL (#254). A note value Python reads as
+        false (missing, null, false, 0, "", an empty list or object) is no note."""
+        note = "json_extract(data, '$.meta.note')"
+        return self._q("SELECT COUNT(*) FROM messages WHERE session=? AND role='user' AND hidden=0 AND"
+                       f" ({note} IS NULL OR {note} IN (0, '') OR json_type(data, '$.meta.note') IN"
+                       f" ('array', 'object') AND {note} IN ('[]', '{{}}'))", (sid,))[0][0]
+
     def append_message(self, sid: str, msg: Message, turn_id: str | None = None) -> Message:
         """Store ``msg`` (assigning ``id`` and ``meta['seq']``) and return it."""
         msg.id = msg.id or new_id("m")
@@ -364,6 +372,14 @@ class SessionStore:
     def message_seq(self, sid: str, message_id: str) -> int | None:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
         return rows[0]["seq"] if rows else None
+
+    def last_messages(self, sid: str, limit: int) -> list[Message]:
+        """Decode at most ``limit`` visible messages, returned in transcript order."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("message limit must be a non-negative integer")
+        rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 ORDER BY seq DESC LIMIT ?",
+                       (sid, limit))
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in reversed(rows)]
 
     def truncate(self, sid: str, after_seq: int) -> int:
         """Remove messages with seq > after_seq and summaries holding them. Agent log entries are hidden,

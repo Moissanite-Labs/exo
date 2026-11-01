@@ -192,6 +192,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
+  of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
+  memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
+  it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
+  order. `/handoff` counts user turns the same way. `last_messages` has the same text and place as in draft #903,
+  which uses it for the context transcript, so the two merge cleanly. Results are unchanged. Tests:
+  `tests/core/test_session_hot_paths_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

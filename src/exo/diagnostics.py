@@ -143,8 +143,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
         "path": str(workspace.handoff_path(eng.agent, path_arg)),
         "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
                    "cwd": cwd, "created": info.created,
-                   "user_turns": sum(1 for m in eng.store.messages(info.id) if m.role == "user"
-                                     and not m.meta.get("note"))},
+                   "user_turns": eng.store.user_turns(info.id)},
         # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
         "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
                 if eng.executor_required else workspace.git_facts(cwd)),
