@@ -42,6 +42,10 @@ path that uses held-out evaluation, decision models for small choices, subagents
 can do the job, and a provider-agnostic model router with fallback. Other promotion paths use principal
 rulings or repeated, high-confidence evidence.
 
+The opt-in [`exo improve --offline` command](docs/integrations/HARNESS2.md) runs
+Harness² experiments on explicit public fixtures, checks disjoint held-out tasks,
+and exports typed proposals and evidence for review.
+
 ## Screenshots
 
 These are historical screenshots driven by scripted test data for a demo agent named `atlas`, fixing a failing
