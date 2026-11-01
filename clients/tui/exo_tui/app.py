@@ -105,6 +105,7 @@ class ExoApp(App):
                                                border-left: outer $cold; }
     #welcome { margin: 1 0; }
     .peer { border-left: double $cold; }
+    #delegated-approvals { height: auto; padding: 0 2; color: $warning; }
     #activity { height: 1; color: $fg-3; padding: 0 2; background: $deep; }
     #compose { height: auto; background: $background; border-top: solid $line; padding: 0 2; }
     #prompt { width: auto; height: 1; margin-right: 1; }
@@ -221,6 +222,11 @@ class ExoApp(App):
         self.last_answer: tuple[str | None, str] = (None, "")
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
+        self.delegated_tasks: dict[str, dict] = {}
+        self.delegated_requests: dict[str, dict] = {}
+        self.delegated_closed: dict[str, int] = {}
+        self._delegated_revision = self._delegated_asked = self._delegated_shown = 0
+        self._delegated_stale = self._delegated_due = False
         self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
         self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
@@ -267,6 +273,7 @@ class ExoApp(App):
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
         self._loading = False
+        self.follow_end = True  # classic: the newest line stays in view as the transcript grows, until the reader scrolls up
 
     # ------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -275,6 +282,7 @@ class ExoApp(App):
             with Vertical(id="left"):
                 yield VerticalScroll(id="transcript")
                 yield Static("", id="activity")
+                yield Static("", id="delegated-approvals")
                 yield ComposeHeader()
                 with Horizontal(id="compose"):
                     yield PromptMark(PROMPT_IDLE, id="prompt")
@@ -293,11 +301,13 @@ class ExoApp(App):
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.set_interval(1.0, self.reconcile_approvals)
+        self.set_interval(3.0, self.refresh_delegated_approvals)
         self.set_interval(3.0, lambda: self.run_worker(self.load_permissions(), exit_on_error=False))  # another window may switch it
         if self.motion:
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
         self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
+        self.watch(self.transcript, "virtual_size", self.follow_latest, init=False)
         self.refresh_status()
         if self.boot_anim:
             self.boot_screen = BootScreen()
@@ -346,9 +356,26 @@ class ExoApp(App):
         return kids[::-1] if self.inverse else kids
 
     def to_latest(self) -> None:
-        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts."""
+        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts.
+
+        Classic also keeps following the bottom (follow_latest): blocks paint in on_mount, so a slow terminal can lay
+        a long thread out in more than one step, and the first scroll lands short of the end (#1023)."""
         tr = self.transcript
-        tr.call_after_refresh(tr.scroll_home if self.inverse else tr.scroll_end, animate=False)
+        self.follow_end = True
+        if self.inverse:
+            tr.call_after_refresh(tr.scroll_home, animate=False)
+        else:
+            tr.call_after_refresh(self.follow_now)
+
+    def follow_latest(self) -> None:
+        """The transcript's content changed size: in classic, stay at the bottom unless the reader scrolled up."""
+        if self.follow_end and not self.inverse:
+            self.transcript.call_after_refresh(self.follow_now)
+
+    def follow_now(self) -> None:
+        """After the layout, ask again: a reader who scrolled up in the meantime keeps the place they chose."""
+        if self.follow_end and not self.inverse:
+            self.transcript.scroll_end(animate=False, immediate=True)
 
     def transcript_text(self) -> str:
         old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]  # history not mounted yet
@@ -538,9 +565,10 @@ class ExoApp(App):
     async def pump(self, since: int) -> None:
         try:
             async for ev in self.client.events(since=since, reconnect=True):
-                if ev.session not in (None, self.session):
-                    continue
                 try:
+                    self.observe_delegated(ev)
+                    if ev.session not in (None, self.session):
+                        continue
                     self.handle(ev)
                 except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
                     self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
@@ -878,6 +906,7 @@ class ExoApp(App):
                 self.update_earlier_row()
                 return
             anchor = next((w for w in tr.children if w is not self.earlier_row), None)
+            self.follow_end = False  # the reader asked for older lines: the view goes to them, not to the bottom
             await tr.mount(*widgets, before=anchor if anchor is not None else 0)
             self.update_earlier_row()
             if anchor is not None:  # keep what the reader was looking at in place
@@ -886,6 +915,7 @@ class ExoApp(App):
             self._loading = False
 
     def watch_transcript_scroll(self, old: float, new: float) -> None:
+        self.follow_end = new >= self.transcript.max_scroll_y  # scrolled up: leave the reader there; back down: follow
         if not self.older:
             return
         if self.inverse:  # the oldest end is the bottom
@@ -911,6 +941,7 @@ class ExoApp(App):
         if sid != self.session:
             await self.leave_thread(sid)
         self.session = sid
+        self.draw_delegated_approvals()
         info = got["session"]
         self.set_session_cwd(info.get("cwd"))
         self.busy = info.get("status") == "live"  # a turn already running there: LIVE, steer, ctrl+c stops it
@@ -942,6 +973,7 @@ class ExoApp(App):
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind, cwd=self.new_cwd))
         await self.leave_thread()
         self.session = got["session"]["id"]
+        self.draw_delegated_approvals()
         self.set_session_cwd(got["session"].get("cwd"))
         self.model = got["session"].get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
@@ -1814,6 +1846,101 @@ class ExoApp(App):
             self.window = self.capacities.get(ref, 0)
             self.refresh_status()
 
+    def observe_delegated(self, ev: s.Event) -> None:
+        """Observe only task/approval metadata globally; child content never enters this thread."""
+        b = ev.body
+        if not isinstance(b, (s.TaskUpdated, s.ApprovalRequested, s.ApprovalResolved)):
+            return
+        self._delegated_revision += 1
+        revision = self._delegated_revision
+        if isinstance(b, s.TaskUpdated):
+            task = dict(self.delegated_tasks.get(b.task_id, {}), task_id=b.task_id, revision=revision)
+            for key in ("title", "status", "child_session"):
+                if value := getattr(b, key):
+                    task[key] = value
+            if ev.session:
+                task["parent"] = ev.session
+            self.delegated_tasks[b.task_id] = task
+        elif isinstance(b, s.ApprovalRequested):
+            self.delegated_requests[b.request_id] = {"session": ev.session, "revision": revision}
+            self.delegated_closed.pop(b.request_id, None)
+            if ev.session not in (None, self.session) and not self._delegated_due:
+                self._delegated_due = True  # place it now, not on the next tick, with one read for a burst
+                self.run_worker(self.refresh_delegated_approvals(), exit_on_error=False)
+        else:
+            self.delegated_requests.pop(b.request_id, None)
+            self.delegated_closed[b.request_id] = revision
+        self.draw_delegated_approvals()
+
+    def draw_delegated_approvals(self) -> None:
+        edges = {t["child_session"]: t for t in self.delegated_tasks.values()
+                 if t.get("child_session") and t.get("parent") and t.get("status") in ("queued", "running")}
+        children = {}
+        for request in self.delegated_requests.values():
+            sid = request.get("session")
+            if not sid or sid == self.session:
+                continue
+            child, visited = sid, set()
+            while child in edges and child not in visited:
+                visited.add(child)
+                child = edges[child]["parent"]
+                if child == self.session:
+                    children[sid] = edges[sid]
+                    break
+        # A title is model text: a line break in it must not draw a second cue line.
+        lines = [f"Delegated approval{' (last known)' if self._delegated_stale else ''}: "
+                 f"{' '.join(str(task.get('title') or '').split()) or sid} ({sid}). /open {task['task_id']} to review."
+                 for sid, task in list(children.items())[:5]]
+        if len(children) > 5:  # /tasks lists only this thread's own tasks, so name the nested ones here
+            hidden = ", ".join(task["task_id"] for task in list(children.values())[5:])
+            lines.append(f"{len(children) - 5} more delegated threads need approval: {hidden}. "
+                         "/open <task> reviews one.")
+        for cue in self.query("#delegated-approvals").results(Static):
+            cue.update(Text("\n".join(lines)))
+            cue.display = bool(lines)
+
+    def delegated_pending(self, listed: list[dict], revision: int) -> dict[str, dict]:
+        """Open requests: the snapshot without those closed since it was asked for, plus newer events."""
+        pending = {a["request_id"]: {"session": a.get("session")} for a in listed
+                   if a.get("request_id") and self.delegated_closed.get(a["request_id"], 0) <= revision}
+        pending.update({rid: a for rid, a in self.delegated_requests.items() if a.get("revision", 0) > revision})
+        return pending
+
+    async def refresh_delegated_approvals(self) -> None:
+        """Task records alone prove ancestry. Merge events newer than either snapshot request. ``tasks.list`` sends
+        every task ever written, so it is asked only while another session has an open request (#997)."""
+        self._delegated_due = False
+        self._delegated_asked += 1
+        asked, revision = self._delegated_asked, self._delegated_revision
+        tasks = None
+        try:
+            approvals = await self.client.send(s.ApprovalsList())
+            if not approvals.ok:
+                raise ValueError("metadata unavailable")
+            listed = approvals.result.get("approvals", [])
+            pending = self.delegated_pending(listed, revision).values()
+            if any(a.get("session") not in (None, self.session) for a in pending):
+                tasks = await self.client.send(s.TasksList())
+                if not tasks.ok:
+                    raise ValueError("metadata unavailable")
+        except Exception:
+            if asked >= self._delegated_shown:
+                self._delegated_stale = True
+                self.draw_delegated_approvals()
+            return
+        if asked < self._delegated_shown:
+            return
+        self._delegated_shown = asked
+        if tasks is not None:  # keep only what the cue reads, not each row's brief and receipt
+            fresh = {t["task_id"]: {k: t.get(k) for k in ("task_id", "parent", "child_session", "title", "status")}
+                     for t in tasks.result.get("tasks", []) if t.get("task_id")}
+            fresh.update({tid: t for tid, t in self.delegated_tasks.items() if t.get("revision", 0) > revision})
+            self.delegated_tasks = fresh
+        self.delegated_requests = self.delegated_pending(listed, revision)
+        self.delegated_closed = {rid: version for rid, version in self.delegated_closed.items() if version > revision}
+        self._delegated_stale = False
+        self.draw_delegated_approvals()
+
     # ------------------------------------------------------------ approvals
     def show_approval(self) -> None:
         if self.card is not None or not self.approvals:
@@ -1871,6 +1998,7 @@ class ExoApp(App):
                     self.threadless.add(a.get("request_id", ""))
                 self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
             self.show_approval()
+        await self.refresh_delegated_approvals()
 
     async def close_card(self, request_id: str) -> bool:
         """True when this call closed the request's card; False when it was already gone."""
@@ -1953,9 +2081,9 @@ class ExoApp(App):
     def arrange(self) -> None:
         """Put the input, menu, activity line and transcript in the order the layout wants."""
         left = self.query_one("#left")
-        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.transcript]
+        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.query_one("#delegated-approvals"), self.transcript]
         if not self.inverse:
-            order = [self.transcript, self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
+            order = [self.transcript, self.query_one("#delegated-approvals"), self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
         prev = None
         for w in order:
             if prev is None:
