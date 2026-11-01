@@ -36,6 +36,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
+- `exo improve --offline` names the cause of each path refusal (#1046 follow-up). A refused working directory, an
+  output name that is not a run ID, and an existing or linked output run printed the fixture line. With `EXO_HOME`
+  unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths now match a
+  recorded root in any letter case, as the gate's store checks do (D-087).
 - The terminal's classic layout can no longer open a long thread short of its newest message (#1023, D-046
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
@@ -51,6 +55,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- The gate reads ssh's control socket (`-S`, `-o ControlPath`), its known-hosts file (`-o UserKnownHostsFile`)
+  and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`) as files
+  ssh makes here, whatever its remote command runs (#484, D-038 amendment). `ssh -S ~/.exo/state/ctl host ls` was
+  a read and was allowed. A store path in these options is now a `store_write`, so it asks the principal. A value
+  is read as ssh reads it, with ssh's own quotes in a setting, so a store folder whose name holds a space counts
+  too. scp's and sftp's `-o` settings, which they hand to ssh, get the same reading. ssh's log file (`-E`) is not
+  part of this change.
 - Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
   (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
@@ -60,6 +71,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
   message, or on the workspace when the list came back empty.
+- Keyboard focus moved to another Providers control while "Try again" waits for its reply, such as a provider's
+  Test button, the model select or "Add custom provider", stays on that control when the reply is drawn (#1014).
+  Before, a failed retry moved it to "Try again" and a successful one to the model select.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
 - `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
   follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
