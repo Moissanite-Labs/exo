@@ -19,11 +19,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a public workspace, and an output run that exists or passes through a link, printed the fixture line. With
   `EXO_HOME` unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths
   now match a recorded root in any letter case, as the gate's store checks do (D-087).
+- Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
+  (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
+  scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
+  tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
+  open request.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal

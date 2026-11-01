@@ -4991,6 +4991,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
@@ -5052,6 +5062,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
+  from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
+  failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
+  startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
