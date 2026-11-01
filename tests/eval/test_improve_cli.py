@@ -14,6 +14,8 @@ from exo.improvement import offline as O
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_REFUSED = "exo improve: run only in an explicit public workspace\n"
 NEW_RUN_REFUSED = "exo improve: output must be a new run; links and overwrites are refused\n"
+RUN_ID_REFUSED = ("exo improve: output must be a run ID: up to 48 lowercase letters, digits and hyphens, "
+                  "starting with a letter\n")
 
 
 def fixture(adapter="text-normalize-v1"):
@@ -127,9 +129,9 @@ def test_bad_json(tmp_path, monkeypatch, capsys, bad):
     assert not capsys.readouterr().out
 
 
-@pytest.mark.parametrize("name", ["../outside", "/tmp/run", ".exo", "bad.json", "a/b", "UPPER"])
+@pytest.mark.parametrize("name", ["../outside", "/tmp/run", ".exo", "bad.json", "a/b", "UPPER", "a" * 49])
 def test_output_name_cannot_escape_or_name_state(tmp_path, monkeypatch, capsys, name):
-    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", name))[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", name)) == (2, None, RUN_ID_REFUSED)
     assert not (tmp_path / "improvement-runs").exists()
 
 
@@ -361,7 +363,7 @@ def test_failed_export_preserves_nonempty_reservation(tmp_path, monkeypatch, cap
     monkeypatch.setattr("exo.core.private.atomic_write", fail)
     assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2
     assert (tmp_path / "improvement-runs" / "nonempty" / "keep.txt").read_text() == "preserve unexpected contents"
-    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty"))[0] == 2
+    assert invoke(tmp_path, monkeypatch, capsys, extra=("--output", "nonempty")) == (2, None, NEW_RUN_REFUSED)
 
 
 @pytest.mark.parametrize("nested", [False, True])

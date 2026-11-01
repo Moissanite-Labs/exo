@@ -278,7 +278,12 @@ def experiment(fixture, adapter, limits):
 def _output_target(cwd, name, roots=None):
     if name is None:
         return None
-    target = cwd / "improvement-runs" / _slug(name)
+    try:
+        run = _slug(name)
+    except ValueError as exc:
+        raise BoundaryError("output must be a run ID: up to 48 lowercase letters, digits and hyphens, "
+                            "starting with a letter") from exc
+    target = cwd / "improvement-runs" / run
     if target.parent.is_symlink() or target.exists() or target.is_symlink():
         raise BoundaryError("output must be a new run; links and overwrites are refused")
     roots = _protected_roots() if roots is None else roots

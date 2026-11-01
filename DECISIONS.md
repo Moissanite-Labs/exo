@@ -6508,7 +6508,7 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 
 - **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.
 
-- **Refusal-line clarification (2026-10-31, #1046 review):** each path refusal prints its own cause. A refused or protected working directory, and an output run that exists or passes through a link, no longer print the generic fixture line. With `EXO_HOME` unset, a broken home or recorded root names the default `~/.exo`, not the variable. No such line holds a path.
+- **Refusal-line clarification (2026-10-31, #1046 review):** each path refusal prints its own cause. A refused or protected working directory, an output name that is not a run ID, and an output run that exists or passes through a link no longer print the generic fixture line. With `EXO_HOME` unset, a broken home or recorded root names the default `~/.exo`, not the variable. No such line holds a path.
 
 - **Letter-case clarification (2026-10-31):** working and export paths match the Exo home, recorded roots and HOME in any letter case, as the gate does (D-087). Each path part is compared case folded and Unicode decomposed. So a root recorded under a case or accent variant still matches on a case-insensitive volume, as default APFS is. Folding only adds matches, so no refusal is lost.
 
