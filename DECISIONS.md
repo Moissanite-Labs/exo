@@ -1366,6 +1366,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
+  store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
+  file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
+  `-o RemoteForward`, `-o DynamicForward`). `_store_touch` returned before it read a command's words when every
+  part was a read, and for ssh those parts are its remote line. So `ssh -S ~/.exo/state/ctl host ls`,
+  `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
+  reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
+  it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
+  an expansion the gate cannot spell out). Each value is also read as ssh reads it: a setting split into words with
+  ssh's quotes and backslashes taken out (its argv_split), a forward split into fields without brackets and
+  backslashes (its parse_fwd_field), and `%d` as the home folder. The word scan after the return does not read
+  ssh's quotes, so `ssh -o 'ControlPath ~/.exo/"st"ate/ctl' a 'bash -c x'` was missed there too, and the check runs
+  on every ssh line. A store folder whose name holds a space, as the desktop app's does, can only be named in a
+  setting inside ssh's quotes. A dynamic forward on a path makes ssh listen on a socket there, as `-L` does (its
+  parse_forward reads a one-field path as a socket). scp and sftp hand their `-o` settings to the ssh they run, so
+  those get the same reading on their lines, with their own option letters, up to their first operand:
+  `scp -o 'UserKnownHostsFile ~/.exo/"st"ate/kh' host:/x /tmp/y` was allowed, and the plain spelling already asked.
+  A relative value counts after a `cd` into the store. `-F` and `GlobalKnownHostsFile` only read their file and
+  stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919 is open for it.
+  *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  *Measured:* main's `scripts/gate_diff.py`, main 6e7e4af7 against this change. Built-in corpus and policies:
+  93,341 actions x 88 policies (8,214,008 pairs), 0 lowered, 60,339 pairs on 926 actions tightened, each to
+  `store_write`. An aimed corpus of 13,934 ssh, scp and sftp lines (1,226,192 pairs): 207,390 pairs tightened, and
+  45 lowered. All 45 are under a policy that reserves `delete`, on a line with a store path in ssh's quotes and a
+  remote `rm -rf` (`ssh -o 'ControlPath ~/.exo/"st"ate/ctl' host 'rm -rf x'`). Each still asks, now as a
+  `store_write` only the principal answers, with no grant. What goes is the reserved hit on the host, as main
+  already decides the plain spelling (`ssh -S ~/.exo/state/ctl host 'rm -rf x'`).
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
@@ -6579,6 +6606,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     - The parametrized test gains `http_401`, `http_403` and a `SourceError` case, and asserts that no class name or raw JSON reaches the page.
   - On main, five of the cases fail.
   - #856's points 3b and 4 are about the page: a browser test of the three states, and the button after a fetch-level 403. They wait for #850, which rewrites `loadModels` and `retryModels`.
+- **Amendment 2026-11-01 (#1014): focus moved to another Providers control during a retry is kept.** The reply redraws the provider rows and the default model section. It redraws the custom providers section too, unless its form is open (#1036). A control the person moved to while the reply was pending was replaced, and focus fell to the page body.
+  - The focus line above then sent focus to "Try again" after a failure, or to the select after a success. `retryModels()` now names the panel control that holds focus just before it draws the reply. The name is the provider row or section, the tag and the label.
+  - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
+  - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
+  - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).
 - **Decision:** the one dim guidance line reads the recorded model error text. An authentication or permission failure ("HTTP 401", "Incorrect API key", "invalid x-api-key", "authentication", "permission denied") may send the reader to the Providers page. A transport failure (`ReadError`, `ReadTimeout`, `ConnectError`, "stream ended without a response", network and unreachable wording) says the model could not be reached and offers no key advice. Text that reads as neither gets a general line pointing at `/trace`. No text at all (an older core, or a boolean flag) gets the general line too.
@@ -6626,3 +6659,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Export and diagnostic clarification (2026-10-31):** the command validates the resolved export parent/target against the same protected-root snapshot before reading fixtures or creating output. A store at `improvement-runs` cannot receive an export from its public parent. Resolution failures in `EXO_HOME` or `EXO_PRINCIPAL_STORE` refuse normally; absent environment roots remain allowed. Recorded-root failures name the principal/configuration key to repair or remove, never the full private path, and the user guide states this recovery step.
 
 - **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.
+
+- **Refusal-line clarification (2026-10-31, #1046 review):** each path refusal prints its own cause. A refused or protected working directory, an output name that is not a run ID, and an output run that exists or passes through a link no longer print the generic fixture line. With `EXO_HOME` unset, a broken home or recorded root names the default `~/.exo`, not the variable. No such line holds a path.
+
+- **Letter-case clarification (2026-10-31):** working and export paths match the Exo home, recorded roots and HOME in any letter case, as the gate does (D-087). Each path part is compared case folded and Unicode decomposed. So a root recorded under a case or accent variant still matches on a case-insensitive volume, as default APFS is. Folding only adds matches, so no refusal is lost.
+
+- **Letter-case cost (2026-10-31):** on a case-sensitive volume, a folder that differs from a protected one only by case or Unicode form is refused too. That is the fail-closed side, as in D-087. `EXO_GATE_CASE_SENSITIVE` does not apply, because this refusal only asks for another workspace or run name. The tests make the variant spelling as its own folder, so they simulate a case-insensitive volume on any host.

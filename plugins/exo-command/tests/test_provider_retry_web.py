@@ -158,3 +158,71 @@ def test_retry_leaves_focus_moved_away_alone(monkeypatch):
     finally:
         release.set()
         srv.close()
+
+
+TEST = "[...document.querySelectorAll('button')].find(b=>b.textContent==='Test')"
+# Two rows with a Test button each, so focus has to come back to the row it was in, not to the first Test.
+# The second row takes a key, so it also has Save and Remove: focus has to come back to Test, not to Save.
+TWO_ROWS = {'providers': [{'provider': 'demo', 'needs': 'none', 'ready': True},
+                          {'provider': 'spare', 'needs': 'key', 'key': 'found', 'ready': True}],
+            'ready': True, 'store': 'environment'}
+SPARE_TEST = ("[...[...document.querySelectorAll('.xc-prow')].find(r => r.querySelector('.xc-prow-name').textContent"
+              " === 'spare').querySelectorAll('button')].find(b => b.textContent === 'Test')")
+ADD_CUSTOM = "[...document.querySelectorAll('button')].find(b=>b.textContent==='Add custom provider')"
+MOVED_TO = {'test': SPARE_TEST, 'select': SELECT, 'add-custom': ADD_CUSTOM}
+# Where focus is, as tag and label, so a failure names it ("BUTTON:Try again", "SELECT:Default model", "BODY:...").
+WHERE = "(e => e.tagName + ':' + (e.getAttribute('aria-label') || e.textContent))(document.activeElement)"
+
+
+@pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'), reason='Chrome/websockets missing')
+@pytest.mark.parametrize('outcome', ['fails', 'succeeds'])
+@pytest.mark.parametrize('moved', ['test', 'select', 'add-custom'])
+def test_held_retry_keeps_focus_moved_inside_the_panel(monkeypatch, moved, outcome):
+    """Focus the person moves to another Providers control while a retry runs is on that control again once the
+    reply has redrawn the panel (#1014). The reply replaces the control, so focus goes to its new copy. The
+    controls are a provider's Test button, the model select and the custom providers' Add button."""
+    reads = []
+    reply = ['list']
+    hold, release = threading.Event(), threading.Event()
+
+    async def handle(centre, method, path, body, router_factory=None):
+        if path == '/api/providers':
+            return 200, TWO_ROWS
+        if path == '/api/providers/models':
+            reads.append(path)
+            if hold.is_set():   # hold the retry until the test has moved focus
+                for _ in range(500):
+                    if release.is_set():
+                        break
+                    await asyncio.sleep(0.02)
+            return 200, MODEL_REPLIES[reply[0]]
+        return 200, {'ok': True}
+
+    monkeypatch.setattr(providers, 'handle', handle)
+    srv = Served(ThreadSrc(pairs=0))
+    try:
+        with Browser() as b:
+            b.goto(srv.url('providers'))
+            b.wait(f"{SELECT}?.value === 'demo:first'")
+            reply[0] = 'fails'
+            b.eval(f"{TEST}.click()")
+            b.wait(f"!!{RETRY}")
+            b.eval(f"window.oldRetry = {RETRY}; window.oldRetry.focus()")
+            hold.set()
+            reply[0] = outcome
+            before = len(reads)
+            b.press(' ', 'Space', 32)
+            end = time.monotonic() + 10
+            while len(reads) == before and time.monotonic() < end:
+                time.sleep(0.02)
+            assert len(reads) == before + 1
+            b.eval(f"window.moved = {MOVED_TO[moved]}; window.moved.focus()")
+            assert b.eval("document.activeElement === window.moved")
+            release.set()
+            b.wait(DRAWN[outcome])
+            assert b.eval("window.moved.isConnected") is False   # the reply redrew the control
+            assert b.eval(f"document.activeElement === {MOVED_TO[moved]} || {WHERE}") is True
+            assert b.eval(f"{SELECT}.value") == 'demo:first'
+    finally:
+        release.set()
+        srv.close()
