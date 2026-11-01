@@ -50,7 +50,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import api
 from . import credentials
 from . import providers as prov
-from .service import SECTIONS, CommandCentre
+from .service import SECTIONS, CommandCentre, CoreConnection
 from .source import SourceError, core_message
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -270,7 +270,7 @@ class WebServer:
                 return await self._json(writer, 404, {"error": "not found"})
             return await self._file(writer, f)
         if path == "/api/health" and method == "GET":
-            return await self._json(writer, 200, {"ok": True, "connected": c.connected, "error": c.last_error,
+            return await self._json(writer, 200, {"ok": True, "connected": c.connected, "core_state": c.core_state, "error": c.last_error,
                                                   "seq": c.state.seq, "settings": c.settings.public()})
         if path == "/api/snapshot" and method == "GET":
             only = [x.strip() for x in q["sections"][0].split(",")] if q.get("sections") else None
@@ -310,6 +310,8 @@ class WebServer:
                 if body is None:
                     return
             return await self._json(writer, *(await credentials.handle(c, method, body)))
+        if path == "/api/reasoning":
+            return await self._reasoning(reader, writer, headers, method)
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
         if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
@@ -328,6 +330,20 @@ class WebServer:
             if reply is not None:
                 return await self._json(writer, reply[0], reply[1])
         return await self._json(writer, 404, {"error": "not found"})
+
+    async def _reasoning(self, reader, writer, headers, method):
+        from . import reasoning
+        peer = writer.get_extra_info("peername")
+        refused = prov.guard(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None, self.token)
+        if refused is not None:
+            return await self._json(writer, *refused)
+        body = {}
+        if method == "POST":
+            body = await self._body(reader, writer, headers)
+            if body is None:
+                return
+        status, data = await reasoning.handle(self.centre, method, body)
+        return await self._json(writer, status, data)
 
     async def _providers(self, reader, writer, headers: Dict[str, str], method: str, path: str) -> None:
         """Provider setup (D-034). The guard runs before the body is read; the body (which may hold a key) is
@@ -388,8 +404,9 @@ class WebServer:
     async def _events(self, writer, since: int, session: Optional[str]) -> None:
         """Every protocol event after ``since`` as ``id: seq`` + ``data: <event json>``, then live ones."""
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n")
         q = self.centre.subscribe_events()
+        writer.write(_core_frame(self.centre.core_state))
         try:
             events, gap = await self.centre.replay_events(since, session)
             sent = 0 if gap and gap["reset"] else since
@@ -413,6 +430,10 @@ class WebServer:
                     continue
                 if ev is None:
                     return
+                if isinstance(ev, CoreConnection):
+                    writer.write(_core_frame(ev.state))
+                    await writer.drain()
+                    continue
                 if ev["seq"] <= sent or (session and ev.get("session") not in (None, session)):
                     continue
                 sent = ev["seq"]
@@ -489,6 +510,11 @@ def _origin(host: str, port: int) -> str:
 def _loopback_shown(host: str) -> bool:
     """Whether the address `exo web` shows for this bind passes the loopback Host check of /api/launch."""
     return prov._host_name(urlsplit(_origin(host, 0)).netloc) in prov.LOOPBACK_NAMES
+
+
+def _core_frame(state: str) -> bytes:
+    # No raw exception, protocol event ID or cursor advancement belongs here.
+    return b"event: core-state\ndata: " + json.dumps({"state": state}).encode() + b"\n\n"
 
 
 def _frame(ev: Dict[str, Any]) -> bytes:

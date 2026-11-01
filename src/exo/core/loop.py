@@ -86,6 +86,7 @@ class _SessionState:
         self.running = self.accepting_steers = False
         self.unlimited = False
         self.total = Usage()
+        self.reasoning_opts: dict[str, Any] = {}
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
@@ -113,6 +114,7 @@ class Loop:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.provider_opts = dict(provider_opts or {})
+        self.reasoning_settings = None  # only the main engine loop opts in
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
@@ -222,6 +224,7 @@ class Loop:
     async def _turn(self, session: str, user: Message, st: _SessionState, max_rounds: int) -> TurnResult:
         turn_id, t0 = new_id("t"), time.monotonic()
         st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
+        st.reasoning_opts = self.reasoning_settings.snapshot(session, self.model or "") if self.reasoning_settings else {}
         waited = self.approval_ms.get(session, 0)
         await self._repair(session)
         await self._add(session, user, turn_id)
@@ -232,6 +235,8 @@ class Loop:
             except Exception as exc:  # a failed refresh keeps the old prompt; the turn still runs
                 await self._emit(trace.error_body("before_turn", exc), session)
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
+        if warning := st.reasoning_opts.get("_exo_reasoning_warning"):
+            await self._emit(ev.Notice(text=warning, level="warn"), session)
         turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         author = provenance.author_of(user)
         remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
@@ -415,9 +420,16 @@ class Loop:
         served = ""
         if s.error is None:  # the route the router stamped, else the attempt that succeeded (D-025)
             served = s.route or next((a.get("route", "") for a in reversed(s.attempts) if a.get("outcome") == "ok"), "")
+        selection = st.reasoning_opts.get("_exo_reasoning")
+        reasoning = next((a["reasoning"] for a in reversed(s.attempts) if "reasoning" in a),
+                         {"requested": selection["requested"], "sent": None, "requested_route": selection["route"],
+                          "route": served, "status": "not sent"} if selection else {})
+        if st.reasoning_opts.get("_exo_reasoning_warning"):
+            reasoning = {"requested": "preference unavailable", "sent": None, "route": served,
+                         "status": "inherited existing settings; saved preference unavailable"}
         await self._emit(ev.ModelCall(
             iteration=iteration + 1, role=role, requested=self.model or "", route=served,
-            attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
+            attempts=s.attempts, reasoning=reasoning, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
             stop_reason=(s.done.stop_reason or "") if s.done is not None else stop,
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
 
@@ -442,7 +454,8 @@ class Loop:
         """Stream one model call with retry. Retries only while nothing was shown."""
         if st.interrupt.is_set():  # stopped before the call began: nothing reached the provider, so no record
             raise _Interrupted()
-        opts = dict(self.provider_opts)
+        opts = {**self.provider_opts, **st.reasoning_opts}
+        opts.pop("_exo_reasoning_warning", None)
         if self.model:
             opts["model"] = self.model
         # providers that route or cache per conversation send it as a header; all threads of one agent are one

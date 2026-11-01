@@ -1,0 +1,18 @@
+.xc-pane-workspace { display:flex; flex-direction:column; height:calc(100vh - 46px - 32px); min-height:440px; min-width:0; }
+/* Scoped to the explicit chat pane controller. */
+.xc-pane-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); }
+.xc-pane-adjust { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--fg-3); }
+.xc-pane-adjust input { width:72px; accent-color:var(--accent); }
+.xc-pane-layout { display:flex; min-width:0; min-height:0; height:auto; flex:1 1 auto; }
+.xc-pane-layout > [data-pane] { min-width:0; order:initial; }
+.xc-pane-layout > [data-pane=details]:not([hidden]) { display:flex; }
+.xc-pane-layout > [data-pane=threads], .xc-pane-layout > [data-pane=details] { flex:0 1 auto; min-width:160px; max-width:42vw; }
+.xc-pane-layout > [data-pane=conversation] { flex:1 1 320px; min-width:240px; }
+.xc-pane-layout > [data-pane][hidden] { display:none; }
+@media (max-width:720px) {
+  .xc-pane-workspace { height:auto; }
+  .xc-pane-layout { flex-direction:column; }
+  .xc-pane-layout > [data-pane=conversation] { min-height:440px; }
+  .xc-pane-layout > [data-pane] { width:100% !important; max-width:none; max-height:none; }
+  .xc-pane-controls input[type=range] { display:none; }
+}

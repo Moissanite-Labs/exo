@@ -17,7 +17,7 @@ import asyncio
 import collections
 import time
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from exo.protocol import schema as s
 from exo.server.engine import MAX_LAG
@@ -35,6 +35,10 @@ SESSION_LIMIT = 200
 EVENT_RING = 3000         # recent events kept for the chat stream (late browsers, reconnects)
 
 
+class CoreConnection(NamedTuple):
+    state: str  # local control frame, never a protocol event or durable cursor
+
+
 class CommandCentre:
     def __init__(self, settings: Optional[Settings] = None, source: Optional[Source] = None):
         self.settings = settings or load_settings()
@@ -42,13 +46,38 @@ class CommandCentre:
         self.state = State()
         self._cache: Dict[str, tuple] = {}
         self._waiters: List[asyncio.Queue] = []
-        self.connected = False
+        self._core_state = "connecting"
         self.last_error: Optional[str] = None
         self.auto_core = False    # True when connect() chose the default socket: find or start the core
         self.ring: "collections.deque[Dict[str, Any]]" = collections.deque(maxlen=EVENT_RING)
         self.panels: Dict[str, Dict[str, Any]] = {}   # open ui.panel panels, by panel_id
         self._ring_seq = 0
         self._event_subs: List[asyncio.Queue] = []
+
+    @property
+    def core_state(self) -> str:
+        return self._core_state
+
+    @property
+    def connected(self) -> bool:
+        return self._core_state == "connected"
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        self.set_core_state("connected" if value else "unavailable")
+
+    def set_core_state(self, state: str) -> None:
+        if state not in ("connecting", "connected", "unavailable"):
+            raise ValueError("invalid core connection state")
+        if state == self._core_state:
+            return
+        self._core_state = state
+        for q in list(self._event_subs):
+            try:
+                q.put_nowait(CoreConnection(state))
+            except asyncio.QueueFull:
+                self._end_stream(q)  # a reconnect receives the latest state immediately
+        self._notify()
 
     # ------------------------------------------------------------ feeding the state
 
@@ -118,10 +147,15 @@ class CommandCentre:
 
     async def follow(self) -> None:
         """Fold the live stream until cancelled. Reconnects are the source's job."""
-        async for ev in self._need_source().stream(self.state.seq):
-            self.state.apply(ev)
-            self.record(ev)
-            self._notify()
+        try:
+            async for ev in self._need_source().stream(self.state.seq):
+                self.state.apply(ev)
+                self.record(ev)
+                self._notify()
+        finally:
+            # Client.events can end normally after swallowing a transport error.
+            # An open browser stream is not evidence that its core is reachable.
+            self.set_core_state("unavailable")
 
     # ------------------------------------------------------------ the chat stream
 
@@ -386,7 +420,7 @@ class CommandCentre:
     def snapshot(self, *, now: Optional[float] = None, fresh: bool = False,
                  only: Optional[list] = None) -> Dict[str, Any]:
         names = [n for n in (only or SECTIONS) if n in SECTIONS]
-        return {"settings": self.settings.public(), "seq": self.state.seq, "connected": self.connected,
+        return {"settings": self.settings.public(), "seq": self.state.seq, "connected": self.connected, "core_state": self.core_state,
                 "error": self.last_error,
                 **{n: self.section(n, now=now, fresh=fresh) for n in names}}
 

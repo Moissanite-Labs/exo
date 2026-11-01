@@ -78,6 +78,7 @@ def _run(tmp_path, script: str, setup: str = "", panels: str = "") -> None:
     (tmp_path / "bus.mjs").write_text(BUS)
     (tmp_path / "panels.mjs").write_text(panels or 'export const renderPanel=()=>null;')
     (tmp_path / "markdown.mjs").write_text('export const renderMarkdown=t=>t;')  # for a chat.js that renders replies
+    (tmp_path / "pane_layout.mjs").write_text('export const attachPaneLayout=()=>()=>{};')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "permissions.mjs").write_text('export const set=async()=>"",refresh=async()=>({}),current=()=>({}),describe=()=>"";')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";

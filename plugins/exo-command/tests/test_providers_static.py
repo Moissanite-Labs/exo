@@ -30,6 +30,11 @@ def test_no_local_storage_anywhere():
         if f.name == "layout.js":  # D-046: the one exception, the layout choice. It never sees keys or text.
             assert "setItem(KEY" in body.replace("(store || localStorage).setItem(KEY", "setItem(KEY") and 'const KEY = "xc-layout"' in body
             continue
+        if f.name == "pane_layout.js":  # Validated pane metadata only; never keys, drafts, or text.
+            assert 'const KEY = "exo-pane-layout-v1"' in body
+            assert 'const layout = validateLayout(value)' in body
+            assert 'setItem(KEY, JSON.stringify(layout))' in body
+            continue
         assert "localStorage" not in body, f.name
 
 

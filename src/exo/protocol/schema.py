@@ -578,6 +578,7 @@ class ModelCall:
     stop_reason: str = ""
     error: str = ""
     retries: int = 0  # loop-level retries before this outcome
+    reasoning: dict[str, Any] = field(default_factory=dict)  # requested vs sent, not measured adaptive computation
 
 
 @event("harness.error")

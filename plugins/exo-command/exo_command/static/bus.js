@@ -6,7 +6,7 @@ import { api, stream } from "./dom.js";
 const listeners = new Set();
 let source = null;
 let panels = [], panelBuffer = null;
-let state = { connected: false, seq: 0, denied: false, resumed: 0, synced: 0, gaps: 0 };
+let state = { connected: false, transport_connected: false, core_state: "connecting", seq: 0, denied: false, resumed: 0, synced: 0, gaps: 0 };
 const stateListeners = new Set();
 
 export function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -16,7 +16,11 @@ export function openPanels() { return panels.slice(); }
 export function forget(panelId) { panels = panels.filter((p) => p.panel_id !== panelId); }
 export function lastSeq() { return state.seq; }
 
-function setState(patch) { state = { ...state, ...patch }; stateListeners.forEach((f) => f(state)); }
+function setState(patch) {
+  state = { ...state, ...patch };
+  state.connected = state.transport_connected && state.core_state === "connected";
+  stateListeners.forEach((f) => f(state));
+}
 
 export async function start() {
   if (source) return;
@@ -34,7 +38,7 @@ export async function restart() {
   clearTimeout(retryTimer);
   if (source) source.close();
   source = null; panels = [];
-  setState({ connected: false, denied: false, seq: 0 });
+  setState({ transport_connected: false, core_state: "connecting", denied: false, seq: 0 });
   await start();
 }
 
@@ -47,10 +51,10 @@ function connect() {
   if (source) source.close();
   source = stream("/api/events?since=" + state.seq);
   const connection = source;
-  source.onopen = () => { if (source !== connection) return; retry = 0; const back = state.denied || !state.connected; setState({ connected: true, denied: false, resumed: back ? state.resumed + 1 : state.resumed }); };
+  source.onopen = () => { if (source !== connection) return; retry = 0; const back = state.denied || !state.connected; setState({ transport_connected: true, core_state: "connecting", denied: false, resumed: back ? state.resumed + 1 : state.resumed }); };
   source.onerror = () => {
     if (source !== connection) return;
-    setState({ connected: false });
+    setState({ transport_connected: false });
     if (source && source.readyState === 2) {   // CLOSED: the browser will not retry
       retry += 1;
       retryTimer = setTimeout(async () => {
@@ -59,6 +63,13 @@ function connect() {
       }, Math.min(15000, 500 * 2 ** Math.min(retry, 5)));
     }
   };
+  source.addEventListener("core-state", (m) => {
+    if (source !== connection) return;
+    let data;
+    try { data = JSON.parse(m.data); } catch (e) { return; }
+    if (!data || !["connecting", "connected", "unavailable"].includes(data.state)) return;
+    setState({ core_state: data.state });
+  });
   source.addEventListener("gap", (m) => {
     if (source !== connection) return;
     let gap;

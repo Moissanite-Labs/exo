@@ -41,6 +41,7 @@ export function emit(e){seq=e.seq;listener(e);} export function recover(){stateL
 ''')
     (tmp_path / "panels.mjs").write_text('export const renderPanel=()=>null;')
     (tmp_path / "permissions.mjs").write_text('export const set=async()=>"",refresh=async()=>({}),current=()=>({}),describe=()=>"";')
+    (tmp_path / "pane_layout.mjs").write_text('export const attachPaneLayout=()=>()=>{};')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";
 export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},ready:()=>globalThis.namesLoaded!==false,
@@ -78,7 +79,7 @@ const root=h("div"), off=chat.mount(root), settle=async()=>{for(let i=0;i<12;i++
 await settle();
 const input=nodes.find(x=>x.tagName==="TEXTAREA"), send=nodes.find(x=>x.attrs.class==="xc-btn xc-primary" && x.textContent==="Send");
 const log=nodes.find(x=>x.attrs.class==="xc-log"), strip=nodes.find(x=>x.attrs.class==="xc-strip");
-assert.match(strip.textContent,/4.2k \/ 8.2k/); assert.ok(!strip.textContent.includes("200k"));
+assert.match(strip.textContent,/4.2k of 8.2k/); assert.ok(!strip.textContent.includes("200k"));
 input.value="draft survives";
 bus.emit({seq:101,session:"s1",type:"message.delta",body:{message_id:"live",text:"one"}});
 status="live"; let release; hold=new Promise(r=>release=r); bus.recover();
@@ -91,7 +92,7 @@ assert.equal(input.value,"draft survives"); assert.match(strip.textContent,/work
 bus.emit({seq:103,session:"s1",type:"message.delta",body:{message_id:"a1",text:" duplicated"}});
 assert.ok(!log.textContent.includes("duplicated"));
 status="idle"; report.capacity=null;bus.recover();await settle();
-assert.match(strip.textContent,/idle/);assert.match(strip.textContent,/capacity unknown/);
+assert.match(strip.textContent,/idle/);assert.match(strip.textContent,/Limit unknown/);
 // D-037: a /word that names no command, and is near none, is message text (#150 review: paths and /me are not held).
 for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken",
                    "/tmp is full, what can I delete?", "/home is on another disk", "/var keeps growing", "/me waves", "/v2 is out",

@@ -161,7 +161,7 @@ def test_inverse_opens_with_the_box_on_top_and_the_newest_item_under_it(page):
     srv, b = page
     g = open_chat(srv, b, "inverse")
     assert g["top"] == 0 and g["page"] == 0
-    assert g["inputY"] < 120                                              # the box sits at the top of the column
+    assert 0 <= g["inputY"] - b.eval("document.querySelector('.xc-chat-main').getBoundingClientRect().top") < 120  # top of the conversation, below pane controls
     assert g["first"].startswith("answer 39") and g["last"].endswith("question 0")
     assert b.eval("document.querySelector('.xc-chat-main').classList.contains('xc-inverse')")
     order = b.eval("[...document.querySelector('.xc-chat-main').children].map(e=>e.className.split(' ')[0])")
