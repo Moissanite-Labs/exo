@@ -2002,6 +2002,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
     timed, opening = _timed.get(), _opening.get()
     prefix: set[int] = set()        # #853: the `time`, `-p` and `--` words of pipeline prefixes before a compound
+    # #864: open a compound behind `! coproc` and the like; #853's opened reading (_opening) opens it too, as it reads
+    # `! time coproc for ..` as `! coproc for ..`.
+    late, late_met = _late_open.get() or opening, _late_met.get()
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -2098,7 +2101,15 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
             if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
                 ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
-            if not v.quoted and _command_word(cur.words, lead, 0):
+            here = not v.quoted and _command_word(cur.words, lead, 0)
+            if not here and cw and v.text in _COMPOUND_OPENERS:
+                # #864: an opener in command position after a `coproc [NAME]` or `function NAME` that reserved words
+                # start (`! coproc for`, `then coproc {`), or after `coproc NAME {` (`function f { for`). bash opens
+                # it as after `;`. Main's reading leaves it as the coproc's argv; the opened reading opens it too.
+                here = late
+                if late_met is not None:
+                    late_met[0] = True
+            if here:
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
                 elif v.text in _COMPOUND_CLOSERS:
@@ -5526,6 +5537,127 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
+    """ssh's own option values that name a file ssh makes on this machine, whatever its remote line runs (#484): its
+    control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a key to (`-o UserKnownHostsFile`) and a
+    forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`). `-F` only reads
+    its file and `-i` is a key. scp and sftp pass their `-o` settings to the ssh they run, so those count for them
+    too. Their other letters name other things (`scp -S` is the program to run). Each comes as (the word that holds
+    the value, the paths it names), and `none` names no path. A value in a word of its own is that word. An attached
+    one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters before the value cut off, when the
+    source spells them as they read. The options are read as _ssh_options reads them, before the host and after it,
+    up to the remote command. scp's and sftp's end at their first operand. A setting's value is split into words as
+    ssh splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
+    texts, out = [w.text for w in words], []
+    prog = texts[0].rsplit("/", 1)[-1]
+    letters = _VALUE_OPTS[prog][0]
+
+    def scan(i: int, after: bool) -> int:
+        while i < len(texts) and texts[i].startswith("-") and not (after and texts[i] == "-"):
+            a, i = texts[i], i + 1
+            if a.startswith("--"):
+                if after and a == "--":
+                    break
+                continue
+            v = next((j for j, ch in enumerate(a[1:], 1) if ch in letters), 0)
+            if not v or v == len(a) - 1 and i == len(texts):
+                continue
+            if v == len(a) - 1:
+                w, value, i = words[i], texts[i], i + 1
+            else:
+                w, value = words[i - 1], a[v + 1:]
+                if w.raw.startswith(a[:v + 1]):
+                    w = replace(w, text=value, raw=w.raw[v + 1:])
+            if a[v] != "o" and prog != "ssh":
+                continue
+            key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
+            args = _ssh_split(rest) if a[v] == "o" else [rest]
+            if key in ("S", "controlpath", "userknownhostsfile"):
+                paths = args if key == "userknownhostsfile" else args[:1]
+            elif key in ("L", "R", "D", "localforward", "remoteforward", "dynamicforward"):
+                paths = [f for t in args[:2] for f in _ssh_fwd_fields(t) if "/" in f]   # a socket path holds a /
+            else:
+                continue
+            out.append((w, [p for p in paths if p.lower() != "none"]))
+        return i
+
+    end = scan(1, False)
+    if prog == "ssh":
+        scan(end + 1, True)
+    return out
+
+
+def _ssh_file_hits(x: str) -> list[str]:
+    """The store paths in one of ssh's file option values (_shell_hits' find for _ssh_file_words): the value, each
+    piece of it between whitespace, `:`, `=` and `,` (`UserKnownHostsFile=/tmp/kh ~/.exo/state/kh`,
+    `~/.exo/state/sock:localhost:5432`), and each word and field ssh's own parsers make of it, without the quotes,
+    brackets and backslashes ssh drops (`ControlPath '~/x y/ctl'`, `-L '[/x/.exo/state/s]:localhost:1'`). A store
+    folder whose name holds a space, as the desktop app's does, can only be named in a setting inside ssh's quotes.
+    ssh spells out its `%d` token as the home folder."""
+    found = [x] + re.split(r"[\s:=,]", x) + _ssh_fwd_fields(x)
+    for t in _ssh_split(x) + _ssh_split(_ssh_setting(x)[1]):
+        found += [t] + re.split(r"[:=,]", t) + _ssh_fwd_fields(t)
+    return [p for p in dict.fromkeys(found) if p and _store_word(_ssh_home(p))]
+
+
+def _ssh_home(path: str) -> str:
+    """``path`` with ssh's `%d` token at its start (the home folder) written as `~`."""
+    return re.sub(r"^%d(?=/|$)", "~", path)
+
+
+def _ssh_split(text: str) -> list[str]:
+    """A setting's value split into words as ssh's argv_split splits it: at a space or tab outside quotes, with each
+    pair of quotes taken out, and a backslash before a quote, a backslash or (outside quotes) a space dropped and
+    the character after it kept. An unclosed quote runs to the end (ssh rejects the line)."""
+    out: list[str] = []
+    cur: list[str] | None = None
+    quote, i = "", 0
+    while i < len(text):
+        ch, nxt = text[i], text[i + 1:i + 2]
+        if cur is None and ch in " \t":
+            i += 1
+            continue
+        cur = [] if cur is None else cur
+        if ch == "\\" and (nxt in ("'", '"', "\\") or not quote and nxt == " "):
+            cur.append(nxt)
+            i += 2
+            continue
+        if not quote and ch in " \t":
+            out.append("".join(cur))
+            cur = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        elif quote and ch == quote:
+            quote = ""
+        else:
+            cur.append(ch)
+        i += 1
+    return out if cur is None else out + ["".join(cur)]
+
+
+def _ssh_fwd_fields(spec: str) -> list[str]:
+    """A forward's fields as ssh's parse_fwd_field reads them: split at `:`, a field in `[...]` taken as it stands,
+    and a backslash elsewhere dropped and the character after it kept (`[/x:y]:localhost:5432`, `/x/st\\ate:1`)."""
+    out: list[str] = []
+    i = 0
+    while i < len(spec):
+        if spec[i] == "[":
+            j = spec.find("]", i + 1)
+            j = len(spec) if j < 0 else j
+            out.append(spec[i + 1:j])
+            i = j + 2
+            continue
+        cur = []
+        while i < len(spec) and spec[i] != ":":
+            if spec[i] == "\\" and i + 1 < len(spec):
+                i += 1
+            cur.append(spec[i])
+            i += 1
+        out.append("".join(cur))
+        i += 1
+    return out
+
+
 def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     """Where a builtin's operands start in ``args`` (its words after the name), and the option letters bash surely
     reads before them. `--` ends the options, and so does a word not spelled `-x`, or `+x` when ``plus`` (declare,
@@ -5997,8 +6129,9 @@ def _ln_targets(argv: list[str]) -> list[str]:
             for b in bases]
 # A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
 # ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
-# ("target").
-_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+# ("target"). ssh's own file options ("ssh", #484) are read with a find of their own, so no other check covers them.
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"},
+           "ssh": {"ssh"}}
 
 
 def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
@@ -6105,6 +6238,19 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
+    # #484: ssh makes its control socket, the known-hosts file it adds a key to and a forward's socket on this machine
+    # whatever its remote line runs, so the return below must not skip a store path there when every part is a read.
+    # These values are read as ssh reads them (its quotes in a setting, a forward's brackets), which the scan below
+    # does not do, so they are read here on every ssh line, with a store check of their own ("ssh"). scp and sftp
+    # hand their -o settings to ssh, so their lines get the same reading.
+    if words and words[0].text.rsplit("/", 1)[-1] in ("ssh", "scp", "sftp"):
+        for w, paths in _ssh_file_words(words):
+            got = _shell_hits(w, seen, "ssh", _ssh_file_hits)
+            hits += [w.text] if got is None else got
+            if _unknown_store(w, seen):
+                hits.append(w.text)
+            if ctx.get("store_cwd") and any(not _expand_text(_ssh_home(p)).startswith("/") for p in paths):
+                hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
@@ -7165,8 +7311,39 @@ def _loop_word(k: _Cmd) -> int:
             return i
     first = k.words[0] if k.words else None
     if first is not None and not first.quoted and first.text in ("coproc", "function"):
-        return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
-                     and k.words[i].text in _LOOP_WORDS), -1)
+        w = next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
+                  and k.words[i].text in _LOOP_WORDS), -1)
+        if w >= 0:
+            return w
+    return _late_loop_word(k) if _late_open.get() or _opening.get() else -1     # #853's opened reading too
+
+
+# #864: set while classify reads a call (_classify_read): [met], which _parse_line sets when a line holds a compound
+# opener in command position that main's reading leaves as a `coproc` or `function` argv (`! coproc for ..`,
+# `then coproc { ..`, `coproc NAME { for ..`). classify then reads the call again with _late_open on, where _parse_line
+# opens such a compound as after `;`, and _loop_word finds the loop word behind those words (_late_loop_word), so #479's
+# second pass of a loop that `cd`s into the store runs there too. Main's reading stays beside (_late_reading).
+_late_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_late_met", default=None)
+_late_open: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_late_open", default=False)
+
+
+def _late_loop_word(k: _Cmd) -> int:
+    """#864: where the loop word is in k behind reserved words, a `coproc` or `function`, its NAME and the reserved
+    words after it (`! coproc for`, `then coproc N { while`, `function f { for`), as _parse_line opens it with
+    _late_open on (`coproc { coproc { for` too); or -1. A quoted word ends the search, except as the NAME: a NAME is
+    one word that is not a reserved word, quoted or not (`! coproc 'W' for` finds the loop, as _parse_line opens it;
+    reading on is the stricter side)."""
+    words, i = k.words, 0
+    while i < len(words) and not words[i].quoted:
+        text = words[i].text
+        if text in _LOOP_WORDS:
+            return i
+        if text in ("coproc", "function"):
+            if i + 1 < len(words) and words[i + 1].text not in _OPENERS and words[i + 1].text not in _LOOP_WORDS:
+                i += 1                      # the NAME
+        elif text not in _OPENERS:
+            return -1
+        i += 1
     return -1
 
 
@@ -9266,18 +9443,29 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
     chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
-    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading); the
-    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. A shell that
-    reads what printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as
-    before and in the opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are
-    resolved from there too (_in_tool_folder sets it)."""
-    timed = [False]
-    met = _timed.set(timed)
+    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading). A line with a
+    compound command in command position behind a `coproc` or `function` that main's reading leaves unopened
+    (`! coproc for ..`, `{ coproc N { ..; }; }`) is also read with it opened (#864, _late_reading); #853's opened
+    reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
+    (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
+    printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
+    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
+    from there too (_in_tool_folder sets it)."""
+    timed, met = [False], [False]
+    t_timed, t_met = _timed.set(timed), _late_met.set(met)
     try:
         c = _printed_reading(action, cwd)
     finally:
-        _timed.reset(met)
-    return _opened_reading(c, action, cwd) if timed[0] and not _opening.get() and not _config_off.get() else c
+        _late_met.reset(t_met)
+        _timed.reset(t_timed)
+    if timed[0] and not _opening.get() and not _config_off.get():
+        c = _opened_reading(c, action, cwd)
+    # On a line that sets both marks the opened reading above opens every compound this one does (_parse_line's
+    # `late`); this reading stays as defence in depth (test_a_line_with_both_marks_reads_the_coproc_loop_either_way).
+    # The only nested classify, D-074's ordinary reading, runs under _config_off, so `_opening` is a cheap guard only.
+    if met[0] and not _late_open.get() and not _opening.get() and not _config_off.get():
+        c = _late_reading(c, action, cwd)
+    return c
 
 
 def _printed_reading(action: Any, cwd: str | None) -> Classification:
@@ -9318,8 +9506,10 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     `cd`s into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before
     stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once (the reading
     as before reads its own without opening it, _classify_read): decide keeps the strictest, and no_grant (and
-    through it the hook's bypass floor) counts each reading, so a line never decides lower than before. The opened
-    reading has its printed reading too (#1047, _printed_reading)."""
+    through it the hook's bypass floor) counts each reading, so a line never decides lower than before. #864's
+    opening of a compound behind a `coproc` is on in this reading too (_parse_line, _loop_word), so a compound behind
+    `! time coproc` or `then time coproc` opens here. The opened reading has its printed reading too (#1047,
+    _printed_reading)."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _opening.set(True), _timed.set(None)
     try:
@@ -9327,6 +9517,32 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     finally:
         _timed.reset(met)
         _opening.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo)
+    return c
+
+
+def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#864: the call as read before (c), with a second reading of it beside it in which each compound command in
+    command position behind a `coproc [NAME]` or `function NAME` that reserved words start (`! coproc for ..`,
+    `if ..; then coproc { ..; }; fi`, `{ coproc N { ..; }; }`), or behind `coproc NAME {` and `function NAME {`, is
+    opened as after `;` (_parse_line, _late_loop_word): its parts and #479's second pass of a loop in it that `cd`s
+    into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before stays as
+    it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once: decide keeps the
+    strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
+    lower than before. It runs after #853's opened reading (_opened_reading), each beside main's. The late reading
+    has its printed reading too (#1047, _printed_reading), as the opened reading has, so a printf or `echo -e` pipe
+    into a shell in a compound only this reading opens is read with what the command writes."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _late_open.set(True), _late_met.set(None)
+    try:
+        x = _brace_budget(_printed_reading)(action, cwd)
+    finally:
+        _late_met.reset(met)
+        _late_open.reset(token)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
     o, xo = c.ordinary, x.ordinary
