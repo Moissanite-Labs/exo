@@ -55,6 +55,11 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
+For Google AI Studio, add the Gemini key in Providers or set `GEMINI_API_KEY`; Exo uses Google's
+OpenAI-compatible API. In the web Providers tab, **Add custom provider** configures an unlisted OpenAI Chat
+Completions or Anthropic Messages endpoint, model and optional key. Use **Edit** for an existing entry, then
+restart the core to apply settings. Supported protocols and remote-core key limits are in `docs/PROVIDERS.md`.
+
 A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
 learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
 limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
@@ -284,6 +289,11 @@ once, and each has a cap on tool rounds, tokens and time. The briefs and receipt
 You can watch and control them:
 
 - `/tasks` lists them with their status. `/open <task>` shows one's session (read only).
+- In the terminal, a parent shows a separate cue when an active delegated task or nested task needs approval.
+  The cue names the child and gives `/open <task>` to review its own card. It does not focus or answer a card,
+  stop parallel parent work, or extend the parent's permissions. Ordinary forks and unrelated tasks are excluded.
+  Past five waiting tasks, the cue names the rest by task id, because `/tasks` lists only this thread's own tasks.
+  A failed metadata refresh labels the cue "last known" until a successful refresh.
 - `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
 - `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.
 - On the web page, the Tasks cards have Open, Steer and Stop buttons.
@@ -649,6 +659,58 @@ They need `--principal ID` or `--root DIR`, like the others.
 | `exo eval` | A report that measures Exo against your own questions and past choices (files in the store's `training/` folder). `--no-write` prints it without saving. |
 
 Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` for the loop that uses them.
+
+### Offline harness experiments
+
+To try a harness change on public synthetic examples, run `exo improve --offline`
+from the directory containing your fixture. The checkout supplies `text.json` and
+`ledger.json` in `examples/improvement`. With this version of Exo installed:
+
+```sh
+exo improve --offline --adapter text-normalize-v1 --fixture text.json
+```
+
+The command proposes and tests text transformations, combines the observed changes,
+then checks separate held-out examples. JSON on stdout includes its evidence and,
+if both checks pass, a proposal marked `review_only`. Add `--output trial-one` to
+save a new owner-only `improvement-runs/trial-one/artifact.json`; existing runs are
+never overwritten. Exit 0 means a review proposal is ready, 1 means the experiment
+did not pass, and 2 means invalid input or a file/output-policy error. Keep the
+default `--iterations 1` for the supplied fixtures: they saturate in one round, and
+a later non-improving round discards the candidate.
+
+This is separate from learning about you: it makes no model calls, reads no store
+contents and activates nothing. It reads the recorded principal-root list only to
+keep experiments out of stores. This also checks the export directory: a public
+working directory cannot export into `improvement-runs` if that directory is a
+recorded store. Choose a different public working directory in that case.
+
+A missing or unresolvable recorded root stops the experiment with exit 2. The
+message names the principal and its `principals.<id>` entry in `config.json` in
+the Exo home. That is `EXO_HOME`, or `~/.exo` when `EXO_HOME` is unset. Repair or
+remount that location, or remove an obsolete entry. The diagnostic does not print
+the private path.
+
+A symlink cycle in `EXO_HOME` or `EXO_PRINCIPAL_STORE` also exits 2 and names the
+environment setting to repair or unset. A broken default `~/.exo` is named as that
+path. A not-yet-created Exo home remains usable. This command needs no store
+initialization.
+
+Other path refusals also exit 2 and say what to change. "run only in an explicit
+public workspace" means the working directory is the file system root or your home
+folder, or is at or inside a hidden folder, an Exo home or a principal store.
+Choose a different public folder. Folder names match in any letter case, as on a
+default macOS volume.
+
+"workspace is a protected location" means Exo treats that folder as a secret store.
+"output must be a run ID" means the `--output` value is not a plain run name. The
+line says which characters a name may hold. "output must be a new run" means that
+run name already exists or `improvement-runs` is a link. Choose a new name or a
+plain folder.
+
+Supply public synthetic data, not your memory or private examples. A successful synthetic check is evidence of the mechanism, not
+proof that Exo will improve on real tasks. Fixture format, other adapter and limits:
+[Harness² integration guide](integrations/HARNESS2.md).
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.

@@ -184,6 +184,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
   cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
   `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-29 (exo-desktop #2, follow-up to #726):** the next command clears a failed start before it
+  waits. The 2026-10-27 change cleared a start that raised or was cancelled only in a command that was waiting on
+  it. When the only waiting command was cancelled and the start then failed, no command cleared it. The next
+  command got that old error once more, and only the command after that started again. Now `start()` first drops
+  a finished start task that raised or was cancelled, then starts again. A start that is still running stays, so a
+  cancelled command still never causes a second start, and every command that waits on a failed start still gets
+  its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
+  Tests: `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -226,6 +234,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
   captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
   and each later turn under 1 ms.
+  *Amendment 2026-10-28 (exo-desktop #54):* no client asks a `belief_conflict` question yet, so an answer cannot
+  release a held conflict proposal in normal use. A direct `exo proposals accept` or `reject` is how it ends, and it
+  now records the question id, which closes the question. A hand-written `answer` that refs the question still
+  works. Putting the question in the ask queue is a follow-up.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -259,6 +271,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or ruling does. "For review" means the usual promotion rules: an unguarded, ungated new proposal that cites a
   ruling is promoted at once by rule 1 (rule 5 runs first for a gated lesson), and one held on a conflict stays
   held (rule 3).
+- **Test clarification (2026-10-31):** the reinforcement regression measures decay 120 days after its last
+  evidence, with fixed event timestamps. This changes the test clock, not the learning rule.
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
@@ -1174,6 +1188,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-30:** the web Providers tab offers a Gemini AI Studio preset using the OpenAI-compatible
+  endpoint and `GEMINI_API_KEY`, plus `GET/POST /api/providers/custom` for supported OpenAI Chat Completions and
+  Anthropic Messages endpoints. The connected core writes non-secret metadata through principal-authorized
+  `config.set`, with no local-disk fallback; the separate key stays in the web server's existing secret store.
+  Custom key references bind provider name, protocol and endpoint, so a key cannot silently follow an endpoint edit.
+  Add refuses an existing name; editing requires explicit replacement. A keyless endpoint is configured but untested
+  until probed. Changes take effect when the core restarts, and a remote core needs its own credential. This amends
+  the earlier description that only a provider name crosses the protocol: custom non-secret metadata also does.
+  Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
+  key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
+  custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
@@ -1341,6 +1366,48 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
+  flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
+  `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
+  (`note: {a:`), or nesting past the recursion limit could instead raise outside the policy-error path and
+  make every hook call ask. These cases now use the existing policy-error fallback: the defaults alone, with a
+  warning, until the file is corrected. This can lower `ls -la`, `git status` and `cat README.md` from ask to allow;
+  a configured deny such as `deny: [{command: '^cat '}]` is also absent during fallback. That loss of the configured
+  policy is the existing fallback's explicit tradeoff, not a claim that the affected read is safe under that policy.
+  The change replaces an indefinite hang or exception on every call with the documented, visible fallback; it does
+  not change valid policies. This applies when the malformed input occurs in any file the policy loader reads.
+  In a principal-started turn with permissions bypass, a default ask such as `rm -rf build` can instead run without
+  a card. With a required executor, a prior classification exception blocked the call; the fallback can allow reads
+  or ask for the `rm` example. These are existing mode-specific fallback behaviors, not new bypass or executor rules.
+  A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
+  or block when an executor is required).
+- *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
+  store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
+  file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
+  `-o RemoteForward`, `-o DynamicForward`). `_store_touch` returned before it read a command's words when every
+  part was a read, and for ssh those parts are its remote line. So `ssh -S ~/.exo/state/ctl host ls`,
+  `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
+  reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
+  it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
+  an expansion the gate cannot spell out). Each value is also read as ssh reads it: a setting split into words with
+  ssh's quotes and backslashes taken out (its argv_split), a forward split into fields without brackets and
+  backslashes (its parse_fwd_field), and `%d` as the home folder. The word scan after the return does not read
+  ssh's quotes, so `ssh -o 'ControlPath ~/.exo/"st"ate/ctl' a 'bash -c x'` was missed there too, and the check runs
+  on every ssh line. A store folder whose name holds a space, as the desktop app's does, can only be named in a
+  setting inside ssh's quotes. A dynamic forward on a path makes ssh listen on a socket there, as `-L` does (its
+  parse_forward reads a one-field path as a socket). scp and sftp hand their `-o` settings to the ssh they run, so
+  those get the same reading on their lines, with their own option letters, up to their first operand:
+  `scp -o 'UserKnownHostsFile ~/.exo/"st"ate/kh' host:/x /tmp/y` was allowed, and the plain spelling already asked.
+  A relative value counts after a `cd` into the store. `-F` and `GlobalKnownHostsFile` only read their file and
+  stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919 is open for it.
+  *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  *Measured:* main's `scripts/gate_diff.py`, main 6e7e4af7 against this change. Built-in corpus and policies:
+  93,341 actions x 88 policies (8,214,008 pairs), 0 lowered, 60,339 pairs on 926 actions tightened, each to
+  `store_write`. An aimed corpus of 13,934 ssh, scp and sftp lines (1,226,192 pairs): 207,390 pairs tightened, and
+  45 lowered. All 45 are under a policy that reserves `delete`, on a line with a store path in ssh's quotes and a
+  remote `rm -rf` (`ssh -o 'ControlPath ~/.exo/"st"ate/ctl' host 'rm -rf x'`). Each still asks, now as a
+  `store_write` only the principal answers, with no grant. What goes is the reserved hit on the host, as main
+  already decides the plain spelling (`ssh -S ~/.exo/state/ctl host 'rm -rf x'`).
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
@@ -4214,11 +4281,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a1dd4fec: 20 prefixed loops on one line 0.074 s against 0.021 s, their twin without `time` 0.042 s; the same
   loops each followed by `echo x > ~/.exo/config.json`, which adds each reading's D-074 `ordinary` reading,
   0.284 s against 0.058 s, twin 0.234 s; 300 `time { :; }` groups 0.075 s against 0.043 s; 150 `time !` before
-  one group 0.014 s against 0.009 s). Known limit:
-  main does not open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc
-  for ..`, `{ coproc for ..; }` ask as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or
-  without; that is `coproc`'s own gap, not the prefix's. The differential against main a1dd4fec (main's
-  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
+  one group 0.014 s against 0.009 s). Known limit when written (lifted by #864, the next amendment): main did not
+  open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc for ..`,
+  `{ coproc for ..; }` asked as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or without;
+  that was `coproc`'s own gap, not the prefix's. #864 opens such a compound in the reading without the prefix
+  too, and `tests/security/test_gate_pipeline_prefix_853.py`'s `test_a_coproc_after_bang_or_then_is_a_known_limit`
+  is now `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened`. The differential against main a1dd4fec
+  (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
   under the 88 policies (1,167,760 pairs), lowers 0 pairs and tightens 79 pairs on 9 actions (`opaque_exec allow`
   to `opaque_exec ask` 40, `opaque_exec ask` to `opaque_exec deny` 16, `opaque_exec log` to `opaque_exec ask`
   16, and 7 to `delete`); 106 pairs keep their outcome with another detail. An aimed corpus (`--only-corpus
@@ -4238,7 +4307,123 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (2 rows that fail on main a1dd4fec).
   *Revisit if:* the gate parses bash's pipeline grammar itself: `time` and `!` then belong to `_parse`, and this
   second reading can go.
+  *Amendment 2026-10-27 (exo-desktop #52):* a file tool's write through a linked folder is read where it lands.
+  `write_file`, `edit_file` and `apply_patch` follow a link in a path's folders, as the kernel does, and refuse
+  only a link at the last name. The store and secret checks already resolved the path (#209), so such a write into
+  a store asked, but the call's target, summary and parts named only the path as spelt. So the principal's question
+  for `cfg/authorized_keys` never named `~/.ssh`, `deny: ["target:*/.ssh/*"]` only asked there, and under
+  `deny: ["target:*/shared/*"]` the absolute path and `../shared/plain.txt` were denied while `o/plain.txt`, with
+  `o` a link to that folder, was an allowed local write: the link was the one spelling no entry on the place could
+  reach. Now each path whose folders a link leads elsewhere adds a `local_write` part whose target is the place it
+  lands (the folders resolved, the last name kept), and the call's summary names that place. The call keeps its
+  category and its target as spelt, so its approvers stay as before and a grant is keyed on the spelling. A
+  relative path is read from the session's folder as resolved, so a link to that folder itself adds nothing. The
+  tools are unchanged.
+  Chosen over a refusal in the tools: they take absolute paths and `..` by design, so a write outside the working
+  folder was never refused. A refusal of a link that leads out of it would refuse a store write the principal
+  approved, which the #241 amendment rules out, and every write through a system link such as macOS `/tmp`. The
+  issue's second finding, a secret-store check in the write tools, did not reproduce: the gate asks for every
+  store or secret write these tools make (each patch operation too), named or through a linked folder, with no
+  grant and the principal alone for the store, so a refusal in the tool would reverse #241. A session started
+  inside a store folder still writes it by relative names as before (the known limit under "The tool's own
+  folder" in `docs/GATE.md`). Main's `scripts/gate_diff.py`, run against main 080e87ba over 91,807 actions and 88
+  policies, finds nothing lowered and nothing tightened: 14 pairs keep their outcome with another detail changed.
+  That run is on Linux, where `/tmp` is not a link. The cost: the gate cannot tell a planted link from a system one.
+  On macOS `/tmp` is a link to `/private/tmp`, so `write_file /tmp/x` adds a part for `/private/tmp/x`. An allow
+  rule matches the call as spelt, and the part is decided on its own (#191). So a policy that denies `local_write`
+  and allows `target:/tmp/*` now denies that write, naming the place, until it allows `target:/private/tmp/*` too.
+  The default policy still allows it. A reserved entry that matches another part of a call keeps the principal's ask
+  from any grant (D-075). So under a reserved entry on the place, or `reserved: [local_write]`, an "always" for
+  `o/plain.txt` no longer covers the next such write, which asks each time: the link may lead elsewhere by then. On
+  main the entry on the place did not reach the write, and a grant covered it under `reserved: [local_write]`.
+  Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main) and the grant rows in
+  `plugins/exo-gate/tests/test_approvals.py` (both fail on main).
 
+- *Amendment 2026-10-29 (issue #864, to the #479 amendment's decision):* a `coproc` compound in command position
+  behind reserved words is opened as after `;`, in a reading beside main's. bash takes a command after `!`,
+  `then`, `else`, `elif`, `if`, `while`, `until`, `do` and `{` as after `;` (`bash -n` 5.2.21 accepts `! coproc
+  for i in 1; do :; done`, `if true; then coproc for ..; fi` and `{ coproc for ..; }`), and the compound right
+  after `coproc NAME {` or `function NAME {` too. `_parse_line` opened a compound only where every word before it
+  in the command was a reserved word, or within two words of a `coproc` or `function` that started the command
+  (`_command_word(cur.words, lead, 0)`), while its own command-position tracking (`head`, `pre`, #436) knew those
+  positions; `_loop_word` likewise found a loop word only at the start or one or two words after a leading
+  `coproc`/`function`. So on main b3efb5e7, under `deny: [store_write]`, `! coproc for i in 1; do cp /tmp/evil
+  gates.yaml; cd ~/.exo/policies; done`, its `if ..; then`, `else`, `elif`, `if <it>; then` and `{ ..; }` forms
+  and the `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`, `coproc W while` and `coproc { for ..`
+  loops there asked as `opaque_exec` (rule `opaque`, `no_grant` False), where after `;` or `&&` they denied with
+  `no_grant` True; `coproc W { for ..; done; }`, `coproc W { while ..; }` and `function f { for ..; done; }` did
+  so at every position, a `$( )` included, and `coproc { coproc { for ..` at any depth past one. A here-doc or
+  here-string after such a group's closer (`! coproc W { bash; } <<EOF`) did not reach the shell inside it (#161),
+  so a fed `rm -rf` was no delete. Main's first pass still read the parts of the coproc's argv, so a delete,
+  push or post body denied as without the opener; what was lost is #479's second pass and the fed text. Now,
+  while classify reads a call (`_classify_read`), `_parse_line` marks a compound opener in command position
+  (`_command_word(cur.words, head, pre)`) that main's check leaves unopened (`_late_met`); classify then reads
+  the call again with `_late_open` on (`_late_reading`, budgets and memos of its own), where `_parse_line` opens
+  it and `_loop_word` also finds the loop word behind leading reserved words, `coproc`/`function`, their NAME
+  and the reserved words after it (`_late_loop_word`). That reading is kept beside main's by `_beside`, with each
+  reading's D-074 `ordinary` kept, as #584's and #479's readings are on main (and #853's opened reading, from
+  #862); main's `opaque_exec` reading still leads on the tie, as for `coproc for ..` after `;`. The issue's rows
+  are a principal-only `store_write` part that `deny: [store_write]` denies, no grant covers and bypass keeps at
+  its floor. Teaching `_parse_line` the positions directly would have replaced main's reading of those lines;
+  the second reading keeps it by construction. With #853 (PR #862, merged first, main 69e33d50) the opened check
+  reads #853's `_opening` too (`late = _late_open.get() or opening` in `_parse_line`, the same `or` in
+  `_loop_word`), so #853's reading without the prefix opens such a compound as well, and `_classify_read` runs
+  `_late_reading` after `_opened_reading`, each beside main's reading (a nested classify inside the opened reading,
+  the D-074 `ordinary` reading, runs neither second reading, as `_config_off` is set there; the `_opening` check on
+  `_late_reading` is a cheap guard only). On a line that sets both marks the opened reading opens every compound
+  the late reading opens and drops the prefixes as well, so the late reading adds nothing found there: with it
+  skipped on such lines every other test in the #853 and #864 files still passes. It is kept as defence in depth, at a
+  third reading's cost, and `test_a_line_with_both_marks_reads_the_coproc_loop_either_way` pins the order and that
+  either second reading alone finds the store loop. So `! time coproc for ..`, `if true;
+  then time coproc for ..`, `time ! coproc for ..`, `! time ! coproc for ..`, `{ time coproc W { for ..; }; }` and
+  `time -p ! coproc W { for ..; }` with the #479 store loop deny under `deny: [store_write]` with `no_grant` True
+  and principal-only approvers, where main 69e33d50 asked as `opaque_exec`; #862's known-limit test
+  `test_a_coproc_after_bang_or_then_is_a_known_limit` is now
+  `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened` in
+  `tests/security/test_gate_pipeline_prefix_853.py` (6 rows, each failing on main 69e33d50). Main's reading of
+  `! time coproc ..` marks only #853's prefix, so such a line is read twice, as on main; its store loop now adds
+  #479's second pass in the opened reading (50 `! time coproc for ..` store loops 0.199 s against 0.112 s on main
+  69e33d50, 200 `! time coproc { :; }` parts 0.089 s against 0.091 s); a line that sets both marks is read three
+  times (100 `! coproc { :; }` and 100 `time { :; }` parts 0.107 s against 0.064 s). The third reading is about a
+  third of that: in one later run the same parts took 0.102 s, and 0.069 s with `_late_reading` stubbed out; 25
+  `! coproc for ..` and 25 `time for ..` store loops took 0.325 s and 0.181 s. Main's `scripts/gate_diff.py`
+  against 69e33d50 lowers 0 of 1,181,400 built-in pairs (312 tightened on 36 actions), 0 of
+  the 1,120,320 #864 aimed pairs, 0 of the 2,262,408 #853 aimed pairs and 0 of 252,000 pairs on 2,100
+  composition lines (9 prefix spellings before 6 coproc and function forms with 5 bodies under 8 positions, 120
+  policies). Known limit, as without coproc: a `case` pattern's `)` inside `$( )` still
+  closes the substitution (`echo $(case x in x) for ..;; esac)` asks as on main). Cost: a line that sets the mark
+  costs about two readings (`time.process_time`, best of five, this tree against b3efb5e7: 200 `! coproc { :; }`
+  parts 0.085 s against 0.042 s, 200 `! coproc { ! coproc { :; }; }` parts 0.158 s against 0.082 s, one nest 200
+  deep 0.081 s against 0.036 s, 50 `! coproc for ..` store loops 0.183 s against 0.043 s, which adds #479's second
+  reading of each reading); a line with no mark is read once (200 `coproc { :; }` parts 0.037 s against 0.033 s).
+  The differential against b3efb5e7 (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus
+  with `--no-variants`, 13,247 actions under the 88 policies (1,165,736 pairs), lowers 0 pairs and tightens 150
+  pairs on 18 actions (`opaque_exec allow` to `opaque_exec ask` 60, `opaque_exec ask` to `opaque_exec deny` 24,
+  `opaque_exec log` to `opaque_exec ask` 24, and 42 to `delete`); an aimed corpus (`--only-corpus --no-variants`)
+  of 9,336 lines (25 coproc and function forms with 12 bodies, delete, push, post, store writes, a store `cd` in
+  a loop and plain ones, under 30 positions: `;`, `&&`, `||`, `&`, `|`, a subshell, a newline, `!`, `! !`, `then`,
+  `else`, `elif`, `if`, `while`, `until`, `do`, `{`, `{ !`, `time`, `$( )`, backticks, `bash -c`, a function body,
+  a case arm, a pipe out, and 4 fed group forms) under the 88 policies and 32 more (deny, reserved, category,
+  category-rule, command, command-rule and target entries; 1,120,320 pairs) lowers 0 pairs and tightens 9,398
+  pairs on 609 actions (`opaque_exec allow` to `opaque_exec ask` 4,184, `opaque_exec ask` to `opaque_exec deny`
+  2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
+  `tests/security/test_gate_coproc_open_864.py` (688 tests; when added, 203 failed on b3efb5e7, the cost test
+  only because main has no `_late_reading` to patch, and the rest passed on both) and 6 hook rows in
+  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there). With #158 (main
+  d3cbd874) the layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (#158's two
+  ways: bash's reading of the words, and `flat`, main's reading before #143) -> `_classify_read` (budgets, the
+  first reading with both marks set, #853's `_opened_reading`, then `_late_reading`) -> `_one_reading`. So each of
+  #158's two readings has its own opened and late readings, each with budgets of its own, and a coproc compound
+  that only bash's reading of a `${..}` word finds (`! coproc for ..` in `${v:-$(..)}`) is opened there.
+  `test_a_coproc_loop_and_a_word_read_both_ways_is_a_principal_only_store_write` pins 8 such rows (a word in the
+  loop body behind `!`, `then`, `{` and `time !`, and the coproc line in a `${..}` word, a backquote, after a
+  quoted `}` and in a `$((`), each failing on d3cbd874.
+  `test_flat_reads_a_coproc_loop_bash_keeps_in_a_word_with_its_own_late_reading` pins `flat`'s own late reading: 4
+  rows (`! coproc for`, `{ coproc for`, `then coproc W {`, `{ coproc N {`) where bash keeps the coproc loop inside
+  a quoted `${..}` word and only `flat` reads it as a command, which are an unread ask again when `_late_reading` is
+  skipped in that way, as on d3cbd874.
+  *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
+  and `pre` and this second reading can go.
 ### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
 
 The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
@@ -4504,6 +4689,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-25 (#389):* the survival sentence of the #385 amendment holds until an undo, the core's or a
   host's, removes the turn a pin came from. The D-041 amendment of 2026-10-24 has the details.
+  *Amendment 2026-10-30 (#537):* that includes an undo the host does not report, such as the messaging gateway's.
+  The first turn of a new engine checks the pins against the host's transcript. The D-041 amendment's 2026-10-30
+  note has the details.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -4787,6 +4975,42 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   request (`muse-cli` refuses a call with tools, D-051), not a fault of the key or the model. It cooled the whole
   credential, so a later call without tools skipped a route that would have served it. It now falls back and
   cools nothing. `docs/PROVIDERS.md`.
+  *2026-10-30 note (#537):* Hermes's messaging gateway cuts its transcript on `/undo`, drops the cached agent and
+  tells no one. The new agent's engine read the undone ruling back from the pins file, and its block, summaries and
+  handoffs carried it again. Each pin now has a lead in the pins file. The lead is a digest of the user and summary
+  rows that come before the first principal message holding the pin, in order from the start of the host's transcript
+  (`conversation_messages`). The file also keeps the transcript's leads, one after each user or summary row, up to the
+  last pin's lead. Only a request that sends `incoming_message` notes them (Hermes does, the core does not). The first
+  such turn of a session that an engine runs checks the pins against the transcript. The transcript before the turn's
+  own message must end at one of the noted leads, so it is the noted transcript with its tail cut. A pin goes when its
+  lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
+  (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
+  ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
+  with the same words as the lead
+  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
+  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
+  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
+  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
+  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
+  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
+  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
+  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
+  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
+  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
+  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
+  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
+  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
+  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
+  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
+  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
+  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. An unreported undo waits for a new
+  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
+  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
+  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
+  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
+  written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
@@ -4903,6 +5127,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
@@ -4964,6 +5198,20 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
+  while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
+  lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
+  129) and nothing followed. Now any change in the transcript's content size scrolls to the end again while the view
+  was there. Scrolling up stops it, scrolling back to the bottom starts it, and `F6` stops it so the reader stays on
+  the page it loaded. Each scroll to the end runs after the layout and checks the flag again at that point, so a
+  reader who scrolls up between a new line and its scroll keeps their place (live tool output under `ctrl+o`).
+  Inverse is unchanged: its newest item is at the top, which content added below does not move.
+  Textual's `Widget.anchor()` does the same job, but its signature and meaning changed in Textual 2, and the client
+  still declares `textual>=1`, so the client keeps its own flag.
+- **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
+  from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
+  failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
+  startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
@@ -5701,7 +5949,14 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
   Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
-  gate does not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a `read`, as is the same line with `rm -rf`).
+  gate did not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` was a `read`, as was the same line with `rm -rf`)
+  until #718 (#491). The gate now reads the text a line feeds that shell where it can (a here-string, a heredoc, a
+  pipe from `echo`). So `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and `sudo -s <<< 'rm -rf ~/.exo/config.json'`
+  are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
+  as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
+  `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
+  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
@@ -6327,9 +6582,15 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - **Limit:** union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk, and union keeps both sides' copy of that hunk with the lines between. When both sides add under one heading and under the next one just below it, an entry can move to the next heading and the lines between repeat, with no conflict. `tests/test_merge_attributes.py` makes the repeat visible: it fails when a version section of `CHANGELOG.md` holds a bullet twice or a `###` heading with nothing under it. Main has neither today. Where an entry sits stays a reviewer's check.
   - **Rejected for now:** changelog fragments (one file per PR under `changelog.d/`, assembled at release). That ends the conflicts for new PRs entirely, but it changes the docs rule and the release steps, so it needs its own decision.
   - **Docs and user impact:** `.gitattributes`, developer guide section 8 "Branch and merge", `tests/test_merge_attributes.py`. No runtime or user setting changes.
+- **Proposed guidance 2026-10-30 (#1008):** Document GitHub's native stacks, issue artifacts and CLI media alongside the existing author-owned workflow. This guidance is advisory until the principal accepts it. Until then the author and review flow in `docs/REPOSITORY-WORKFLOW.md` governs.
+  - These tools do not change independent current-head review, required checks, merge authority, desktop sync or installation boundaries.
+  - Inventory and coordinate any existing stack with its owners before modifying it. A tool's ability to rebase or merge several branches is not authorization to do so.
+  - **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md` "GitHub collaboration tools (proposed guidance)", developer guide section 8. No runtime or user-guide change.
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
+- **Implementation correction (2026-10-29):** a retryable failure offers "Try again" beside a cached model list too. The existing picker and selection remain usable until a successful refresh replaces the list. Authority refusals still offer no retry.
+- **Focus after a retry (2026-10-30):** the retry redraws the section and drops the focused button. Focus then goes to "Try again" if it is drawn again, else to the model select. A refusal with no list leaves neither, so its message takes focus. An empty list leaves no section, so the workspace takes it. Focus the person moved out of the panel meanwhile is left alone.
 - **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
 - **Why:** the route answered `"core unreachable (<ExceptionName>)"` for every failure, including a core that answered and refused the caller. That reads as a broken connection, so the page could only offer a retry that changes nothing, and an exception class name was the whole diagnosis. Issue #756 is the same defect on the chat side: guidance must follow the failure class, not the fact of a failure.
 - **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
@@ -6345,6 +6606,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     - The parametrized test gains `http_401`, `http_403` and a `SourceError` case, and asserts that no class name or raw JSON reaches the page.
   - On main, five of the cases fail.
   - #856's points 3b and 4 are about the page: a browser test of the three states, and the button after a fetch-level 403. They wait for #850, which rewrites `loadModels` and `retryModels`.
+- **Amendment 2026-11-01 (#1014): focus moved to another Providers control during a retry is kept.** The reply redraws the provider rows and the default model section. It redraws the custom providers section too, unless its form is open (#1036). A control the person moved to while the reply was pending was replaced, and focus fell to the page body.
+  - The focus line above then sent focus to "Try again" after a failure, or to the select after a success. `retryModels()` now names the panel control that holds focus just before it draws the reply. The name is the provider row or section, the tag and the label.
+  - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
+  - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
+  - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).
 - **Decision:** the one dim guidance line reads the recorded model error text. An authentication or permission failure ("HTTP 401", "Incorrect API key", "invalid x-api-key", "authentication", "permission denied") may send the reader to the Providers page. A transport failure (`ReadError`, `ReadTimeout`, `ConnectError`, "stream ended without a response", network and unreachable wording) says the model could not be reached and offers no key advice. Text that reads as neither gets a general line pointing at `/trace`. No text at all (an older core, or a boolean flag) gets the general line too.
@@ -6377,3 +6644,24 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+
+## D-096 (2026-10-31) Harness improvement starts as an offline review-only experiment
+- **Decision:** `exo improve --offline` runs bounded Propose–Probe–Compose experiments on explicitly supplied public/synthetic fixtures through named trusted built-in adapters. Proposers and composers see development behavior, never hidden evaluator values, reference-derived identifiers or held-out inputs. A selected composition must improve on disjoint held-out fixtures without any individual regression before a typed `review_only` proposal is exported.
+- **Authority:** this command never activates notes, registers skills, schedules work or feeds principal learning/promotion. It constructs no principal store and reads no store contents. Its only configuration read is `store.explicit_roots()` to refuse a working directory or resolved export parent/target at or below any recorded principal root, including stores outside Exo home. Existing tool authorization stays in force; the callback API is trusted host code, not an OS/network sandbox.
+- **Why:** establish a usable, reproducible adaptation/evidence workflow before spending on live models or connecting candidate instructions to a person's learning state. Synthetic success proves mechanics, not live effectiveness or authority to promote.
+- **Rejected:** upstream executor defaults as an Exo trust boundary; arbitrary callbacks/code supplied by fixtures; score-bearing hashes in editor context; automatic adoption; treating an improved mean as sufficient when an individual held-out task regresses.
+- **Revisit if:** a separately authorized live pilot supplies explicit route/data/spending authority, executor isolation, real held-out evidence and a reviewed bridge into typed principal proposals with approval and rollback. This decision grants none of those capabilities.
+- **Docs and user impact:** `docs/integrations/HARNESS2.md`, `docs/COMMANDS.md` "Learning and review", `docs/USER-GUIDE.md` §11 "Offline harness experiments", `docs/DEVELOPER-GUIDE.md` §9 "Add an exo subcommand", `docs/DOCS-MAP.md`. Adds an opt-in CLI command and review artifact; ordinary learning and runtime defaults are unchanged.
+
+- **Path-resolution clarification (2026-10-31):** every recorded root must resolve before an experiment can run. A missing target, cyclic symlink or other root-resolution failure refuses the command through its documented path-error exit 2, without a traceback. This catches only the resolution operation; unrelated implementation errors remain errors.
+
+- **Export and diagnostic clarification (2026-10-31):** the command validates the resolved export parent/target against the same protected-root snapshot before reading fixtures or creating output. A store at `improvement-runs` cannot receive an export from its public parent. Resolution failures in `EXO_HOME` or `EXO_PRINCIPAL_STORE` refuse normally; absent environment roots remain allowed. Recorded-root failures name the principal/configuration key to repair or remove, never the full private path, and the user guide states this recovery step.
+
+- **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.
+
+- **Refusal-line clarification (2026-10-31, #1046 review):** each path refusal prints its own cause. A refused or protected working directory, an output name that is not a run ID, and an output run that exists or passes through a link no longer print the generic fixture line. With `EXO_HOME` unset, a broken home or recorded root names the default `~/.exo`, not the variable. No such line holds a path.
+
+- **Letter-case clarification (2026-10-31):** working and export paths match the Exo home, recorded roots and HOME in any letter case, as the gate does (D-087). Each path part is compared case folded and Unicode decomposed. So a root recorded under a case or accent variant still matches on a case-insensitive volume, as default APFS is. Folding only adds matches, so no refusal is lost.
+
+- **Letter-case cost (2026-10-31):** on a case-sensitive volume, a folder that differs from a protected one only by case or Unicode form is refused too. That is the fail-closed side, as in D-087. `EXO_GATE_CASE_SENSITIVE` does not apply, because this refusal only asks for another workspace or run name. The tests make the variant spelling as its own folder, so they simulate a case-insensitive volume on any host.

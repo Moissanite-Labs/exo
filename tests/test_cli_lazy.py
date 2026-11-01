@@ -19,7 +19,8 @@ from exo import cli
 COMMAND_MODULES = (
     'exo.ledger', 'exo.store', 'exo.crypto', 'exo.ingest.cli', 'exo.ask', 'exo.eval', 'exo.brief',
     'exo.consolidate', 'exo.onboard', 'exo.upstream', 'exo.cli_chat', 'exo.models_cmd', 'exo.providers_cmd',
-    'exo.decide_cmd', 'exo.trace_cmd', 'exo.memory_cmd', 'exo.baseline.cli', 'httpx', 'nacl',
+    'exo.decide_cmd', 'exo.trace_cmd', 'exo.memory_cmd', 'exo.baseline.cli',
+    'exo.improvement.offline', 'httpx', 'nacl',
 )
 
 # Every name `from exo.cli import ...` could reach before #260, other than the functions still defined here.
@@ -68,7 +69,8 @@ def test_version_loads_only_what_reading_the_version_needs():
     assert loaded_after(run_main('--version')) == alone
 
 
-@pytest.mark.parametrize('cmd,own', [('models', 'exo.models_cmd'), ('ask', 'exo.ask'), ('log', 'exo.ledger')])
+@pytest.mark.parametrize('cmd,own', [('models', 'exo.models_cmd'), ('ask', 'exo.ask'), ('log', 'exo.ledger'),
+                                    ('improve', 'exo.improvement.offline')])
 def test_a_command_loads_its_own_module_and_not_the_rest(cmd, own):
     alone = set(loaded_after(f'import {own}'))
     assert own in alone and set(loaded_after(run_main(cmd, '--help'))) == alone

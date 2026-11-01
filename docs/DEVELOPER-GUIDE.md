@@ -350,7 +350,16 @@ in whichever agent the host built then (#389, #580). A compression move carries 
 listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
 `exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it. A host with no
 agent left reports `exo.host_undo.report(session)` itself, which reaches the engines still registered for the
-session (#580).
+session (#580). A host that reports no undo at all, such as Hermes's messaging gateway, is covered when it sends
+its whole transcript as `conversation_messages` and the turn's message as `incoming_message`. The first such turn
+of a session in a new engine drops a pin whose message the transcript no longer holds, when the transcript is the
+one noted last with its tail cut at or before the pin's lead (#537). A host that trims the start of its transcript
+drops nothing that way, unless the rows left read word for word like the session's first rows. One that edits an
+earlier user row keeps the pins after it. One that leaves the turn's message out of `conversation_messages` keeps
+a pin first said in the last turn before an undo, as no transcript held the pin's message to note its lead. It also
+keeps every pin when the next turn's message repeats the last user row an undo left and no user or summary row
+comes before that row. A host that keeps its engine across an undo must report it: once that engine runs a turn
+after the undo, no later engine drops the pins.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
@@ -653,6 +662,8 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
+    categories; it never prints the raw browser output.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
@@ -746,7 +757,7 @@ example with `git filter-repo`), then publish.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.
 
-**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries and verification.
+**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries, verification, and proposed guidance on GitHub stacks, issue plans and media evidence.
 
 **Branch and merge.**
 
@@ -1161,6 +1172,21 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
 
+`exo improve --offline` (D-096) is a storeless CLI example in
+`src/exo/improvement/offline.py`: use the existing lazy registration path without
+`STORE_CMDS` or the common principal flags. Its workspace guard reads only the
+recorded root list through `store.explicit_roots()` and checks the same resolved
+root snapshot for working and export paths; do not construct a store or load its
+contents. Boundary diagnostics identify configuration keys or environment settings,
+not private path values. Fixture JSON cannot select imports or callbacks. Preserve
+editor/evaluator separation and the disjoint held-out gate when changing the
+trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
+`tests/test_cli_lazy.py` and `tests/docs` after a change.
+
+A new path refusal in that command raises `BoundaryError`, so it prints its own
+line instead of the fixture line. Compare paths with `_at_or_below`. It folds
+letter case as D-087 does for the gate, and Unicode form too.
+
 ### Web composer draft ownership
 
 `plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
@@ -1171,3 +1197,13 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Public history preparation
+
+Before sharing repository history, follow `docs/PUBLIC-HISTORY-CLEANUP.md`. The read-only
+`scripts/audit_public_history.py` reports counts for the historical paths in #49 without printing
+matched content. It does not rewrite or push history. The runbook separates private rehearsal,
+independent verification, final remote-ref approval and retained-copy review.
+Ordinary clones have local coverage only; overall completeness requires a fresh full mirror
+verified with `--verify-remote origin`. Literal checks include object contents, historical paths
+and ref names, with counts reported separately.

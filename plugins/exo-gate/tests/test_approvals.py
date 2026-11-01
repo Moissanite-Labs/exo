@@ -791,6 +791,36 @@ def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     assert events(store)[-1]["decision"]["reserved"] == [["vcs_merge", "#3"]]
 
 
+@pytest.mark.parametrize("gates", ['reserved: ["target:*/shared/*"]\n', "reserved: [local_write]\n"])
+def test_a_grant_on_a_linked_spelling_never_covers_the_reserved_place_it_lands_in(tmp_path, gates):
+    # exo-desktop #52 with D-075: a write through a linked folder is also a write of the place it lands in, a part of
+    # its own. A grant is keyed on the path as spelt, so a reserved entry that matches the place keeps the principal's
+    # ask: the link may lead elsewhere by the next call. The place spelt as itself is the call's own act, so a grant on
+    # it covers it. On main the linked write was allowed under the entry on the place, and a grant covered it under
+    # the entry on the category.
+    _, _, ctx = _store454(tmp_path, "st52", gates)
+    shared, work = tmp_path / "shared", tmp_path / "work"
+    shared.mkdir()
+    work.mkdir()
+    (work / "o").symlink_to(shared)
+    place = os.path.join(os.path.realpath(shared), "plain.txt")
+    [cb] = ctx.hooks["pre_tool_call"]
+
+    def write(path):
+        return asyncio.run(cb(tool_name="write_file", args={"path": path, "content": "x"}, session_id="s1",
+                              tool_call_id="c1", turn_id="t1", cwd=str(work)))
+
+    r = write(place)
+    assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
+    answer(ctx, r, "always")
+    assert write(place) is None
+    for _ in range(2):
+        r = write("o/plain.txt")
+        assert r is not None and r["action"] == "approve" and "reserved for the principal" in r["message"], r
+        assert f"a link leads it to {place}" in r["message"], r
+        answer(ctx, r, "always")
+
+
 def test_a_grant_for_one_push_does_not_cover_a_second_push_with_other_credentials(tmp_path):
     # D-075: the ledger view redacts URL userinfo, but the grant check compares the hits as written, so a
     # second push to the same URL under other credentials is not taken for the push the grant was given for.
@@ -1034,3 +1064,18 @@ def test_footer_exposures_limits_the_footer_to_public():
     assert "missing footer: > Automated." not in gate.decide(c, pol).violations
     c.exposure = "public"
     assert "missing footer: > Automated." in gate.decide(c, pol).violations
+
+
+@pytest.mark.parametrize("filename", ["gates.yaml", "budget.yaml", "approvals.yaml"])
+def test_map_value_starting_with_closer_keeps_existing_deny(keyed_store, filename):
+    store, key = keyed_store
+    policies = store / "policies"
+    gates = "deny:\n  - command: '^rm '\n"
+    if filename == "gates.yaml":
+        gates += "note: {x: ], y: 1}\n"
+    else:
+        (policies / filename).write_text("note: {x: ], y: 1}\n")
+    (policies / "gates.yaml").write_text(gates)
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "terminal", {"command": "rm -rf build"})
+    assert result and result["action"] == "block", result

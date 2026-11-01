@@ -332,13 +332,186 @@ def long_session(app, n):
     app.render_history(long_history(n))
 
 
+def at_bottom(tr):
+    return tr.max_scroll_y > 0 and tr.scroll_y == tr.max_scroll_y
+
+
+def tool_history(n):
+    """n rounds of a question, a tool call with eight lines of output, and an answer."""
+    msgs = []
+    for i in range(n):
+        out = "\n".join(f"line {k}" for k in range(8))
+        msgs += [{"id": f"u{i}", "role": "user", "content": [{"type": "text", "text": f"question {i}"}]},
+                 {"id": f"c{i}", "role": "assistant", "content": [],
+                  "tool_calls": [{"id": f"call{i}", "name": "read_file", "arguments": {"path": f"f{i}"}}]},
+                 {"id": f"r{i}", "role": "tool",
+                  "tool_results": [{"call_id": f"call{i}", "content": [{"type": "text", "text": out}]}]},
+                 {"id": f"a{i}", "role": "assistant", "content": [{"type": "text", "text": f"answer {i}"}]}]
+    return msgs
+
+
+def late_paints(monkeypatch, delay=0.3):
+    """Blocks paint in on_mount. Hold each paint back, as a slow runner does, until the empty blocks have been laid
+    out and scrolled to. The first scroll then lands at row 49 of 129, the numbers of the hosted failure in #1023."""
+    paint = Block.on_mount
+
+    def late(self):
+        self.set_timer(delay, lambda: paint(self))
+
+    monkeypatch.setattr(Block, "on_mount", late)
+
+
 def test_classic_opens_at_the_latest_message_at_the_bottom(tmp_path):
     async def sc(app, pilot, client, eng):
         long_session(app, 40)
-        await pilot.pause(0.5)
         tr = app.transcript
-        assert tr.max_scroll_y > 0
-        assert tr.scroll_y == tr.max_scroll_y
+        await until(lambda: at_bottom(tr), pilot)
+        await pilot.pause(0.2)  # and it stays there once the layout settles
+        assert at_bottom(tr)
+
+    run(tmp_path, sc)
+
+
+def test_classic_keeps_following_the_bottom_while_blocks_paint_late(tmp_path, monkeypatch):
+    """#1023: the first scroll can land before every block has its height. The view follows the bottom down."""
+    async def sc(app, pilot, client, eng):
+        late_paints(monkeypatch)
+        long_session(app, 40)
+        tr = app.transcript
+        blocks = [w for w in tr.children if isinstance(w, Block)]
+        await until(lambda: all(b.shown is not None for b in blocks), pilot)
+        await pilot.pause(0.2)
+        assert at_bottom(tr)
+
+    run(tmp_path, sc)
+
+
+def test_classic_leaves_a_reader_who_scrolled_up_in_place(tmp_path, monkeypatch):
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(tool_history(10))
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        tr.scroll_to(y=3, animate=False)
+        await until(lambda: tr.scroll_y == 3, pilot)
+        await pilot.press("ctrl+o")  # every tool output opens: the content grows below the reader
+        await until(lambda: all(tb.expanded for tb in app.tools.values()), pilot)
+        await pilot.pause(0.2)
+        assert tr.scroll_y == 3
+
+    run(tmp_path, sc)
+
+
+def test_classic_a_reader_one_line_up_is_not_pulled_down(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(tool_history(10))
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        up = tr.max_scroll_y - 1
+        tr.scroll_to(y=up, animate=False)
+        await until(lambda: tr.scroll_y == up, pilot)
+        await pilot.press("ctrl+o")
+        await until(lambda: all(tb.expanded for tb in app.tools.values()), pilot)
+        await pilot.pause(0.2)
+        assert tr.scroll_y == up
+
+    run(tmp_path, sc)
+
+
+def test_classic_scrolling_back_to_the_bottom_follows_again(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(tool_history(10))
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        tr.scroll_to(y=3, animate=False)  # the reader scrolls up ...
+        await until(lambda: tr.scroll_y == 3, pilot)
+        tr.scroll_end(animate=False)  # ... and back down to the end
+        await until(lambda: at_bottom(tr), pilot)
+        before = tr.max_scroll_y
+        await pilot.press("ctrl+o")  # the content grows below: the view follows it again
+        await until(lambda: tr.max_scroll_y > before, pilot)
+        await pilot.pause(0.2)
+        assert at_bottom(tr)
+
+    run(tmp_path, sc)
+
+
+def test_classic_a_wheel_notch_up_during_live_tool_output_stands(tmp_path):
+    """A follow queued by one output line must not undo the reader's scroll that lands before it runs."""
+    from exo.core.types import ToolCall
+    from exo.protocol import schema as s
+
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(tool_history(10))
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        await pilot.press("ctrl+o")  # tool output open: each new output line grows the live block
+        await pilot.pause(0.2)
+        app.handle(s.Event.of(s.ToolStarted(call=ToolCall("live", "bash", {"command": "x"})), seq=1,
+                              session=app.session))
+        undone = 0
+        for k in range(8):
+            tr.scroll_end(animate=False)
+            await until(lambda: at_bottom(tr), pilot)
+            await pilot.pause(0.1)  # every scroll already asked for has landed
+            app.handle(s.Event.of(s.ToolOutput(call_id="live", text=f"out {k}\n"), seq=2 + k, session=app.session))
+            await pilot.pause(0)  # the new line is laid out, and a follow is queued
+            tr.scroll_relative(y=-2, animate=False)  # one wheel notch up, right then
+            up = tr.scroll_y
+            await pilot.pause(0.15)
+            undone += tr.scroll_y > up
+        assert undone == 0  # the reader's notch stands, as it does on a still transcript
+
+    run(tmp_path, sc)
+
+
+def test_classic_a_thread_opened_from_the_top_of_another_follows_its_late_paints(tmp_path, monkeypatch):
+    """Reading the top of one thread, then opening another: the new thread follows its bottom while it paints."""
+    async def sc(app, pilot, client, eng):
+        long_session(app, 40)
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        tr.scroll_home(animate=False)  # the reader is at the top: not following
+        await until(lambda: tr.scroll_y == 0, pilot)
+        late_paints(monkeypatch)
+        long_session(app, 12)  # unpainted, its blocks fit the screen, so the first scroll moves nothing; painted, they scroll
+        blocks = [w for w in tr.children if isinstance(w, Block)]
+        await until(lambda: all(b.shown is not None for b in blocks), pilot)
+        await pilot.pause(0.2)
+        assert at_bottom(tr)
+
+    run(tmp_path, sc)
+
+
+def test_classic_at_the_bottom_stays_there_when_tool_output_opens(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(tool_history(10))
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        before = tr.max_scroll_y
+        await pilot.press("ctrl+o")
+        await until(lambda: tr.max_scroll_y > before, pilot)
+        await pilot.pause(0.2)
+        assert at_bottom(tr)
+
+    run(tmp_path, sc)
+
+
+def test_classic_f6_at_the_bottom_keeps_the_reader_at_the_page_it_loaded(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        long_session(app, appmod.WINDOW + 10)
+        tr = app.transcript
+        await until(lambda: at_bottom(tr), pilot)
+        await pilot.press("f6")
+        await until(lambda: not app.older and app.earlier_row is None, pilot)
+        await pilot.pause(0.3)
+        assert tr.scroll_y < tr.max_scroll_y  # what was first on screen is still in view, not the bottom
 
     run(tmp_path, sc)
 
@@ -348,8 +521,9 @@ def test_inverse_opens_at_the_latest_message_at_the_top(tmp_path, monkeypatch):
 
     async def sc(app, pilot, client, eng):
         long_session(app, 40)
-        await pilot.pause(0.5)
         tr = app.transcript
+        await until(lambda: tr.max_scroll_y > 0, pilot)
+        await pilot.pause(0.2)
         assert tr.max_scroll_y > 0 and tr.scroll_y == 0
         first = [w for w in tr.children if isinstance(w, Block) and w.kind in ("user", "assistant")][0]
         assert first.text.startswith("answer 39")
