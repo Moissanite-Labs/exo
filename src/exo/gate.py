@@ -10687,6 +10687,8 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
     """Parse a flow value starting at s[i]; return (value, index after it)."""
     while i < len(s) and s[i] in " \t":
         i += 1
+    if i >= len(s) or s[i] in "]}":
+        raise PolicyError("unclosed or mismatched flow collection")
     if s[i] == "[":
         out, i = [], i + 1
         while True:
@@ -10696,7 +10698,12 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
                 raise PolicyError(f"unterminated flow list: {s!r}")
             if s[i] == "]":
                 return out, i + 1
+            if s[i] == "}":
+                raise PolicyError("unclosed or mismatched flow collection")
+            start = i
             v, i = _flow(s, i)
+            if i <= start:
+                raise PolicyError("unclosed or mismatched flow collection")
             out.append(v)
     if s[i] == "{":
         out, i = {}, i + 1
@@ -10710,7 +10717,13 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
             k, i = _flow_atom(s, i, stop=":")
             if i >= len(s) or s[i] != ":":
                 raise PolicyError(f"flow map key without value: {s!r}")
-            v, i = _flow(s, i + 1)
+            j = i + 1
+            while j < len(s) and s[j] in " \t":
+                j += 1
+            if j < len(s) and s[j] in "]},":
+                v, i = None, j
+            else:
+                v, i = _flow(s, i + 1)
             out[str(k)] = v
     return _flow_atom(s, i, stop=",]}")
 
@@ -10754,7 +10767,10 @@ def parse_yaml(text: str) -> Any:
             lines.append((len(body) - len(body.lstrip(" ")), body.strip(), n))
     if not lines:
         return None
-    val, i = _block(lines, 0, lines[0][0], raw)
+    try:
+        val, i = _block(lines, 0, lines[0][0], raw)
+    except (json.JSONDecodeError, IndexError, RecursionError) as e:
+        raise PolicyError(f"malformed YAML: {e}") from e
     if i != len(lines):
         raise PolicyError(f"unexpected indentation at line {lines[i][2] + 1}: {lines[i][1]!r}")
     return val
