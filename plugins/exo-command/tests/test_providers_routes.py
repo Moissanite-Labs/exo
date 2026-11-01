@@ -104,7 +104,7 @@ def ok_headers(port, **extra):
                                   "null-origin", "https-origin", "origin-other-port", "cross-site", "same-site",
                                   "no-host"])
 @pytest.mark.parametrize("route", ["/api/providers/openai/key", "/api/providers/openai/remove",
-                                   "/api/providers/openai/test", "/api/providers/default", "/api/providers"])
+                                   "/api/providers/openai/test", "/api/providers/default", "/api/providers/custom", "/api/providers"])
 def test_key_routes_refuse_without_every_check(case, route):
     async def go(web, port):
         h = ok_headers(port)
