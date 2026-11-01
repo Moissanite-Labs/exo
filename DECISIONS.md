@@ -5076,6 +5076,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
   failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
   startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
+- **Test-harness amendment 2026-11-01 (#907):** the first Chrome start in a test process waits up to 90 s for
+  `DevToolsActivePort`. Later starts keep the 20 s deadline. The two hosted `DevToolsActivePort` timeouts on record,
+  in the ubuntu jobs of #1036 (reported in #907) and #1092, were each the job's first real start, in
+  `test_csp_web.py`, out of many starts per job. A fresh hosted runner reads the browser from a cold disk on that
+  start. The longer wait ends only once a start has reached DevTools, so a failed cold start does not shorten the
+  next one. Like the 90 s for the first DevTools replies, this is a wait for Chrome to start, not a bound a test
+  asserts. It does not cover the macOS case where Chrome started but did not answer `Page.enable` within 90 s.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls

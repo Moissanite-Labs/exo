@@ -15,6 +15,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Tests: the first headless Chrome start in a test run waits up to 90 s for DevTools instead of 20 s (#907, D-046
+  amendment). The two hosted startup timeouts on record were each a job's first start, in `test_csp_web.py`, where a
+  fresh runner reads the browser from a cold disk. Later starts keep 20 s.
 - The terminal's classic layout can no longer open a long thread short of its newest message (#1023, D-046
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes

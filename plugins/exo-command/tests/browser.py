@@ -22,6 +22,13 @@ from typing import Any, Optional
 
 MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 START_TIMEOUT = 20.0
+# #907: the first Chrome start in a test run can be far slower than the ones after it. On a fresh hosted runner it
+# reads the browser and its libraries from a cold disk. The two hosted DevToolsActivePort timeouts on record (#1036's
+# ubuntu job, reported in #907, and #1092's) were each the job's first real start, in test_csp_web.py, out of many
+# starts in each job. Like the 90 s for the first replies in Browser._start, this is a wait for Chrome to start, not
+# a bound any test asserts.
+FIRST_START_TIMEOUT = 90.0
+_started = False  # set once a Chrome in this process has written DevToolsActivePort
 STDERR_LIMIT = 16384
 # Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
 STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
@@ -171,6 +178,7 @@ class Browser:
             raise
 
     def _start(self, chrome, width, height):
+        global _started
         self.proc = subprocess.Popen(
             # #907: keep a headless page's timers and frames running at full rate, whatever the runner's window state
             [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
@@ -182,7 +190,8 @@ class Browser:
         self._stderr = _StderrTail(self.proc.stderr)
         atexit.register(self.close)  # never leave a browser behind, even when a test dies
         port_file = Path(self.profile) / "DevToolsActivePort"
-        end = time.monotonic() + START_TIMEOUT
+        limit = START_TIMEOUT if _started else FIRST_START_TIMEOUT
+        end = time.monotonic() + limit
         while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:
             if self.proc.poll() is not None:
                 self._stderr.finish()
@@ -194,8 +203,9 @@ class Browser:
             if self.proc.poll() is not None:
                 raise RuntimeError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
                                    f"stderr: {self._stderr.hints()}")
-            raise RuntimeError(f"Chrome did not create DevToolsActivePort within {START_TIMEOUT:g}s; "
+            raise RuntimeError(f"Chrome did not create DevToolsActivePort within {limit:g}s; "
                                f"stderr: {self._stderr.hints()}")
+        _started = True  # Chrome is loaded; a failure after this point is not a slow cold start
         port = port_file.read_text().split()[0]
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
         page = next(t for t in targets if t.get("type") == "page")

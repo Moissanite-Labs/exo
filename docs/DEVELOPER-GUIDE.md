@@ -664,6 +664,9 @@ these tests so that only the defect they guard against can fail them:
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
     categories; it never prints the raw browser output.
+  - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
+    hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
+    were each a job's first start (#907). A start that never reaches DevTools leaves the next one the longer wait.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,

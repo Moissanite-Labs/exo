@@ -89,12 +89,55 @@ def test_timeout_terminates_chrome_and_removes_profile(fake_chrome, monkeypatch)
         "time.sleep(30)\n"
     )
     monkeypatch.setattr(browser, "START_TIMEOUT", 0.5)
+    monkeypatch.setattr(browser, "_started", True)  # a later start in the run, so the 0.5 s wait applies
     with pytest.raises(RuntimeError) as exc:
         browser.Browser()
     msg = str(exc.value)
     assert "did not create DevToolsActivePort within 0.5s" in msg and "D-Bus" in msg
     assert "synthetic-private" not in msg
     assert processes[0].poll() is not None and not os.path.exists(profiles[0])
+
+
+def test_the_first_start_in_a_run_gets_the_longer_wait(fake_chrome, monkeypatch):
+    """#907: a cold first start may take longer than START_TIMEOUT; a failed start does not use that allowance up."""
+    profiles, processes = fake_chrome("import time\ntime.sleep(30)\n")
+    monkeypatch.setattr(browser, "START_TIMEOUT", 0.2)
+    monkeypatch.setattr(browser, "FIRST_START_TIMEOUT", 1.0)
+    monkeypatch.setattr(browser, "_started", False)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"DevToolsActivePort within 1s"):
+        browser.Browser()
+    assert time.monotonic() - started >= 1.0
+    assert browser._started is False  # it never reached DevTools, so the next start still waits the longer time
+    with pytest.raises(RuntimeError, match=r"DevToolsActivePort within 1s"):
+        browser.Browser()
+    monkeypatch.setattr(browser, "_started", True)
+    with pytest.raises(RuntimeError, match=r"DevToolsActivePort within 0.2s"):
+        browser.Browser()
+    assert all(p.poll() is not None for p in processes) and not any(os.path.exists(p) for p in profiles)
+
+
+def test_a_slow_first_start_is_not_a_timeout_and_ends_the_allowance(fake_chrome, monkeypatch):
+    """A first start slower than START_TIMEOUT goes on to DevTools; once one has, later starts get START_TIMEOUT."""
+    profiles, processes = fake_chrome(
+        "import pathlib, sys, time\n"
+        "time.sleep(0.8)\n"
+        "profile = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--user-data-dir='))\n"
+        "pathlib.Path(profile, 'DevToolsActivePort').write_text('12345\\n')\n"
+        "time.sleep(30)\n"
+    )
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic connection error")
+    monkeypatch.setattr(browser.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(browser, "START_TIMEOUT", 0.2)
+    monkeypatch.setattr(browser, "FIRST_START_TIMEOUT", 10.0)
+    monkeypatch.setattr(browser, "_started", False)
+    with pytest.raises(RuntimeError, match="synthetic connection error"):  # past the port file, not a timeout
+        browser.Browser()
+    assert browser._started is True
+    with pytest.raises(RuntimeError, match=r"DevToolsActivePort within 0.2s"):
+        browser.Browser()
+    assert all(p.poll() is not None for p in processes) and not any(os.path.exists(p) for p in profiles)
 
 
 def test_error_after_port_creation_still_cleans_up(fake_chrome, monkeypatch):
