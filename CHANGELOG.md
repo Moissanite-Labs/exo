@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The terminal's classic layout can no longer open a long thread short of its newest message (#1023, D-046
+  amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
+  scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
+  the hosted CI failure `assert 49 == 129` in `test_classic_opens_at_the_latest_message_at_the_bottom`.
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
