@@ -470,7 +470,7 @@ class TreeContext:
                             text += "\n\n## Principal directives restored verbatim by the harness\n" + "\n".join(
                                 f'- "{d}"' for d in lost)
                 else:
-                    left, right = (self._body(c) for c in self._children(node))  # a skipped child counts verbatim
+                    left, right = self._halves(node)  # a skipped child counts verbatim
                     source = left + right
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, right, previous=left)
@@ -579,6 +579,12 @@ class TreeContext:
     def _children(self, node: SummaryNode) -> tuple[SummaryNode, SummaryNode]:
         by_key = {(n.level, n.index): n for n in self._nodes(node.session)}
         return by_key[(node.level - 1, node.index * 2)], by_key[(node.level - 1, node.index * 2 + 1)]
+
+    @_one_read
+    def _halves(self, node: SummaryNode) -> tuple[str, str]:
+        """A merge's two children as the view shows them. A skipped child below it does not read the tree again."""
+        left, right = (self._body(c) for c in self._children(node))
+        return left, right
 
     def import_messages(self, session: str, messages: list[Message]) -> None:
         """Append history from elsewhere; its summaries run in the import lane."""
@@ -984,7 +990,13 @@ class AgentContext(TreeContext):
     def _source_tokens(self, node: SummaryNode) -> int:
         if node.level == 0:
             return estimate_tokens("\n\n".join(render_message(m) for m in self._read(node.session, node.start - 1, node.end)))
-        return estimate_tokens("".join(self._body(c) for c in self._children(node)))
+        return estimate_tokens("".join(self._halves(node)))
+
+    @_one_read
+    def _folded(self, new: list[SummaryNode]) -> list[dict[str, Any]]:
+        """Each new summary's size before and after, from one read of the tree for all of them."""
+        return [{"level": n.level, "start": n.start, "end": n.end, "before_tokens": self._source_tokens(n),
+                 "after_tokens": estimate_tokens(n.text)} for n in new if n.status == "done"]
 
     async def compact(self, session: str, system: str = "", timeout: float = 600.0) -> dict[str, Any]:
         """Summarize now whatever is eligible for this thread's agent: every full leaf (no tail wait), then merges
@@ -1009,8 +1021,7 @@ class AgentContext(TreeContext):
         if frontier:  # let this thread's tail drop what the new summaries now cover
             self.store.update_meta(session, {"compact_seq": self.store.last_logged_seq(session, frontier)})
         after = self.report(session, system)
-        folded = [{"level": n.level, "start": n.start, "end": n.end, "before_tokens": self._source_tokens(n),
-                   "after_tokens": estimate_tokens(n.text)} for n in new if n.status == "done"]
+        folded = self._folded(new)
         return {"before": before, "after": after, "folded": folded, "complete": ok, "captured": captured,
                 "skipped": sum(1 for n in new if n.status == "skipped"),
                 "failed": [n.text for n in new if n.status == "failed"]}
