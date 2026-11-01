@@ -86,11 +86,11 @@ participant input, not commands.
 
 `run_turn` must return an object with:
 
-- `stop_reason` — `"interrupted"` classifies the member as `"cancelled"`
+- `stop_reason`: `"interrupted"` classifies the member as `"cancelled"`
   and cancels its task; anything other than `"end"` (or a truthy `error`)
   records an `"error"` outcome and fails the member;
-- `error` — any truthy value fails the turn as above;
-- `message` — on success, `message.text()` is the reply; an empty reply
+- `error`: any truthy value fails the turn as above;
+- `message`: on success, `message.text()` is the reply; an empty reply
   publishes nothing but the inputs are still consumed.
 
 A `run_turn` that raises also records `"error"` and fails the member with
@@ -144,11 +144,11 @@ A member stops with `reason="budget"` after `max_turns` **successful**
 turns; failed and cancelled turns are never charged. Budget exhaustion
 does not drain the queue: recipients can accumulate durable pending input
 while stopped, and the host must observe (`pending()`, `observe()`) and
-manage that backlog — nothing retries or resumes the member automatically.
+manage that backlog; nothing retries or resumes the member automatically.
 
 `reason="cancelled"` covers every host-stop path: cancellation while idle
 in `checkpoint`/`_wait`, cancellation propagating out of `run_turn`, an
-engine reporting `stop_reason == "interrupted"`, and — critically — a stop
+engine reporting `stop_reason == "interrupted"`, and, critically, a stop
 that lands mid-turn but is swallowed by the engine into a normal return.
 The adapter re-checks the task's cancellation request after `run_turn`
 returns and before any publish/consume, so a swallowed stop still
@@ -179,3 +179,17 @@ lingers inside a long idle wait.
 - After a `failed` receipt, reconcile durable `pending()` input against
   `history()` before sending more work; expect possible duplicate replies
   when re-driving interrupted members.
+
+## Host conversation opt-in
+
+`GroupHost.start(..., conversation=ConversationOptions(...))` accepts the
+reactive adapter on the host's behalf: `start` builds one
+`GroupConversationAdapter` with audiences fixed by the stored group mode
+and validated bounds (`max_turns` >= 1, `idle_timeout` > 0, checked
+before the engine factory and any durable claim), starts it, and stores a
+per-start `ConversationWake`. Every accepted host send persists the
+message first and then sets that wake. There is **no client activation**:
+the opt-in is a host-side runtime binding that constructs no client,
+connection or UI, sends nothing on the wire, and requires no member
+presence; member loops idle on durable pending input, and a missed wake
+degrades to the bounded idle poll. Host objects stay out of model view.
