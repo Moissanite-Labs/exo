@@ -230,6 +230,74 @@ def test_a_gh_body_from_an_escape_stays_unseen(line):
     assert [decide(c, p).outcome for p in POLICIES] == ["ask"] * 4
 
 
+# #864 opens a compound behind `!`, `then`, `else` or `{` before a `coproc`, and right after `coproc NAME {` or
+# `function NAME {`, in a reading of the call of its own (_late_reading). That reading has its printed reading too,
+# as #853's opened reading has. A pipe from printf or `echo -e` into a shell inside such a compound decides as the
+# same line with the escape written out. Main's reading reads the parts of a compound it leaves unopened, so these
+# rows decided so without the late reading's printed reading too. Each pipe comes after a `:`, since main reads an
+# `echo` or `printf` pipe that starts a group, a `then` or a `do` as `opaque_exec`, written out or not.
+POST = ("github_post", "ask", "ask", "ask", "ask")
+LATE_SHAPES = ["! coproc { :; %s; }", "! coproc for i in 1; do :; %s; done", "if true; then coproc { :; %s; }; fi",
+               "if false; then :; else coproc { :; %s; }; fi", "{ coproc { :; %s; }; }", "! time coproc { :; %s; }",
+               "{ time coproc W { for i in 1; do :; %s; done; }; }", "coproc W { for i in 1; do :; %s; done; }",
+               "function f { for i in 1; do :; %s; done; }", "{ coproc W { while :; do :; %s; done; }; }"]
+PRINTED_PIPES = [
+    (r"printf 'r\x6d -rf /srv/data' | bash", "printf 'rm -rf /srv/data' | bash", DELETE),
+    (r"echo -e 'r\x6d -rf /srv/data' | sh", "echo -e 'rm -rf /srv/data' | sh", DELETE),
+    (rf"printf '{CP}\n' | bash", f"printf '{CP}\n' | bash", STORE),
+    (rf"echo -e '{CP}\n' | sudo -s", f"echo -e '{CP}\n' | sudo -s", STORE),
+    (r"printf 'git push --forc\x65 origin main' | bash", "printf 'git push --force origin main' | bash", FORCE),
+    (r"printf 'gh pr comment 1 --body h\x69' | bash", "printf 'gh pr comment 1 --body hi' | bash", POST),
+]
+
+
+@pytest.mark.parametrize("shape", LATE_SHAPES)
+@pytest.mark.parametrize("escaped, written, want", PRINTED_PIPES)
+def test_a_printed_pipe_in_a_late_opened_compound_reads_as_written_out(shape, escaped, written, want):
+    assert _decided(shape % escaped) == _decided(shape % written) == want
+
+
+# The compound can also be in what the command writes, where only the printed reading sees it. There a loop that
+# `cd`s into the store is read a second time, as #479 reads it, and a heredoc after a block's `}` reaches the shell
+# inside it. Each row hides the compound from the text as written: its newlines are `\n`, or a word that opens it
+# is spelt with an escape. Without the late reading's printed reading, the rows behind `!`, `then`, `else`, `{`,
+# `coproc NAME {` and `function NAME {` read the loop as written only and asked under `deny: [store_write]`, and the
+# heredoc's delete was `opaque_exec`. #853's opened reading has its printed reading, so the rows behind `time`
+# decided so already.
+LOOP_STORE = ("opaque_exec", "ask", "deny", "ask", "ask")
+STORE_LOOP = "cp /tmp/evil gates.yaml; cd ~/.exo/policies"
+OUTPUT_SHAPES = [   # the compound, then the word that opens it and that word spelt with an escape
+    ("! coproc for i in 1 2; do %s; done", "! ", r"\x21 "),
+    ("if true; then coproc for i in 1 2; do %s; done; fi", "then", r"\x74hen"),
+    ("if false; then :; else coproc for i in 1 2; do %s; done; fi", "for", r"\x66or"),
+    ("{ coproc for i in 1 2; do %s; done; }", "{", r"\x7b"),
+    ("! time coproc for i in 1 2; do %s; done", "! ", r"\x21 "),
+    ("time ! coproc for i in 1 2; do %s; done", "! ", r"\x21 "),
+    ("{ time coproc W { for i in 1 2; do %s; done; }; }", "{", r"\x7b"),
+    ("coproc W { for i in 1 2; do %s; done; }", "{", r"\x7b"),
+    ("function f { for i in 1 2; do %s; done; }", "{", r"\x7b"),
+    ("{ coproc W { while :; do %s; done; }; }", "{", r"\x7b"),
+]
+OUTPUT_ROWS = [
+    (f"{cmd} '{escaped}' | bash", f"{cmd} '{written}' | bash", LOOP_STORE)
+    for shape, word, spelt in OUTPUT_SHAPES
+    for written, escaped in [((shape % STORE_LOOP).replace("; ", "\n"), (shape % STORE_LOOP).replace("; ", r"\n")),
+                             (shape % STORE_LOOP, (shape % STORE_LOOP).replace(word, spelt, 1))]
+    for cmd in ("printf", "echo -e")
+] + [
+    (f"{cmd} '{escaped}' | bash", f"{cmd} '{written}' | bash", DELETE)
+    for lines in [["! coproc W { bash", " } <<EOF", "rm -rf /srv/data", "EOF"],
+                  ["if true", " then coproc W { bash", " } <<EOF", "rm -rf /srv/data", "EOF", "fi"]]
+    for written, escaped in [("\n".join(lines), r"\n".join(lines))]
+    for cmd in ("printf", "echo -e")
+]
+
+
+@pytest.mark.parametrize("escaped, written, want", OUTPUT_ROWS)
+def test_a_late_opened_compound_in_the_output_reads_as_written_out(escaped, written, want):
+    assert _decided(escaped) == _decided(written) == want
+
+
 # What bash 5.2's printf builtin writes for these words (checked against it), or None where the gate is not sure.
 PRINTF = [
     (["a\\nb"], "a\nb"),

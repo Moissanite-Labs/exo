@@ -9534,8 +9534,8 @@ def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classifica
     it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once: decide keeps the
     strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
     lower than before. It runs after #853's opened reading (_opened_reading), each beside main's. The late reading
-    has its printed reading too (#1047, _printed_reading), as the opened reading has, so a printf or `echo -e` pipe
-    into a shell in a compound only this reading opens is read with what the command writes."""
+    has its printed reading too (#1047, _printed_reading), as the opened reading has, so a compound only this reading
+    opens is also opened in what printf or `echo -e` writes to a shell."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _late_open.set(True), _late_met.set(None)
     try:

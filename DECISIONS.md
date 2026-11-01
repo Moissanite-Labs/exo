@@ -1388,6 +1388,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   #853's opened reading and #584's joined reading are read. It reads `out` there in place of the text as written.
   The first reading reads the text as written only and marks the call (`_printed_met`). It is main's reading.
 
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864,
+  `_late_reading`) each have a printed reading of their own too, so a compound only they open is read in the output.
+
   `decide` keeps the strictest of the two readings, so no decision is lower than main's. The call leads with the
   reading `_combine` would pick of the two (`_beside` with `lead`): credentials, then a store write, then the more
   severe. So the printf line above is a `store_write`, as the line without `\n` is.

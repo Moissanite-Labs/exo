@@ -1363,6 +1363,11 @@ gate does not read:
   of the two. The call leads with the reading a line of both would lead with: credentials, then a
   store write, then the more severe.
 
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then`
+  or `{` (#864) each read what the command writes in a printed reading of their own too. So
+  `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
+  is read as the same line with `!`, and `deny: [store_write]` denies it.
+
   So the output spends no budget of the reading as before. A later command on the line is read in
   full there, also past 16 printed readings of a sudo word that may take a value or 24 printed
   parts that only bash's reading opens. The posts in the output take no room from the violations

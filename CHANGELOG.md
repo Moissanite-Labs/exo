@@ -23,6 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
   written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
   `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864) read
+  the output too.
 
   A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
   Interpreters and SQL clients still read the text as written only. Tests:
