@@ -4239,11 +4239,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a1dd4fec: 20 prefixed loops on one line 0.074 s against 0.021 s, their twin without `time` 0.042 s; the same
   loops each followed by `echo x > ~/.exo/config.json`, which adds each reading's D-074 `ordinary` reading,
   0.284 s against 0.058 s, twin 0.234 s; 300 `time { :; }` groups 0.075 s against 0.043 s; 150 `time !` before
-  one group 0.014 s against 0.009 s). Known limit:
-  main does not open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc
-  for ..`, `{ coproc for ..; }` ask as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or
-  without; that is `coproc`'s own gap, not the prefix's. The differential against main a1dd4fec (main's
-  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
+  one group 0.014 s against 0.009 s). Known limit when written (lifted by #864, the next amendment): main did not
+  open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc for ..`,
+  `{ coproc for ..; }` asked as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or without;
+  that was `coproc`'s own gap, not the prefix's. #864 opens such a compound in the reading without the prefix
+  too, and `tests/security/test_gate_pipeline_prefix_853.py`'s `test_a_coproc_after_bang_or_then_is_a_known_limit`
+  is now `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened`. The differential against main a1dd4fec
+  (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
   under the 88 policies (1,167,760 pairs), lowers 0 pairs and tightens 79 pairs on 9 actions (`opaque_exec allow`
   to `opaque_exec ask` 40, `opaque_exec ask` to `opaque_exec deny` 16, `opaque_exec log` to `opaque_exec ask`
   16, and 7 to `delete`); 106 pairs keep their outcome with another detail. An aimed corpus (`--only-corpus
@@ -4295,6 +4297,91 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main) and the grant rows in
   `plugins/exo-gate/tests/test_approvals.py` (both fail on main).
 
+- *Amendment 2026-10-29 (issue #864, to the #479 amendment's decision):* a `coproc` compound in command position
+  behind reserved words is opened as after `;`, in a reading beside main's. bash takes a command after `!`,
+  `then`, `else`, `elif`, `if`, `while`, `until`, `do` and `{` as after `;` (`bash -n` 5.2.21 accepts `! coproc
+  for i in 1; do :; done`, `if true; then coproc for ..; fi` and `{ coproc for ..; }`), and the compound right
+  after `coproc NAME {` or `function NAME {` too. `_parse_line` opened a compound only where every word before it
+  in the command was a reserved word, or within two words of a `coproc` or `function` that started the command
+  (`_command_word(cur.words, lead, 0)`), while its own command-position tracking (`head`, `pre`, #436) knew those
+  positions; `_loop_word` likewise found a loop word only at the start or one or two words after a leading
+  `coproc`/`function`. So on main b3efb5e7, under `deny: [store_write]`, `! coproc for i in 1; do cp /tmp/evil
+  gates.yaml; cd ~/.exo/policies; done`, its `if ..; then`, `else`, `elif`, `if <it>; then` and `{ ..; }` forms
+  and the `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`, `coproc W while` and `coproc { for ..`
+  loops there asked as `opaque_exec` (rule `opaque`, `no_grant` False), where after `;` or `&&` they denied with
+  `no_grant` True; `coproc W { for ..; done; }`, `coproc W { while ..; }` and `function f { for ..; done; }` did
+  so at every position, a `$( )` included, and `coproc { coproc { for ..` at any depth past one. A here-doc or
+  here-string after such a group's closer (`! coproc W { bash; } <<EOF`) did not reach the shell inside it (#161),
+  so a fed `rm -rf` was no delete. Main's first pass still read the parts of the coproc's argv, so a delete,
+  push or post body denied as without the opener; what was lost is #479's second pass and the fed text. Now,
+  while classify reads a call (`_classify_read`), `_parse_line` marks a compound opener in command position
+  (`_command_word(cur.words, head, pre)`) that main's check leaves unopened (`_late_met`); classify then reads
+  the call again with `_late_open` on (`_late_reading`, budgets and memos of its own), where `_parse_line` opens
+  it and `_loop_word` also finds the loop word behind leading reserved words, `coproc`/`function`, their NAME
+  and the reserved words after it (`_late_loop_word`). That reading is kept beside main's by `_beside`, with each
+  reading's D-074 `ordinary` kept, as #584's and #479's readings are on main (and #853's opened reading, from
+  #862); main's `opaque_exec` reading still leads on the tie, as for `coproc for ..` after `;`. The issue's rows
+  are a principal-only `store_write` part that `deny: [store_write]` denies, no grant covers and bypass keeps at
+  its floor. Teaching `_parse_line` the positions directly would have replaced main's reading of those lines;
+  the second reading keeps it by construction. With #853 (PR #862, merged first, main 69e33d50) the opened check
+  reads #853's `_opening` too (`late = _late_open.get() or opening` in `_parse_line`, the same `or` in
+  `_loop_word`), so #853's reading without the prefix opens such a compound as well, and `_classify_read` runs
+  `_late_reading` after `_opened_reading`, each beside main's reading (a nested classify inside the opened reading,
+  the D-074 `ordinary` reading, runs neither second reading, as `_config_off` is set there; the `_opening` check on
+  `_late_reading` is a cheap guard only). On a line that sets both marks the opened reading opens every compound
+  the late reading opens and drops the prefixes as well, so the late reading adds nothing found there: with it
+  skipped on such lines every other test in the #853 and #864 files still passes. It is kept as defence in depth, at a
+  third reading's cost, and `test_a_line_with_both_marks_reads_the_coproc_loop_either_way` pins the order and that
+  either second reading alone finds the store loop. So `! time coproc for ..`, `if true;
+  then time coproc for ..`, `time ! coproc for ..`, `! time ! coproc for ..`, `{ time coproc W { for ..; }; }` and
+  `time -p ! coproc W { for ..; }` with the #479 store loop deny under `deny: [store_write]` with `no_grant` True
+  and principal-only approvers, where main 69e33d50 asked as `opaque_exec`; #862's known-limit test
+  `test_a_coproc_after_bang_or_then_is_a_known_limit` is now
+  `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened` in
+  `tests/security/test_gate_pipeline_prefix_853.py` (6 rows, each failing on main 69e33d50). Main's reading of
+  `! time coproc ..` marks only #853's prefix, so such a line is read twice, as on main; its store loop now adds
+  #479's second pass in the opened reading (50 `! time coproc for ..` store loops 0.199 s against 0.112 s on main
+  69e33d50, 200 `! time coproc { :; }` parts 0.089 s against 0.091 s); a line that sets both marks is read three
+  times (100 `! coproc { :; }` and 100 `time { :; }` parts 0.107 s against 0.064 s). The third reading is about a
+  third of that: in one later run the same parts took 0.102 s, and 0.069 s with `_late_reading` stubbed out; 25
+  `! coproc for ..` and 25 `time for ..` store loops took 0.325 s and 0.181 s. Main's `scripts/gate_diff.py`
+  against 69e33d50 lowers 0 of 1,181,400 built-in pairs (312 tightened on 36 actions), 0 of
+  the 1,120,320 #864 aimed pairs, 0 of the 2,262,408 #853 aimed pairs and 0 of 252,000 pairs on 2,100
+  composition lines (9 prefix spellings before 6 coproc and function forms with 5 bodies under 8 positions, 120
+  policies). Known limit, as without coproc: a `case` pattern's `)` inside `$( )` still
+  closes the substitution (`echo $(case x in x) for ..;; esac)` asks as on main). Cost: a line that sets the mark
+  costs about two readings (`time.process_time`, best of five, this tree against b3efb5e7: 200 `! coproc { :; }`
+  parts 0.085 s against 0.042 s, 200 `! coproc { ! coproc { :; }; }` parts 0.158 s against 0.082 s, one nest 200
+  deep 0.081 s against 0.036 s, 50 `! coproc for ..` store loops 0.183 s against 0.043 s, which adds #479's second
+  reading of each reading); a line with no mark is read once (200 `coproc { :; }` parts 0.037 s against 0.033 s).
+  The differential against b3efb5e7 (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus
+  with `--no-variants`, 13,247 actions under the 88 policies (1,165,736 pairs), lowers 0 pairs and tightens 150
+  pairs on 18 actions (`opaque_exec allow` to `opaque_exec ask` 60, `opaque_exec ask` to `opaque_exec deny` 24,
+  `opaque_exec log` to `opaque_exec ask` 24, and 42 to `delete`); an aimed corpus (`--only-corpus --no-variants`)
+  of 9,336 lines (25 coproc and function forms with 12 bodies, delete, push, post, store writes, a store `cd` in
+  a loop and plain ones, under 30 positions: `;`, `&&`, `||`, `&`, `|`, a subshell, a newline, `!`, `! !`, `then`,
+  `else`, `elif`, `if`, `while`, `until`, `do`, `{`, `{ !`, `time`, `$( )`, backticks, `bash -c`, a function body,
+  a case arm, a pipe out, and 4 fed group forms) under the 88 policies and 32 more (deny, reserved, category,
+  category-rule, command, command-rule and target entries; 1,120,320 pairs) lowers 0 pairs and tightens 9,398
+  pairs on 609 actions (`opaque_exec allow` to `opaque_exec ask` 4,184, `opaque_exec ask` to `opaque_exec deny`
+  2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
+  `tests/security/test_gate_coproc_open_864.py` (688 tests; when added, 203 failed on b3efb5e7, the cost test
+  only because main has no `_late_reading` to patch, and the rest passed on both) and 6 hook rows in
+  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there). With #158 (main
+  d3cbd874) the layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (#158's two
+  ways: bash's reading of the words, and `flat`, main's reading before #143) -> `_classify_read` (budgets, the
+  first reading with both marks set, #853's `_opened_reading`, then `_late_reading`) -> `_one_reading`. So each of
+  #158's two readings has its own opened and late readings, each with budgets of its own, and a coproc compound
+  that only bash's reading of a `${..}` word finds (`! coproc for ..` in `${v:-$(..)}`) is opened there.
+  `test_a_coproc_loop_and_a_word_read_both_ways_is_a_principal_only_store_write` pins 8 such rows (a word in the
+  loop body behind `!`, `then`, `{` and `time !`, and the coproc line in a `${..}` word, a backquote, after a
+  quoted `}` and in a `$((`), each failing on d3cbd874.
+  `test_flat_reads_a_coproc_loop_bash_keeps_in_a_word_with_its_own_late_reading` pins `flat`'s own late reading: 4
+  rows (`! coproc for`, `{ coproc for`, `then coproc W {`, `{ coproc N {`) where bash keeps the coproc loop inside
+  a quoted `${..}` word and only `flat` reads it as a command, which are an unread ask again when `_late_reading` is
+  skipped in that way, as on d3cbd874.
+  *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
+  and `pre` and this second reading can go.
 ### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
 
 The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
