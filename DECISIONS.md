@@ -5139,6 +5139,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
+  while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
+  lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
+  129) and nothing followed. Now any change in the transcript's content size scrolls to the end again while the view
+  was there. Scrolling up stops it, scrolling back to the bottom starts it, and `F6` stops it so the reader stays on
+  the page it loaded. Each scroll to the end runs after the layout and checks the flag again at that point, so a
+  reader who scrolls up between a new line and its scroll keeps their place (live tool output under `ctrl+o`).
+  Inverse is unchanged: its newest item is at the top, which content added below does not move.
+  Textual's `Widget.anchor()` does the same job, but its signature and meaning changed in Textual 2, and the client
+  still declares `textual>=1`, so the client keeps its own flag.
 - **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
   from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
   failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
