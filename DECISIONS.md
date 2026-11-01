@@ -1369,14 +1369,45 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
-  (`note: {a:`), or a list nested past the recursion limit could instead raise outside the policy-error path and
+  (`note: {a:`), or nesting past the recursion limit could instead raise outside the policy-error path and
   make every hook call ask. These cases now use the existing policy-error fallback: the defaults alone, with a
   warning, until the file is corrected. This can lower `ls -la`, `git status` and `cat README.md` from ask to allow;
   a configured deny such as `deny: [{command: '^cat '}]` is also absent during fallback. That loss of the configured
   policy is the existing fallback's explicit tradeoff, not a claim that the affected read is safe under that policy.
   The change replaces an indefinite hang or exception on every call with the documented, visible fallback; it does
   not change valid policies. This applies when the malformed input occurs in any file the policy loader reads.
-  A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error/ask path.
+  In a principal-started turn with permissions bypass, a default ask such as `rm -rf build` can instead run without
+  a card. With a required executor, a prior classification exception blocked the call; the fallback can allow reads
+  or ask for the `rm` example. These are existing mode-specific fallback behaviors, not new bypass or executor rules.
+  A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
+  or block when an executor is required).
+- *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
+  store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
+  file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
+  `-o RemoteForward`, `-o DynamicForward`). `_store_touch` returned before it read a command's words when every
+  part was a read, and for ssh those parts are its remote line. So `ssh -S ~/.exo/state/ctl host ls`,
+  `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
+  reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
+  it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
+  an expansion the gate cannot spell out). Each value is also read as ssh reads it: a setting split into words with
+  ssh's quotes and backslashes taken out (its argv_split), a forward split into fields without brackets and
+  backslashes (its parse_fwd_field), and `%d` as the home folder. The word scan after the return does not read
+  ssh's quotes, so `ssh -o 'ControlPath ~/.exo/"st"ate/ctl' a 'bash -c x'` was missed there too, and the check runs
+  on every ssh line. A store folder whose name holds a space, as the desktop app's does, can only be named in a
+  setting inside ssh's quotes. A dynamic forward on a path makes ssh listen on a socket there, as `-L` does (its
+  parse_forward reads a one-field path as a socket). scp and sftp hand their `-o` settings to the ssh they run, so
+  those get the same reading on their lines, with their own option letters, up to their first operand:
+  `scp -o 'UserKnownHostsFile ~/.exo/"st"ate/kh' host:/x /tmp/y` was allowed, and the plain spelling already asked.
+  A relative value counts after a `cd` into the store. `-F` and `GlobalKnownHostsFile` only read their file and
+  stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919 is open for it.
+  *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  *Measured:* main's `scripts/gate_diff.py`, main 6e7e4af7 against this change. Built-in corpus and policies:
+  93,341 actions x 88 policies (8,214,008 pairs), 0 lowered, 60,339 pairs on 926 actions tightened, each to
+  `store_write`. An aimed corpus of 13,934 ssh, scp and sftp lines (1,226,192 pairs): 207,390 pairs tightened, and
+  45 lowered. All 45 are under a policy that reserves `delete`, on a line with a store path in ssh's quotes and a
+  remote `rm -rf` (`ssh -o 'ControlPath ~/.exo/"st"ate/ctl' host 'rm -rf x'`). Each still asks, now as a
+  `store_write` only the principal answers, with no grant. What goes is the reserved hit on the host, as main
+  already decides the plain spelling (`ssh -S ~/.exo/state/ctl host 'rm -rf x'`).
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
@@ -4250,11 +4281,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a1dd4fec: 20 prefixed loops on one line 0.074 s against 0.021 s, their twin without `time` 0.042 s; the same
   loops each followed by `echo x > ~/.exo/config.json`, which adds each reading's D-074 `ordinary` reading,
   0.284 s against 0.058 s, twin 0.234 s; 300 `time { :; }` groups 0.075 s against 0.043 s; 150 `time !` before
-  one group 0.014 s against 0.009 s). Known limit:
-  main does not open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc
-  for ..`, `{ coproc for ..; }` ask as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or
-  without; that is `coproc`'s own gap, not the prefix's. The differential against main a1dd4fec (main's
-  `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
+  one group 0.014 s against 0.009 s). Known limit when written (lifted by #864, the next amendment): main did not
+  open a `coproc` compound right after `!`, `then` or `{` (`! coproc for ..`, `if ..; then coproc for ..`,
+  `{ coproc for ..; }` asked as `opaque_exec` without a `deny: [store_write]` deny), with a prefix or without;
+  that was `coproc`'s own gap, not the prefix's. #864 opens such a compound in the reading without the prefix
+  too, and `tests/security/test_gate_pipeline_prefix_853.py`'s `test_a_coproc_after_bang_or_then_is_a_known_limit`
+  is now `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened`. The differential against main a1dd4fec
+  (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus with `--no-variants`, 13,270 actions
   under the 88 policies (1,167,760 pairs), lowers 0 pairs and tightens 79 pairs on 9 actions (`opaque_exec allow`
   to `opaque_exec ask` 40, `opaque_exec ask` to `opaque_exec deny` 16, `opaque_exec log` to `opaque_exec ask`
   16, and 7 to `delete`); 106 pairs keep their outcome with another detail. An aimed corpus (`--only-corpus
@@ -4306,6 +4339,91 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main) and the grant rows in
   `plugins/exo-gate/tests/test_approvals.py` (both fail on main).
 
+- *Amendment 2026-10-29 (issue #864, to the #479 amendment's decision):* a `coproc` compound in command position
+  behind reserved words is opened as after `;`, in a reading beside main's. bash takes a command after `!`,
+  `then`, `else`, `elif`, `if`, `while`, `until`, `do` and `{` as after `;` (`bash -n` 5.2.21 accepts `! coproc
+  for i in 1; do :; done`, `if true; then coproc for ..; fi` and `{ coproc for ..; }`), and the compound right
+  after `coproc NAME {` or `function NAME {` too. `_parse_line` opened a compound only where every word before it
+  in the command was a reserved word, or within two words of a `coproc` or `function` that started the command
+  (`_command_word(cur.words, lead, 0)`), while its own command-position tracking (`head`, `pre`, #436) knew those
+  positions; `_loop_word` likewise found a loop word only at the start or one or two words after a leading
+  `coproc`/`function`. So on main b3efb5e7, under `deny: [store_write]`, `! coproc for i in 1; do cp /tmp/evil
+  gates.yaml; cd ~/.exo/policies; done`, its `if ..; then`, `else`, `elif`, `if <it>; then` and `{ ..; }` forms
+  and the `while`, `until`, `select`, `for ((..))`, `for ..; { ..; }`, `coproc W while` and `coproc { for ..`
+  loops there asked as `opaque_exec` (rule `opaque`, `no_grant` False), where after `;` or `&&` they denied with
+  `no_grant` True; `coproc W { for ..; done; }`, `coproc W { while ..; }` and `function f { for ..; done; }` did
+  so at every position, a `$( )` included, and `coproc { coproc { for ..` at any depth past one. A here-doc or
+  here-string after such a group's closer (`! coproc W { bash; } <<EOF`) did not reach the shell inside it (#161),
+  so a fed `rm -rf` was no delete. Main's first pass still read the parts of the coproc's argv, so a delete,
+  push or post body denied as without the opener; what was lost is #479's second pass and the fed text. Now,
+  while classify reads a call (`_classify_read`), `_parse_line` marks a compound opener in command position
+  (`_command_word(cur.words, head, pre)`) that main's check leaves unopened (`_late_met`); classify then reads
+  the call again with `_late_open` on (`_late_reading`, budgets and memos of its own), where `_parse_line` opens
+  it and `_loop_word` also finds the loop word behind leading reserved words, `coproc`/`function`, their NAME
+  and the reserved words after it (`_late_loop_word`). That reading is kept beside main's by `_beside`, with each
+  reading's D-074 `ordinary` kept, as #584's and #479's readings are on main (and #853's opened reading, from
+  #862); main's `opaque_exec` reading still leads on the tie, as for `coproc for ..` after `;`. The issue's rows
+  are a principal-only `store_write` part that `deny: [store_write]` denies, no grant covers and bypass keeps at
+  its floor. Teaching `_parse_line` the positions directly would have replaced main's reading of those lines;
+  the second reading keeps it by construction. With #853 (PR #862, merged first, main 69e33d50) the opened check
+  reads #853's `_opening` too (`late = _late_open.get() or opening` in `_parse_line`, the same `or` in
+  `_loop_word`), so #853's reading without the prefix opens such a compound as well, and `_classify_read` runs
+  `_late_reading` after `_opened_reading`, each beside main's reading (a nested classify inside the opened reading,
+  the D-074 `ordinary` reading, runs neither second reading, as `_config_off` is set there; the `_opening` check on
+  `_late_reading` is a cheap guard only). On a line that sets both marks the opened reading opens every compound
+  the late reading opens and drops the prefixes as well, so the late reading adds nothing found there: with it
+  skipped on such lines every other test in the #853 and #864 files still passes. It is kept as defence in depth, at a
+  third reading's cost, and `test_a_line_with_both_marks_reads_the_coproc_loop_either_way` pins the order and that
+  either second reading alone finds the store loop. So `! time coproc for ..`, `if true;
+  then time coproc for ..`, `time ! coproc for ..`, `! time ! coproc for ..`, `{ time coproc W { for ..; }; }` and
+  `time -p ! coproc W { for ..; }` with the #479 store loop deny under `deny: [store_write]` with `no_grant` True
+  and principal-only approvers, where main 69e33d50 asked as `opaque_exec`; #862's known-limit test
+  `test_a_coproc_after_bang_or_then_is_a_known_limit` is now
+  `test_a_coproc_after_bang_or_then_behind_a_prefix_is_read_opened` in
+  `tests/security/test_gate_pipeline_prefix_853.py` (6 rows, each failing on main 69e33d50). Main's reading of
+  `! time coproc ..` marks only #853's prefix, so such a line is read twice, as on main; its store loop now adds
+  #479's second pass in the opened reading (50 `! time coproc for ..` store loops 0.199 s against 0.112 s on main
+  69e33d50, 200 `! time coproc { :; }` parts 0.089 s against 0.091 s); a line that sets both marks is read three
+  times (100 `! coproc { :; }` and 100 `time { :; }` parts 0.107 s against 0.064 s). The third reading is about a
+  third of that: in one later run the same parts took 0.102 s, and 0.069 s with `_late_reading` stubbed out; 25
+  `! coproc for ..` and 25 `time for ..` store loops took 0.325 s and 0.181 s. Main's `scripts/gate_diff.py`
+  against 69e33d50 lowers 0 of 1,181,400 built-in pairs (312 tightened on 36 actions), 0 of
+  the 1,120,320 #864 aimed pairs, 0 of the 2,262,408 #853 aimed pairs and 0 of 252,000 pairs on 2,100
+  composition lines (9 prefix spellings before 6 coproc and function forms with 5 bodies under 8 positions, 120
+  policies). Known limit, as without coproc: a `case` pattern's `)` inside `$( )` still
+  closes the substitution (`echo $(case x in x) for ..;; esac)` asks as on main). Cost: a line that sets the mark
+  costs about two readings (`time.process_time`, best of five, this tree against b3efb5e7: 200 `! coproc { :; }`
+  parts 0.085 s against 0.042 s, 200 `! coproc { ! coproc { :; }; }` parts 0.158 s against 0.082 s, one nest 200
+  deep 0.081 s against 0.036 s, 50 `! coproc for ..` store loops 0.183 s against 0.043 s, which adds #479's second
+  reading of each reading); a line with no mark is read once (200 `coproc { :; }` parts 0.037 s against 0.033 s).
+  The differential against b3efb5e7 (main's `scripts/gate_diff.py`, `--jobs 2 --timeout 0`): the built-in corpus
+  with `--no-variants`, 13,247 actions under the 88 policies (1,165,736 pairs), lowers 0 pairs and tightens 150
+  pairs on 18 actions (`opaque_exec allow` to `opaque_exec ask` 60, `opaque_exec ask` to `opaque_exec deny` 24,
+  `opaque_exec log` to `opaque_exec ask` 24, and 42 to `delete`); an aimed corpus (`--only-corpus --no-variants`)
+  of 9,336 lines (25 coproc and function forms with 12 bodies, delete, push, post, store writes, a store `cd` in
+  a loop and plain ones, under 30 positions: `;`, `&&`, `||`, `&`, `|`, a subshell, a newline, `!`, `! !`, `then`,
+  `else`, `elif`, `if`, `while`, `until`, `do`, `{`, `{ !`, `time`, `$( )`, backticks, `bash -c`, a function body,
+  a case arm, a pipe out, and 4 fed group forms) under the 88 policies and 32 more (deny, reserved, category,
+  category-rule, command, command-rule and target entries; 1,120,320 pairs) lowers 0 pairs and tightens 9,398
+  pairs on 609 actions (`opaque_exec allow` to `opaque_exec ask` 4,184, `opaque_exec ask` to `opaque_exec deny`
+  2,675, `opaque_exec log` to `opaque_exec ask` 1,569). No classify or decide errors. Tests:
+  `tests/security/test_gate_coproc_open_864.py` (688 tests; when added, 203 failed on b3efb5e7, the cost test
+  only because main has no `_late_reading` to patch, and the rest passed on both) and 6 hook rows in
+  `plugins/exo-gate/tests/test_bypass.py` that fail on b3efb5e7 (bypass auto-allowed them there). With #158 (main
+  d3cbd874) the layers are `classify` (#471) -> `_split_reading` (#591, #707) -> `_classify_reading` (#158's two
+  ways: bash's reading of the words, and `flat`, main's reading before #143) -> `_classify_read` (budgets, the
+  first reading with both marks set, #853's `_opened_reading`, then `_late_reading`) -> `_one_reading`. So each of
+  #158's two readings has its own opened and late readings, each with budgets of its own, and a coproc compound
+  that only bash's reading of a `${..}` word finds (`! coproc for ..` in `${v:-$(..)}`) is opened there.
+  `test_a_coproc_loop_and_a_word_read_both_ways_is_a_principal_only_store_write` pins 8 such rows (a word in the
+  loop body behind `!`, `then`, `{` and `time !`, and the coproc line in a `${..}` word, a backquote, after a
+  quoted `}` and in a `$((`), each failing on d3cbd874.
+  `test_flat_reads_a_coproc_loop_bash_keeps_in_a_word_with_its_own_late_reading` pins `flat`'s own late reading: 4
+  rows (`! coproc for`, `{ coproc for`, `then coproc W {`, `{ coproc N {`) where bash keeps the coproc loop inside
+  a quoted `${..}` word and only `flat` reads it as a command, which are an unread ask again when `_late_reading` is
+  skipped in that way, as on d3cbd874.
+  *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
+  and `pre` and this second reading can go.
 ### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
 
 The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
@@ -5002,6 +5120,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
@@ -5063,6 +5191,20 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
+  while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
+  lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
+  129) and nothing followed. Now any change in the transcript's content size scrolls to the end again while the view
+  was there. Scrolling up stops it, scrolling back to the bottom starts it, and `F6` stops it so the reader stays on
+  the page it loaded. Each scroll to the end runs after the layout and checks the flag again at that point, so a
+  reader who scrolls up between a new line and its scroll keeps their place (live tool output under `ctrl+o`).
+  Inverse is unchanged: its newest item is at the top, which content added below does not move.
+  Textual's `Widget.anchor()` does the same job, but its signature and meaning changed in Textual 2, and the client
+  still declares `textual>=1`, so the client keeps its own flag.
+- **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
+  from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
+  failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
+  startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
@@ -6457,6 +6599,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     - The parametrized test gains `http_401`, `http_403` and a `SourceError` case, and asserts that no class name or raw JSON reaches the page.
   - On main, five of the cases fail.
   - #856's points 3b and 4 are about the page: a browser test of the three states, and the button after a fetch-level 403. They wait for #850, which rewrites `loadModels` and `retryModels`.
+- **Amendment 2026-11-01 (#1014): focus moved to another Providers control during a retry is kept.** The reply redraws the provider rows and the default model section. It redraws the custom providers section too, unless its form is open (#1036). A control the person moved to while the reply was pending was replaced, and focus fell to the page body.
+  - The focus line above then sent focus to "Try again" after a failure, or to the select after a success. `retryModels()` now names the panel control that holds focus just before it draws the reply. The name is the provider row or section, the tag and the label.
+  - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
+  - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
+  - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).
 - **Decision:** the one dim guidance line reads the recorded model error text. An authentication or permission failure ("HTTP 401", "Incorrect API key", "invalid x-api-key", "authentication", "permission denied") may send the reader to the Providers page. A transport failure (`ReadError`, `ReadTimeout`, `ConnectError`, "stream ended without a response", network and unreachable wording) says the model could not be reached and offers no key advice. Text that reads as neither gets a general line pointing at `/trace`. No text at all (an older core, or a boolean flag) gets the general line too.
@@ -6504,3 +6652,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Export and diagnostic clarification (2026-10-31):** the command validates the resolved export parent/target against the same protected-root snapshot before reading fixtures or creating output. A store at `improvement-runs` cannot receive an export from its public parent. Resolution failures in `EXO_HOME` or `EXO_PRINCIPAL_STORE` refuse normally; absent environment roots remain allowed. Recorded-root failures name the principal/configuration key to repair or remove, never the full private path, and the user guide states this recovery step.
 
 - **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.
+
+- **Refusal-line clarification (2026-10-31, #1046 review):** each path refusal prints its own cause. A refused or protected working directory, an output name that is not a run ID, and an output run that exists or passes through a link no longer print the generic fixture line. With `EXO_HOME` unset, a broken home or recorded root names the default `~/.exo`, not the variable. No such line holds a path.
+
+- **Letter-case clarification (2026-10-31):** working and export paths match the Exo home, recorded roots and HOME in any letter case, as the gate does (D-087). Each path part is compared case folded and Unicode decomposed. So a root recorded under a case or accent variant still matches on a case-insensitive volume, as default APFS is. Folding only adds matches, so no refusal is lost.
+
+- **Letter-case cost (2026-10-31):** on a case-sensitive volume, a folder that differs from a protected one only by case or Unicode form is refused too. That is the fail-closed side, as in D-087. `EXO_GATE_CASE_SENSITIVE` does not apply, because this refusal only asks for another workspace or run name. The tests make the variant spelling as its own folder, so they simulate a case-insensitive volume on any host.

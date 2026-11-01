@@ -18,15 +18,44 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
   error fallback. Those formerly failing files use defaults alone until corrected, which can allow reads that formerly
   asked on the error path (#981).
+- `exo improve --offline` names the cause of each path refusal (#1046 follow-up). A refused working directory, an
+  output name that is not a run ID, and an existing or linked output run printed the fixture line. With `EXO_HOME`
+  unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths now match a
+  recorded root in any letter case, as the gate's store checks do (D-087).
+- The terminal's classic layout can no longer open a long thread short of its newest message (#1023, D-046
+  amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
+  scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
+  the hosted CI failure `assert 49 == 129` in `test_classic_opens_at_the_latest_message_at_the_bottom`.
+- Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
+  on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
+  date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
+  branch. It now stamps every event at two fixed anchors and checks 64 days later. The promotion rule is unchanged
+  (the same pattern as #1086's decay test).
+- Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- The gate reads ssh's control socket (`-S`, `-o ControlPath`), its known-hosts file (`-o UserKnownHostsFile`)
+  and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`) as files
+  ssh makes here, whatever its remote command runs (#484, D-038 amendment). `ssh -S ~/.exo/state/ctl host ls` was
+  a read and was allowed. A store path in these options is now a `store_write`, so it asks the principal. A value
+  is read as ssh reads it, with ssh's own quotes in a setting, so a store folder whose name holds a space counts
+  too. scp's and sftp's `-o` settings, which they hand to ssh, get the same reading. ssh's log file (`-E`) is not
+  part of this change.
+- Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
+  (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
+  scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
+  tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
+  open request.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
   message, or on the workspace when the list came back empty.
+- Keyboard focus moved to another Providers control while "Try again" waits for its reply, such as a provider's
+  Test button, the model select or "Add custom provider", stays on that control when the reply is drawn (#1014).
+  Before, a failed retry moved it to "Try again" and a successful one to the model select.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
 - `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
   follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
@@ -119,6 +148,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
   array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
   `parse_json` takes the first brace or bracket that decodes.
+- A `coproc` compound right after `!`, `then`, `else`, `elif`, `if` or `{` is read as it is after `;` (#864).
+  bash runs `! coproc for i in 1; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` as it runs the loop
+  after `true &&`, but the gate opened a compound only where the `coproc` started the command, so there the loop
+  stayed the coproc's argv: #479's second pass did not run, and on main b3efb5e7 the line (and its `if ..; then`
+  and `{ ..; }` forms) asked as `opaque_exec`, `deny: [store_write]` did not deny it, a seat the approvers name
+  could answer it and permissions bypass auto-allowed it. The same held at every position for a loop right after
+  `coproc NAME {` or `function NAME {` (`coproc W { for ..; done; }`, `coproc { coproc { for ..`), and a here-doc
+  after the closer of such a group (`! coproc W { bash; } <<EOF`) did not reach the shell inside. `classify` now
+  also reads such a line with the compound opened, beside main's reading: the store loop is a principal-only
+  `store_write` part that `deny: [store_write]` denies and bypass keeps at its floor, and main's `opaque_exec`
+  reading still leads on the tie. Main's reading stays, so nothing decides lower: main's `scripts/gate_diff.py`
+  against b3efb5e7 lowers 0 of 1,165,736 built-in pairs (150 tightened on 18 actions) and 0 of 1,120,320 pairs
+  on an aimed corpus of 9,336 coproc and function lines under 120 policies (9,398 tightened on 609 actions). Such
+  a line costs about two readings (200 `! coproc { :; }` parts 0.085 s, main 0.042 s). With #853's reading
+  without the prefix, the same compound behind `time` opens too (`! time coproc for ..`, `if ..; then time
+  coproc for ..`, `time ! coproc for ..`, `{ time coproc W { for ..; }; }`), so its store loop is denied by
+  `deny: [store_write]` as well; #853's known-limit test for those rows is now a fix test. Tests:
+  `tests/security/test_gate_coproc_open_864.py`, `tests/security/test_gate_pipeline_prefix_853.py`,
+  `plugins/exo-gate/tests/test_bypass.py`. **Docs:**
+  `docs/GATE.md` ("Shell commands: an allowlist", "The store is credentials (D-038)"), `DECISIONS.md` (D-038
+  amendment of 2026-10-29), `docs/DOCS-MAP.md`.
 - `test_a_setup_state_is_not_a_harness_error` failed on a loaded machine: it slept a fixed 0.2 s after `TurnSend`,
   but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
   was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s

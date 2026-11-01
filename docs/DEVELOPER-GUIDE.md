@@ -662,6 +662,8 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
+    categories; it never prints the raw browser output.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
@@ -1180,6 +1182,10 @@ not private path values. Fixture JSON cannot select imports or callbacks. Preser
 editor/evaluator separation and the disjoint held-out gate when changing the
 trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
 `tests/test_cli_lazy.py` and `tests/docs` after a change.
+
+A new path refusal in that command raises `BoundaryError`, so it prints its own
+line instead of the fixture line. Compare paths with `_at_or_below`. It folds
+letter case as D-087 does for the gate, and Unicode form too.
 
 ### Web composer draft ownership
 
