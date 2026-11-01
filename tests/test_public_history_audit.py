@@ -173,7 +173,11 @@ def test_shallow_clone_refused(tmp_path, capsys):
 
 def test_partial_config_refused_before_traversal(tmp_path, monkeypatch):
     repo = fixture_repo(tmp_path)
-    for key, value in [('remote.origin.promisor', 'true'), ('extensions.partialClone', 'origin')]:
+    # Git honours a promisor remote set in an included file, so the audit must read included files too.
+    included = tmp_path / 'included-partial-config'
+    included.write_text('[remote "origin"]\n\tpromisor = true\n')
+    for key, value in [('remote.origin.promisor', 'true'), ('extensions.partialClone', 'origin'),
+                       ('include.path', str(included))]:
         git(repo, 'config', key, value)
         before = sorted((str(p.relative_to(repo)), p.read_bytes()) for p in (repo / '.git/objects').rglob('*') if p.is_file())
         real_git = audit.git
@@ -439,7 +443,7 @@ def test_linked_detached_head_refused_before_traversal(tmp_path, monkeypatch):
         assert report['worktree_count'] == 2 and not report['local_complete'] and not report['complete']
 
 
-@pytest.mark.parametrize('url_kind', ['mirror-of-plain', 'self', 'file-url', 'instead-of'])
+@pytest.mark.parametrize('url_kind', ['mirror-of-plain', 'self', 'file-url', 'instead-of', 'second-url'])
 def test_local_sources_cannot_establish_hosting_coverage(tmp_path, capsys, monkeypatch, url_kind):
     source = fixture_repo(tmp_path)
     safe = git(source, 'rev-parse', 'HEAD').strip().decode()
@@ -455,6 +459,10 @@ def test_local_sources_cannot_establish_hosting_coverage(tmp_path, capsys, monke
     elif url_kind == 'instead-of':
         git(mirror, 'remote', 'set-url', 'origin', 'https://hosting.example.invalid/synthetic/repo')
         git(mirror, 'config', 'url.' + plain.as_uri() + '.insteadOf', 'https://hosting.example.invalid/synthetic/repo')
+    elif url_kind == 'second-url':
+        # Git reads the first URL, the local source. A second hosting URL must not count.
+        git(mirror, 'remote', 'set-url', '--add', 'origin', 'https://hosting.example.invalid/synthetic/repo')
+        assert len(git(mirror, 'remote', 'get-url', '--all', 'origin').splitlines()) == 2
     def forbidden(*args):
         raise AssertionError('Local or aliased local remotes must not be queried as hosting evidence')
     monkeypatch.setattr(audit, 'advertised_refs', forbidden)
@@ -463,7 +471,9 @@ def test_local_sources_cannot_establish_hosting_coverage(tmp_path, capsys, monke
     assert str(tmp_path) not in output and 'hosting.example.invalid' not in output
     report = json.loads(output)
     assert report['full_mirror'] and report['local_complete']
-    assert report['remote_local'] and not report['remote_network'] and not report['remote_verified']
+    # More than one URL is unsupported, so it reads as neither local nor network.
+    assert report['remote_local'] is (url_kind != 'second-url')
+    assert not report['remote_network'] and not report['remote_verified']
     assert not report['complete'] and report['ref_namespaces']['pull'] == 0 and brief_count(report) == 0
 
 
@@ -529,7 +539,7 @@ def test_unmocked_ssh_wrapper_cannot_verify_a_stale_local_source(tmp_path, monke
 
 
 @pytest.mark.parametrize('key', sorted(audit.TRANSPORT_ENV) + [
-    'core.sshCommand', 'core.gitProxy', 'remote.origin.uploadpack', 'remote.origin.vcs',
+    'core.sshCommand', 'core.gitProxy', 'remote.origin.uploadpack', 'remote.origin.vcs', 'include.path',
 ])
 def test_custom_transport_presence_refuses_verification_without_execution(tmp_path, monkeypatch, key):
     source = fixture_repo(tmp_path)
@@ -537,6 +547,11 @@ def test_custom_transport_presence_refuses_verification_without_execution(tmp_pa
     git(mirror, 'remote', 'set-url', 'origin', 'https://hosting.example.invalid/synthetic/repo.git')
     if key in audit.TRANSPORT_ENV:
         monkeypatch.setenv(key, 'private-custom-transport-fixture')
+    elif key == 'include.path':
+        # Git runs a command set in an included file, so the audit must read included files too.
+        included = tmp_path / 'included-transport-config'
+        included.write_text('[core]\n\tsshCommand = private-custom-transport-fixture\n')
+        git(mirror, 'config', key, str(included))
     else:
         git(mirror, 'config', key, 'private-custom-transport-fixture')
     def forbidden(*args):
