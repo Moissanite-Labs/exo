@@ -179,7 +179,8 @@ caps inline/URL payload, not remote asset download sizes; metadata and serializa
   target: write that path instead, and the link stays. Before, the rename replaced the link with a regular file and
   left the target unchanged. `apply_patch` checks this before it writes anything, and its Delete File removes only
   the link, as `rm` does. A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent
-  folder is still followed.
+  folder is still followed. The gate reads such a write where it lands, so its question names that place and a
+  `target:` entry on the place applies (exo-desktop #52, `docs/GATE.md` "Other spellings of a store path").
 - **Reads** (`read_file`, `edit_file`, `apply_patch`, `grep`) open regular files only. A FIFO, socket or device, or
   a link to one, is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero`
   cannot fill its memory. `read_file`, `edit_file` and `apply_patch` refuse files over 50 MB (`MAX_READ_BYTES`),

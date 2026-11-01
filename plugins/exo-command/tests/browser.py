@@ -21,6 +21,50 @@ from pathlib import Path
 from typing import Any, Optional
 
 MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+START_TIMEOUT = 20.0
+STDERR_LIMIT = 16384
+# Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
+STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
+                (b"zygote", "zygote"), (b"singletonlock", "profile lock"),
+                (b"no space left on device", "storage exhausted"), (b"shared memory", "shared memory"))
+
+
+class _StderrTail:
+    """Drain Chrome's stderr without blocking it, retaining only a bounded in-memory tail."""
+    def __init__(self, stream):
+        self.stream = stream
+        self.tail = b""
+        self.stop = threading.Event()
+        os.set_blocking(stream.fileno(), False)
+        self.thread = threading.Thread(target=self._drain, daemon=True)
+        self.thread.start()
+
+    def _drain(self):
+        after_stop = 0
+        while True:
+            try:
+                chunk = os.read(self.stream.fileno(), 4096)
+            except BlockingIOError:
+                if self.stop.is_set():
+                    return
+                self.stop.wait(0.05)
+                continue
+            if not chunk:
+                return
+            self.tail = (self.tail + chunk)[-STDERR_LIMIT:]
+            if self.stop.is_set():
+                after_stop += 1
+                if after_stop >= 256:  # Bound cleanup even if a descendant keeps writing.
+                    return
+
+    def finish(self):
+        self.stop.set()
+        self.thread.join()
+
+    def hints(self):
+        tail = self.tail.lower()
+        found = [label for needle, label in STDERR_HINTS if needle in tail]
+        return ", ".join(found) if found else "no recognized diagnostic (output withheld)"
 
 # Runs before the page's own scripts in every document: counts the page's requests until their body is read, so
 # Browser.settle() can tell when the start-up requests are answered and handled.
@@ -114,11 +158,19 @@ class Served:
 
 class Browser:
     def __init__(self, width: int = 1440, height: int = 900):
-        from websockets.sync.client import connect
         chrome = find_chrome()
         if not chrome:
             raise RuntimeError("no Chrome found")
         self.profile = tempfile.mkdtemp(prefix="exo-chrome-")
+        self.proc = None
+        self._stderr = None
+        try:
+            self._start(chrome, width, height)
+        except BaseException:
+            self.close()
+            raise
+
+    def _start(self, chrome, width, height):
         self.proc = subprocess.Popen(
             # #907: keep a headless page's timers and frames running at full rate, whatever the runner's window state
             [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
@@ -126,15 +178,28 @@ class Browser:
              "--disable-renderer-backgrounding",
              f"--window-size={width},{height}", "--remote-debugging-port=0", f"--user-data-dir={self.profile}",
              "--use-mock-keychain", "--password-store=basic", "--no-first-run", "--no-default-browser-check", "about:blank"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self._stderr = _StderrTail(self.proc.stderr)
         atexit.register(self.close)  # never leave a browser behind, even when a test dies
         port_file = Path(self.profile) / "DevToolsActivePort"
-        end = time.monotonic() + 20
-        while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:  # written, not only made
+        end = time.monotonic() + START_TIMEOUT
+        while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:
+            if self.proc.poll() is not None:
+                self._stderr.finish()
+                raise RuntimeError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
+                                   f"stderr: {self._stderr.hints()}")
             time.sleep(0.05)
+        if not port_file.exists() or not port_file.read_text().strip():
+            self._stderr.finish()
+            if self.proc.poll() is not None:
+                raise RuntimeError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
+                                   f"stderr: {self._stderr.hints()}")
+            raise RuntimeError(f"Chrome did not create DevToolsActivePort within {START_TIMEOUT:g}s; "
+                               f"stderr: {self._stderr.hints()}")
         port = port_file.read_text().split()[0]
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
         page = next(t for t in targets if t.get("type") == "page")
+        from websockets.sync.client import connect
         self._cm = connect(page["webSocketDebuggerUrl"], max_size=None)
         self.ws = self._cm.__enter__()
         self.n = 0
@@ -239,15 +304,27 @@ class Browser:
         Path(path).write_bytes(base64.b64decode(data))
 
     def close(self) -> None:
+        atexit.unregister(self.close)
         try:
             self._cm.__exit__(None, None, None)
         except Exception:
             pass
-        self.proc.terminate()
-        try:
-            self.proc.wait(5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                try:
+                    self.proc.terminate()
+                    self.proc.wait(5)
+                except ProcessLookupError:
+                    self.proc.wait()
+                except subprocess.TimeoutExpired:
+                    try:
+                        self.proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    self.proc.wait()
+            if self._stderr is not None:
+                self._stderr.finish()
+                self.proc.stderr.close()
         shutil.rmtree(self.profile, ignore_errors=True)
 
     def __enter__(self) -> "Browser":

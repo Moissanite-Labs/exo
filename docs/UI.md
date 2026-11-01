@@ -52,6 +52,12 @@ the middle dot as separator come straight from the site.
    Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
    restoration share this transition. A request with no thread still stays across thread switches (#276, D-045).
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`. A queued steer count leads this line (`1 steer queued (Up to edit)`), visible even with a draft in the composer.
+   Beside it, a parent thread shows the delegated approval cue when an active task it handed out, or a task under
+   that one, waits for approval (#996, D-045). Each line names the task's title on one line, its session and
+   `/open <task>`. Past five, one more line names the other task ids, because `/tasks` lists only this thread's own
+   tasks. The cue never takes focus and never answers. It sits above the activity line in the classic layout and
+   below it in the inverse layout. The cue reads `approvals.list` every 3 s. It reads `tasks.list` only while
+   another session has an open request, and at once when such a request arrives.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer sending ›` while its reply is pending, `steer queued ›` after the core queues it, then `steer delivered ›` on its matching `message.completed` or a successful `unsteer` reply confirming it already left the queue. Delivery means the text reached the conversation, not that the model has acted on it. Delivery events received before the send reply are retained only for in-flight sends. A send reply alone never proves delivery. A lost reply says `steer delivery unknown`; a refused send says `steer not sent`. `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts queued text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
@@ -126,9 +132,13 @@ route uses one, the panel opens too, or the default-model picker when only one p
   `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for the four headings. A long paste stays whole.
   Slash, argument and `@` completion work as in the one-line composer; up and down move the caret and do not recall history.
 - **Inverse layout** (`docs/media/tui-11-inverse.png`): the status strip under the brand bar, then the input, the menu,
-  approval card and activity line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
-  its newest item at the top. `/layout classic` restores the usual order with the status strip at the bottom
-  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+  approval card and activity line, then the delegated approval cue when a delegated task waits, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
+  its newest item at the top. `/layout classic` restores the usual order: the transcript, the delegated approval cue,
+  the activity line and the input, with the status strip at the bottom
+  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). In classic the view stays at the bottom
+  while the transcript grows, whether a long thread is still being laid out or tool output opens with `ctrl+o`, until
+  you scroll up. Scrolling back to the bottom follows again, and `F6` stays on the page it loaded (#1023).
+  `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
 ## Switches
