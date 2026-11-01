@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- `exo improve --offline` names the cause of each path refusal (#1046 follow-up). A refused working directory, an
+  output name that is not a run ID, and an existing or linked output run printed the fixture line. With `EXO_HOME`
+  unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths now match a
+  recorded root in any letter case, as the gate's store checks do (D-087).
 - The terminal's classic layout can no longer open a long thread short of its newest message (#1023, D-046
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
