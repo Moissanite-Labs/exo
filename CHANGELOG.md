@@ -49,7 +49,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   from seq 0 on a home with 100,000 events waited 733 ms for its first event while the core held all of them
   (88 MB at the peak). `SessionStore.iter_events` now reads 1,000 events at a time, up to the newest event at
   the call, and a subscription takes its backlog from it as the client reads. The first event comes in 7 ms and
-  the core holds one page (0.9 MB at the peak). Every event still arrives once, in order (D-010 amendment).
+  the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
+  `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
+  stream at once (D-010 amendment).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every

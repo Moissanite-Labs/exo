@@ -208,7 +208,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   backlog instead of a list of every event, since a bounded first page alone would skip events. A read that also
   keeps the events of no session (`with_global`) is now two index searches joined by `UNION ALL`. Its `OR` form
   sorted every later event on each call, so reading it page by page took time that grew with the square of the
-  log. The one-shot `events.subscribe` reply still carries the whole replay, as the protocol says. Tests:
+  log. The one-shot `events.subscribe` reply still carries the whole replay, as the protocol says. The stdio
+  transport built that reply and then dropped it to stream. It now opens its subscription at once, and a
+  `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
+  queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
   `tests/core/test_event_paging_254.py`.
 

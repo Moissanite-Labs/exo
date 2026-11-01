@@ -99,7 +99,11 @@ class Subscription:
         self._hub = hub
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
         hub._subs.add(self._queue)
-        self._backlog = iter(hub.log.read(since, session))
+        try:
+            self._backlog = iter(hub.log.read(since, session))
+        except BaseException:  # a since the log cannot read leaves no queue behind to fill
+            hub._subs.discard(self._queue)
+            raise
 
     async def next(self, timeout: float | None = None) -> Event | None:
         """Next event, or None after ``timeout`` seconds idle. Raises Closed."""

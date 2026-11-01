@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -156,6 +157,61 @@ def test_subscribe_from_zero_holds_one_page(tmp_path, decoded):
         assert len(decoded) <= PAGE  # main decoded all 3,000 before the first one went out
     finally:
         store.close()
+
+
+def test_a_stdio_subscribe_reads_one_page_before_its_first_event(tmp_path, decoded):
+    """The JSON-lines transport first built the one-shot events.subscribe reply, with every event decoded, and then
+    dropped it to stream from a Subscription."""
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore(tmp_path / "s.sqlite")
+    hub = Hub(SqliteLog(store))
+    for i in range(3 * PAGE):
+        hub.publish(notice(i), "s1")
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c0").to_json()]
+    out: list[tuple[dict, int]] = []  # each line written, with the count decoded when it went out
+
+    async def read():
+        if lines:
+            return lines.pop(0)
+        while sum("type" in o for o, _n in out) < 3 * PAGE:
+            await asyncio.sleep(0.01)
+        return None
+
+    try:
+        decoded.clear()
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append((json.loads(text), len(decoded)))), 30))
+    finally:
+        store.close()
+    assert [o["result"]["subscribed"] for o, _n in out if "type" not in o] == [True]
+    events = [(o["seq"], n) for o, n in out if "type" in o]
+    assert [seq for seq, _n in events] == list(range(1, 3 * PAGE + 1))
+    assert events[0][1] <= PAGE  # main decoded all 3,000 for the reply it dropped, then the first page again
+
+
+def test_a_stdio_subscribe_the_log_cannot_read_is_a_typed_reply_and_leaves_no_queue():
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = Hub(SqliteLog(store))
+    lines = [s.Command.of(s.EventsSubscribe(since=2**63), id="c0").to_json(),
+             s.Command.of(s.SessionList(), id="c1").to_json()]
+    out: list[dict] = []
+
+    async def read():
+        return lines.pop(0) if lines else None
+
+    try:
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append(json.loads(text))), 10))
+    finally:
+        store.close()
+    assert [(o["id"], o["ok"]) for o in out] == [("c0", False), ("c1", True)]
+    assert out[0]["error"]["code"] == "internal" and "OverflowError" in out[0]["error"]["message"]
+    assert not hub._subs  # no queue is left behind to fill with every later event
 
 
 def test_trace_reads_its_events_in_pages(tmp_path, limits):
