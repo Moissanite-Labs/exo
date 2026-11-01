@@ -23,11 +23,11 @@ def ruling(rt, text, session="s-rule"):
 
 
 def propose(rt, ptype="taste", *, evidence, claim=None, wants="plain status lines", avoid="decorations",
-            domain="mind", **extra):
+            domain="mind", now=None, **extra):
     item = {"type": ptype, "claim": claim or f"The principal wants {wants}, not {avoid}, because they said so.",
             "wants": wants, "avoid": avoid, "because": "they said so", "domain": domain, "evidence": list(evidence)}
     item.update(extra)
-    (res,) = propose_typed(rt.store, rt.ledger, [item], author=AUTHOR)
+    (res,) = propose_typed(rt.store, rt.ledger, [item], author=AUTHOR, now=now)
     return res
 
 
