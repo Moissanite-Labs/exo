@@ -95,7 +95,7 @@ export function mount(root) {
       if (isNote(m)) continue;
       if (m.role === "user" || m.role === "assistant") {
         const text = partsText(m.content);
-        if (text || m.role === "user") out.push(ingressItem(m) || { kind: m.role, id: m.id || "m" + out.length, text, complete: true });
+        if (text || m.role === "user") out.push(ingressItem(m) || { kind: m.role, id: m.id || "m" + out.length, feedbackSaved: !!m.id, text, complete: true });
         for (const c of m.tool_calls || []) {
           const it = { kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" };
           byCall[c.id] = it;
@@ -319,7 +319,7 @@ export function mount(root) {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
       it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
-      el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
+      el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming || !it.id || it.feedbackSaved === false ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
         it.tone === "tip" ? "tip: " + it.text : [h("span", { class: "xc-k" }, it.label), " \u00B7 " + it.text]);
@@ -349,17 +349,48 @@ export function mount(root) {
   }
 
   function feedbackBar(it) {
-    const done = it.verdict;
-    const btn = (v, label) => h("button", { class: "xc-btn xc-fb" + (done === v ? " on" : ""),
-      onclick: () => (v === "edit" ? (it.editing = !it.editing, redraw(it)) : feedback(it, v, "")) }, label);
-    const bar = h("div", { class: "xc-feedback" }, btn("accept", "accept"), btn("edit", "edit"), btn("reject", "reject"),
-      done ? h("span", { class: "xc-dim" }, "sent: " + done) : null);
-    if (!it.editing) return bar;
-    const box = h("textarea", { class: "xc-input", rows: "4", "aria-label": "Better answer" });
+    const done = it.verdict, saving = !!it.feedbackSaving;
+    const choices = [["accept", "Good reply"], ["edit", "Correct it"], ["reject", "Bad reply"]];
+    const active = it.feedbackFocus || done || "accept";
+    const buttons = choices.map(([v, label]) => h("button", {
+      class: "xc-btn xc-fb" + (done === v ? " on" : ""),
+      disabled: saving,
+      tabindex: active === v ? 0 : -1,
+      "aria-pressed": done === v ? "true" : "false",
+      onfocus: () => { it.feedbackFocus = v; buttons.forEach((b, i) => { b.tabIndex = choices[i][0] === v ? 0 : -1; }); },
+      onclick: () => {
+        if (it.feedbackSaving) return;
+        it.feedbackFocus = v;
+        if (v === "edit") { it.editing = !it.editing; redraw(it); }
+        else feedback(it, v, "");
+      },
+      onkeydown: (e) => {
+        const index = choices.findIndex(([value]) => value === v);
+        const next = e.key === "ArrowRight" ? (index + 1) % 3 : e.key === "ArrowLeft" ? (index + 2) % 3 : e.key === "Home" ? 0 : e.key === "End" ? 2 : -1;
+        if (next < 0 || it.feedbackSaving) return;
+        e.preventDefault(); buttons[next].focus();
+      }
+    }, label));
+    const group = h("div", { class: "xc-feedback", role: "group", "aria-label": "Feedback on this reply" },
+      buttons, saving ? h("span", { class: "xc-dim", role: "status" }, "Saving.") : null,
+      it.feedbackError ? h("span", { class: "xc-err", role: "alert" }, it.feedbackError) : null,
+      done ? h("span", { class: "xc-dim" }, "sent: " + choices.find(([v]) => v === done)[1]) : null);
+    if (!it.editing) {
+      if (it.feedbackReturnFocus) { it.feedbackReturnFocus = false; queueMicrotask(() => buttons[choices.findIndex(([v]) => v === active)].focus()); }
+      return group;
+    }
+    const box = h("textarea", { class: "xc-input", rows: "4", "aria-label": "Better answer", disabled: saving });
     box.value = it.edit != null ? it.edit : it.text;
-    return h("div", null, bar, h("div", { class: "xc-edit" }, box, h("div", { class: "xc-btnrow" },
-      h("button", { class: "xc-btn", onclick: () => { it.edit = box.value; feedback(it, "edit", box.value); } }, "Send edit"),
-      h("button", { class: "xc-btn", onclick: () => { it.editing = false; redraw(it); } }, "Cancel"))));
+    box.addEventListener("input", () => { it.edit = box.value; });
+    const cancel = () => {
+      if (it.feedbackSaving) return;
+      it.edit = box.value; it.editing = false; it.feedbackFocus = "edit"; it.feedbackReturnFocus = true; redraw(it);
+    };
+    box.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } });
+    if (!saving) queueMicrotask(() => box.focus());
+    return h("div", null, group, h("div", { class: "xc-edit" }, box, h("div", { class: "xc-btnrow" },
+      h("button", { class: "xc-btn", disabled: saving, onclick: () => { if (it.feedbackSaving) return; it.edit = box.value; feedback(it, "edit", box.value); } }, "Send edit"),
+      h("button", { class: "xc-btn", disabled: saving, onclick: cancel }, "Cancel"))));
   }
 
   function setBusy(value) {
@@ -733,10 +764,20 @@ export function mount(root) {
   }
 
   async function feedback(it, verdict, text) {
+    if (it.feedbackSaving) return;
+    it.feedbackSaving = true;
+    it.feedbackError = null;
+    redraw(it);
     try {
       await api("POST", "/api/feedback", { session: current, verdict, message_id: it.id, text });
-      it.verdict = verdict; it.editing = false; redraw(it); flash("");
-    } catch (e) { fail(e); }
+      it.verdict = verdict; it.editing = false; it.feedbackError = null; flash("");
+    } catch (e) {
+      it.feedbackError = "Not saved. Try again.";
+      fail(e);
+    } finally {
+      it.feedbackSaving = false;
+      redraw(it);
+    }
   }
 
   async function respondPanel(p, action, value, quiet) {
