@@ -173,7 +173,9 @@ export function mount(root) {
         onclick: () => { editing = { name: "", endpoint: "", protocol: "openai", auth: "key", model: "" }; draw(true); } }, "Add custom provider"));
       return section;
     }
-    const name = h("input", { class: "xc-field", value: editing.name, required: true, disabled: !!editing.existing, "aria-label": "Provider name" });
+    // Read once: a save clears `editing` before the form is replaced, so the form keeps its own entry's kind (#1099).
+    const existing = !!editing.existing;
+    const name = h("input", { class: "xc-field", value: editing.name, required: true, disabled: existing, "aria-label": "Provider name" });
     const endpoint = h("input", { class: "xc-field", value: editing.endpoint, type: "url", required: true, "aria-label": "Base URL" });
     const model = h("input", { class: "xc-field", value: editing.model, required: true, "aria-label": "Model ID" });
     const protocol = h("select", { class: "xc-field", "aria-label": "Protocol" },
@@ -190,7 +192,7 @@ export function mount(root) {
     const field = (label, input) => h("label", null, h("span", null, label), input);
     const form = h("form", { class: "xc-custom-form", onsubmit: async (e) => {
       e.preventDefault();
-      const request = { name: name.value, endpoint: endpoint.value, protocol: protocol.value, auth: auth.value, model: model.value, key: key.value, replace: !!editing.existing };
+      const request = { name: name.value, endpoint: endpoint.value, protocol: protocol.value, auth: auth.value, model: model.value, key: key.value, replace: existing };
       key.value = "";
       saveButton.disabled = cancelButton.disabled = true;
       try {
@@ -253,7 +255,13 @@ export function mount(root) {
     const rows = data.providers || [];
     const active = document.activeElement;
     const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
-    if (keep && !(active.closest && active.closest(".xc-custom-form"))) return; // preserve other key fields
+    if (keep && !(active.closest && active.closest(".xc-custom-form"))) {
+      // Never redraw a provider row while its key is being typed. The custom providers section and the model section
+      // never hold that field, so they are still drawn: a saved custom provider's form closes (#1099), and a retry's
+      // reply reaches the model section (#1100). Any other key field holds the whole panel, as before.
+      if (layout && layout.before.contains(keep)) drawSlots(force);
+      return;
+    }
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
     counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
@@ -273,6 +281,11 @@ export function mount(root) {
         title: "This core knows no model provider yet.",
         body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
         hint: "Add one to the config or start a local server such as Ollama, then open this tab again." })].filter(Boolean));
+    drawSlots(force);
+  }
+
+  // The custom providers section and the model section, below the provider rows.
+  function drawSlots(force) {
     // Keep the actual form node (including focus and password input) during unrelated refreshes.
     if (force || !editing) layout.custom.replaceChildren(customPanel());
     const pick = picker();
