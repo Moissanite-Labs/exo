@@ -55,6 +55,11 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
+For Google AI Studio, add the Gemini key in Providers or set `GEMINI_API_KEY`; Exo uses Google's
+OpenAI-compatible API. In the web Providers tab, **Add custom provider** configures an unlisted OpenAI Chat
+Completions or Anthropic Messages endpoint, model and optional key. Use **Edit** for an existing entry, then
+restart the core to apply settings. Supported protocols and remote-core key limits are in `docs/PROVIDERS.md`.
+
 A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
 learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
 limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
@@ -284,6 +289,11 @@ once, and each has a cap on tool rounds, tokens and time. The briefs and receipt
 You can watch and control them:
 
 - `/tasks` lists them with their status. `/open <task>` shows one's session (read only).
+- In the terminal, a parent shows a separate cue when an active delegated task or nested task needs approval.
+  The cue names the child and gives `/open <task>` to review its own card. It does not focus or answer a card,
+  stop parallel parent work, or extend the parent's permissions. Ordinary forks and unrelated tasks are excluded.
+  Past five waiting tasks, the cue names the rest by task id, because `/tasks` lists only this thread's own tasks.
+  A failed metadata refresh labels the cue "last known" until a successful refresh.
 - `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
 - `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.
 - On the web page, the Tasks cards have Open, Steer and Stop buttons.

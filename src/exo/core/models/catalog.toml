@@ -25,6 +25,13 @@ transport = "openai"
 base_url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
 
+# Google AI Studio's Gemini Developer API via its OpenAI Chat Completions compatibility endpoint.
+# This is not the native Gemini API or Vertex AI OAuth. See https://ai.google.dev/gemini-api/docs/openai
+[providers.gemini]
+transport = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+key_env = "GEMINI_API_KEY"
+
 # Local OpenAI-compatible servers: no key, the small-model and device path.
 [providers.llamacpp]
 transport = "openai"

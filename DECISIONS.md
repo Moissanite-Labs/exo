@@ -1188,6 +1188,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-30:** the web Providers tab offers a Gemini AI Studio preset using the OpenAI-compatible
+  endpoint and `GEMINI_API_KEY`, plus `GET/POST /api/providers/custom` for supported OpenAI Chat Completions and
+  Anthropic Messages endpoints. The connected core writes non-secret metadata through principal-authorized
+  `config.set`, with no local-disk fallback; the separate key stays in the web server's existing secret store.
+  Custom key references bind provider name, protocol and endpoint, so a key cannot silently follow an endpoint edit.
+  Add refuses an existing name; editing requires explicit replacement. A keyless endpoint is configured but untested
+  until probed. Changes take effect when the core restarts, and a remote core needs its own credential. This amends
+  the earlier description that only a provider name crosses the protocol: custom non-secret metadata also does.
+  Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
+  key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
+  custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
@@ -5042,6 +5053,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
@@ -5103,6 +5124,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
+  from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
+  failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
+  startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
