@@ -204,8 +204,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   part of the thread. The copies are the same as before, byte for byte. Event reads with no bound go page by
   page. `SessionStore.iter_events` reads 1,000 events at a time, up to the newest seq at the call, so it returns
   what one read at the call returned. It reads the first page at once, so a bad `since` still fails when the
-  caller asks. `SqliteLog.read`, trace and `/handoff` use it. A `Subscription` keeps the log's iterator as its
-  backlog instead of a list of every event, since a bounded first page alone would skip events. A read that also
+  caller asks. `SqliteLog.read`, trace and `/handoff` use it. A `Subscription` takes the log's iterator from
+  `Hub.replay` as its backlog instead of a list of every event, since a bounded first page alone would skip
+  events. `Hub.since` lists the same replay, so a rule on what the hub replays has one place. A read that also
   keeps the events of no session (`with_global`) is now two index searches joined by `UNION ALL`. Its `OR` form
   sorted every later event on each call, so reading it page by page took time that grew with the square of the
   log. The one-shot `events.subscribe` reply still carries the whole replay, as the protocol says. The stdio

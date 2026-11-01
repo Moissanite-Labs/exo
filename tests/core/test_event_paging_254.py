@@ -159,6 +159,35 @@ def test_subscribe_from_zero_holds_one_page(tmp_path, decoded):
         store.close()
 
 
+def test_since_and_a_subscription_both_replay_through_the_hub(tmp_path):
+    """A rule on what the hub replays, put in ``Hub.replay``, reaches ``since`` and a subscription's backlog alike.
+    A backlog read from the log directly would skip it."""
+    class Owned(Hub):
+        def replay(self, seq, session=None):
+            return (e for e in super().replay(seq, session) if e.session != "s2")
+
+    store = SessionStore(tmp_path / "s.sqlite")
+    hub = Owned(SqliteLog(store))
+    for i in range(PAGE + 30):
+        hub.publish(notice(i), ("s1", "s2", None)[i % 3])
+
+    async def backlog():
+        sub, got = hub.subscribe(0), []
+        try:
+            while (ev := await sub.next(timeout=0.05)) is not None:
+                got.append(ev.seq)
+            return got
+        finally:
+            sub.close()
+
+    try:
+        want = [e.seq for e in store.events_since(0, None, 1 << 30) if e.session != "s2"]
+        assert [e.seq for e in hub.since(0)] == want
+        assert asyncio.run(backlog()) == want
+    finally:
+        store.close()
+
+
 def test_a_stdio_subscribe_reads_one_page_before_its_first_event(tmp_path, decoded):
     """The JSON-lines transport first built the one-shot events.subscribe reply, with every event decoded, and then
     dropped it to stream from a Subscription."""
