@@ -15,6 +15,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
+  (`test_the_join_budget_is_shared_by_every_substitution`) timed each line once in CPU time, so one pause in a call,
+  such as a full collection of a long run's heap, failed it. It now times again when over the bound, as the file's
+  other timing tests do. The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
+  as soon as the job's row said done, but the done event is published after the job's notice. It now waits for the
+  event.
 - `exo improve --offline` names the cause of each path refusal (#1046 follow-up). A refused working directory, an
   output name that is not a run ID, and an existing or linked output run printed the fixture line. With `EXO_HOME`
   unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths now match a
