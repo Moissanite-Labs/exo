@@ -8,6 +8,7 @@ import pytest
 
 import exo.core.sessions as sessions
 from exo import provenance
+from exo.core.engine import CoreEngine
 from exo.core.loop import Loop
 from exo.core.sessions import SessionStore
 from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolResult, Usage
@@ -117,6 +118,31 @@ class Memory:
 
     def checkpoint(self, session_id="", messages=None, reason="turn"):
         self.checkpoints.append(messages)
+
+
+def test_handoff_counts_user_turns_without_loading_the_thread(tmp_path, monkeypatch):
+    models = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}, "fake": {"rules": []}}
+    eng = CoreEngine(tmp_path / "home", models, env={}, cwd=str(tmp_path))
+    loads: list[tuple] = []
+    load = SessionStore.messages
+
+    def spy(self, sid, since=0, upto=None):
+        loads.append((sid, since, upto))
+        return load(self, sid, since, upto)
+
+    async def go():
+        sid = (await eng.loop.create_session(title="w")).id
+        fill(eng.store, sid, 30)
+        expected = old_turns(eng.store, sid)
+        monkeypatch.setattr(SessionStore, "messages", spy)
+        return sid, expected, await eng.handoff_facts(sid)
+
+    try:
+        sid, expected, facts = asyncio.run(go())
+    finally:
+        eng.store.close()
+    assert facts["thread"]["user_turns"] == expected > 28
+    assert (sid, 0, None) not in loads, loads  # main loaded the whole thread to count its user turns
 
 
 def test_a_turn_counts_and_tails_without_decoding_the_session(tmp_path, decoded):

@@ -71,6 +71,38 @@ def test_iter_events_matches_one_unbounded_read(tmp_path, limits):
         store.close()
 
 
+def test_a_page_with_global_events_does_not_sort_the_rest_of_the_log():
+    """A page that also keeps events of no session costs the same at 2,000 events and at 20,000. The OR form
+    collected and sorted every later match on each call, so paging a long log took time that grew with its square."""
+    store = SessionStore()
+
+    def add(start: int, n: int) -> None:
+        for i in range(start, start + n):
+            store.append_event(notice(i), ("s1", "s2", None)[i % 3])
+
+    def steps() -> int:
+        count = [0]
+
+        def tick() -> int:
+            count[0] += 1
+            return 0
+
+        store._db.set_progress_handler(tick, 10)
+        try:
+            assert len(store.events_since(0, "s1", 10, with_global=True)) == 10
+        finally:
+            store._db.set_progress_handler(None, 10)
+        return count[0]
+
+    try:
+        add(0, 2000)
+        small = steps()
+        add(2000, 18_000)
+        assert steps() <= 2 * small + 50  # the same either way; the OR form grew tenfold
+    finally:
+        store.close()
+
+
 def test_replay_from_zero_across_pages_while_live_events_publish(tmp_path):
     """OPTIMIZATION.md W2-4 acceptance: every seq arrives once, in order, with live events published mid replay."""
     store = SessionStore(tmp_path / "s.sqlite")
