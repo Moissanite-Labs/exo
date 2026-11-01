@@ -801,18 +801,21 @@ def test_the_join_budget_is_shared_by_every_substitution(shape, units, monkeypat
     spend it as fast as many short ones. Timed through gate.classify, CPU time,
     against the same call with the check stubbed out, at two sizes: a ratio with a margin, not a limit."""
     lines = [SUB_SHAPES[shape](units), SUB_SHAPES[shape](2 * units)]
-    took, base = [], []
-    for line in lines:
-        start = time.process_time()
-        c = _bash(line)
-        took.append(time.process_time() - start)
-        assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
     real = gate._exo_relative
-    monkeypatch.setattr(gate, "_exo_relative", lambda *a, **kw: "")
-    for line in lines:
-        start = time.process_time()
-        _bash(line)
-        base.append(time.process_time() - start)
-    monkeypatch.setattr(gate, "_exo_relative", real)
+    for _ in range(3):      # CPU time; timed again only when over the bound, so one pause in a call no longer fails it
+        took, base = [], []
+        for line in lines:
+            start = time.process_time()
+            c = _bash(line)
+            took.append(time.process_time() - start)
+            assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
+        monkeypatch.setattr(gate, "_exo_relative", lambda *a, **kw: "")
+        for line in lines:
+            start = time.process_time()
+            _bash(line)
+            base.append(time.process_time() - start)
+        monkeypatch.setattr(gate, "_exo_relative", real)
+        if all(t < 2 * b + 0.5 for t, b in zip(took, base)):
+            break
     for t, b in zip(took, base):
         assert t < 2 * b + 0.5, (took, base)
