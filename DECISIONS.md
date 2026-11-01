@@ -5062,6 +5062,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-11-01 (#1037 review):** a stderr category names a failure message, such as
+  running as root without `--no-sandbox`, not a bare `sandbox` or `dbus`. The D-Bus errors and sandbox
+  warning of a healthy Linux start are no longer named as a cause. A Chrome that exits after it writes
+  `DevToolsActivePort` is reported with its exit code and categories. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
   from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
   failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the

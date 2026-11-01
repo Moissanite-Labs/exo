@@ -23,9 +23,17 @@ from typing import Any, Optional
 MAC = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 START_TIMEOUT = 20.0
 STDERR_LIMIT = 16384
+# How long a failed start waits for Chrome to exit before it reports the error as is. Chrome can close its
+# DevTools port a moment before its process ends.
+EXIT_GRACE = 2.0
 # Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
-STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
-                (b"zygote", "zygote"), (b"singletonlock", "profile lock"),
+# Match a failure message, not a bare subsystem name. A healthy Linux start also writes D-Bus connection errors and
+# a sandbox warning, so `dbus` or `sandbox` alone would name a cause on every start (#1037).
+STDERR_HINTS = ((b"running as root without --no-sandbox", "sandbox: running as root without --no-sandbox"),
+                (b"no usable sandbox", "sandbox: no usable sandbox"),
+                (b"suid sandbox helper binary", "sandbox: setuid helper"),
+                (b"setuid sandbox", "sandbox: setuid helper"),
+                (b"crashpad", "crashpad"), (b"zygote", "zygote"), (b"singletonlock", "profile lock"),
                 (b"no space left on device", "storage exhausted"), (b"shared memory", "shared memory"))
 
 
@@ -63,7 +71,7 @@ class _StderrTail:
 
     def hints(self):
         tail = self.tail.lower()
-        found = [label for needle, label in STDERR_HINTS if needle in tail]
+        found = list(dict.fromkeys(label for needle, label in STDERR_HINTS if needle in tail))
         return ", ".join(found) if found else "no recognized diagnostic (output withheld)"
 
 # Runs before the page's own scripts in every document: counts the page's requests until their body is read, so
@@ -196,7 +204,20 @@ class Browser:
                                    f"stderr: {self._stderr.hints()}")
             raise RuntimeError(f"Chrome did not create DevToolsActivePort within {START_TIMEOUT:g}s; "
                                f"stderr: {self._stderr.hints()}")
-        port = port_file.read_text().split()[0]
+        try:
+            self._connect(port_file.read_text().split()[0], width, height)
+        except Exception as exc:
+            try:
+                code = self.proc.wait(EXIT_GRACE)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code is None:
+                raise
+            self._stderr.finish()
+            raise RuntimeError(f"Chrome exited after writing DevToolsActivePort (exit {code}); "
+                               f"stderr: {self._stderr.hints()}") from exc
+
+    def _connect(self, port, width, height):
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
         page = next(t for t in targets if t.get("type") == "page")
         from websockets.sync.client import connect

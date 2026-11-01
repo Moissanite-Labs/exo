@@ -21,6 +21,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   branch. It now stamps every event at two fixed anchors and checks 64 days later. The promotion rule is unchanged
   (the same pattern as #1086's decay test).
 - Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
+- Browser test startup no longer names D-Bus or the sandbox as the cause of every failed start on Linux. A healthy
+  start logs D-Bus errors and a sandbox warning, so the categories now match only failure messages, such as running
+  as root without `--no-sandbox`. A Chrome that exits after it writes `DevToolsActivePort` is now reported with its
+  exit code and categories (#1037 review).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
