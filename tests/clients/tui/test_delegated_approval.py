@@ -1,5 +1,6 @@
 """Parent cues project active task ancestry without projecting approval authority (#996)."""
 import asyncio
+import time
 
 from exo.protocol import schema as s
 from exo.wire import Brief, encode
@@ -247,6 +248,56 @@ def test_task_list_is_read_only_while_another_sessions_request_is_open(tmp_path)
             for _ in range(3):
                 await refresh()
             assert len(calls) == before and not cue(app)
+    run(tmp_path, scenario)
+
+
+def test_a_burst_of_child_requests_shares_one_task_list_read(tmp_path):
+    """#997 review nit: a request event of another session starts a refresh at once, and a burst shares that one
+    refresh and its one ``tasks.list`` read. Only request events call the wrapper (see the test above). The 3 s timer
+    may add its own reads while the burst is open: at most one per started 3 s of the window."""
+    async def scenario(app, pilot, client, eng):
+        child = add_task(eng, app.session, 'running', 'Scout')
+        calls = count_tasks_lists(client)
+        refresh, started, finished = app.refresh_delegated_approvals, [], []
+
+        async def tracked():
+            await refresh()
+            finished.append(True)
+
+        def on_event():
+            started.append(True)
+            return tracked()
+        app.refresh_delegated_approvals = on_event
+        began = time.monotonic()
+        for n in range(40):  # one burst: every event is queued before the window reads the first
+            pending_approval(eng, child, s.ApprovalRequested(request_id=f'burst-{n}', summary='fixture'))
+        await until(lambda: '/open k_abc123' in cue(app) and started and len(finished) == len(started), pilot,
+                    timeout=HELD)
+        ticks = int((time.monotonic() - began) // 3) + 1
+        assert len(started) == 1
+        assert 1 <= len(calls) <= 1 + ticks
+    run(tmp_path, scenario)
+
+
+def test_an_unrelated_sessions_request_reads_only_active_tasks(tmp_path):
+    """#997 review nit: an open request of a session this thread did not start (another window) turns the
+    ``tasks.list`` read on, since only the list can tell that it is unrelated. The read asks for active tasks only,
+    so the finished history is not sent on every tick, and no cue shows."""
+    async def scenario(app, pilot, client, eng):
+        other = eng.store.create_session(title='another window').id
+        for n in range(30):  # finished history of other threads
+            eng.store._q("INSERT INTO tasks (id, parent, child, depth, title, status, brief, created, updated) VALUES "
+                         "(?,?,?,?,?,?,?,?,?)", (f'k_old{n}', other, None, 1, f'Old {n}', 'done',
+                                                 encode(Brief(id=f'k_old{n}', thread=other, goal='x' * 1500)),
+                                                 s.now_ts(), s.now_ts()))
+        live = add_nested(eng, other, 'k_live', 'Live')
+        calls = count_tasks_lists(client)
+        pending_approval(eng, other, s.ApprovalRequested(request_id='other-window', summary='fixture'))
+        await until(lambda: calls, pilot, timeout=HELD)
+        await app.refresh_delegated_approvals()
+        assert set(app.delegated_tasks) == {'k_live'} and app.delegated_tasks['k_live']['child_session'] == live
+        assert all(body.active for body in calls)
+        assert not cue(app) and app.card is None
     run(tmp_path, scenario)
 
 

@@ -5105,6 +5105,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-11-01 (#997 follow-up):** the cue's `tasks.list` read asks for active tasks only. `tasks.list`
+  takes an optional `active` field that keeps queued and running tasks, the only ones that make a delegated edge.
+  An open request of an unrelated session, such as another window's, still turns the read on. Only the list shows
+  that the session is unrelated. The finished history no longer travels on each tick. Commands are strict, so a
+  window that joins an older core is refused this read (`bad_body`), as for any new command field. Its cue then
+  rests on the task events it has seen and is marked "(last known)". A test now holds that a burst of request
+  events shares one read.
 - **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
   transcript events to the selected session. Active task records alone establish delegated ancestry. A
   non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and

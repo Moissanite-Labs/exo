@@ -701,7 +701,7 @@ class CoreRuntime:
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
-        return {"tasks": self.agents.list(b.session)}
+        return {"tasks": self.agents.list(b.session, active=b.active)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         self.approvals.respond(b)
