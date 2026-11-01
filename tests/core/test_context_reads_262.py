@@ -86,11 +86,13 @@ def test_each_step_reads_its_tree_once_when_no_text_is_cached():
         agent = AgentContext(store, Summ(), leaf_size=8, tail_messages=12, min_compact_tokens=0, view_budget=200)
         sid, key = store.create_session(agent="probe").id, agent.key("probe")
         await grown(agent, key, sid, store, 160)
+        own = store.create_session(agent="probe", kind="private").id  # a private thread keeps a tree of its own
+        await grown(agent, own, own, store, 160)
         steps = {"plain view": lambda: plain._plain_view("s"), "plain merge": lambda: plain._maybe_merge("s"),
                  "plain note": lambda: plain.note("s"), "plain wait check": lambda: verbatim_overflows(plain, "s"),
                  "agent view": lambda: agent._view(key), "agent merge": lambda: agent._maybe_merge(key),
                  "agent note": lambda: agent.note(sid), "agent wait check": lambda: verbatim_overflows(agent, key),
-                 "/context": lambda: agent.report(sid)}
+                 "/context": lambda: agent.report(sid), "private tail": lambda: agent._thread_tail(own, 0)}
         for name, step in steps.items():
             plain._verbatim_cache.clear()
             agent._verbatim_cache.clear()
@@ -98,7 +100,7 @@ def test_each_step_reads_its_tree_once_when_no_text_is_cached():
             step()
             store._db.set_trace_callback(None)
             assert len(reads) == 1, (name, len(reads))
-        assert not plain.pending("s") and not agent.pending(sid)  # the tree was full: no step scheduled a node
+        assert not plain.pending("s") and not agent.pending(sid) and not agent.pending(own)  # no step scheduled a node
 
     asyncio.run(go())
 
