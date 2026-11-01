@@ -198,8 +198,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. `last_messages` has the same text and place as in draft #903,
-  which uses it for the context transcript, so the two merge cleanly. Results are unchanged. Tests:
-  `tests/core/test_session_hot_paths_254.py`.
+  which uses it for the context transcript, so the two merge cleanly. Results are unchanged. A fork now copies
+  in one write transaction: the new session, the copies with `executemany`, their search rows and the summaries
+  that still fit. It wrote each copy in a transaction of its own, so a fork that failed partway left a session with
+  part of the thread. The copies are the same as before, byte for byte. Tests:
+  `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
