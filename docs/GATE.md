@@ -336,6 +336,31 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
 - The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
   source names (`ghe.corp/pub/repo#5`), as above.
+- The repo `GH_REPO` names (#566). gh reads `GH_REPO` as `-R` when the line gives none. So each
+  value the line sets for it is read as `-R` is, on each reading with no `-R`: a prefix assignment
+  (`GH_REPO=pub/repo gh pr comment 5`, also through `env`), and a value set earlier on the line
+  (`export GH_REPO=pub/repo; gh pr comment 5`). A bare assignment counts too, since gh sees it
+  when the variable was exported before the line. So does an export or assignment in a compound,
+  or before a nested line that inherits it: `{ export GH_REPO=pub/repo; gh pr comment 5; }`,
+  `export GH_REPO=pub/repo; x=$(gh pr comment 5)` and `bash -c`. The gate keeps the last four
+  values the line set, so a long line stays linear. Of the prefix assignments before one command
+  it keeps the last four too. bash, `env` and `sudo` pass gh the last one, but an option can take
+  a later word as its value (`sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt). gh api
+  fills `{owner}` and `{repo}` in its endpoint from it, and `:owner` and `:repo` up to a word
+  boundary, so `repos/{owner}/{repo}/issues/5/comments` and `repos/:owner/:repo/issues/5/comments`
+  read as `pub/repo` too. The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks as on a repo the line does not name. A value from
+  an expansion adds nothing, as that reading already stands, and so does a value past the four.
+  Not read here: a prefix assignment on a command that starts a nested shell
+  (`GH_REPO=pub/repo bash -c '..'`) or that calls a function (`GH_REPO=pub/repo f`). A value a
+  loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh pr comment 5 -b x; export GH_REPO=pub/repo; done`). A function whose gh
+  runs where it is called, after the value is set
+  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). A prefix value followed by four
+  words that an option takes as its value, each written like an assignment
+  (`GH_REPO=pub/repo sudo -E -p GH_REPO=b1/y` and three more such `-p` words): they push it past
+  the four. And `GH_HOST`, which names gh's host. Each of these asks as on a repo the line does not
+  name, as before.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
@@ -343,13 +368,16 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. The posting rules list a post's violations under the post's own name, and right after
-them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
-target can be public where the post's is internal). On a line with such copies, the other posts
-keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
-own, so it lists all that main lists while those list no more than 200. Its question merges the
-readings of the line, so a copy's finding can show both under the copy's name and under the
-post's, and it lists one `and N more on other posts`, which counts each entry a reading left out
+part. Past eight other targets, the line on each of them keeps one copy of each reading the
+policy tells apart, and the line on its own target keeps them all, so the decision stays the
+same ("Invariant gh field parsing (#550)" below). The posting rules list a post's violations
+under the post's own name, and right after them what a copy finds that neither the post nor
+another copy of it does (under a scope a copy's target can be public where the post's is
+internal). On a line with such copies, the other posts keep the room of twenty, and the posts
+with copies and their copies have a room of 200 of their own, so it lists all that main lists
+while those list no more than 200. Its question merges the readings of the line, so a copy's
+finding can show both under the copy's name and under the post's, and it lists one
+`and N more on other posts`, which counts each entry a reading left out
 that the merged list does not hold. The ledger row lists the other targets as `alt_targets`, with a user and password in a
 URL as `***@`. The question the principal sees
 names each of them, also when none decides the line:
@@ -1165,7 +1193,10 @@ target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and 
 still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
 expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
 `opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
-stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc ends on the
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. When the two outcomes
+are the same, the reserved hits of both readings stand (#566). A copy of a gh post on another
+target can raise the line's own reading to the outcome of the `opaque_exec` one, and a reservation
+on `opaque_exec` still keeps a standing grant from covering the line then. A heredoc ends on the
 line that equals its delimiter exactly, and the delimiter is the opener word after quote removal, so
 whitespace or any other character in it is part of it (#328): `cat <<'EOF '` (and `<<"EOF "`,
 `<<' EOF'`, `<<EOF\ `) ends on the line `EOF ` (with the space), never on bare `EOF`. The gate
@@ -1641,7 +1672,8 @@ gate does not read:
   `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
   `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
   `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
-  and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  and `~/.exo`), `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` (gh's hosts, tokens and settings, its pager
+  and editor commands among them, #566), `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
   `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,
@@ -3532,6 +3564,24 @@ Git gc.recentObjectsHook is read as shell execution across git configuration for
 
 ### Invariant gh field parsing (#550)
 
-The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only.
 
 The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
+Since the D-038 amendment of 2026-10-30, the rest of #550 is closed too. A close's or reopen's comment and a merge's
+subject are read once per line, with the body and the title. `decide` reads the line on its own target with every
+part, the copies on its other targets among them. Past eight other targets (`_ALTS_IN_FULL`), it reads the line on
+each of them with one copy of each reading the policy tells apart (`_one_copy_each`). A copy's reading is how the
+policy reads its target (its exposure and third party after the scopes, and which target patterns of the policy
+match it), with everything else `decide` reads of it. Copies of one reading decide alike, so each step that meets
+one meets the first. The posting rules list a copy's finding once, under the first copy that finds it, which is
+the first of its reading. So the line on each other target decides as it does with every copy: the same outcome,
+reason, exposure, third party and findings. The copies it leaves out add only their own reserved hits, and the line
+on its own target lists those. So the merged decision is the one every part gives, reserved hits and their order
+included. The work grows with the number of URL operands times the readings the policy tells apart, not with the
+square of the operands. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`. It now
+takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:
+`tests/security/test_gate_gh_field_work_550.py` and `tests/security/test_gate_expansion_scan_linear.py`.
+
+Two smaller points from the issue. The ledger row's `alt_targets` already read a user and a password in a URL as
+`***@`. `gh pr --repo="$R" comment 5` still reads as `opaque_exec`, which asks: stricter than needed, never lower.
