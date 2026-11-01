@@ -173,7 +173,11 @@ def test_shallow_clone_refused(tmp_path, capsys):
 
 def test_partial_config_refused_before_traversal(tmp_path, monkeypatch):
     repo = fixture_repo(tmp_path)
-    for key, value in [('remote.origin.promisor', 'true'), ('extensions.partialClone', 'origin')]:
+    # Git honours a promisor remote set in an included file, so the audit must read included files too.
+    included = tmp_path / 'included-partial-config'
+    included.write_text('[remote "origin"]\n\tpromisor = true\n')
+    for key, value in [('remote.origin.promisor', 'true'), ('extensions.partialClone', 'origin'),
+                       ('include.path', str(included))]:
         git(repo, 'config', key, value)
         before = sorted((str(p.relative_to(repo)), p.read_bytes()) for p in (repo / '.git/objects').rglob('*') if p.is_file())
         real_git = audit.git
