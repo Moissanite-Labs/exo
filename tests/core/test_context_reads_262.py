@@ -23,6 +23,12 @@ class Short:
         return "S" * 40
 
 
+def cold(*ctxs):
+    """Drop every cached text, as a restart does. A new cache of the same type works for any cache class."""
+    for ctx in ctxs:
+        ctx._verbatim_cache = type(ctx._verbatim_cache)()
+
+
 def counted(store):
     reads: list[str] = []
     store._db.set_trace_callback(lambda sql: reads.append(sql) if sql.startswith("SELECT * FROM summaries") else None)
@@ -94,8 +100,7 @@ def test_each_step_reads_its_tree_once_when_no_text_is_cached():
                  "agent note": lambda: agent.note(sid), "agent wait check": lambda: verbatim_overflows(agent, key),
                  "/context": lambda: agent.report(sid), "private tail": lambda: agent._thread_tail(own, 0)}
         for name, step in steps.items():
-            plain._verbatim_cache.clear()
-            agent._verbatim_cache.clear()
+            cold(plain, agent)
             reads = counted(store)
             step()
             store._db.set_trace_callback(None)
@@ -135,7 +140,7 @@ def test_a_merge_job_reads_its_tree_once_for_its_two_halves():
         await grown(ctx, key, sid, store, 160)
         top = max((n for n in store.summaries(key) if n.status == "skipped"), key=lambda n: n.level)
         assert top.level >= 3
-        ctx._verbatim_cache.clear()  # as after a restart
+        cold(ctx)
         reads, at, summarize = counted(store), [], ctx._summarize
 
         async def spy(session, content, previous=None, extra=""):
