@@ -632,6 +632,8 @@ class _Lexer:
         depth, start = 0, -1              # start: where the current word's source text begins
         w_at = hd_at = 0                  # where that word starts with its `<(`, and where a here-doc's `<<` does
         fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
+        after_redir = False               # the last token was a redirection: the word after it is its target, not
+                                          # an fd for the next operator (`1<&0>/dev/stdout` is a copy, then a write)
 
         def mark(a: int, b: int) -> None:
             if marks is not None:
@@ -639,11 +641,12 @@ class _Lexer:
                 met.append(len(self.subs))
 
         def flush():
-            nonlocal start, fd
+            nonlocal start, fd, after_redir
             w = state["w"]
             w.raw, start = s[start:self.i], -1
             if w.started:
                 w.fd, fd = fd, ""
+                after_redir = False       # the target word is complete; a later digit is an fd again
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     hd.fd = w.fd
@@ -671,6 +674,7 @@ class _Lexer:
                 flush()
                 self.i += 1
             elif ch == "\n":
+                after_redir = False       # a newline ends any redirection's target word, as a separator does
                 flush()
                 toks.append(("op", ";"))
                 mark(self.i, self.i + 1)
@@ -699,6 +703,7 @@ class _Lexer:
             elif ch == "$":
                 self._dollar(w)
             elif ch in "<>" and nxt == "(" and not w.started:
+                after_redir = False       # the process substitution is the redirection's target word
                 self.i += 2
                 start = self.i
                 if self.nest >= _NEST:
@@ -711,8 +716,11 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 op_at = self.i
-                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
-                if w.started and not w.quoted and (w.text.isdigit()
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator --
+                # unless it is the target of the redirection just read (`1<&0>/dev/stdout`: the 0 is the copy's
+                # source, not the fd of the `>` that follows it). While a heredoc delimiter is still pending
+                # the old reading wins even there, because _nest_end resolves delimiters under it.
+                if w.started and not w.quoted and (not after_redir or state["delim"] is not None) and (w.text.isdigit()
                         or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
                     state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
@@ -722,10 +730,17 @@ class _Lexer:
                 self.i += len(op)
                 if op in ("<<", "<<-"):
                     state["delim"], hd_at = op == "<<-", op_at
+                    after_redir = False   # the word after a heredoc operator is its delimiter, and the
+                                          # delimiter's digits keep the old reading _nest_end agrees with
                 else:
                     toks.append(("redir", op))
                     mark(op_at, self.i)
+                    # Only a descriptor-copy operator's word is a descriptor, not the next operator's fd:
+                    # after any other operator a digit word keeps the old reading, which _nest_end agrees
+                    # with (`<2>file` steals the 2 as the `>` fd; `<<<2>file` the same)
+                    after_redir = op in ("<&", ">&")
             elif ch in ";&|()":
+                after_redir = False       # a separator ends any redirection's target word
                 flush()
                 if ch == ")" and closer and depth == 0:
                     self.i += 1
@@ -6370,6 +6385,216 @@ def _lead(parts: list[Classification]) -> Classification | None:
     return c
 
 
+_COPY_SRC = re.compile(r"(\d+)(-?)")     # a copy's source: a descriptor number, `-` when it closes after
+
+
+def _fd_num(fd: str, default: str) -> str | None:
+    """A redirection's descriptor as text: the number written before its operator, or ``default`` when none is
+    written. Compared as text, as in _store_touch, so a number of any length is safe. None when it is not
+    digits (a named `{fd}` descriptor); the caller skips that redirection."""
+    if not fd:
+        return default
+    return (fd.lstrip("0") or "0") if fd.isascii() and fd.isdigit() else None
+
+
+def _held_open(t: _Word, seen: dict) -> bool:
+    """Whether a `<` target leaves its descriptor holding a file a copy onto stdout or stderr would write
+    back (#336): one that pins to a store path, or one the gate cannot pin to a path (a variable, a
+    substitution, a glob or a relative name), as #305 already counts those on descriptors 1 and 2."""
+    hits = _shell_hits(t, seen, "target", _store_word_hit)
+    if hits is None:
+        return True
+    loose = t.dynamic or t.glob or not _expand_text(t.text).startswith("/")
+    if hits:
+        return True
+    return loose      # no store word among the word's spellings (its text included): _shell_hits checked them
+                      # all, or a covering check already did. Never re-check the text here: _store_word runs
+                      # realpath over every spelling, and _store_touch already paid it once per spelling.
+
+
+_ABSENT = object()      # a descriptor _fd_apply's journal records as not held before the command
+
+
+def _fd_copy_source(t: _Word, seen: dict) -> tuple[str | None, bool]:
+    """The descriptor a copy source word names, and whether a trailing `-` closes it after the copy -- or
+    (None, False) when the gate cannot pin it to one descriptor. A plain digit names itself; a brace form
+    names its single digit expansion (`{0..0}` is 0); a variable, a substitution or several digits is
+    unpinned, and the caller fails closed on it instead of clearing the destination."""
+    m = _COPY_SRC.fullmatch(t.text)
+    if m:
+        return (m.group(1).lstrip("0") or "0", bool(m.group(2)))
+    if not t.brace:
+        return (None, False)
+    closes = t.text.endswith("-") and not t.quoted
+    base = t.raw[:-1] if closes else t.raw
+    words = _brace_words(base.replace("\\\n", ""), pool=1)
+    if words is None:
+        return (None, False)
+    digits = {d.lstrip("0") or "0" for e in words[1:] for d in _dequote(e) if d.isascii() and d.isdigit()}
+    return (digits.pop(), closes) if len(digits) == 1 else (None, False)
+
+
+def _fd_apply(redirs: list, held: dict, seen: dict, journal: dict | None = None) -> str:
+    """Follow one command's redirections over ``held`` (descriptor -> the open target it holds, as written),
+    in the order bash applies them. A copy (`N<&M`, `N>&M`, `>&M`, `N<&M-`) gives the destination what the
+    source holds. Returns the target a copy puts onto stdout or stderr, or ''. When ``journal`` is given,
+    each descriptor's value before the command (or _ABSENT) is recorded there first, so the caller can roll
+    the command's bindings back: only an exec's, and a compound seed's, persist past their own command."""
+    def put(d: str, v: str) -> None:
+        if journal is not None and d not in journal:
+            journal[d] = held[d] if d in held else _ABSENT
+        held[d] = v
+
+    def drop(d: str) -> None:
+        if journal is not None and d not in journal:
+            journal[d] = held[d] if d in held else _ABSENT
+        held.pop(d, None)
+
+    for op, t in redirs:
+        if op in ("<", "<>"):
+            d = _fd_num(t.fd, "0")
+            if d is None:
+                continue
+            if _held_open(t, seen):
+                put(d, t.text)
+            else:
+                drop(d)
+        elif op in ("<&", ">&"):
+            d = _fd_num(t.fd, "1" if op == ">&" else "0")
+            if d is None:
+                continue
+            if t.text == "-":                       # `N>&-`: the descriptor is closed
+                drop(d)
+                continue
+            s, closes = _fd_copy_source(t, seen)
+            if s is not None:                       # a copy: the destination holds what the source holds
+                if s in held:
+                    if d in ("1", "2"):
+                        return held[s]
+                    if d != s:
+                        put(d, held[s])
+                    if closes:                      # `N<&M-`: the copy closes the source, itself included
+                        drop(s)
+                else:
+                    drop(d)
+                    if op == ">&" and not t.fd:     # `>&M` with M unheld rebinds stderr too
+                        drop("2")
+            elif t.dynamic or t.glob or t.brace:    # an expansion that may name a descriptor: fail closed,
+                if held:                            # do not clear the destination on an unpinned source
+                    pick = next((v for v in held.values() if _store_word(v)), None)
+                    if pick is None:
+                        pick = next(iter(held.values()))
+                    if d in ("1", "2"):
+                        return pick
+                    put(d, pick)
+            else:                                   # `>& file`: both streams go to a file
+                drop(d)
+                if not t.fd:
+                    drop("2" if d == "1" else "1")
+        elif op in _WRITE_REDIRS:
+            d = _fd_num(t.fd, "1")
+            if d is None:
+                continue
+            drop(d)                                 # a plain write binds the descriptor to a file instead
+            if op in ("&>", "&>>") and not t.fd:
+                drop("2")
+    return ""
+
+
+def _exec_shaped(k: _Cmd) -> bool:
+    """Whether the command is `exec` reached as _sets_shell_stdin reaches it (past openers, `command`,
+    `time` and assignments). An exec's redirections bind the shell's own descriptors, so what they hold
+    persists to the line's later commands; any other command's bind only itself. `command -- exec` counts:
+    `--` ends `command`'s options, it is not a word of the command run."""
+    w = next((w for w in k.words if not (w.text in _OPENERS or w.text in ("command", "time", "-p", "--")
+                                          or _ASSIGN.fullmatch(w.text))), None)
+    return w is not None and w.text == "exec"
+
+
+def _fd_copy_store(cmds: list, seen: dict, subs: list | None = None, held0: dict | None = None,
+                   depth: int = 0) -> str:
+    """#336, the copy route of #217: a store file opened for reading on a descriptor the open check in
+    _store_touch leaves alone -- stdin, or descriptor 3 and up through a spelling the gate cannot pin to a
+    path -- is written back when a copy puts what the descriptor holds onto stdout or stderr and the line
+    writes there (`printf F < G 1<&0 > /dev/stdout`). The descriptors a line holds are followed across its
+    commands: a compound's redirections bind every command inside it and none outside it, so a closer's are
+    applied where its compound opens and the state from before the compound is restored where it closes (a
+    heredoc or here-string of the closer on stdin holds text there instead); an exec's persist, as the
+    shell's do, and a command with redirections but no command name persists the same way. Returns the open
+    target to blame, or ''. Compound boundaries come from the parser's own pairing (`k.opens`): the hand
+    scan it replaces paired a subshell's closer with the line's start and lost a compound whose opener
+    shared its command with another opener. A substitution's commands run with the descriptors the shell
+    holds where the substitution sits (a `>( )` body is fed, so it does not inherit stdin)."""
+    seeds: dict[int, list] = {}     # a compound's first command -> its closers, outer closer first
+    pure: dict[int, int] = {}       # a pure closer command -> the compound it closes
+    for i, k in enumerate(cmds):
+        if k.opens is not None and (not k.words or all(
+                w.quoted or w.text in _OPENERS or w.text in _COMPOUND_CLOSERS for w in k.words)):
+            seeds.setdefault(k.opens[0], []).append((i, k))
+            pure[i] = k.opens[0]
+    for start in seeds:
+        seeds[start].sort(key=lambda p: -p[0])      # the outer closer closes later: its seed applies first
+    held: dict = dict(held0) if held0 is not None else {}
+    saved: dict[int, dict] = {}     # a pure closer -> the state from before its compound's seeds
+    prev_met = 0
+    for i, k in enumerate(cmds):
+        if i in pure:                               # the compound ends: its bindings stop here, and the
+            held = saved.pop(i, held)               # closer's own redirections were its compound's seed
+            hit = _fd_sub_hit(k, subs, prev_met, held, seen, depth)
+            if hit:                                 # its redirections' substitutions ran before the compound
+                return hit
+            prev_met = k.subs_met
+        if i in seeds:                              # a compound opens: each closer seeds it, outer first,
+            for ci, closer in seeds[i]:             # and the state from before is kept for the closer
+                saved[ci] = dict(held)
+                hit = _fd_apply(closer.redirs, held, seen)
+                if hit:
+                    return hit
+                if not any(op in ("<", "<>") and _fd_num(t.fd, "0") == "0" for op, t in closer.redirs) and (
+                        any(not h.fd.lstrip("0") for h in closer.heredocs)
+                        or any(not w.fd.lstrip("0") for w in closer.herestrings)):
+                    held.pop("0", None)             # the compound's stdin is text, not a file
+        if i in pure:
+            continue                                # a pure closer has no command of its own to run
+        hit = _fd_sub_hit(k, subs, prev_met, held, seen, depth)
+        if hit:
+            return hit
+        prev_met = k.subs_met
+        if _exec_shaped(k) or not k.words and k.redirs:
+            hit = _fd_apply(k.redirs, held, seen)   # an exec's, and a bare redirection's, persist
+            if hit:
+                return hit
+        else:
+            journal: dict = {}                      # any other command's bind only itself: roll it back
+            hit = _fd_apply(k.redirs, held, seen, journal)
+            for d, old in journal.items():
+                if old is _ABSENT:
+                    held.pop(d, None)
+                else:
+                    held[d] = old
+            if hit:
+                return hit
+    return ""
+
+
+def _fd_sub_hit(k: _Cmd, subs: list | None, prev_met: int, held: dict, seen: dict, depth: int) -> str:
+    """A copy onto stdout or stderr from a held descriptor inside one of command ``k``'s substitutions,
+    or ''. The substitution's commands run with the descriptors the shell holds at this command (a `>( )`
+    body is fed what the command around it writes, so it does not inherit stdin). Only sources with a
+    descriptor copy in them are parsed."""
+    if not subs:
+        return ""
+    for src in subs[prev_met:k.subs_met]:
+        if "<&" not in src and ">&" not in src:
+            continue
+        sub_cmds, sub_subs, _ = _parse(src)
+        seed = {d: v for d, v in held.items() if not (isinstance(src, _OutSub) and d == "0")}
+        hit = _fd_copy_store(sub_cmds, seen, sub_subs, seed, depth + 1)
+        if hit:
+            return hit
+    return ""
+
+
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
@@ -7512,6 +7737,18 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c = secret(c, found, found, c.category in ("store_write", "credentials"))
     if more and more != found:
         c = secret(c, more, more, c.category in ("store_write", "credentials"))
+    # #336: a store file a descriptor holds reaches stdout or stderr by a copy (1<&0, >&0, N<&M-), and the
+    # next write there writes it back; the per-command open check never follows the copy.
+    if c.category not in ("credentials", "store_write"):
+        hit = _fd_copy_store(cmds, ctx.setdefault("store_braces", {}), subs)
+        if hit:
+            signals = c.signals
+            what = (f"uses {hit}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
+                    if _fd_path(hit) else f"write to the Exo store: {hit}")
+            c = _make("store_write", summary=what[:120], target=hit, link=hit, command=cmd)
+            c.signals = signals + ["exo store"]
+            c.parts = list(parts)
+
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),

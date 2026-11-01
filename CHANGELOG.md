@@ -597,6 +597,29 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
   under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
   and `*_env` names are still shown and accepted (#691).
+- A store file held on a descriptor and copied onto stdout or stderr is a store write (#336).
+  #305 counted a store file opened for reading on descriptors 1 and 2, and on a higher descriptor
+  by a path the gate could pin; a store file opened on stdin, or on descriptor 3 and up through
+  a spelling the gate cannot pin to a path, then copied onto stdout or stderr (`1<&0`, `>&0`,
+  `2>&0`, `N<&M`, `N<&M-`) was written back by the next write there and allowed -- the #217
+  attack with one extra redirection, and no link for #324 to catch. The gate now follows what
+  each descriptor holds across a line (a compound's redirections bind the commands inside it, an
+  exec's persist), and a copy onto stdout or stderr from a held descriptor asks as a store
+  write. Reads through stdin that make no copy (`cat < f`, `jq . < f > /dev/stdout`) are
+  unchanged.
+- The fd-copy store pairing is repaired (#336, reviews of 2026-10-25/26). Compound pairing uses
+  the parser's own closer pairing, so a subshell closer seeds its own commands and a compound
+  whose opener shares its command keeps its stdin; a compound's seed is restored where it closes,
+  so a group's stdin no longer erases an exec-held store file and an exec inside a compound no
+  longer leaks past it. A copy source the gate cannot pin to one descriptor fails closed instead
+  of clearing the destination; `command -- exec` counts as exec; a substitution's commands run
+  with the descriptors held where it sits; `1<&0>/dev/stdout` (no space) is a copy and then a
+  write. A command's own bindings roll back instead of copying the held set, so the walk is
+  linear in commands; the residual per-redirection cost is the shared store-path check main
+  already pays. The lexer no longer steals a descriptor-copy's source as the next operator's fd,
+  but only where no heredoc delimiter is pending, so its reading still agrees with `_nest_end`.
+  Known limit, fails closed: an exec inside a subshell whose closer carries no redirections is
+  read as persisting, because the parser drops that empty closer command.
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
