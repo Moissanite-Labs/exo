@@ -249,11 +249,39 @@ turn those stores off (tests and sandboxes use them).
 | anthropic | ANTHROPIC_API_KEY | https://api.anthropic.com | works |
 | openrouter | OPENROUTER_API_KEY | https://openrouter.ai/api/v1 | works |
 | openai | OPENAI_API_KEY | https://api.openai.com/v1 | works |
+| gemini | GEMINI_API_KEY | https://generativelanguage.googleapis.com/v1beta/openai | Google AI Studio key via OpenAI Chat Completions compatibility; not live-verified here |
 | opencode-go | OPENCODE_GO_API_KEY | https://opencode.ai/zen/go/v1 | chat models only (see below) |
 | nous | NOUS_API_KEY | https://inference-api.nousresearch.com/v1 | off: not verified |
 | jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; works; first decision route by default |
 | laya | none | http://127.0.0.1:8000/v1 | decision role only; local; needs `laya-serve` (see below) |
 | llamacpp, ollama, lmstudio, vllm | none | http://127.0.0.1 (ports 8080, 11434, 1234, 8000) | local |
+
+**Google Gemini:** enter a Google AI Studio Developer API key in the Gemini row or use `exo providers add gemini`.
+Exo uses Google's [OpenAI-compatible endpoint](https://ai.google.dev/gemini-api/docs/openai), not its native Gemini
+API; some native features are not represented by this transport. This is not Vertex AI or Enterprise OAuth. Choose an
+available `gemini:model-id` route. No live Google call was made for this change. Some compatible reasoning endpoints
+require replaying reasoning or provider-specific tool-call metadata that Exo's Chat Completions adapter does not yet
+preserve; see [issue #616](https://github.com/Moissanite-Labs/exo/issues/616).
+
+**Custom providers in the web/desktop Providers page:** choose **Add custom provider**, enter a new name, base URL,
+protocol, authentication and model ID, then optionally enter an API key. Exo supports OpenAI Chat Completions with
+Bearer authentication and Anthropic Messages with `x-api-key`, or no key; an arbitrary API is not necessarily compatible.
+Use **Edit** to change an existing custom provider; adding the same name is refused.
+The core's model-discovery cache is tied to a custom provider's endpoint, protocol and key reference. After a
+configuration change it does not fall back to models cached for the old service, even if the new service is offline;
+the manually entered model remains available. Unchanged configurations retain the normal six-hour cache.
+The OpenAI base includes the API path (often `/v1`); Anthropic uses the service root because Exo adds `/v1/messages`.
+Use HTTPS for remote endpoints: HTTP, including on local networks, sends the key without encryption. URL credentials,
+query strings and fragments are refused. Do not put a key in a URL or model ID.
+
+Settings are saved by the connected core and take effect after it restarts. The key goes to the existing local secret
+store on the web server's machine separately, never into `config.json` or the core protocol. A core on another machine
+needs its own credential in that machine's store; after restarting it, `exo providers add custom-NAME` on that machine
+stores the key there. A failed key save can leave the non-secret settings saved; edit the entry
+to try the key again. Editing the endpoint or protocol creates a different key reference, so the previous key is not
+sent to the new address. Old credentials are not automatically deleted. The entered model is offered after restart;
+select it as the default explicitly. Seat-specific provider settings may override these global settings. The existing core
+and Desktop installation are not restarted or updated by saving.
 
 OpenCode Go: Exo uses its OpenAI-compatible endpoint (`/chat/completions`): GLM, Kimi, DeepSeek,
 MiMo and others. Its other models use `/responses` or `/messages` and are not served yet. Refs look
