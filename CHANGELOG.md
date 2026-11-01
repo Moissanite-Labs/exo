@@ -37,8 +37,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A turn no longer decodes its whole session twice (#254, W2-4). It loaded every message to count the user turns
   it passes to memory, then loaded them all again to keep the last 40 for the memory checkpoint. The count is now
   one SQL `COUNT` and the checkpoint reads only its 40 rows, with the same results. On a 10,000-message session the
-  count went from 196 ms to 7.8 ms and the tail from 190 ms to 0.9 ms. `/handoff` counts user turns
-  the same way (D-010 amendment).
+  count went from 196 ms to 7.8 ms and the tail from 190 ms to 0.9 ms. With learning on, the chat capture after
+  the turn loaded the session a third time to keep its last 12 messages, and a review loaded it for its last 6.
+  They now read only those rows. `/handoff` counts user turns the same way (D-010 amendment).
 - A fork writes its copy in one transaction (#254, W2-4). It wrote each copied message, with its search row, in a
   transaction of its own, then each summary in another statement. Forking a 5,000-message session took 2.9 s,
   and a fork that failed partway left a new session holding part of the thread. The session, the copies, their

@@ -197,7 +197,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
-  order. `/handoff` counts user turns the same way. `last_messages` has the same text and place as in draft #903,
+  order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
+  read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
+  `last_messages` has the same text and place as in draft #903,
   which uses it for the context transcript, so the two merge cleanly. Results are unchanged. A fork now copies
   in one write transaction: the new session, the copies with `executemany`, their search rows and the summaries
   that still fit. It wrote each copy in a transaction of its own, so a fork that failed partway left a session with
