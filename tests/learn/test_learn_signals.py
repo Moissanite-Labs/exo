@@ -363,3 +363,18 @@ def test_threads_capturing_at_once_write_each_key_once(engine, learner):
     assert len(arrived) == threads  # every thread was held at the lock
     keys = [(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=CAPTURED)]
     assert len(keys) == 2 and len(set(keys)) == 2
+
+
+def test_an_accept_whose_answer_is_not_in_the_transcript_is_no_replay_gold(engine, learner):
+    """exo-desktop #54: the backfilled target of such an accept holds a placeholder, not the agent's words."""
+    from exo.eval import build_replays
+    led = learner.runtime.ledger
+    found, _ = new_session(engine, ("user", "Summarise the PR"), ("assistant", "Here is a long summary."))
+    lost, _ = new_session(engine, ("user", "Summarise the issue"))   # the answer is not in this transcript
+    for sid, said in ((found, "Summarise the PR"), (lost, "Summarise the issue")):
+        led.append("utterance", {"text": said, "role": "user"}, provenance.PRINCIPAL, session=sid)  # as exo-memory logs it
+        assert handle_feedback(engine, feedback(sid, "accept"))["recorded"]
+    targets = [led.get(e["body"]["target"])["body"] for e in verdicts(learner)]
+    assert [t["source"] for t in targets] == ["learn_backfill", "learn_backfill"]
+    golds = {i["session"]: i["gold"] for i in build_replays(led)}
+    assert golds == {found: "Here is a long summary."}   # a backfill that holds the answer still counts
