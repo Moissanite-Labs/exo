@@ -1432,6 +1432,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
   and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
   `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
+- *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
+  flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
+  `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
+  (`note: {a:`), or nesting past the recursion limit could instead raise outside the policy-error path and
+  make every hook call ask. These cases now use the existing policy-error fallback: the defaults alone, with a
+  warning, until the file is corrected. This can lower `ls -la`, `git status` and `cat README.md` from ask to allow;
+  a configured deny such as `deny: [{command: '^cat '}]` is also absent during fallback. That loss of the configured
+  policy is the existing fallback's explicit tradeoff, not a claim that the affected read is safe under that policy.
+  The change replaces an indefinite hang or exception on every call with the documented, visible fallback; it does
+  not change valid policies. This applies when the malformed input occurs in any file the policy loader reads.
+  In a principal-started turn with permissions bypass, a default ask such as `rm -rf build` can instead run without
+  a card. With a required executor, a prior classification exception blocked the call; the fallback can allow reads
+  or ask for the `rm` example. These are existing mode-specific fallback behaviors, not new bypass or executor rules.
+  A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
+  or block when an executor is required).
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
   file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,

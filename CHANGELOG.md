@@ -30,6 +30,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Interpreters and SQL clients still read the text as written only. Tests:
   `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
   `docs/DOCS-MAP.md`.
+- Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
+  error fallback. Those formerly failing files use defaults alone until corrected, which can allow reads that formerly
+  asked on the error path (#981).
 - `exo improve --offline` names the cause of each path refusal (#1046 follow-up). A refused working directory, an
   output name that is not a run ID, and an existing or linked output run printed the fixture line. With `EXO_HOME`
   unset, a broken Exo home is named as `~/.exo`, not as a variable to unset. Working and export paths now match a
