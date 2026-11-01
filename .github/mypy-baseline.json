@@ -950,12 +950,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/server/engine.py",
-      "message": "Argument 1 to \"wait_for\" has incompatible type \"Coroutine[Any, Any, Event | None]\"; expected \"Future[Event] | Generator[Any, None, Event] | Awaitable[Event]\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
       "path": "src/exo/upstream.py",
       "message": "Argument 1 to \"add\" of \"set\" has incompatible type \"Any | None\"; expected \"str\"",
       "code": "arg-type",

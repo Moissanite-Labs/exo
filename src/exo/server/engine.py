@@ -8,7 +8,6 @@ session keep their order."""
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from typing import Any, AsyncIterator, Iterable, Protocol, runtime_checkable
 
 from exo.protocol.schema import Command, Event, new_id
@@ -89,7 +88,9 @@ class Subscription:
     """Replay of ``seq > since`` followed by live events, with no gap or repeat.
 
     The queue is registered before the backlog is read, so an event published
-    in between is seen once: duplicates are dropped by ``seq``.
+    in between is seen once: duplicates are dropped by ``seq``. The backlog is the
+    log's own iterator: the SQLite log reads it a page at a time, up to the newest
+    event at subscribe, so a subscriber far behind holds one page (#254).
     """
 
     def __init__(self, hub: Hub, since: int, session: str | None):
@@ -98,12 +99,12 @@ class Subscription:
         self._hub = hub
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
         hub._subs.add(self._queue)
-        self._backlog = deque(hub.since(since, session))
+        self._backlog = iter(hub.log.read(since, session))
 
     async def next(self, timeout: float | None = None) -> Event | None:
         """Next event, or None after ``timeout`` seconds idle. Raises Closed."""
-        if self._backlog:
-            ev = self._backlog.popleft()
+        ev = next(self._backlog, None)
+        if ev is not None:
             self.last = ev.seq
             return ev
         loop = asyncio.get_running_loop()

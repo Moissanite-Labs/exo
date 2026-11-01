@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from exo.core import trace
 from exo.core.hooks import maybe_await
@@ -639,9 +639,13 @@ class SessionStore:
         if session is None:
             rows = self._q(f"SELECT * FROM events WHERE seq>?{drop} ORDER BY seq LIMIT ?", (since, *skip, limit))
         else:
-            extra = " OR session IS NULL" if with_global else ""
-            rows = self._q(f"SELECT * FROM events WHERE seq>? AND (session=?{extra}){drop} ORDER BY seq LIMIT ?",
-                           (since, session, *skip, limit))
+            sql = f"SELECT * FROM events WHERE seq>? AND session=?{drop} ORDER BY seq LIMIT ?"
+            args: tuple = (since, session, *skip, limit)
+            if with_global:  # two index searches: one OR sorted every later event, on each page too (#254)
+                glob = f"SELECT * FROM events WHERE seq>? AND session IS NULL{drop} ORDER BY seq LIMIT ?"
+                sql = f"SELECT * FROM ({sql}) UNION ALL SELECT * FROM ({glob}) ORDER BY seq LIMIT ?"
+                args = (*args, since, *skip, limit, limit)
+            rows = self._q(sql, args)
         out = []
         for r in rows:
             cls = EVENTS.get(r["type"])
@@ -650,6 +654,26 @@ class SessionStore:
             out.append(Event(seq=r["seq"], type=r["type"], body=body, session=r["session"],
                              ts=r["ts"], id=r["id"]))
         return out
+
+    def iter_events(self, since: int = 0, session: str | None = None, with_global: bool = False,
+                    skip: tuple[str, ...] = (), page: int = 1000) -> Iterator[Event]:
+        """``events_since`` with no bound, read ``page`` events at a time, so a long read holds one page (#254). It
+        stops at the newest seq at the call, as one read would. The first page is read now: a bad ``since`` fails
+        here, not at the first ``next``."""
+        upto = self.last_event_seq()
+        first = self.events_since(since, session, page, with_global, skip)
+
+        def pages(batch: list[Event]) -> Iterator[Event]:
+            while True:
+                for e in batch:
+                    if e.seq > upto:
+                        return
+                    yield e
+                if len(batch) < page:
+                    return
+                batch = self.events_since(batch[-1].seq, session, page, with_global, skip)
+
+        return pages(first)
 
     def last_event_seq(self) -> int:
         return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]
