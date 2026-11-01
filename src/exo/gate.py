@@ -4910,15 +4910,17 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     # cmd was not read. That reading stays beside cmd's, and the parts read from cmd are signed, so decide also decides
     # the line with the parts read before on top (_QUOTED): no decision is looser than before. Also when cmd is an
     # `env -S` (words is [] then), so the quoted word's value is still scanned for store paths and env-inject names.
+    # #852: each signed part, the late ones a deferred value adds among them (#887 review), also has a copy on each of
+    # its other targets (an ssh hop's host), as it would lead there.
     old_words = _strip_prefix_words(before, False)[0]
     old_parts: list[Classification] = []
     if len(old_words) > len(words):
         signed: dict = {}
         if "late" in ctx:
-            ctx["late"][n_late:] = [_signed(p, _QUOTED, signed) for p in ctx["late"][n_late:]]
+            ctx["late"][n_late:] = [_on_other_targets(_signed(p, _QUOTED, signed)) for p in ctx["late"][n_late:]]
         old_parts = _classify_program(old_words, k, cmd, depth, ctx, piped) + \
             _exec_options(before, old_words, k, cmd, depth, ctx, piped)
-        parts = [_signed(p, _QUOTED, signed) for p in parts] + old_parts
+        parts = [_on_other_targets(_signed(p, _QUOTED, signed)) for p in parts] + old_parts
     if sudo:
         parts[0].signals.append("sudo")
         _run_privileged(parts[0])
@@ -4987,6 +4989,23 @@ def _signed(c: Classification, signal: str, memo: dict) -> Classification:
                               own_signals=None if c.own_signals is None else [*c.own_signals, signal])
         memo[id(c)].parts = [_signed(p, signal, memo) for p in c.parts]
     return memo[id(c)]
+
+
+def _on_other_targets(c: Classification) -> Classification:
+    """#852: ``c``, a part read behind a quoted prefix assignment (_signed), with a copy of it on each of its other
+    targets among its parts (_bare_copy), where none is there yet: an ssh or mosh hop's host beside the remote
+    command's own target (#493). Behind `X=ab` the part leads the line and decide reads it on each such target
+    (#399). Behind `X='a b'` the part main read as the program can lead, and the line is decided on that part's
+    targets, so a deny or reserved (category, host) entry, and a rule on the two that denies (#191), meet the copy
+    as a part (D-075). Only parts are added: every reading main makes stays. ``c`` is a copy
+    _signed made for this call, so it is changed in place. The copy's summary names where it lands, as decide's
+    reason does for a part that leads on its other targets, so a reason that names the copy still names the host
+    (#887 review)."""
+    have = {(p.category, p.target) for p in c.parts}
+    c.parts += [_bare_copy(c, target=t, alt_targets=[], displaced=None,
+                           summary=f"{c.summary or c.category} (if it lands on {_target_names([t])})")
+                for t in dict.fromkeys(c.alt_targets) if t and t != c.target and (c.category, t) not in have]
+    return c
 
 
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
