@@ -34,6 +34,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- The gate reads ssh's control socket (`-S`, `-o ControlPath`), its known-hosts file (`-o UserKnownHostsFile`)
+  and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`) as files
+  ssh makes here, whatever its remote command runs (#484, D-038 amendment). `ssh -S ~/.exo/state/ctl host ls` was
+  a read and was allowed. A store path in these options is now a `store_write`, so it asks the principal. A value
+  is read as ssh reads it, with ssh's own quotes in a setting, so a store folder whose name holds a space counts
+  too. scp's and sftp's `-o` settings, which they hand to ssh, get the same reading. ssh's log file (`-E`) is not
+  part of this change.
 - Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
   (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting

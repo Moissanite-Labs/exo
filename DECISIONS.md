@@ -1366,6 +1366,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
+  store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
+  file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
+  `-o RemoteForward`, `-o DynamicForward`). `_store_touch` returned before it read a command's words when every
+  part was a read, and for ssh those parts are its remote line. So `ssh -S ~/.exo/state/ctl host ls`,
+  `ssh -o UserKnownHostsFile=~/.exo/state/kh host ls` and `ssh -L ~/.exo/state/sock:localhost:5432 host ls` were
+  reads, allowed under `store_write: deny` too. Now `_ssh_file_words` finds these values, before the host and after
+  it, and they are checked before that return, with the checks the scan after it gives a word (brace sets, `$HOME`,
+  an expansion the gate cannot spell out). Each value is also read as ssh reads it: a setting split into words with
+  ssh's quotes and backslashes taken out (its argv_split), a forward split into fields without brackets and
+  backslashes (its parse_fwd_field), and `%d` as the home folder. The word scan after the return does not read
+  ssh's quotes, so `ssh -o 'ControlPath ~/.exo/"st"ate/ctl' a 'bash -c x'` was missed there too, and the check runs
+  on every ssh line. A store folder whose name holds a space, as the desktop app's does, can only be named in a
+  setting inside ssh's quotes. A dynamic forward on a path makes ssh listen on a socket there, as `-L` does (its
+  parse_forward reads a one-field path as a socket). scp and sftp hand their `-o` settings to the ssh they run, so
+  those get the same reading on their lines, with their own option letters, up to their first operand:
+  `scp -o 'UserKnownHostsFile ~/.exo/"st"ate/kh' host:/x /tmp/y` was allowed, and the plain spelling already asked.
+  A relative value counts after a `cd` into the store. `-F` and `GlobalKnownHostsFile` only read their file and
+  stay reads, and `none` names no file. ssh's log file (`-E`) is not part of this change. #919 is open for it.
+  *Cost:* a store path in these options asks the principal even when the remote command only reads.
+  *Measured:* main's `scripts/gate_diff.py`, main 6e7e4af7 against this change. Built-in corpus and policies:
+  93,341 actions x 88 policies (8,214,008 pairs), 0 lowered, 60,339 pairs on 926 actions tightened, each to
+  `store_write`. An aimed corpus of 13,934 ssh, scp and sftp lines (1,226,192 pairs): 207,390 pairs tightened, and
+  45 lowered. All 45 are under a policy that reserves `delete`, on a line with a store path in ssh's quotes and a
+  remote `rm -rf` (`ssh -o 'ControlPath ~/.exo/"st"ate/ctl' host 'rm -rf x'`). Each still asks, now as a
+  `store_write` only the principal answers, with no grant. What goes is the reserved hit on the host, as main
+  already decides the plain spelling (`ssh -S ~/.exo/state/ctl host 'rm -rf x'`).
 - *Amendment 2026-10-28 (#473):* Git gc.recentObjectsHook is read as shell execution across git configuration forms, preserving policy denies on its nested command.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
