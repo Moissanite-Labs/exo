@@ -1,0 +1,22 @@
+{
+  "agent": "agent",
+  "session": "current",
+  "token_budget": 240,
+  "max_items": 2,
+  "visible_ids": ["current-message"],
+  "records": [
+    {"id": "alpha-proof", "session": "project-alpha", "agent": "agent", "author": "agent", "text": "alpha build requires make verify", "visibility": "shared", "thread_kind": "thread", "ordinal": 1},
+    {"id": "beta-proof", "session": "project-beta", "agent": "agent", "author": "agent", "text": "beta deploy uses staging then smoke", "visibility": "shared", "thread_kind": "thread", "ordinal": 2},
+    {"id": "alpha-correction", "session": "project-alpha", "agent": "agent", "author": "principal", "text": "alpha build is validated only after make verify", "correction": true, "visibility": "shared", "thread_kind": "thread", "ordinal": 3},
+    {"id": "recent-noise", "session": "gardening", "agent": "agent", "author": "agent", "text": "weather orange garden", "visibility": "shared", "thread_kind": "thread", "ordinal": 50},
+    {"id": "private-bait", "session": "private", "agent": "agent", "text": "alpha build PRIVATE_DATA", "visibility": "private", "thread_kind": "private", "ordinal": 100},
+    {"id": "protected-bait", "session": "secret", "agent": "agent", "text": "beta deploy PROTECTED_DATA", "visibility": "protected", "thread_kind": "thread", "ordinal": 100},
+    {"id": "current-message", "session": "current", "agent": "agent", "text": "alpha build duplicated transcript", "visibility": "shared", "thread_kind": "thread", "ordinal": 100}
+  ],
+  "tasks": [
+    {"name": "project-alpha", "query": "alpha build", "expected": ["alpha-proof", "alpha-correction"]},
+    {"name": "task-change-to-beta", "query": "beta deploy", "expected": ["beta-proof"]},
+    {"name": "known-synonym-failure", "query": "compilation", "expected": ["alpha-proof"]},
+    {"name": "private-query-denied", "query": "PRIVATE_DATA", "expected": []}
+  ]
+}
