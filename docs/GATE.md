@@ -1378,8 +1378,9 @@ gate does not read:
 
   The gate reads what the command writes only where it is sure of it. Every word must be literal:
   no expansion, glob, brace, leading `~` or `$".."`. printf may take `--` but no other option, and
-  no conversion but `%s`, `%b` and `%%`. Output past four times the text and 4 KB is not read. A
-  `\u` past ASCII stays as written. Bash writes the character there, or an escape of its own
+  no conversion but `%s`, `%b` and `%%`. Output past four times the text and 4 KB is not read.
+
+  A `\u` past ASCII stays as written. Bash writes the character there, or an escape of its own
   spelling (`\u00E9` for `\u00e9`), as its locale allows. A NUL is dropped, as the shell drops it.
 
   `echo` without `-e` writes its words as they are in bash, so its text is read as written only.

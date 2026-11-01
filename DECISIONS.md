@@ -1419,7 +1419,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   are. dash and zsh expand them, a known limit. The expansion matches bash 5.2's builtins on 7,500 random formats and
   texts, but for a `\u` past ASCII.
 
-  Main's `scripts/gate_diff.py` against main 4a2b6769, whose gate is d995d667's, lowers 0 pairs in each of six runs.
+  Main's `scripts/gate_diff.py` against main 46150d21, whose gate is d995d667's, lowers 0 pairs in each of six runs.
   The built-in corpus gives 1,265,792 pairs without variants and 8,108,232 with them.
 
   Three aimed corpora give 29,040 pairs (the first build's 165 printf, `echo -e`, `echo`, `%b`, `%s`, octal, hex,
