@@ -17,6 +17,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
+- Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
+  (`test_the_join_budget_is_shared_by_every_substitution`) timed each line once in CPU time, so one pause in a call,
+  such as a full collection of a long run's heap, failed it. It now times again when over the bound, as the file's
+  other timing tests do. The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
+  as soon as the job's row said done, but the done event is published after the job's notice. It now waits for the
+  event.
 - Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
   error fallback. Those formerly failing files use defaults alone until corrected, which can allow reads that formerly
   asked on the error path (#981).
@@ -150,6 +156,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   #72 by sparky-118. The reflector tries each `{` and takes the first JSON object, so a bracketed note or an
   array before the object (`Note [draft]: {...}`) still reads as it did on main (#835 review). Learn's
   `parse_json` takes the first brace or bracket that decodes.
+- Gate: a rule or entry keyed on a category and an ssh or mosh host reaches the remote command behind a quoted
+  prefix assignment. `X='a b' ssh host 'echo hi > /tmp/f'` asked as an unknown program under
+  `{category: local_write, target: host*}: deny`, and a reserved entry on the two lost its `(local_write, host)`
+  hit, where `X=ab ssh host ..` denied and listed it. Each part read behind the quoted word, a part a deferred
+  value adds (`declare -n`) included, now has a copy on the hop's host among its parts, beside main's reading,
+  so the line denies and lists the hit as its `X=ab` twin does, and a reason that names the copy names the host
+  (#852, docs/GATE.md "Where a gh command lands", D-038 amendment). A hop part that does not lead, such as a
+  `$( )` in an argument or a hop after a delete, still keeps the host among its other targets only, as on main.
 - A `coproc` compound right after `!`, `then`, `else`, `elif`, `if` or `{` is read as it is after `;` (#864).
   bash runs `! coproc for i in 1; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` as it runs the loop
   after `true &&`, but the gate opened a compound only where the `coproc` started the command, so there the loop
