@@ -123,7 +123,7 @@ def test_a_long_line_of_gh_repo_values_and_gh_commands_is_linear():
 
 def test_many_prefix_gh_repo_values_before_many_url_operands_are_linear():
     """#566, review 5722148651: each GH_REPO value before gh is read on every operand. bash passes gh only the last,
-    and the gate keeps the last few, so 4,600 values before 800 URL operands no longer take the square of the two.
+    and the gate keeps the last few, so 4,687 values before 806 URL operands no longer take the product of the two.
     A deny on the last value still reaches the line."""
     values = SIZE * 3 // 4 // len("GH_REPO=a1234/r ")
     unit = "https://ghe.corp/o/r/pull/1234 "
