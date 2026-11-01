@@ -1188,6 +1188,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-30:** the web Providers tab offers a Gemini AI Studio preset using the OpenAI-compatible
+  endpoint and `GEMINI_API_KEY`, plus `GET/POST /api/providers/custom` for supported OpenAI Chat Completions and
+  Anthropic Messages endpoints. The connected core writes non-secret metadata through principal-authorized
+  `config.set`, with no local-disk fallback; the separate key stays in the web server's existing secret store.
+  Custom key references bind provider name, protocol and endpoint, so a key cannot silently follow an endpoint edit.
+  Add refuses an existing name; editing requires explicit replacement. A keyless endpoint is configured but untested
+  until probed. Changes take effect when the core restarts, and a remote core needs its own credential. This amends
+  the earlier description that only a provider name crosses the protocol: custom non-secret metadata also does.
+  Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
+  key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
+  custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
@@ -5057,6 +5068,16 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
+  transcript events to the selected session. Active task records alone establish delegated ancestry. A
+  non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
+  answers remain in the child's view, with no permission inheritance or automatic answer. Partial task events
+  preserve identity, terminal and retargeted edges clear old cues, and snapshots reconcile missed events with
+  newer-event and request-generation guards. Metadata failure qualifies the cue as last known. Each snapshot
+  reads `approvals.list` first. It reads `tasks.list`, which returns every task ever written, only while another
+  session has an open request. Such a request arriving as an event starts one snapshot at once. The cue keeps a
+  task title on one line. Past five requests it names the other task ids, since `/tasks` lists only the open
+  thread's own tasks.
 - **Amendment 2026-10-27 (thread drafts):** the web composer keeps unsent text and selection with its
   conversation, including the initial new-conversation slot. Drafts survive navigation between web views in
   page memory only; reload and closing the page discard them. Sending has a per-conversation pending guard.
@@ -5118,6 +5139,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-10-30 (#907):** headless Chrome startup reports an early process exit separately
+  from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
+  failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
+  startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls
@@ -6495,6 +6520,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 
 ## D-091 (2026-10-29) A failed model list says which failure it was, and offers a retry only where one helps
 - **Status:** Accepted, effective for the next release.
+- **Implementation correction (2026-10-29):** a retryable failure offers "Try again" beside a cached model list too. The existing picker and selection remain usable until a successful refresh replaces the list. Authority refusals still offer no retry.
+- **Focus after a retry (2026-10-30):** the retry redraws the section and drops the focused button. Focus then goes to "Try again" if it is drawn again, else to the model select. A refusal with no list leaves neither, so its message takes focus. An empty list leaves no section, so the workspace takes it. Focus the person moved out of the panel meanwhile is left alone.
 - **Decision:** `GET /api/providers/models` keeps its 200 shape (`models`, `available`) and adds three fields on failure: `error` (a sentence, already passed through `redact_secrets` and capped at 300 characters), `error_class` (`transport`, `authority` or `other`) and `retryable` (true only for `transport`). The Providers page shows the sentence in place of the picker and puts its "Try again" button behind `retryable`.
 - **Why:** the route answered `"core unreachable (<ExceptionName>)"` for every failure, including a core that answered and refused the caller. That reads as a broken connection, so the page could only offer a retry that changes nothing, and an exception class name was the whole diagnosis. Issue #756 is the same defect on the chat side: guidance must follow the failure class, not the fact of a failure.
 - **Safety:** the guard is unchanged (D-034): loopback peer, matching Host and Origin, page token. D-081 is unaffected: the model list still never runs on the main model. The sentence is built by `core_failure()` in `source.py`, which never includes an address or an exception name, and only for the transport class; the constant is the same one `core_message()` uses, so the page and the socket path cannot drift.
@@ -6542,3 +6569,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+
+## D-096 (2026-10-31) Harness improvement starts as an offline review-only experiment
+- **Decision:** `exo improve --offline` runs bounded Propose–Probe–Compose experiments on explicitly supplied public/synthetic fixtures through named trusted built-in adapters. Proposers and composers see development behavior, never hidden evaluator values, reference-derived identifiers or held-out inputs. A selected composition must improve on disjoint held-out fixtures without any individual regression before a typed `review_only` proposal is exported.
+- **Authority:** this command never activates notes, registers skills, schedules work or feeds principal learning/promotion. It constructs no principal store and reads no store contents. Its only configuration read is `store.explicit_roots()` to refuse a working directory or resolved export parent/target at or below any recorded principal root, including stores outside Exo home. Existing tool authorization stays in force; the callback API is trusted host code, not an OS/network sandbox.
+- **Why:** establish a usable, reproducible adaptation/evidence workflow before spending on live models or connecting candidate instructions to a person's learning state. Synthetic success proves mechanics, not live effectiveness or authority to promote.
+- **Rejected:** upstream executor defaults as an Exo trust boundary; arbitrary callbacks/code supplied by fixtures; score-bearing hashes in editor context; automatic adoption; treating an improved mean as sufficient when an individual held-out task regresses.
+- **Revisit if:** a separately authorized live pilot supplies explicit route/data/spending authority, executor isolation, real held-out evidence and a reviewed bridge into typed principal proposals with approval and rollback. This decision grants none of those capabilities.
+- **Docs and user impact:** `docs/integrations/HARNESS2.md`, `docs/COMMANDS.md` "Learning and review", `docs/USER-GUIDE.md` §11 "Offline harness experiments", `docs/DEVELOPER-GUIDE.md` §9 "Add an exo subcommand", `docs/DOCS-MAP.md`. Adds an opt-in CLI command and review artifact; ordinary learning and runtime defaults are unchanged.
+
+- **Path-resolution clarification (2026-10-31):** every recorded root must resolve before an experiment can run. A missing target, cyclic symlink or other root-resolution failure refuses the command through its documented path-error exit 2, without a traceback. This catches only the resolution operation; unrelated implementation errors remain errors.
+
+- **Export and diagnostic clarification (2026-10-31):** the command validates the resolved export parent/target against the same protected-root snapshot before reading fixtures or creating output. A store at `improvement-runs` cannot receive an export from its public parent. Resolution failures in `EXO_HOME` or `EXO_PRINCIPAL_STORE` refuse normally; absent environment roots remain allowed. Recorded-root failures name the principal/configuration key to repair or remove, never the full private path, and the user guide states this recovery step.
+
+- **Missing-component clarification (2026-10-31):** tolerating an absent environment/output root must not hide a later symlink cycle after a missing component and `..`. Missing-only resolution refuses such cycles without reading fixtures or creating output, while ordinary absent roots remain usable.

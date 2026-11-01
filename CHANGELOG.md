@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
+  supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
+- Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
+
 - Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
 
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
@@ -31,11 +36,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
+- Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Terminal parent conversations show a separate cue for pending approvals in active delegated descendants
+  (#996), with a child label and `/open <task>` instruction. Existing approval focus, answers and permission
+  scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
+  tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
+  open request.
+- The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
+- "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
+  "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
+  message, or on the workspace when the list came back empty.
 - Updated the frozen certifi bundle to 2026.10.23 for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), removing the affected emSign root. Existing environments and packaged apps need a dependency refresh or rebuild to receive the updated bundle.
 - `docs/GATE.md`'s store limits now say which stdin of a `sudo -s` or `sudo -i` shell the gate reads (#491
   follow-up). #718 made the gate read the text a line feeds such a shell (a here-string, a heredoc, a pipe from
@@ -166,6 +181,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Pending sends block duplicate submission; unconfirmed sends keep recoverable text with their originating
   conversation and preserve newer edits. No automatic retry or browser persistence (D-045).
 
+
+- A read-only, content-free historical-path audit and a private cleanup rehearsal runbook (#49).
+  Overall completeness requires a full mirror verified against advertised remote refs; local traversal,
+  historical path/ref-name literals and omitted-ref coverage are reported separately. The tool does
+  not rewrite remote history or change repository visibility. Local/file/self remotes cannot establish
+  hosting coverage; known custom transport commands/helpers also leave remote coverage unverified.
+  The synthetic tests isolate inherited Git configuration and transport selectors.
 
 - Thread lists expose Rename with an explicit title editor, Save/Cancel and keyboard controls. Renaming another thread preserves the selected chat and composer draft ([Discussion #733](https://github.com/aska-digital/exo/discussions/733)).
 
