@@ -231,6 +231,26 @@ def test_a_turn_message_left_out_that_repeats_the_last_row_left(turns, listed, a
     assert gw.file()['ruling'] == kept
 
 
+@pytest.mark.parametrize('turns, listed, again, kept', [
+    (('continue', RULING, 'continue', 'go on'), False, 'go on', []),  # not covered: only `continue` is checked
+    (('continue', RULING, 'continue', 'go on'), True, 'go on', [RULING]),  # every message in the transcript
+    (('continue', RULING, 'continue', 'go on'), False, 'next step', [RULING]),  # a message that repeats no row
+    (('start', RULING, 'continue', 'go on'), False, 'go on', [RULING]),  # the row checked is not the session's first
+])
+def test_a_turn_message_left_out_that_repeats_the_last_row_of_a_window(turns, listed, again, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). A window of the last two turns leaves `continue` and
+    `go on`, which do not read like the session's first rows. A host that leaves every turn's message out has the
+    engine take the window's `go on` row for a next turn's message of `go on`, so it checks only the `continue`
+    before it. That reads like the session's first row, so the window looks like an undo, and the ruling after that
+    row goes. `listed` holds for every turn, as such a host leaves out each message, the ruling's too."""
+    gw = Gateway('gw-left-out-window-537')
+    for text in turns:
+        gw.turn(text, listed=listed)
+    gw.window(2)
+    gw.turn(again, listed=listed)
+    assert gw.file()['ruling'] == kept
+
+
 @pytest.mark.parametrize('turns, n, kept', [
     (('start', RULING), 1, [RULING]),  # not covered: no transcript held the ruling's message, so it has no lead
     (('start', RULING, 'x'), 2, []),  # the turn after the ruling's held it and noted its lead
