@@ -5082,7 +5082,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   `test_csp_web.py`, out of many starts per job. A fresh hosted runner reads the browser from a cold disk on that
   start. The longer wait ends only once a start has reached DevTools, so a failed cold start does not shorten the
   next one. Like the 90 s for the first DevTools replies, this is a wait for Chrome to start, not a bound a test
-  asserts. It does not cover the macOS case where Chrome started but did not answer `Page.enable` within 90 s.
+  asserts. On hosted macOS, Chrome has twice started and then not answered one of its first DevTools calls within
+  90 s (`Page.enable` in #894's job, `Page.addScriptToEvaluateOnNewDocument` in #887's), in a different test each
+  time. A start that fails in any of these ways (an early exit, no `DevToolsActivePort`, or an unanswered first call)
+  is closed, and Chrome starts once more with a fresh profile. No test code has run at that point, so no test result
+  is retried. Any other error is raised at once. A second failed start fails the test, and its message names both. A
+  different error on the second start keeps the first failure as a note. A Chrome that never starts now costs two
+  waits per test, not one.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls

@@ -29,6 +29,14 @@ START_TIMEOUT = 20.0
 # a bound any test asserts.
 FIRST_START_TIMEOUT = 90.0
 _started = False  # set once a Chrome in this process has written DevToolsActivePort
+# The first DevTools answers can wait for the new tab's renderer to start. On a loaded macOS runner one of them
+# (Emulation.setDeviceMetricsOverride) once took more than the 30 s an ordinary command gets.
+FIRST_REPLY_TIMEOUT = 90.0
+# #907: on hosted macOS runners Chrome has twice started and then not answered one of its first DevTools calls within
+# FIRST_REPLY_TIMEOUT (Page.enable in #894's job, Page.addScriptToEvaluateOnNewDocument in #887's), in a different
+# test each time. A start that fails like that, or exits early, or never writes DevToolsActivePort, is tried once more
+# with a fresh profile. No test code has run at that point. A second failure fails the test and names both.
+START_ATTEMPTS = 2
 STDERR_LIMIT = 16384
 # Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
 STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
@@ -163,19 +171,36 @@ class Served:
         self._server_mod.STATIC = self._static0
 
 
+class ChromeStartError(RuntimeError):
+    """Chrome did not start: it exited early, never wrote DevToolsActivePort, or never answered a first DevTools call."""
+
+
 class Browser:
     def __init__(self, width: int = 1440, height: int = 900):
         chrome = find_chrome()
         if not chrome:
             raise RuntimeError("no Chrome found")
-        self.profile = tempfile.mkdtemp(prefix="exo-chrome-")
-        self.proc = None
-        self._stderr = None
-        try:
-            self._start(chrome, width, height)
-        except BaseException:
-            self.close()
-            raise
+        failures = []
+        for _ in range(START_ATTEMPTS):
+            self.profile = tempfile.mkdtemp(prefix="exo-chrome-")
+            self.proc = None
+            self._stderr = None
+            self._cm = None
+            try:
+                self._start(chrome, width, height)
+                return
+            except ChromeStartError as exc:
+                self.close()
+                failures.append(exc)
+            except BaseException as exc:
+                self.close()
+                if failures:
+                    exc.add_note("after a failed Chrome start: " + "; then ".join(map(str, failures)))
+                raise
+        if len(failures) == 1:
+            raise failures[0]
+        raise ChromeStartError(f"Chrome did not start in {len(failures)} attempts: "
+                               + "; then ".join(f"({i}) {f}" for i, f in enumerate(failures, 1))) from failures[-1]
 
     def _start(self, chrome, width, height):
         global _started
@@ -195,16 +220,16 @@ class Browser:
         while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:
             if self.proc.poll() is not None:
                 self._stderr.finish()
-                raise RuntimeError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
-                                   f"stderr: {self._stderr.hints()}")
+                raise ChromeStartError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
+                                       f"stderr: {self._stderr.hints()}")
             time.sleep(0.05)
         if not port_file.exists() or not port_file.read_text().strip():
             self._stderr.finish()
             if self.proc.poll() is not None:
-                raise RuntimeError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
+                raise ChromeStartError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
+                                       f"stderr: {self._stderr.hints()}")
+            raise ChromeStartError(f"Chrome did not create DevToolsActivePort within {limit:g}s; "
                                    f"stderr: {self._stderr.hints()}")
-            raise RuntimeError(f"Chrome did not create DevToolsActivePort within {limit:g}s; "
-                               f"stderr: {self._stderr.hints()}")
         _started = True  # Chrome is loaded; a failure after this point is not a slow cold start
         port = port_file.read_text().split()[0]
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
@@ -213,14 +238,17 @@ class Browser:
         self._cm = connect(page["webSocketDebuggerUrl"], max_size=None)
         self.ws = self._cm.__enter__()
         self.n = 0
-        # The first answers can wait for the new tab's renderer to start. On a loaded macOS runner one of them
-        # (Emulation.setDeviceMetricsOverride) once took more than the 30 s an ordinary command gets. This is a wait
-        # for Chrome to start, not a bound any test asserts.
-        start = {"reply_within": 90}
-        self.call("Page.enable", **start)
-        self.call("Page.addScriptToEvaluateOnNewDocument", source=COUNT_REQUESTS, **start)
-        self.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=1, mobile=False,
-                  **start)
+        # A wait for Chrome to start (FIRST_REPLY_TIMEOUT), not a bound any test asserts.
+        first = (("Page.enable", {}), ("Page.addScriptToEvaluateOnNewDocument", {"source": COUNT_REQUESTS}),
+                 ("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False}))
+        for method, params in first:
+            try:
+                self.call(method, reply_within=FIRST_REPLY_TIMEOUT, **params)
+            except TimeoutError as exc:
+                self._stderr.finish()
+                raise ChromeStartError(f"Chrome did not answer {method} within {FIRST_REPLY_TIMEOUT:g}s; "
+                                       f"stderr: {self._stderr.hints()}") from exc
 
     def call(self, method: str, *, reply_within: float = 30, **params: Any) -> dict:
         self.n += 1
@@ -314,28 +342,32 @@ class Browser:
         Path(path).write_bytes(base64.b64decode(data))
 
     def close(self) -> None:
-        atexit.unregister(self.close)
         try:
-            self._cm.__exit__(None, None, None)
-        except Exception:
-            pass
-        if self.proc is not None:
-            if self.proc.poll() is None:
-                try:
-                    self.proc.terminate()
-                    self.proc.wait(5)
-                except ProcessLookupError:
-                    self.proc.wait()
-                except subprocess.TimeoutExpired:
+            try:
+                self._cm.__exit__(None, None, None)
+            except Exception:
+                pass
+            if self.proc is not None:
+                if self.proc.poll() is None:
                     try:
-                        self.proc.kill()
+                        self.proc.terminate()
+                        self.proc.wait(5)
                     except ProcessLookupError:
-                        pass
-                    self.proc.wait()
-            if self._stderr is not None:
-                self._stderr.finish()
-                self.proc.stderr.close()
-        shutil.rmtree(self.profile, ignore_errors=True)
+                        self.proc.wait()
+                    except subprocess.TimeoutExpired:
+                        try:
+                            self.proc.kill()
+                        except ProcessLookupError:
+                            pass
+                        self.proc.wait()
+                if self._stderr is not None:
+                    self._stderr.finish()
+                    self.proc.stderr.close()
+            shutil.rmtree(self.profile, ignore_errors=True)
+        finally:
+            # Only once Chrome is gone: an interrupt during the close still leaves the exit hook to stop it.
+            if self.proc is None or self.proc.poll() is not None:
+                atexit.unregister(self.close)
 
     def __enter__(self) -> "Browser":
         return self

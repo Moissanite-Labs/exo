@@ -667,6 +667,10 @@ these tests so that only the defect they guard against can fail them:
   - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
     hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
     were each a job's first start (#907). A start that never reaches DevTools leaves the next one the longer wait.
+  - A Chrome start that fails (it exits early, never writes `DevToolsActivePort`, or does not answer one of its first
+    DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile before any test code
+    runs. Any other error is raised at once. A second failed start fails the test and names both. Hosted macOS has
+    twice left a first call unanswered (#907).
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
