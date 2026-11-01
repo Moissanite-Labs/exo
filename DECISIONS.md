@@ -1299,6 +1299,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
+- **Amendment 2026-10-29 (#873):** explicit runtime close interrupts and drains its owned turns before store closure and writer release. Admission closes first; accepted input is retained without another model dispatch. Uncooperative cancellation reports incomplete shutdown and keeps the store open. Client disconnect remains distinct from stopping the shared core.
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
   `ConnectError: [Errno 2] No such file or directory`. The terminal client had already started the core in process
   and held the agent's writer lock (D-028), so the two clients only shared an agent if the user ran `exo serve` first.
