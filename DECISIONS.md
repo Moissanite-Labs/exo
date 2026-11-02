@@ -5275,6 +5275,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-11-01 (#997 follow-up):** the cue's `tasks.list` read asks for active tasks only. `tasks.list`
+  takes an optional `active` field that keeps queued and running tasks, the only ones that make a delegated edge.
+  An open request of an unrelated session, such as another window's, still turns the read on. Only the list shows
+  that the session is unrelated. The finished history no longer travels on each tick. Commands are strict, so a
+  window that joins an older core is refused this read (`bad_body`), as for any new command field. Its cue then
+  rests on the task events it has seen and is marked "(last known)". A test now holds that a burst of request
+  events shares one read.
 - **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
   transcript events to the selected session. Active task records alone establish delegated ancestry. A
   non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
@@ -5346,6 +5353,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-11-01 (#1037 review):** a stderr category names a failure message, such as
+  running as root without `--no-sandbox`, not a bare `sandbox` or `dbus`. The D-Bus errors and sandbox
+  warning of a healthy Linux start are no longer named as a cause. A Chrome that exits after it writes
+  `DevToolsActivePort` is reported with its exit code and categories. See `docs/DEVELOPER-GUIDE.md` §7.
+  - **With #907's retry (2026-11-02):** that exit is a failed start, so it is tried once more, as an early exit is.
+    The start waits up to 2 s for Chrome to exit before it reads stderr. So the categories hold the lines Chrome
+    wrote last, also when a first DevTools call got no answer.
 - **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
   while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
   lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
