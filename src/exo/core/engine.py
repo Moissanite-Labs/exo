@@ -76,7 +76,7 @@ class SqliteLog:
         self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
-        return self.store.events_since(since, session, limit=1 << 30, with_global=True)
+        return self.store.iter_events(since, session, with_global=True)  # page by page (#254)
 
     def last_seq(self) -> int:
         return self.store.last_event_seq()

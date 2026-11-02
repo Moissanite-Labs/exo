@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from exo.core import trace
 from exo.core.hooks import maybe_await
@@ -229,14 +229,20 @@ class SessionStore:
                        id: str | None = None, agent: str | None = None, kind: str = "") -> SessionInfo:
         """``agent`` makes this a thread of that agent's one memory; ``kind`` is thread (default for an agent),
         private, scheduled or subagent."""
-        sid, ts = id or new_id("s"), now_ts()
-        cwd = canonical_cwd(cwd)
+        with self._lock:
+            sid = self._new_session(self._db, id, title, seat, model, canonical_cwd(cwd), parent, fork_seq, agent, kind)
+        return self.get_session(sid)  # type: ignore[return-value]
+
+    @staticmethod
+    def _new_session(db: sqlite3.Connection, sid: str | None, title: str, seat: str | None, model: str | None,
+                     cwd: str | None, parent: str | None, fork_seq: int | None, agent: str | None, kind: str) -> str:
+        sid, ts = sid or new_id("s"), now_ts()
         kind = (kind or "thread") if agent else ""
         if kind and kind not in (*LOGGED_KINDS, "subagent"):
             raise ValueError(f"unknown thread kind {kind!r}")
-        self._q("INSERT INTO sessions (id, title, seat, model, cwd, parent, fork_seq, created, updated, agent, kind)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
-        return self.get_session(sid)  # type: ignore[return-value]
+        db.execute("INSERT INTO sessions (id, title, seat, model, cwd, parent, fork_seq, created, updated, agent, kind)"
+                   " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
+        return sid
 
     def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:
         if count is None:
@@ -321,6 +327,14 @@ class SessionStore:
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
         return self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0][0]
 
+    def user_turns(self, sid: str) -> int:
+        """Visible user messages that are not context notes, counted in SQL (#254). A note value Python reads as
+        false (missing, null, false, 0, "", an empty list or object) is no note."""
+        note = "json_extract(data, '$.meta.note')"
+        return self._q("SELECT COUNT(*) FROM messages WHERE session=? AND role='user' AND hidden=0 AND"
+                       f" ({note} IS NULL OR {note} IN (0, '') OR json_type(data, '$.meta.note') IN"
+                       f" ('array', 'object') AND {note} IN ('[]', '{{}}'))", (sid,))[0][0]
+
     def append_message(self, sid: str, msg: Message, turn_id: str | None = None) -> Message:
         """Store ``msg`` (assigning ``id`` and ``meta['seq']``) and return it."""
         msg.id = msg.id or new_id("m")
@@ -365,6 +379,14 @@ class SessionStore:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
         return rows[0]["seq"] if rows else None
 
+    def last_messages(self, sid: str, limit: int) -> list[Message]:
+        """Decode at most ``limit`` visible messages, returned in transcript order."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("message limit must be a non-negative integer")
+        rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 ORDER BY seq DESC LIMIT ?",
+                       (sid, limit))
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in reversed(rows)]
+
     def truncate(self, sid: str, after_seq: int) -> int:
         """Remove messages with seq > after_seq and summaries holding them. Agent log entries are hidden,
         not deleted, so the log stays append-only. Context notes stay: they hold other threads' news."""
@@ -395,30 +417,47 @@ class SessionStore:
         return self.truncate(sid, rows[-1]["seq"] - 1) if rows else 0
 
     def fork(self, sid: str, at_message: str | None = None, title: str = "") -> SessionInfo:
-        """New session holding the parent's messages up to and including ``at_message``."""
+        """New session holding the parent's messages up to and including ``at_message``. One write transaction
+        adds the session, its copies, their search rows and summaries, so a failed fork leaves nothing (#254)."""
         parent = self.get_session(sid)
         if parent is None:
             raise KeyError(sid)
-        upto = self.last_seq(sid) if at_message is None else self.message_seq(sid, at_message)
-        if upto is None:
-            raise KeyError(at_message)
-        child = self.create_session(title=title or parent.title, seat=parent.seat, model=parent.model,
-                                    cwd=parent.cwd, parent=sid, fork_seq=upto, agent=parent.agent,
-                                    kind=parent.kind if parent.kind != "scheduled" else "thread")
-        for m in self.messages(sid, upto=upto):
-            m.meta["forked_from"] = m.id
-            m.meta["local"] = "fork"  # the original is already in the agent log
-            m.id = None
-            self.append_message(child.id, m)
-        # the copies are renumbered 1..n: a range with an undone (hidden or deleted) row up to its end would shift
-        for row in self._q("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done' AND end_seq=("
-                           "SELECT COUNT(*) FROM messages m WHERE m.session=? AND hidden=0 AND seq<=summaries.end_seq)",
-                           (sid, upto, sid)):
-            self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status,"
-                    " lane) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (new_id("sum"), child.id, row["level"], row["idx"], row["start_seq"],
-                     row["end_seq"], row["text"], row["status"], row["lane"]))
-        return self.get_session(child.id)  # type: ignore[return-value]
+        cwd = canonical_cwd(parent.cwd)
+
+        def copy(db: sqlite3.Connection) -> str:
+            if at_message is None:
+                upto = db.execute("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,)).fetchone()[0]
+            else:
+                row = db.execute("SELECT seq FROM messages WHERE session=? AND id=?", (sid, at_message)).fetchone()
+                if row is None:
+                    raise KeyError(at_message)
+                upto = row[0]
+            child = self._new_session(db, None, title or parent.title, parent.seat, parent.model, cwd, sid, upto,
+                                      parent.agent, parent.kind if parent.kind != "scheduled" else "thread")
+            rows, fts, ts = [], [], now_ts()
+            for seq, r in enumerate(db.execute("SELECT data FROM messages WHERE session=? AND seq<=? AND hidden=0"
+                                               " ORDER BY seq", (sid, upto)).fetchall(), 1):
+                m = from_dict(Message, json.loads(r["data"]), strict=False)
+                m.meta["forked_from"] = m.id
+                m.meta["local"] = "fork"  # the original is already in the agent log; the copy takes no place in it
+                m.id, m.meta["seq"] = new_id("m"), seq
+                data = json.dumps(to_dict(m), ensure_ascii=False)
+                rows.append((m.id, child, seq, m.role, ts, data, data))
+                if text := _fts_text(m):
+                    fts.append((text, m.id, child))
+            db.executemany("INSERT INTO messages (id, session, seq, role, created, data, copy_pos)"
+                           " VALUES (?,?,?,?,?,?,json_extract(?, '$.meta.pos'))", rows)
+            db.executemany("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)", fts)
+            # the copies are renumbered 1..n: a range with an undone (hidden or deleted) row up to its end would shift
+            done = db.execute("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done' AND end_seq=("
+                              "SELECT COUNT(*) FROM messages m WHERE m.session=? AND hidden=0 AND"
+                              " seq<=summaries.end_seq)", (sid, upto, sid)).fetchall()
+            db.executemany("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status, lane)"
+                           " VALUES (?,?,?,?,?,?,?,?,?)", [(new_id("sum"), child, r["level"], r["idx"], r["start_seq"],
+                                                            r["end_seq"], r["text"], r["status"], r["lane"]) for r in done])
+            return child
+
+        return self.get_session(self._tx(copy))  # type: ignore[return-value]
 
     def search(self, query: str, limit: int = 20, session: str | None = None,
                agent: str | None = None) -> list[dict[str, Any]]:
@@ -600,9 +639,13 @@ class SessionStore:
         if session is None:
             rows = self._q(f"SELECT * FROM events WHERE seq>?{drop} ORDER BY seq LIMIT ?", (since, *skip, limit))
         else:
-            extra = " OR session IS NULL" if with_global else ""
-            rows = self._q(f"SELECT * FROM events WHERE seq>? AND (session=?{extra}){drop} ORDER BY seq LIMIT ?",
-                           (since, session, *skip, limit))
+            sql = f"SELECT * FROM events WHERE seq>? AND session=?{drop} ORDER BY seq LIMIT ?"
+            args: tuple = (since, session, *skip, limit)
+            if with_global:  # two index searches: one OR sorted every later event, on each page too (#254)
+                glob = f"SELECT * FROM events WHERE seq>? AND session IS NULL{drop} ORDER BY seq LIMIT ?"
+                sql = f"SELECT * FROM ({sql}) UNION ALL SELECT * FROM ({glob}) ORDER BY seq LIMIT ?"
+                args = (*args, since, *skip, limit, limit)
+            rows = self._q(sql, args)
         out = []
         for r in rows:
             cls = EVENTS.get(r["type"])
@@ -611,6 +654,26 @@ class SessionStore:
             out.append(Event(seq=r["seq"], type=r["type"], body=body, session=r["session"],
                              ts=r["ts"], id=r["id"]))
         return out
+
+    def iter_events(self, since: int = 0, session: str | None = None, with_global: bool = False,
+                    skip: tuple[str, ...] = (), page: int = 1000) -> Iterator[Event]:
+        """``events_since`` with no bound, read ``page`` events at a time, so a long read holds one page (#254). It
+        stops at the newest seq at the call, as one read would. The first page is read now: a bad ``since`` fails
+        here, not at the first ``next``."""
+        upto = self.last_event_seq()
+        first = self.events_since(since, session, page, with_global, skip)
+
+        def pages(batch: list[Event]) -> Iterator[Event]:
+            while True:
+                for e in batch:
+                    if e.seq > upto:
+                        return
+                    yield e
+                if len(batch) < page:
+                    return
+                batch = self.events_since(batch[-1].seq, session, page, with_global, skip)
+
+        return pages(first)
 
     def last_event_seq(self) -> int:
         return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]

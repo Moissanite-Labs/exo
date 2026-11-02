@@ -143,8 +143,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
         "path": str(workspace.handoff_path(eng.agent, path_arg)),
         "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
                    "cwd": cwd, "created": info.created,
-                   "user_turns": sum(1 for m in eng.store.messages(info.id) if m.role == "user"
-                                     and not m.meta.get("note"))},
+                   "user_turns": eng.store.user_turns(info.id)},
         # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
         "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
                 if eng.executor_required else workspace.git_facts(cwd)),
@@ -152,7 +151,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
                      for r in eng.findings.list("open")[:10]],
     }
     latest: dict[str, dict[str, Any]] = {}
-    for e in eng.store.events_since(0, info.id, limit=1 << 30):
+    for e in eng.store.iter_events(0, info.id):  # page by page (#254)
         if isinstance(e.body, s.TaskUpdated):
             latest[e.body.task_id] = {"id": e.body.task_id, "title": e.body.title[:100], "status": e.body.status}
     facts["tasks"] = [t for t in latest.values() if t["status"] in ("queued", "running")]

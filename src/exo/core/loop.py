@@ -229,7 +229,7 @@ class Loop:
             except Exception as exc:  # a failed refresh keeps the old prompt; the turn still runs
                 await self._emit(trace.error_body("before_turn", exc), session)
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
-        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
+        turn_no = self.store.user_turns(session)  # counted in SQL, not by decoding the whole session (#254)
         author = provenance.author_of(user)
         remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
         if remembered:
@@ -263,7 +263,7 @@ class Loop:
         if remembered:
             await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
         if remembered and self.memory is not None and hasattr(self.memory, "checkpoint"):
-            recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
+            recent = [provenance.flat(m) for m in self.store.last_messages(session, 40)]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
             await maybe_await(self.context.on_turn_complete(session, result.last_usage))  # the last prompt's size

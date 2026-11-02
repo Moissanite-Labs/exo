@@ -192,6 +192,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
+  of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
+  memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
+  it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
+  order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
+  read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
+  `last_messages` has the same text and place as in draft #903,
+  which uses it for the context transcript, so the two merge cleanly. Results are unchanged. A fork now copies
+  in one write transaction: the new session, the copies with `executemany`, their search rows and the summaries
+  that still fit. It wrote each copy in a transaction of its own, so a fork that failed partway left a session with
+  part of the thread. The copies are the same as before, byte for byte. Event reads with no bound go page by
+  page. `SessionStore.iter_events` reads 1,000 events at a time, up to the newest seq at the call, so it returns
+  what one read at the call returned. It reads the first page at once, so a bad `since` still fails when the
+  caller asks. `SqliteLog.read`, trace and `/handoff` use it. A `Subscription` takes the log's iterator from
+  `Hub.replay` as its backlog instead of a list of every event, since a bounded first page alone would skip
+  events. `Hub.since` lists the same replay, so a rule on what the hub replays has one place. A read that also
+  keeps the events of no session (`with_global`) is now two index searches joined by `UNION ALL`. Its `OR` form
+  sorted every later event on each call, so reading it page by page took time that grew with the square of the
+  log. The one-shot `events.subscribe` reply still carries the whole replay, as the protocol says. The stdio
+  transport built that reply and then dropped it to stream. It now opens its subscription at once, and a
+  `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
+  queue back out of the hub, so no queue is left to fill with later events. Tests:
+  `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
+  `tests/core/test_event_paging_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

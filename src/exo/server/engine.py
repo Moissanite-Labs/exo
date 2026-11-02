@@ -8,8 +8,7 @@ session keep their order."""
 from __future__ import annotations
 
 import asyncio
-from collections import deque
-from typing import Any, AsyncIterator, Iterable, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Iterable, Iterator, Protocol, runtime_checkable
 
 from exo.protocol.schema import Command, Event, new_id
 
@@ -89,7 +88,9 @@ class Subscription:
     """Replay of ``seq > since`` followed by live events, with no gap or repeat.
 
     The queue is registered before the backlog is read, so an event published
-    in between is seen once: duplicates are dropped by ``seq``.
+    in between is seen once: duplicates are dropped by ``seq``. The backlog comes
+    from ``Hub.replay``: the SQLite log reads it a page at a time, up to the newest
+    event at subscribe, so a subscriber far behind holds one page (#254).
     """
 
     def __init__(self, hub: Hub, since: int, session: str | None):
@@ -98,12 +99,16 @@ class Subscription:
         self._hub = hub
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
         hub._subs.add(self._queue)
-        self._backlog = deque(hub.since(since, session))
+        try:
+            self._backlog = hub.replay(since, session)
+        except BaseException:  # a since the log cannot read leaves no queue behind to fill
+            hub._subs.discard(self._queue)
+            raise
 
     async def next(self, timeout: float | None = None) -> Event | None:
         """Next event, or None after ``timeout`` seconds idle. Raises Closed."""
-        if self._backlog:
-            ev = self._backlog.popleft()
+        ev = next(self._backlog, None)
+        if ev is not None:
             self.last = ev.seq
             return ev
         loop = asyncio.get_running_loop()
@@ -161,7 +166,12 @@ class Hub:
         return ev
 
     def since(self, seq: int, session: str | None = None) -> list[Event]:
-        return list(self.log.read(seq, session))
+        return list(self.replay(seq, session))
+
+    def replay(self, seq: int, session: str | None = None) -> Iterator[Event]:
+        """Events after ``seq``, read from the log as they are taken (#254). ``since`` and every
+        ``Subscription`` replay through here, so a rule on what the hub replays goes here."""
+        return iter(self.log.read(seq, session))
 
     def head(self) -> int:
         """The log's highest seq, the cursor a joining client starts from. Seats of one home share the log, so

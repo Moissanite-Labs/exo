@@ -34,6 +34,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
   the hosted CI failure `assert 49 == 129` in `test_classic_opens_at_the_latest_message_at_the_bottom`.
+- A turn no longer decodes its whole session twice (#254, W2-4). It loaded every message to count the user turns
+  it passes to memory, then loaded them all again to keep the last 40 for the memory checkpoint. The count is now
+  one SQL `COUNT` and the checkpoint reads only its 40 rows, with the same results. On a 10,000-message session the
+  count went from 196 ms to 7.8 ms and the tail from 190 ms to 0.9 ms. With learning on, the chat capture after
+  the turn loaded the session a third time to keep its last 12 messages, and a review loaded it for its last 6.
+  They now read only those rows. `/handoff` counts user turns the same way (D-010 amendment).
+- A fork writes its copy in one transaction (#254, W2-4). It wrote each copied message, with its search row, in a
+  transaction of its own, then each summary in another statement. Forking a 5,000-message session took 2.9 s,
+  and a fork that failed partway left a new session holding part of the thread. The session, the copies, their
+  search rows and the summaries that still fit now go in one transaction with batched inserts. The same fork takes
+  0.25 s, a failed fork leaves nothing, and the copies are the same as before (D-010 amendment).
+- Event reads with no bound go page by page (#254, W2-4). The hub's replay, `exo trace` and `/handoff` read the
+  events table with a limit of 2^30, so one read decoded every matching event at once. A client that subscribed
+  from seq 0 on a home with 100,000 events waited 733 ms for its first event while the core held all of them
+  (88 MB at the peak). `SessionStore.iter_events` now reads 1,000 events at a time, up to the newest event at
+  the call, and a subscription takes its backlog from it as the client reads. The first event comes in 7 ms and
+  the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
+  `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
+  stream at once (D-010 amendment).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
