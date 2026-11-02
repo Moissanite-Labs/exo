@@ -4389,7 +4389,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `/dev/fd` one, name both folders, where main 69e33d50 named the first only. #864's reading (`_late_reading`) also
   reaches `_one_reading`, so the added reading is made inside it too. That matters when each loop is in its own
   `coproc`, which only that reading opens: `{ coproc for ..; done; }; { coproc for ..; done; }`, the pair after
-  `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only. On
+  `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only.
+  #1047's printed reading (`_printed_reading`) reaches `_one_reading` too, so the pair in a text printf or `echo -e`
+  pipes into a shell, its `cp` spelt `c\x70`, names both folders, where main 2a9ba976 named the first only. On
   main d3cbd874 (#158) a call whose `${..}` words or `$((` bash may read otherwise than the reading before #143 is
   read both ways (`_classify_reading` around `_classify_read`, the second reading `flat`); each of the two reaches
   `_one_reading`, so each makes its own #867 reading with its own budget, and so does each one's opened reading (the
@@ -4423,8 +4425,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `${v:-$( )}` word cost about 1.2 to 2.2 times what they cost on main d3cbd874 (the last round: 0.24, 0.33,
   0.15 and 0.45 s against 0.17, 0.21, 0.13 and 0.25 s); 100 loops into `/dev/fd` alone cost about the same
   (0.13 to 0.20 against 0.14 to 0.18 s; no reading is added). Tests:
-  `tests/security/test_gate_loop_fd_per_loop_867.py`. 117 of its 130 tests fail on main 6ec085b6. The other 13,
-  the 11 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too.
+  `tests/security/test_gate_loop_fd_per_loop_867.py`. 125 of its 139 tests fail on main 2a9ba976. The other 14,
+  the 12 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too.
   Known limit, as on main: a command that runs once, outside any loop's second pass, after a second descriptor
   `cd` is still named by the first descriptor folder of the line, since the line's first reading keeps one folder
   (`fd_cwd`) for the whole line. That holds on a straight line (`cd /dev/fd; cd /proc/self/fd; cp /tmp/evil 3`)

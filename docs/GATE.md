@@ -3344,11 +3344,12 @@ call is read once more with each loop's second pass in its own folder, beside th
 are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when each
 loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). It is made in #864's reading too, so
 it counts when each loop is in its own `coproc` (`{ coproc for ..; done; }; { coproc for ..; done; }`, also after
-`then` and as `coproc NAME { ..; }`). And it is made in each of the two readings of a line whose `${..}` words are
-read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names
-`/proc/self/fd` too. A loop inside another that holds such a `cd` of its own counts too (the pair inside `while :;
-do ..; done`). Two known limits stay, as on main (#888). A command that runs once, outside any loop's second pass,
-after a second descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
+`then` and as `coproc NAME { ..; }`), and in #1047's printed reading, so it counts in a text printf or `echo -e`
+pipes into a shell. And it is made in each of the two readings of a line whose `${..}` words are read both ways
+(#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too. A loop
+inside another that holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). Two known
+limits stay, as on main (#888). A command that runs once, outside any loop's second pass, after a second
+descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
 cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only. And a loop whose own commands `cd` into two different
 descriptor folders is named by its first descriptor `cd`, though bash starts its second pass where the last one
 left, so `while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only. bash also takes
