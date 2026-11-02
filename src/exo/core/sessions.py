@@ -206,7 +206,8 @@ class SessionStore:
             try:
                 out = fn(self._db)
             except BaseException:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:  # SQLite rolls back a full disk itself: keep that error, not ROLLBACK's
+                    self._db.execute("ROLLBACK")
                 raise
             self._db.execute("COMMIT")
             return out
@@ -220,7 +221,8 @@ class SessionStore:
             try:
                 return fn(self._db)
             finally:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
 
     # ---------------------------------------------------------------- sessions
 

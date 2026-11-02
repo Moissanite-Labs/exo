@@ -230,7 +230,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
   once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
   the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
-  subscribe, as the one-shot read did before, and its EOF flush does the same. Tests:
+  subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
+  when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
+  disk raises `database or disk is full`, not `cannot rollback`. Tests:
   `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari

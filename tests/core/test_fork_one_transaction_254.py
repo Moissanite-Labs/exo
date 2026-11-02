@@ -249,3 +249,23 @@ def test_a_fork_that_fails_at_its_last_write_leaves_nothing():
     child = store.fork(sid)  # the same fork without the trigger writes summaries, so the trigger fired on them
     assert store._q("SELECT COUNT(*) FROM summaries WHERE session=?", (child.id,))[0][0] > 0
     store.close()
+
+
+def test_a_fork_on_a_full_disk_raises_the_full_disk():
+    """SQLite rolls a write back itself when the disk is full. A second ROLLBACK raised "cannot rollback - no
+    transaction is active" in its place, with the real error only as its context."""
+    store = SessionStore()
+    sid = parent_thread(store)
+    before = store._q("SELECT (SELECT COUNT(*) FROM sessions), (SELECT COUNT(*) FROM messages),"
+                      " (SELECT COUNT(*) FROM messages_fts), (SELECT COUNT(*) FROM summaries)")[0]
+    (pages,) = store._q("PRAGMA page_count")[0]
+    store._db.execute(f"PRAGMA max_page_count={pages + 2}")  # the fork needs more than 2 new pages
+    with pytest.raises(sqlite3.OperationalError, match="database or disk is full"):
+        store.fork(sid)
+    assert not store._db.in_transaction
+    after = store._q("SELECT (SELECT COUNT(*) FROM sessions), (SELECT COUNT(*) FROM messages),"
+                     " (SELECT COUNT(*) FROM messages_fts), (SELECT COUNT(*) FROM summaries)")[0]
+    assert tuple(after) == tuple(before)
+    store._db.execute("PRAGMA max_page_count=1073741823")
+    assert store.fork(sid).message_count == len(store.messages(sid))
+    store.close()
