@@ -1835,6 +1835,11 @@ _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_openin
 # shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
 _printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
 _printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
+# #1104: set while classify reads a call (_lead_reading): [met], which _piped_text sets when an `echo`, `printf` or `cat`
+# that writes to a pipe comes after reserved words (_pipe_lead), where main's reading reads no text. classify then reads
+# the call again with _leading on, where such a pipe's text is read as at the start of a line. Main's reading stays.
+_lead_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_lead_met", default=None)
+_leading: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_leading", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -6445,12 +6450,19 @@ def _pipe_lead(words: list) -> int:
 
 def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
     """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`, also as the
-    first command of a group, a body or a condition, or after `!` or `time` (_pipe_lead, #1104).
+    first command of a group, a body or a condition, or after `!` or `time` (_pipe_lead, #1104). Main's reading reads
+    no text there and notes the pipe (_lead_met): the call's second reading (_lead_reading, _leading) reads it.
     memo joins a compound's stdin, which many `cat`s inside it share, once per line."""
-    words = k.words[_pipe_lead(k.words):]
+    lead = _pipe_lead(k.words)
+    words = k.words[lead:]
     if not words or any(w.dynamic for w in words):
         return None
     prog = words[0].text
+    if lead and not _leading.get():
+        if (prog in ("echo", "printf") or prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings)) and \
+                (met := _lead_met.get()) is not None:
+            met[0] = True
+        return None
     if prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings):
         memo = {} if memo is None else memo
         key = (id(k.heredocs), id(k.herestrings))
@@ -9577,7 +9589,7 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     met = [False]
     token = _printed_met.set(met)
     try:
-        c = _one_reading(action, cwd)
+        c = _lead_reading(action, cwd)
     finally:
         _printed_met.reset(token)
     if not met[0] or _printing.get() or _config_off.get():
@@ -9585,11 +9597,46 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token2 = _printing.set(True)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_lead_reading)(action, cwd)
     finally:
         _printing.reset(token2)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
+
+
+def _lead_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1104: when a pipe in it is written by an `echo`, `printf` or `cat` that comes
+    after reserved words (`{ echo .. | bash; }`, a `then` or `do` body, after `!` or `time`: _pipe_lead), whose text
+    that reading does not read (_piped_text notes it), a second reading of the call beside it, in which each such
+    pipe's text is read as at the start of a line. The second reading has budgets and memos of its own, as
+    _printed_reading's has, and the text spends them: a text that uses up a cap (_WORD_PARTS, _BRACE_BUDGET) leaves
+    no part after it unread that main's reading read. The reading as before is main's, with its ``ordinary`` reading
+    (D-074) beside the second reading's, and decide keeps the strictest, so a line never decides lower than before.
+    A second reading that adds no part (_part_key) is left out, so a line it reads no more of keeps main's reading
+    alone. A reading inside the second reading reads such pipes with no third reading."""
+    met = [False]
+    token = _lead_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _lead_met.reset(token)
+    if not met[0] or _leading.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _leading.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _leading.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    keys = {_part_key(p) for r in readings(c) for p in _each_part(r)}
+    if all(_part_key(p) in keys for r in readings(x) for p in _each_part(r)):
+        return c
     o, xo = c.ordinary, x.ordinary
     c = _beside(c, x, lead=True)
     c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)

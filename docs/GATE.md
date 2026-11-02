@@ -1426,7 +1426,10 @@ gate does not read:
   an opener. bash keeps them out of the command. So `{ echo 'rm -rf /srv/data' | bash; }`, the same
   pipe in a `then` or `do` body, a function or coproc body, and after `!` or `time` are a delete, as
   the line with `true;` before the pipe is. Before, each was only `opaque_exec`, which a policy that
-  allows `opaque_exec` let run. An escape (#1047) is read there too.
+  allows `opaque_exec` let run. An escape (#1047) is read there too. The gate reads such a text in a
+  second reading of the call, beside the reading as before, with budgets of its own, and `decide`
+  keeps the strictest. So a long text that uses up a cap, such as the 24 `${..}` parts one call
+  opens, leaves no later part on the line unread.
 
   A quoted `{` is a command name, not a reserved word, and writes nothing. A quoted `time` and a
   prefix command such as `command` or `nohup` run the command after them, but the gate reads such a

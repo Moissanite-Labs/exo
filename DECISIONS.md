@@ -1420,14 +1420,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   A compound fed by such a pipe (`{ echo .. | { bash; }; }`) gets the text, and its commands stay marked as fed a
   stdin the gate cannot read (#316), as on main. So an `ssh` in it still asks, and a post's body from it stays unseen
-  (#208). A shell that reads the text keeps its own `opaque_exec` part, so the change only adds parts.
+  (#208). A shell that reads the text keeps its own `opaque_exec` part.
+
+  The text is read in a second reading of the call (`_lead_reading`), beside main's, with budgets and memos of its
+  own, as #1047's printed reading is. Main's reading reads no such text and notes the pipe. A first version read the
+  text in main's reading, where it spent the call's caps. Thirty `${a:-$(true)}` words in the text used up the 24
+  `${..}` parts one call opens (`_WORD_PARTS`). The delete in a later `bash -c 'echo ${x:-$(rm -rf /srv/data)}'` was
+  then cut, so the line was `opaque_exec`, which `{opaque_exec: allow}` allowed and main asked for. Now decide keeps
+  the strictest of the two readings, so no line decides lower. The second reading is left out when it adds no part.
 
   A post's body from the first command of a group is still read only as main reads it, so it stays unseen. A quoted
   `{` or `time`, a prefix command (`command`, `nohup`) and a coproc of a simple command, whose output goes to the
   coprocess, read as on main.
 
-  Main's `scripts/gate_diff.py` lowers no pair against main f8f1d28b. The PR lists each run's numbers. Tests:
-  `tests/security/test_gate_pipe_first_in_group_1104.py`.
+  Main's `scripts/gate_diff.py` lowers no pair against main b724f255. The PR lists each run's numbers.
+  Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`.
 - *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
   writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did
   not fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, the same line piped to `sudo -s`,

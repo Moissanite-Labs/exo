@@ -19,8 +19,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
   `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
   body, or after `!` or `time` were only `opaque_exec`. So `{opaque_exec: allow, delete: deny}` allowed them where it
-  denied the plain line. Each now decides as the line with `true;` before the pipe. Tests:
-  `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  denied the plain line. Each now decides as the line with `true;` before the pipe. The text is read in a second
+  reading of the call beside main's, with budgets of its own, so a long text spends no cap a later command needs.
+  Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment), `docs/DOCS-MAP.md`.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
   `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so

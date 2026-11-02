@@ -227,6 +227,19 @@ def test_a_post_body_from_the_first_command_stays_unseen(line):
     assert _decided(line.replace("gh pr comment 1 -F -", "bash")) == DELETE
 
 
+# Such a pipe's text is read in a reading of the call of its own (_lead_reading), with budgets of its own, beside
+# main's reading. A text that uses up a cap there, here the parts in `${..}` words one call opens (_WORD_PARTS), leaves
+# the parts after it as main's reading read them: the delete in a later `bash -c` or `eval` text is still denied.
+FILLER = " ".join(["${a:-$(true)}"] * 30)
+
+
+@pytest.mark.parametrize("later", [f"bash -c 'echo ${{x:-$({RM})}}'", f"eval 'echo ${{x:-$({RM})}}'"])
+@pytest.mark.parametrize("shape", ["{ %s; }", "if true; then %s; fi", "for i in 1; do %s; done", "! %s", "time %s",
+                                   "function f { %s; }"])
+def test_a_text_that_uses_up_a_cap_leaves_the_parts_after_it_read(shape, later):
+    assert _decided(shape % f"echo 'echo {FILLER}' | bash" + f"; {later}") == DELETE
+
+
 def test_the_pipe_lead_skips_only_reserved_words():
     words = lambda s: gate._parse(s)[0][0].words  # noqa: E731
     lead = lambda s: [w.text for w in words(s)[gate._pipe_lead(words(s)):]]  # noqa: E731
