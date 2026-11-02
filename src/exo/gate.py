@@ -2354,6 +2354,9 @@ _GIT_VALUE_OPTS = {"rebase": "CsXx", "push": "o", "archive": "o", "fetch": "jo",
 # lower-case keyword ssh matches (see _ssh_setting).
 _SSH_EXEC_SETTINGS = {k.lower(): k for k in ("ProxyCommand", "LocalCommand", "RemoteCommand", "KnownHostsCommand")}
 _SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvider")}
+# The ones of them ssh runs on this machine (#1083): ProxyCommand and LocalCommand with the user's shell, and
+# KnownHostsCommand as a program.
+_SSH_RUNS_HERE = ("proxycommand", "localcommand", "knownhostscommand")
 # Variables set before a program (also through env or sudo), exported or assigned bare on the line.
 # _EXEC_ENV: the value is a command line the program runs, classified as a nested command.
 _EXEC_ENV = frozenset("""
@@ -5641,6 +5644,23 @@ def _ssh_forwards(words: list, k: _Cmd, piped: str | None, i: int, flags: str, f
     return not set(flags + late) & set("nNf")
 
 
+def _ssh_runs_here(key: str, value: str) -> tuple[str, str]:
+    """What an ssh `-o` setting runs on this machine (#1083), as (the summary of an opaque part, or "", and the value
+    with its %-tokens filled in, when that changes it, or ""). ssh runs ProxyCommand and LocalCommand with the
+    user's shell (`$SHELL -c`) and KnownHostsCommand as a program, so each is read as `bash -c` is: an opaque part,
+    beside the nested line _exec_options already reads. A known program there (`touch /tmp/x`) then asks, as it
+    does after `bash -c`. XAuthLocation names the program ssh runs for X11 forwarding, which a config file can turn
+    on, so it is an opaque part too. ssh fills in %-tokens before it runs a command: `%%` is `%` and `%d` is the
+    home folder, so the value is read again with `%d` as `~` (`rm -rf %d/.exo` is a store write). The other tokens
+    (`%h`, `%p`, `%r`...) name a host, a port or a user and stay as written. A `none` value never comes here."""
+    if key == "xauthlocation" and value.strip():
+        return f"ssh XAuthLocation runs the program {value.strip()}", ""
+    if key not in _SSH_RUNS_HERE:
+        return "", ""
+    filled = re.sub(r"%([d%])", lambda m: "~" if m[1] == "d" else "%", value)
+    return f"ssh {_SSH_EXEC_SETTINGS[key]} runs a command on this machine", filled if filled != value else ""
+
+
 def _ssh_setting(text: str) -> tuple[str, str]:
     """An ssh `-o` setting split as ssh's readconf splits it: (keyword in lower case, the command value). Leading
     whitespace is skipped; the keyword may be quoted and ends at whitespace, a quote or `=`; a command value is
@@ -6049,6 +6069,12 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
                 parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
+            # #1083: what the setting runs here goes beside the line, which _classify_shell adds last (ssh_here)
+            why, filled = _ssh_runs_here(key, value)
+            if why:
+                ctx.setdefault("ssh_here", []).append(_opaque(why, cmd))
+            if filled and nested(filled, f"ssh {_SSH_EXEC_SETTINGS[key]}") is not None:
+                ctx.setdefault("ssh_here", []).append(parts.pop())
     if prog == "ssh":
         for v in values(("-I",)):
             parts.append(_opaque(f"ssh -I loads the library {v}"[:120], cmd))
@@ -7803,6 +7829,14 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         _policy_command_view(cmd),
         *(view for part in parts for view in part._command_views),
     ]))
+    # #1083: each part for what an ssh setting runs on this machine (_ssh_runs_here) is added beside the line, after
+    # its other readings, so the line keeps every reading main made of it: its category, the targets its lead has on
+    # an ssh hop's host, and the store check of its words. Its signals join the line's, so the opaque part's
+    # indirection asks as after `bash -c`, and a deny, reserved or rule entry on a part meets it. A store write read
+    # through `%d` is such a part too: it does not lead.
+    if here := ctx.get("ssh_here"):
+        c.parts = [*c.parts, *here]
+        c.signals = list(dict.fromkeys([*c.signals, *(s for p in here for s in p.signals if s != _QUOTED)]))
     # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
     # body is a file: another command's heredoc is not that file, and the caller reads the file (#208). On a store
     # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`), and so on a secret line.
