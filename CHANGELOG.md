@@ -24,6 +24,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
     second try leaves a warning in the test summary.
   - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
     never starts costs the first test two waits and each later test one, as with a single try.
+- The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
+  (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
+  started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
+  repository before any walk.
 - Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
@@ -87,6 +91,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   branch. It now stamps every event at two fixed anchors and checks 64 days later. The promotion rule is unchanged
   (the same pattern as #1086's decay test).
 - Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
+- Browser test startup no longer names D-Bus or the sandbox as the cause of every failed start on Linux. A healthy
+  start logs D-Bus errors and a sandbox warning, so the categories now match only failure messages, such as running
+  as root without `--no-sandbox` (#1037 review).
+- Browser test startup reports a Chrome that exits after it writes `DevToolsActivePort` with its exit code and
+  categories, also when a first DevTools call is waiting for an answer. Such an exit is a failed start, so it is tried
+  once more (#1037 review).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
@@ -104,6 +114,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
   tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
   open request.
+- The terminal's delegated approval cue no longer reads every task ever written while an unrelated session has an
+  open request (#997 follow-up, D-045 amendment). Such a request, for example from another window, turned on the
+  3 s `tasks.list` read, since only the list shows that the session is unrelated. `tasks.list` now takes `active`,
+  which keeps only queued and running tasks, and the cue asks for those.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal

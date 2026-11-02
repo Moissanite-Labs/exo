@@ -662,15 +662,16 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
-  - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
-    categories; it never prints the raw browser output.
+  - A failed Chrome startup says whether Chrome exited, with its exit code, or timed out. It reports only fixed
+    stderr categories and never prints the raw browser output. A category names a failure message, so the D-Bus
+    errors and the sandbox warning that a healthy Linux start logs are not reported as a cause.
   - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
     hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
     were each a job's first start (#907). The 90 s ends once a start reaches DevTools, or once one 90 s wait runs out.
-  - A Chrome start that fails (it exits early, never writes `DevToolsActivePort`, or does not answer one of its first
-    DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile before any test code
-    runs. Any other error is raised at once. A second failed start fails the test and names both. Hosted macOS has
-    twice left a first call unanswered (#907).
+  - A Chrome start that fails (it exits, before or after it writes `DevToolsActivePort`, never writes it, or does not
+    answer one of its first DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile
+    before any test code runs. Any other error is raised at once. A second failed start fails the test and names
+    both. Hosted macOS has twice left a first call unanswered (#907).
   - A start that works after a failed one emits a `ChromeStartWarning` that names the failure. Pytest lists it in its
     warnings summary, so the stall still shows in a CI log.
   - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
