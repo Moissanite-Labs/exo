@@ -74,6 +74,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   same home failed with `database is locked` after its 5 s wait. The fork now builds its copies before it takes
   the lock and only checks and inserts under it. It takes 1.1 to 1.6 s, holds the lock for 0.4 s at most, and the other
   process opens and writes at once (D-010 amendment 2026-11-02).
+- A stdio client whose event replay hits an event the core cannot read gets a typed reply, not silence (#254,
+  follows #1102). Since #1102 the replay reads its backlog a page at a time after `events.subscribe` answers. A
+  page that failed after the first ended the feed with nothing sent: the client stayed subscribed, got no live
+  event, and the core raised the error again at EOF. The feed now ends with an `internal` error `Response` for
+  the subscribe, as the one-shot read before #1102 did, and the EOF flush is guarded the same way (D-010
+  amendment 2026-11-02).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every

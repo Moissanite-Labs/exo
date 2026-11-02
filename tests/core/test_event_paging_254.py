@@ -12,7 +12,7 @@ from exo.core import trace
 from exo.core.engine import CoreEngine, SqliteLog
 from exo.core.sessions import SessionStore
 from exo.protocol import schema as s
-from exo.server.engine import Hub
+from exo.server.engine import Closed, Hub
 
 PAGE = 1000
 
@@ -241,6 +241,73 @@ def test_a_stdio_subscribe_the_log_cannot_read_is_a_typed_reply_and_leaves_no_qu
     assert [(o["id"], o["ok"]) for o in out] == [("c0", False), ("c1", True)]
     assert out[0]["error"]["code"] == "internal" and "OverflowError" in out[0]["error"]["message"]
     assert not hub._subs  # no queue is left behind to fill with every later event
+
+
+def bad_row_on_page_two(store: SessionStore) -> Hub:
+    """3,000 events of s1 with the body of seq 1,500 one the decoder rejects, so the replay fails on its second page."""
+    hub = Hub(SqliteLog(store))
+    for i in range(3 * PAGE):
+        hub.publish(notice(i), "s1")
+    store._db.execute("UPDATE events SET body='{}' WHERE seq=1500")
+    return hub
+
+
+def test_a_subscription_whose_backlog_fails_ends_instead_of_skipping_to_live_events():
+    """Main kept the queue after the error, so a second call skipped the other 1,999 backlog events and returned
+    the next live one."""
+    store = SessionStore()
+    hub = bad_row_on_page_two(store)
+
+    async def go():
+        sub = hub.subscribe(0, "s1")
+        got = [(await sub.next(timeout=1)).seq for _ in range(PAGE)]
+        with pytest.raises(ValueError):
+            await sub.next(timeout=1)
+        assert not hub._subs  # the queue left the hub with the error
+        hub.publish(notice(-1), "s1")
+        with pytest.raises(Closed):  # the client resumes with since, from got[-1]
+            await sub.next(timeout=1)
+        return got
+
+    try:
+        assert asyncio.run(go()) == list(range(1, PAGE + 1))
+    finally:
+        store.close()
+
+
+def test_a_stdio_feed_whose_replay_fails_on_a_later_page_gets_a_typed_reply():
+    """Main sent the first page, then nothing: no reply, no live event, and its EOF flush raised the error."""
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = bad_row_on_page_two(store)
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json(), "wait",
+             s.Command.of(s.SessionList(), id="c2").to_json()]
+    out: list[dict] = []
+
+    async def read():
+        line = lines.pop(0) if lines else None
+        if line == "wait":  # until the feed ends, or 3 s
+            for _ in range(300):
+                if any(o.get("id") == "c1" and o.get("ok") is False for o in out):
+                    break
+                await asyncio.sleep(0.01)
+            hub.publish(notice(-1), "s1")
+            line = lines.pop(0)
+        return line
+
+    try:
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append(json.loads(text))), 30))
+    finally:
+        store.close()
+    assert [o["seq"] for o in out if "seq" in o] == list(range(1, PAGE + 1))
+    replies = [(o["id"], o["ok"]) for o in out if "ok" in o]
+    assert replies == [("c1", True), ("c1", False), ("c2", True)]
+    failure = next(o for o in out if o.get("ok") is False)
+    assert failure["error"]["code"] == "internal" and failure["error"]["message"].startswith("ValueError: ")
+    assert not hub._subs
 
 
 def test_trace_reads_its_events_in_pages(tmp_path, limits):

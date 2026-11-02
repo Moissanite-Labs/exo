@@ -225,8 +225,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
   the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
   kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
-  summary. The fork is still one transaction, and a failed fork still leaves nothing. Tests:
-  `tests/core/test_fork_one_transaction_254.py`.
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. A replay page the log
+  cannot read ends the stream. Since the amendment above, only the first page is read at subscribe, so a later
+  page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
+  once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
+  the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
+  subscribe, as the one-shot read did before, and its EOF flush does the same. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
