@@ -6064,6 +6064,25 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
   verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
   `tests/core/test_turn_settle.py`.
+- *Amendment 2026-11-02 (#1013, leaf size):* an agent tree and a private thread's own tree size a leaf as the tail
+  carries it. The size floor (`min_compact_tokens`) and the shrink test sum `_cost` from `src/exo/turn_settle.py`
+  over the leaf's messages: text and tool results in full, plus the tool-call arguments past 400 characters (#524).
+
+  Before, a leaf measured `render_message`, which cuts each tool result at 2000 characters and each text part at
+  4000. Those trees end their view at the last summary, so a span skipped as too small after it rode the tail in
+  full. Merges of the previews moved the frontier past it only later.
+
+  In a private thread with a floor of 1500 and a fast summarizer, 30 rounds of 20k `read_file` results left all 13
+  leaves skipped. The next call carried 22 of the results, 441,149 characters. Now all 13 are summarized, and the
+  call carries the 4 rounds in no leaf yet, 80,764 characters.
+
+  With a slow summarizer the leaves now wait for it, so the private call cuts their spans (#244). Before, they were
+  skipped at once, and the last round's call carried all 30 results.
+
+  A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
+  merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
+  the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
+  `tests/core/test_context_leaf_size_1013.py`, `tests/core/test_agent_context.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
