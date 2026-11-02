@@ -205,6 +205,10 @@ view the cut counts. The agent tree's jobs shrink neither the private view nor t
 either wait. So a private turn can now wait where it did not: while a cut would apply, each call waits up to
 `overflow_settle` for those jobs.
 
+An agent tree and a private thread's own tree send a leaf of large tool results to the summarizer, since #1013
+sizes it in full. A tail of such results keeps the view over `view_budget`, so each call there can wait up to
+`overflow_settle` for those leaves.
+
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
 summaries or the finished summary. Messages are never both summarized and verbatim, and never neither, except

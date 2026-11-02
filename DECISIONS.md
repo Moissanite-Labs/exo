@@ -6079,6 +6079,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   With a slow summarizer the leaves now wait for it, so the private call cuts their spans (#244). Before, they were
   skipped at once, and the last round's call carried all 30 results.
 
+  These leaves now go to the summarizer, where they were skipped at once. A tail of large results keeps the view
+  over `view_budget`, so a call there waits up to `overflow_settle` for them, as this decision allows. With a fake
+  summarizer that takes 3 s a leaf, those 30 rounds took 39.54 s, where they took 3.35 s.
+
   A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
   merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
   the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
