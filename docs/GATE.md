@@ -3395,6 +3395,17 @@ counts as the store has a D-074 `ordinary` reading, which is a classify of its o
 budget, so both readings pay it: such a nest six levels deep took 1.10 s against 0.29 s on main (about 4 times).
 A line of 1,500 such loops side by side, each read once more, took 6.6 s against 2.2 s (linear in the line).
 All are `time.process_time`, the best of three runs, at a load average of 10 to 29 on 4 CPUs.
+bash ends a command at a compound's closer, so a reserved word may follow `done`, `fi`, `esac` or `}` with no `;`
+between (#1095): `done }`, `done fi`, `done done`, `done esac`, `done then`, `done else`, `done elif`, `fi done` and
+`} done` are read as their forms with a `;`. The parser ends the command at the closer there, so the loop's `done`
+is found and the loop is read again. On main b6670ab8 these two lines were allowed reads, also under
+`deny: [store_write]`:
+`{ for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done }` and `if true; then for ..; done fi`.
+A pipe into a loop or an `if` closed right before such a word reaches the commands inside it too, as with the `;`
+(`{ cat cmds | while read l; do ssh h; done }` asks, #316). Any other word right after a closer (`done if`,
+`done {`, `done !`), a closer with a redirection before the word (`done > f }`) and a quoted word are bash syntax
+errors or plain words, and are read as before. One of these words where bash rejects it (`done then` outside an
+`if` condition) is read as its form with a `;`, which bash rejects too.
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret for a

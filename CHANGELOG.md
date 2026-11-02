@@ -239,6 +239,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   call that ran across the change skipped the new key as the one that had failed and sent the failed key again.
   A 501 (`muse-cli` asked to carry tools) falls back without cooling `muse-cli`, so the next call without tools
   still reaches it (exo-desktop #52, D-041 amendment).
+- Gate (#1095, D-038 amendment): a reserved word right after `done`, `fi`, `esac` or `}` with no `;` between is read
+  as after `;`. bash takes `done }`, `done fi`, `done done`, `done esac`, `done then`, `done else`, `done elif`,
+  `fi done` and `} done` as their forms with a `;`. The gate kept the closer and the word after it in one command,
+  so #479's loop reading missed the loop there.
+
+  On main b6670ab8 `{ for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done }` and its
+  `if true; then ..; done fi` form were allowed reads, also under `deny: [store_write]`, where the `done; }` form
+  asks as a principal-only `store_write` and denies there. A pipe into a loop or an `if` closed right before such a
+  word did not reach the commands inside it either, so `{ cat cmds | while read l; do ssh h; done }` was allowed.
+
+  The parser now ends the command at the closer before such a word, as at a `;`, so each of these lines reads as its
+  form with a `;`. A word bash rejects there (`done if`, `done {`, `done > f }`) is read as before. Main's
+  `scripts/gate_diff.py` against b6670ab8 lowers 0 of 10,138,656 pairs on the built-in corpus with variants, and
+  none in its other two runs. Tests: `tests/security/test_gate_loop_done_reserved_1095.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 
 ### Added
 - `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
