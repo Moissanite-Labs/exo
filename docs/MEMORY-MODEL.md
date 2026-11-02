@@ -207,6 +207,16 @@ summaries or the finished summary. Messages are never both summarized and verbat
 that a private thread's call can leave out a span whose summary is running, behind a marker. Memory
 content is the same once the summaries finish. Tests: `tests/core/test_turn_settle.py`.
 
+Each step of a build reads a summary tree once (#262). Scheduling upkeep (`note`), the merge check, both views,
+a thread's tail and `/context` each read a tree one time and share that read with the helpers they call, so a
+skipped merge no longer reads the whole tree again to find its two children. These steps never await, so no other
+task can change the tree during one. A step that schedules a node reads that tree again. The view is read after
+the overflow wait, so a summary that lands during the wait is in it. A build therefore reads a tree twice: once
+for upkeep and once for the view. While a job runs, the check for the overflow wait reads it once more. While a
+private thread's own leaves run and its tail is over budget, each look for spans to cut from that tail (issue
+#244, above) reads its own tree once more too. A merge job reads the tree once to find its two halves, and
+`/compact` reads it once to report the size of every summary it made. Tests: `tests/core/test_context_reads_262.py`.
+
 ## Undo and failed summaries (D-041)
 
 - **Undo.** Undo hides the entries of the undone turns. It also deletes each tree node whose range holds one of
