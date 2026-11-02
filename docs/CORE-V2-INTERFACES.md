@@ -133,6 +133,8 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
   subscriber 4,096 unread events behind (`MAX_LAG` in `exo.server.engine`) has stalled: the core ends its stream
   after the last event it read, and the client resumes with `since` and misses nothing (D-079). In process, the
   terminal window and stdio subscribe again on their own, and their stream ends only when the core shuts down.
+  A stream replays its backlog from the event log 1,000 events at a time, up to the newest event when it
+  subscribed, then goes live, so a client far behind costs the core one page, not its whole gap (#254).
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
 - `config.get` ConfigGet: key? (None = whole config)
 - `config.set` ConfigSet: key, value: Any
@@ -140,7 +142,8 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `models.set` ModelsSet: model, role = "main", session? (None = default)
 - `tools.list` ToolsList: session?
 - `skills.list` SkillsList: no fields
-- `tasks.list` TasksList: session?
+- `tasks.list` TasksList: session?, active = false (true returns only queued and running tasks, which the
+  terminal's delegated approval cue asks for, D-045)
 - `seat.list` SeatList: no fields
 - `taste.list` TasteList: no fields
 - `taste.edit` TasteEdit: action `add/update/remove`, rule_id?, text = ""

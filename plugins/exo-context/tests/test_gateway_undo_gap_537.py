@@ -111,9 +111,11 @@ class Gateway:
         engine.on_session_start(self.sid)
         return engine
 
-    def turn(self, text):
+    def turn(self, text, listed=True):
+        """`listed=False` leaves the turn's message out of conversation_messages, as a host may."""
         self.history.append(mine(text))
-        out = self.engine.select_context([SYS, *self.history], conversation_messages=list(self.history),
+        sent = self.history if listed else self.history[:-1]
+        out = self.engine.select_context([SYS, *self.history], conversation_messages=list(sent),
                                          incoming_message=self.history[-1], budget_tokens=0)
         self.history.append(ok())
         self.engine.on_turn_complete(list(self.history), usage=None)
@@ -209,6 +211,59 @@ def test_an_undo_the_same_engine_runs_past_is_not_settled_by_a_later_engine():
     gw.engine = gw.agent()
     gw.turn('next step')
     assert gw.file()['ruling'] == [RULING] and not gw.file().get('dropped')
+
+
+@pytest.mark.parametrize('turns, listed, again, kept', [
+    (('continue', RULING, 'x'), False, 'continue', [RULING]),  # not covered: the row left is taken for the message
+    (('continue', RULING, 'x'), True, 'continue', []),  # the message in the transcript, as the gateway sends it
+    (('continue', RULING, 'x'), False, 'next step', []),  # a message that repeats no row
+    (('start', 'continue', RULING, 'x'), False, 'continue', []),  # a user row before the repeated one
+])
+def test_a_turn_message_left_out_that_repeats_the_last_row_left(turns, listed, again, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). A host may leave the turn's message out of
+    conversation_messages. The engine takes the last user row for the turn's message when the two read the same.
+    With no user or summary row before that row, nothing comes before the turn's own message, so the ruling stays."""
+    gw = Gateway('gw-left-out-537')
+    for text in turns:
+        gw.turn(text)
+    gw.undo(2)
+    gw.turn(again, listed=listed)
+    assert gw.file()['ruling'] == kept
+
+
+@pytest.mark.parametrize('turns, listed, again, kept', [
+    (('continue', RULING, 'continue', 'go on'), False, 'go on', []),  # not covered: only `continue` is checked
+    (('continue', RULING, 'continue', 'go on'), True, 'go on', [RULING]),  # every message in the transcript
+    (('continue', RULING, 'continue', 'go on'), False, 'next step', [RULING]),  # a message that repeats no row
+    (('start', RULING, 'continue', 'go on'), False, 'go on', [RULING]),  # the row checked is not the session's first
+])
+def test_a_turn_message_left_out_that_repeats_the_last_row_of_a_window(turns, listed, again, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). A window of the last two turns leaves `continue` and
+    `go on`, which do not read like the session's first rows. A host that leaves every turn's message out has the
+    engine take the window's `go on` row for a next turn's message of `go on`, so it checks only the `continue`
+    before it. That reads like the session's first row, so the window looks like an undo, and the ruling after that
+    row goes. `listed` holds for every turn, as such a host leaves out each message, the ruling's too."""
+    gw = Gateway('gw-left-out-window-537')
+    for text in turns:
+        gw.turn(text, listed=listed)
+    gw.window(2)
+    gw.turn(again, listed=listed)
+    assert gw.file()['ruling'] == kept
+
+
+@pytest.mark.parametrize('turns, n, kept', [
+    (('start', RULING), 1, [RULING]),  # not covered: no transcript held the ruling's message, so it has no lead
+    (('start', RULING, 'x'), 2, []),  # the turn after the ruling's held it and noted its lead
+])
+def test_a_host_that_leaves_every_turn_message_out_notes_a_lead_one_turn_late(turns, n, kept):
+    """Not covered in the first case (D-041, 2026-10-30 note). Only a transcript that holds a pin's message notes
+    the pin's lead, so a pin first said in the last turn before the undo has none and stays."""
+    gw = Gateway('gw-all-out-537')
+    for text in turns:
+        gw.turn(text, listed=False)
+    gw.undo(n)
+    gw.turn('go', listed=False)
+    assert gw.file()['ruling'] == kept
 
 
 @pytest.mark.parametrize('again', [RULING, f'As I said: {RULING}'])

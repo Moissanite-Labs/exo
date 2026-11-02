@@ -115,6 +115,7 @@ async def test_start_returns_at_once_and_output_streams_to_the_log(tmp_path):
     assert body == "second" and "done, exit 0" in out
     grep = (await eng.registry.call(ToolCall(id="c4", name="job_output", arguments={"id": jid, "grep": "FIR"}), None)).text()
     assert grep.split("\n", 1)[1] == "first"
+    await until(lambda: any(e.state == "done" for e in events(eng)))  # the row says done before the event
     states = [(e.job_id, e.state) for e in events(eng)]
     assert states[0] == (jid, "running") and states[-1] == (jid, "done")
     assert events(eng)[-1].exit_code == 0
