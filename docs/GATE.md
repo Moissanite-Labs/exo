@@ -1735,6 +1735,33 @@ gate does not read:
   reads `+cmd` as keystrokes: `!` runs a shell command after any of them (`+G!cmd`, `+:n!cmd`),
   while a search (`+/pattern`) takes the rest as its pattern unless a newline or another control
   key ends it.
+- Commands an ssh setting runs on this machine (#1083). ssh runs `ProxyCommand` and `LocalCommand`
+  with the user's shell, and `KnownHostsCommand` as a program, here and not on the host. Each is
+  read as the line it holds, as above, and also as `bash -c` is: an `opaque_exec` part beside the
+  line's own reading.
+
+  So `ssh -o 'ProxyCommand=touch /tmp/x' host ls` asks, as `bash -c 'touch /tmp/x'` does, though a
+  known program in another option's value stays `allow` (below).
+
+  A delete, a post or a store path in the value still counts, and `opaque_exec: allow` allows a
+  known program there again. `XAuthLocation` names the program ssh runs for X11 forwarding, which
+  a config file can turn on, so it is an `opaque_exec` part too. scp's and sftp's `-o` settings
+  count the same way. `none` stays `allow`, and so do `ProxyJump` and `-J`, which name a host.
+
+  ssh fills in its %-tokens before it runs the command. `%%` is `%` and `%d` is the home folder,
+  so a value that holds them is read once more with `%d` as `~`: `ssh -o 'LocalCommand=rm -rf
+  %d/.exo' host ls` gets a store write part.
+
+  The other tokens (`%h`, `%p`, `%r` and the rest) name a host, a port or a user. They stay as
+  written, so a path built from them is read as the path it spells, and the `opaque_exec` part
+  still asks.
+
+  These parts sit beside the line, which keeps the category main gave it, its targets on an ssh
+  hop's host and the store check of its words. So `ssh -o 'ProxyCommand=touch /tmp/x' host ls`
+  stays a `read` that asks, and a `deny`, `reserved` or rule entry meets each part.
+
+  A store write read through `%d` is such a part too: `deny: [store_write]` denies the line, but
+  the part does not lead, so the store floor does not apply to it.
 - A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
   `allow`; a program the gate does not know asks, as it would on its own. The compressors `tar
   -I` usually names are known programs, none of them with an exec option: `gzip`, `bzip2`, `xz`,

@@ -1551,6 +1551,57 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or ask for the `rm` example. These are existing mode-specific fallback behaviors, not new bypass or executor rules.
   A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
   or block when an executor is required).
+- *Amendment 2026-11-01 (issue #1083):* a command an ssh setting runs on this machine is an `opaque_exec` part beside
+  the line, as `bash -c` is. On main d007348e `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand`
+  line were reads, allowed under `deny: [local_write]`, while `bash -c 'touch /tmp/x'` asks there. `ssh -X -o
+  XAuthLocation=/tmp/evil host ls` was a read too.
+
+  The issue took the gate to scan these values for words only. It reads them as nested lines since #154, so a delete,
+  a post or a store path there counts. But `touch /tmp/x` alone is `shell`, and a known program in an option's value
+  stays `allow` (`rsync -e`, `PAGER=cat`).
+
+  ssh runs `ProxyCommand` and `LocalCommand` with the user's shell (`$SHELL -c`), which can read startup files of its
+  own, as `bash -c` runs its line. It runs `KnownHostsCommand` as a program, after it fills in tokens and `${VAR}` in
+  its arguments.
+
+  `_ssh_runs_here` gives an `opaque_exec` part for each of the three, beside the nested reading `_exec_options`
+  already made, in every form `_ssh_setting` takes and for scp and sftp. `XAuthLocation` names the program ssh runs
+  for X11 forwarding. A config file can turn that on, so any value is an `opaque_exec` part too.
+
+  `none` stays a read, and so do `ProxyJump` and `-J`, which name a host. `RemoteCommand` runs on the host and keeps
+  its reading.
+
+  ssh fills in %-tokens before it runs the command. `%%` is `%`, and `%d` is the home folder, which `LocalCommand` and
+  `KnownHostsCommand` take. A value that holds either is read once more with `%d` as `~`, beside the reading as
+  written, so `rm -rf %d/.exo` gets a store write part.
+
+  ssh stops on `%d` in `ProxyCommand`, which takes only `%%`, `%h`, `%n`, `%p` and `%r`, and the gate reads it as the
+  home folder there too. The other tokens name a host, a port or a user and stay as written.
+
+  `_exec_options` puts these parts in the line's context (`ssh_here`), and `_classify_shell` adds them beside the
+  combined line last, with their signals. So the line keeps its category, its lead's targets on an ssh hop's host, and
+  the store check of its words. The opaque part's indirection asks, and deny, reserved and rule entries meet each
+  part.
+
+  A first build let the parts lead, and lowered decisions. Main's `scripts/gate_diff.py` found `(read, a)` reserved
+  lost on `ssh a "ssh -o 'ProxyCommand=touch /tmp/x' b ls"`, as the part led the nested line in place of the read.
+
+  It also found the remote delete's `(delete, host)` lost on `ssh -o 'ProxyCommand=rm -rf %d/.exo' host 'rm -rf y'`
+  when the store write led. `tests/security/test_gate_hash_p.py` found a third: as a part of the simple command, the
+  opaque part made the store check scan the line's words, and `/dev/fd/3` in `ProxyCommand='hash -p /dev/fd/3 ls'`
+  outranked a post with a matrix deny.
+
+  *Cost:* a known program in these settings asks, as `ssh -o 'ProxyCommand=ssh -W %h:%p jump' host ls` now does. `ssh
+  -J jump host ls` stays `allow`. A store write read through `%d` does not lead, so `deny: [store_write]` meets it but
+  the store floor does not.
+
+  Main's `scripts/gate_diff.py` against main d007348e lowers 0 pairs in each of three runs. The built-in corpus gives
+  1,422,960 pairs without variants (4,347 tightened) and 10,312,632 with them (30,979 tightened).
+
+  An aimed corpus of 7,277 lines puts each setting in each form, with values that read, write, delete, post, touch a
+  store or hold %-tokens, in each position and wrapper. Under the 88 built-in policies and 64 deny, reserved and rule
+  policies on the categories it meets, it gives 1,106,104 pairs (141,900 tightened). Tests:
+  `tests/security/test_gate_ssh_command_settings_1083.py`.
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
   file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
