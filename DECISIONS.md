@@ -235,8 +235,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
   written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
   `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
-  limit, so a page of -1 read the whole log at once. Tests: `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
+  none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
+  `last_messages`, and now gives none for a limit below 1 there too. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
+  `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

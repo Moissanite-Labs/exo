@@ -382,7 +382,8 @@ class SessionStore:
         return rows[0]["seq"] if rows else None
 
     def last_messages(self, sid: str, limit: int) -> list[Message]:
-        """Decode at most ``limit`` visible messages, returned in transcript order."""
+        """Decode at most ``limit`` visible messages, returned in transcript order. A ``limit`` of 0 gives none, where
+        the slice ``[-0:]`` gave every message. A negative ``limit`` raises ``ValueError``."""
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("message limit must be a non-negative integer")
         rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 ORDER BY seq DESC LIMIT ?",
