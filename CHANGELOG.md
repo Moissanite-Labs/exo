@@ -101,6 +101,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
   tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
   open request.
+- The terminal's delegated approval cue no longer reads every task ever written while an unrelated session has an
+  open request (#997 follow-up, D-045 amendment). Such a request, for example from another window, turned on the
+  3 s `tasks.list` read, since only the list shows that the session is unrelated. `tasks.list` now takes `active`,
+  which keeps only queued and running tasks, and the cue asks for those.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
