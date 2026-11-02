@@ -403,8 +403,12 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
                     continue
                 if feed:
                     feed.cancel()
+                try:
+                    write(s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()}).to_json())
+                except BaseException:  # a client gone before the reply leaves no queue in the hub to fill
+                    sub.close()
+                    raise
                 cursor.update(seq=sub.last, session=sub.session, id=cmd.id)
-                write(s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()}).to_json())
                 feed = asyncio.create_task(pump(sub))
                 await asyncio.sleep(0)  # start the replay before the next command
                 continue

@@ -334,6 +334,29 @@ def test_a_stdio_feed_whose_replay_fails_on_a_later_page_gets_a_typed_reply():
     assert not hub._subs
 
 
+def test_a_stdio_subscribe_whose_reply_cannot_be_written_leaves_no_queue():
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = Hub(SqliteLog(store))
+    hub.publish(notice(0), "s1")
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json()]
+
+    async def read():
+        return lines.pop(0) if lines else None
+
+    def gone(text: str) -> None:
+        raise BrokenPipeError("the client closed its end")
+
+    try:
+        with pytest.raises(BrokenPipeError):
+            asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read, gone), 10))
+    finally:
+        store.close()
+    assert not hub._subs  # main left the subscription's queue to fill until MAX_LAG dropped it
+
+
 def test_trace_reads_its_events_in_pages(tmp_path, limits):
     store = SessionStore(tmp_path / "s.sqlite")
     try:
