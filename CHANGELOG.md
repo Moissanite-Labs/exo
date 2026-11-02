@@ -35,6 +35,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
+  `docs/DOCS-MAP.md`.
 - The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
   (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
   started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
