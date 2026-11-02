@@ -3296,38 +3296,38 @@ of two loops into `/dev/fd` and `/proc/self/fd` on one line (`for i in 1; do cd 
 /proc/self/fd < <(cp /tmp/evil 3); do break; done`) only `/dev/fd` was named, and `deny: [target:/proc*]` asked.
 When a loop's own folder (the store, for a loop with no descriptor `cd`) is not the one that reading gives it, the
 call is read once more with each loop's second pass in its own folder, beside the other readings, so both folders
-are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when
-each loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`), and in each of the two
-readings of a line whose `${..}` words are read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}`
-in the second loop's body names `/proc/self/fd` too. A loop inside another that
-holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). A command that runs once,
-outside any loop's second pass, after a second descriptor `cd` is still named by the line's first descriptor
-folder (`cd /dev/fd; for i in 1; do cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only): a known
-limit, as on main (#888). So is a loop whose own commands `cd` into two different descriptor folders: it is
-named by its first descriptor `cd`, though bash
-starts its second pass where the last one left (`while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done`
-names `/dev/fd` only). bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
-in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++))
-{ ..; }`) and runs it once per pass in the same shell, so such a loop is read again as a `do ..; done` one is; a
-`{ ..; }` group that is no loop's body runs once and is not. A `for ((..))` header is found from its own `((..))`
-(the parser counts the `(` and `)` tokens and marks the `{` right after the closing `))`, a `;` or newline
-between), whatever the arithmetic holds: a reserved word as the variable (`for ((do=0; do<2; do++)) { ..; }`,
-`while`, `done`, `if`), a `!`, and any number of `|`, `&&` or `||` in it, each of which the parser reads as a
-command of its own. A `cd` back out later in the body (`cd -`, `cd /tmp`) is not followed: fails closed, and a
-`cd -` that goes back into the store on a later pass is covered by the same reading. The folder is the one the
-`cd` names, so a store spelt through a form the `cd` check reads (`"$HOME/.exo/policies"`,
-`${X:-~/.exo/policies}`, `~/.exo/pol*`) counts. Known limit: a `cd` through a variable set earlier
-(`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`) or through the loop variable (`for d
-in /tmp ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop (`d=~/.exo/policies; cd
-$d; cp /tmp/evil gates.yaml` is allowed on main too): the `cd` check reads no variable's value where it is set.
-bash expands a `for` or `select` word list and the redirections of the loop's `done` (or `}`) once, before the
-first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd ~/.exo/policies; done` is
-read as before). A command before the loop runs once and keeps its folder too. A function the loop calls is not
-followed into, but its call is a command in the store on that reading, which asks and is denied by `deny:
-[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A compound behind
-bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading. bash takes
-`time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`, `time
-time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
+are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when each
+loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). It is made in #864's reading too, so
+it counts when each loop is in its own `coproc` (`{ coproc for ..; done; }; { coproc for ..; done; }`, also after
+`then` and as `coproc NAME { ..; }`). And it is made in each of the two readings of a line whose `${..}` words are
+read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names
+`/proc/self/fd` too. A loop inside another that holds such a `cd` of its own counts too (the pair inside `while :;
+do ..; done`). Two known limits stay, as on main (#888). A command that runs once, outside any loop's second pass,
+after a second descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
+cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only. And a loop whose own commands `cd` into two different
+descriptor folders is named by its first descriptor `cd`, though bash starts its second pass where the last one
+left, so `while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only. bash also takes
+a `{ ..; }` group as the body of a `for` or `select` loop (`for i in 1 2; { cp /tmp/evil gates.yaml; cd
+~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++)) { ..; }`) and runs it once per pass in the
+same shell, so such a loop is read again as a `do ..; done` one is. A `{ ..; }` group that is no loop's body runs
+once and is not. A `for ((..))` header is found from its own `((..))` (the parser counts the `(` and `)` tokens and
+marks the `{` right after the closing `))`, a `;` or newline between), whatever the arithmetic holds: a reserved
+word as the variable (`for ((do=0; do<2; do++)) { ..; }`, `while`, `done`, `if`), a `!`, and any number of `|`, `&&`
+or `||` in it, each of which the parser reads as a command of its own. A `cd` back out later in the body (`cd -`,
+`cd /tmp`) is not followed: fails closed, and a `cd -` that goes back into the store on a later pass is covered by
+the same reading. The folder is the one the `cd` names, so a store spelt through a form the `cd` check reads
+(`"$HOME/.exo/policies"`, `${X:-~/.exo/policies}`, `~/.exo/pol*`) counts. Known limit: a `cd` through a variable set
+earlier (`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`) or through the loop variable
+(`for d in /tmp ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop
+(`d=~/.exo/policies; cd $d; cp /tmp/evil gates.yaml` is allowed on main too): the `cd` check reads no variable's
+value where it is set. bash expands a `for` or `select` word list and the redirections of the loop's `done` (or `}`)
+once, before the first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd
+~/.exo/policies; done` is read as before). A command before the loop runs once and keeps its folder too. A function
+the loop calls is not followed into, but its call is a command in the store on that reading, which asks and is
+denied by `deny: [store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A
+compound behind bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading.
+bash takes `time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`,
+`time time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
 `do`, `then`, `else`, `elif`, `if`, `while`, `until` or a case pattern's `)`, never after `|` or `|&`), and runs
 the compound after them
 (`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f { ..; }` definition,

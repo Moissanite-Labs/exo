@@ -91,6 +91,11 @@ TWO_ROWS = [
     # folder is named only if the reading this change adds is made inside it (_opened_reading) too
     f"time {_A}; time {_B}",
     f"! {_B}; time -p {_A}",
+    # each loop in its own `coproc` (#864): only #864's late reading opens it, so the second folder is named only if
+    # the reading this change adds is made inside that reading too (_late_reading)
+    f"{{ coproc {_A}; }}; {{ coproc {_B}; }}",
+    f"if true; then coproc {_A}; fi; if true; then coproc {_B}; fi",
+    f"coproc W {{ {_A}; }}; coproc V {{ {_B}; }}",
 ]
 _AC = "while cd /dev/fd < <(cp /tmp/evil 3); do :; done"
 _BC = "while cd /proc/self/fd < <(cp /tmp/evil 3); do :; done"
@@ -367,6 +372,9 @@ def test_the_joined_form_keeps_its_second_reading_when_only_the_867_reading_runs
             # with no `time`, both of #158's readings ran past at this depth; behind it, at least the opened one did
             assert past == phases if not before else any(o for _, o in past), (d, past)
             assert gate.decide(c).outcome == "ask" and gate.no_grant(c), d
+            # the #867 reading fails closed past it as the #479 one does: one store write stands for the passes it
+            # did not read (main's readings ask here without it, so the decision alone does not show it)
+            assert any("unread loop pass" in p.signals for r in gate.readings(c) for p in gate._each_part(r)), d
             break
     assert hit, "no depth ran past the budget in the #867 reading only"
 
