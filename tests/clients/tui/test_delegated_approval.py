@@ -214,10 +214,10 @@ def test_direct_approval_is_visible_before_held_delegation_metadata(tmp_path):
 
 
 def test_task_list_is_read_only_while_another_sessions_request_is_open(tmp_path):
-    """#997: ``tasks.list`` sends every task ever written. The 3 s refresh asks for it only while a request of
-    another session is open, never for this thread's own requests or for requests of no thread. The timer may add
-    refreshes while the child's request is open, so the strict count is zero before it opens and after it closes.
-    Each request event of another session starts its own refresh, the second one too."""
+    """#997: the 3 s refresh asks for ``tasks.list`` only while a request of another session is open, never for
+    this thread's own requests or for requests of no thread. The timer may add refreshes while the child's request
+    is open, so the strict count is zero before it opens and after it closes. Each request event of another session
+    starts its own refresh, the second one too."""
     async def scenario(app, pilot, client, eng):
         child = add_task(eng, app.session, 'running', 'Scout')
         calls = count_tasks_lists(client)
