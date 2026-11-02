@@ -96,6 +96,20 @@ def test_iter_events_matches_one_read_with_skips_and_global_pages():
         store.close()
 
 
+def test_iter_events_refuses_a_page_below_one():
+    """Review 5732419504: on main a page of 0 raised IndexError at the first event, and -1 read the whole log
+    as one page (SQLite reads LIMIT -1 as no limit) and then raised IndexError."""
+    store = SessionStore()
+    try:
+        fill(store, 7, "s1", "s2")
+        for page in (0, -1, True, 2.0, "3"):
+            with pytest.raises(ValueError, match="page"):
+                store.iter_events(0, "s1", page=page)
+        assert [e.seq for e in store.iter_events(0, None, page=1)] == list(range(1, 8))
+    finally:
+        store.close()
+
+
 def test_a_page_with_global_events_does_not_sort_the_rest_of_the_log():
     """A page that also keeps events of no session costs the same at 2,000 events and at 20,000. The OR form
     collected and sorted every later match on each call, so paging a long log took time that grew with its square."""

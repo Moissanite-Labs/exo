@@ -233,8 +233,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
   when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
   disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
-  written (the client is gone) closes its subscription, so no queue is left in the hub. Tests:
-  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`.
+  written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
+  `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
+  limit, so a page of -1 read the whole log at once. Tests: `tests/core/test_fork_one_transaction_254.py`,
+  `tests/core/test_event_paging_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

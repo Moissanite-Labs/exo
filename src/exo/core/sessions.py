@@ -677,7 +677,10 @@ class SessionStore:
                     skip: tuple[str, ...] = (), page: int = 1000) -> Iterator[Event]:
         """``events_since`` with no bound, read ``page`` events at a time, so a long read holds one page (#254). It
         stops at the newest seq at the call, as one read would. The first page is read now: a bad ``since`` fails
-        here, not at the first ``next``."""
+        here, not at the first ``next``. A ``page`` below 1 raises ``ValueError``, as a negative limit does in
+        ``last_messages``. SQLite reads LIMIT -1 as no limit, and both 0 and -1 ended in an ``IndexError``."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("event page must be a positive integer")
         upto = self.last_event_seq()
         first = self.events_since(since, session, page, with_global, skip)
 
