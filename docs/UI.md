@@ -135,7 +135,10 @@ route uses one, the panel opens too, or the default-model picker when only one p
   approval card and activity line, then the delegated approval cue when a delegated task waits, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
   its newest item at the top. `/layout classic` restores the usual order: the transcript, the delegated approval cue,
   the activity line and the input, with the status strip at the bottom
-  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). In classic the view stays at the bottom
+  while the transcript grows, whether a long thread is still being laid out or tool output opens with `ctrl+o`, until
+  you scroll up. Scrolling back to the bottom follows again, and `F6` stays on the page it loaded (#1023).
+  `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
 ## Switches

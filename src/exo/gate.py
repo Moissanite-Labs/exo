@@ -1827,6 +1827,11 @@ class _LoopBudget(Exception):
 # those `time`, `-p` and `--` words and opens the compound after them, as without them. Main's reading stays beside.
 _timed: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_timed", default=None)
 _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_opening", default=False)
+# #1047: set while classify reads a call (_printed_reading): [met], which _stdin_texts sets when a shell reads a text
+# that printf or `echo -e` writes (a _Printed). classify then reads the call again with _printing on, where each such
+# shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
+_printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
+_printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -1997,6 +2002,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
     timed, opening = _timed.get(), _opening.get()
     prefix: set[int] = set()        # #853: the `time`, `-p` and `--` words of pipeline prefixes before a compound
+    # #864: open a compound behind `! coproc` and the like; #853's opened reading (_opening) opens it too, as it reads
+    # `! time coproc for ..` as `! coproc for ..`.
+    late, late_met = _late_open.get() or opening, _late_met.get()
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -2093,7 +2101,15 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
             if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
                 ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
-            if not v.quoted and _command_word(cur.words, lead, 0):
+            here = not v.quoted and _command_word(cur.words, lead, 0)
+            if not here and cw and v.text in _COMPOUND_OPENERS:
+                # #864: an opener in command position after a `coproc [NAME]` or `function NAME` that reserved words
+                # start (`! coproc for`, `then coproc {`), or after `coproc NAME {` (`function f { for`). bash opens
+                # it as after `;`. Main's reading leaves it as the coproc's argv; the opened reading opens it too.
+                here = late
+                if late_met is not None:
+                    late_met[0] = True
+            if here:
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
                 elif v.text in _COMPOUND_CLOSERS:
@@ -4540,10 +4556,19 @@ def _literal_pipe(w: _Cmd | None) -> str | None:
     return None
 
 
-def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
+def _stdin_texts(k: _Cmd, piped: str | None, shell: bool = False) -> list[str]:
+    """The texts k reads on its stdin: its heredoc bodies, here-strings and the text piped in. In the call's printed
+    reading (_printing, #1047) a shell (``shell``) reads what printf or `echo -e` writes there (a _Printed's ``out``)
+    in place of the text as written, which the reading as before reads. That reading notes that it met one
+    (_printed_met)."""
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
         out.append(piped)
+    if shell and any(isinstance(t, _Printed) for t in out):
+        if _printing.get():
+            out = [t.out if isinstance(t, _Printed) else t for t in out]
+        elif (met := _printed_met.get()) is not None:
+            met[0] = True
     return list(dict.fromkeys(out))
 
 
@@ -4708,11 +4733,12 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
     spends the call's budgets (_brace_budget) and a second read could find them spent."""
     memo = ctx.setdefault("stdin", {})
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, getattr(piped, "out", ""), ambiguous)
     if whole in memo:
         return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
-    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
+    shell = key[0] is classify_shell
+    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped, shell):
         if (*key, text) not in memo:
             memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
         got += memo[(*key, text)]
@@ -4982,15 +5008,17 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     # cmd was not read. That reading stays beside cmd's, and the parts read from cmd are signed, so decide also decides
     # the line with the parts read before on top (_QUOTED): no decision is looser than before. Also when cmd is an
     # `env -S` (words is [] then), so the quoted word's value is still scanned for store paths and env-inject names.
+    # #852: each signed part, the late ones a deferred value adds among them (#887 review), also has a copy on each of
+    # its other targets (an ssh hop's host), as it would lead there.
     old_words = _strip_prefix_words(before, False)[0]
     old_parts: list[Classification] = []
     if len(old_words) > len(words):
         signed: dict = {}
         if "late" in ctx:
-            ctx["late"][n_late:] = [_signed(p, _QUOTED, signed) for p in ctx["late"][n_late:]]
+            ctx["late"][n_late:] = [_on_other_targets(_signed(p, _QUOTED, signed)) for p in ctx["late"][n_late:]]
         old_parts = _classify_program(old_words, k, cmd, depth, ctx, piped) + \
             _exec_options(before, old_words, k, cmd, depth, ctx, piped)
-        parts = [_signed(p, _QUOTED, signed) for p in parts] + old_parts
+        parts = [_on_other_targets(_signed(p, _QUOTED, signed)) for p in parts] + old_parts
     if sudo:
         parts[0].signals.append("sudo")
         _run_privileged(parts[0])
@@ -5059,6 +5087,23 @@ def _signed(c: Classification, signal: str, memo: dict) -> Classification:
                               own_signals=None if c.own_signals is None else [*c.own_signals, signal])
         memo[id(c)].parts = [_signed(p, signal, memo) for p in c.parts]
     return memo[id(c)]
+
+
+def _on_other_targets(c: Classification) -> Classification:
+    """#852: ``c``, a part read behind a quoted prefix assignment (_signed), with a copy of it on each of its other
+    targets among its parts (_bare_copy), where none is there yet: an ssh or mosh hop's host beside the remote
+    command's own target (#493). Behind `X=ab` the part leads the line and decide reads it on each such target
+    (#399). Behind `X='a b'` the part main read as the program can lead, and the line is decided on that part's
+    targets, so a deny or reserved (category, host) entry, and a rule on the two that denies (#191), meet the copy
+    as a part (D-075). Only parts are added: every reading main makes stays. ``c`` is a copy
+    _signed made for this call, so it is changed in place. The copy's summary names where it lands, as decide's
+    reason does for a part that leads on its other targets, so a reason that names the copy still names the host
+    (#887 review)."""
+    have = {(p.category, p.target) for p in c.parts}
+    c.parts += [_bare_copy(c, target=t, alt_targets=[], displaced=None,
+                           summary=f"{c.summary or c.category} (if it lands on {_target_names([t])})")
+                for t in dict.fromkeys(c.alt_targets) if t and t != c.target and (c.category, t) not in have]
+    return c
 
 
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -5602,6 +5647,127 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
+    """ssh's own option values that name a file ssh makes on this machine, whatever its remote line runs (#484): its
+    control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a key to (`-o UserKnownHostsFile`) and a
+    forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`). `-F` only reads
+    its file and `-i` is a key. scp and sftp pass their `-o` settings to the ssh they run, so those count for them
+    too. Their other letters name other things (`scp -S` is the program to run). Each comes as (the word that holds
+    the value, the paths it names), and `none` names no path. A value in a word of its own is that word. An attached
+    one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters before the value cut off, when the
+    source spells them as they read. The options are read as _ssh_options reads them, before the host and after it,
+    up to the remote command. scp's and sftp's end at their first operand. A setting's value is split into words as
+    ssh splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
+    texts, out = [w.text for w in words], []
+    prog = texts[0].rsplit("/", 1)[-1]
+    letters = _VALUE_OPTS[prog][0]
+
+    def scan(i: int, after: bool) -> int:
+        while i < len(texts) and texts[i].startswith("-") and not (after and texts[i] == "-"):
+            a, i = texts[i], i + 1
+            if a.startswith("--"):
+                if after and a == "--":
+                    break
+                continue
+            v = next((j for j, ch in enumerate(a[1:], 1) if ch in letters), 0)
+            if not v or v == len(a) - 1 and i == len(texts):
+                continue
+            if v == len(a) - 1:
+                w, value, i = words[i], texts[i], i + 1
+            else:
+                w, value = words[i - 1], a[v + 1:]
+                if w.raw.startswith(a[:v + 1]):
+                    w = replace(w, text=value, raw=w.raw[v + 1:])
+            if a[v] != "o" and prog != "ssh":
+                continue
+            key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
+            args = _ssh_split(rest) if a[v] == "o" else [rest]
+            if key in ("S", "controlpath", "userknownhostsfile"):
+                paths = args if key == "userknownhostsfile" else args[:1]
+            elif key in ("L", "R", "D", "localforward", "remoteforward", "dynamicforward"):
+                paths = [f for t in args[:2] for f in _ssh_fwd_fields(t) if "/" in f]   # a socket path holds a /
+            else:
+                continue
+            out.append((w, [p for p in paths if p.lower() != "none"]))
+        return i
+
+    end = scan(1, False)
+    if prog == "ssh":
+        scan(end + 1, True)
+    return out
+
+
+def _ssh_file_hits(x: str) -> list[str]:
+    """The store paths in one of ssh's file option values (_shell_hits' find for _ssh_file_words): the value, each
+    piece of it between whitespace, `:`, `=` and `,` (`UserKnownHostsFile=/tmp/kh ~/.exo/state/kh`,
+    `~/.exo/state/sock:localhost:5432`), and each word and field ssh's own parsers make of it, without the quotes,
+    brackets and backslashes ssh drops (`ControlPath '~/x y/ctl'`, `-L '[/x/.exo/state/s]:localhost:1'`). A store
+    folder whose name holds a space, as the desktop app's does, can only be named in a setting inside ssh's quotes.
+    ssh spells out its `%d` token as the home folder."""
+    found = [x] + re.split(r"[\s:=,]", x) + _ssh_fwd_fields(x)
+    for t in _ssh_split(x) + _ssh_split(_ssh_setting(x)[1]):
+        found += [t] + re.split(r"[:=,]", t) + _ssh_fwd_fields(t)
+    return [p for p in dict.fromkeys(found) if p and _store_word(_ssh_home(p))]
+
+
+def _ssh_home(path: str) -> str:
+    """``path`` with ssh's `%d` token at its start (the home folder) written as `~`."""
+    return re.sub(r"^%d(?=/|$)", "~", path)
+
+
+def _ssh_split(text: str) -> list[str]:
+    """A setting's value split into words as ssh's argv_split splits it: at a space or tab outside quotes, with each
+    pair of quotes taken out, and a backslash before a quote, a backslash or (outside quotes) a space dropped and
+    the character after it kept. An unclosed quote runs to the end (ssh rejects the line)."""
+    out: list[str] = []
+    cur: list[str] | None = None
+    quote, i = "", 0
+    while i < len(text):
+        ch, nxt = text[i], text[i + 1:i + 2]
+        if cur is None and ch in " \t":
+            i += 1
+            continue
+        cur = [] if cur is None else cur
+        if ch == "\\" and (nxt in ("'", '"', "\\") or not quote and nxt == " "):
+            cur.append(nxt)
+            i += 2
+            continue
+        if not quote and ch in " \t":
+            out.append("".join(cur))
+            cur = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        elif quote and ch == quote:
+            quote = ""
+        else:
+            cur.append(ch)
+        i += 1
+    return out if cur is None else out + ["".join(cur)]
+
+
+def _ssh_fwd_fields(spec: str) -> list[str]:
+    """A forward's fields as ssh's parse_fwd_field reads them: split at `:`, a field in `[...]` taken as it stands,
+    and a backslash elsewhere dropped and the character after it kept (`[/x:y]:localhost:5432`, `/x/st\\ate:1`)."""
+    out: list[str] = []
+    i = 0
+    while i < len(spec):
+        if spec[i] == "[":
+            j = spec.find("]", i + 1)
+            j = len(spec) if j < 0 else j
+            out.append(spec[i + 1:j])
+            i = j + 2
+            continue
+        cur = []
+        while i < len(spec) and spec[i] != ":":
+            if spec[i] == "\\" and i + 1 < len(spec):
+                i += 1
+            cur.append(spec[i])
+            i += 1
+        out.append("".join(cur))
+        i += 1
+    return out
+
+
 def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     """Where a builtin's operands start in ``args`` (its words after the name), and the option letters bash surely
     reads before them. `--` ends the options, and so does a word not spelled `-x`, or `+x` when ``plus`` (declare,
@@ -6073,8 +6239,9 @@ def _ln_targets(argv: list[str]) -> list[str]:
             for b in bases]
 # A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
 # ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
-# ("target").
-_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+# ("target"). ssh's own file options ("ssh", #484) are read with a find of their own, so no other check covers them.
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"},
+           "ssh": {"ssh"}}
 
 
 def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
@@ -6181,6 +6348,19 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
+    # #484: ssh makes its control socket, the known-hosts file it adds a key to and a forward's socket on this machine
+    # whatever its remote line runs, so the return below must not skip a store path there when every part is a read.
+    # These values are read as ssh reads them (its quotes in a setting, a forward's brackets), which the scan below
+    # does not do, so they are read here on every ssh line, with a store check of their own ("ssh"). scp and sftp
+    # hand their -o settings to ssh, so their lines get the same reading.
+    if words and words[0].text.rsplit("/", 1)[-1] in ("ssh", "scp", "sftp"):
+        for w, paths in _ssh_file_words(words):
+            got = _shell_hits(w, seen, "ssh", _ssh_file_hits)
+            hits += [w.text] if got is None else got
+            if _unknown_store(w, seen):
+                hits.append(w.text)
+            if ctx.get("store_cwd") and any(not _expand_text(_ssh_home(p)).startswith("/") for p in paths):
+                hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
@@ -6336,8 +6516,122 @@ def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
             memo[key] = "\n".join([h.body for h in k.heredocs] + [w.text for w in k.herestrings])
         return memo[key]
     if prog in ("echo", "printf"):
-        return " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        text = " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        return _printed(text, prog, words[1:])
     return None
+
+
+class _Printed(str):
+    """A pipe's text as written, which every reader reads as before. ``out`` is what `printf` or `echo -e` writes
+    there once bash expands its escapes and fills its format (#1047). A shell reads it beside the text as written,
+    in a reading of the call of its own (_printed_reading), with budgets and memos of its own: the reading as before
+    stays main's, and decide keeps the strictest."""
+    out = ""
+
+
+def _printed(text: str, prog: str, words: list) -> str:
+    """``text`` with what `printf` or `echo -e` writes as its ``out``, when the gate is sure of it and it differs
+    (#1047). Every word must be one bash leaves as it is: no expansion, glob, brace, leading `~` or `$".."`. Bash
+    drops a NUL in the commands it reads, so ``out`` has none. Else ``text`` alone, read as before."""
+    if any(_expands(w) or w.locale for w in words):
+        return text
+    args = [w.text for w in words]
+    out = _printf_out(args, 4 * len(text) + 4096) if prog == "printf" else _echo_out(args)
+    out = (out or "").replace("\0", "")
+    if not out or out == text:
+        return text
+    p = _Printed(text)
+    p.out = out
+    return p
+
+
+# The one-letter escapes of bash's printf and `echo -e` (#1047).
+_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+            "\\": "\\"}
+
+
+def _escape(s: str, i: int, where: str) -> tuple[str | None, int]:
+    """The escape at s[i], a backslash, as bash reads it in a printf format (``where`` "f"), in a `%b` argument
+    ("b") or after `echo -e` ("e"), and where the text goes on (#1047). None ends the output (`\\c` in "b" and "e").
+    An escape bash keeps as written gives the backslash alone, and the next character is read as usual. So does a
+    `\\u` past ASCII, which bash writes as its locale allows (the character, or `\\u00E9` for `\\u00e9`): to a shell
+    it is the letters of a word either way. A byte from `\\x` or octal past ASCII is the character of that number."""
+    e = s[i + 1:i + 2]
+    if e and e in _ESCAPES:
+        return _ESCAPES[e], i + 2
+    if e == "c" and where != "f":
+        return None, i + 2
+    if e and e in "'\"?" and where == "f":
+        return e, i + 2
+    pat = {"x": "[0-9A-Fa-f]{1,2}", "u": "[0-9A-Fa-f]{1,4}", "U": "[0-9A-Fa-f]{1,8}"}.get(e)
+    if e and e in "01234567" and (where != "e" or e == "0"):
+        # a format takes up to three octal digits; `%b` and `echo -e` take \0 and up to three more, `%b` also \NNN
+        pat = "[0-7]{0,%d}" % (3 if e == "0" and where != "f" else 2)
+    m = re.compile(pat).match(s, i + 2) if pat else None    # from i + 2 without a copy of the rest of the text
+    if m and e in "01234567":
+        return chr(int(e + m.group(), 8) & 0xFF), m.end()
+    if m and (e == "x" or int(m.group(), 16) < 0x80):
+        return chr(int(m.group(), 16)), m.end()
+    return "\\", i + 1
+
+
+def _unescape(s: str, where: str) -> tuple[str, bool]:
+    """``s`` with its escapes expanded as _escape reads them, and whether a `\\c` ended the output in it (#1047)."""
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        j = s.find("\\", i)
+        if j < 0:
+            out.append(s[i:])
+            break
+        out.append(s[i:j])
+        t, i = _escape(s, j, where)
+        if t is None:
+            return "".join(out), True
+        out.append(t)
+    return "".join(out), False
+
+
+def _printf_out(args: list[str], room: int) -> str | None:
+    """What bash's printf writes for these literal words (#1047): its format's escapes expanded, `%%`, and `%s` and
+    `%b` filled from the arguments, the format used again while they last. None for an option, another conversion,
+    a flag or a width, and for output longer than ``room``: the gate is not sure of it then, or would read too much."""
+    if args[:1] == ["--"]:
+        args = args[1:]
+    if not args or args[0].startswith("-"):
+        return None
+    fmt = re.split(r"(%.?)", args[0], flags=re.S)
+    if any(p not in ("%%", "%s", "%b") for p in fmt[1::2]):
+        return None
+    fmt = [p if n % 2 else _unescape(p, "f")[0] for n, p in enumerate(fmt)]
+    rest, k, size, stop = args[1:], 0, 0, False
+    out: list[str] = []
+    while not stop:
+        took = False
+        for n, p in enumerate(fmt):
+            if n % 2 == 0 or p == "%%":
+                text = "%" if n % 2 else p
+            else:                           # an argument, or nothing once they run out
+                text, took, k = (rest[k] if k < len(rest) else ""), took or k < len(rest), k + 1
+                if p == "%b":
+                    text, stop = _unescape(text, "b")
+            out.append(text)
+            size += len(text)
+            if stop:
+                break
+        stop = stop or not took or k >= len(rest) or size > room
+    return "".join(out) if size <= room else None
+
+
+def _echo_out(args: list[str]) -> str | None:
+    """What bash's `echo -e` writes for these literal words (#1047), None without `-e`: echo then writes its words as
+    they are. Its options are the leading words of `n`, `e` and `E` alone (`-ne`, `-eE`), the last `e` or `E`
+    deciding, and a `\\c` ends the output."""
+    n, esc = 0, False
+    while n < len(args) and re.fullmatch(r"-[neE]+", args[n]):
+        esc = {"e": True, "E": False}.get(args[n].replace("n", "")[-1:], esc)
+        n += 1
+    return _unescape(" ".join(args[n:]), "e")[0] if esc else None
 
 
 # Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).
@@ -7136,8 +7430,39 @@ def _loop_word(k: _Cmd) -> int:
             return i
     first = k.words[0] if k.words else None
     if first is not None and not first.quoted and first.text in ("coproc", "function"):
-        return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
-                     and k.words[i].text in _LOOP_WORDS), -1)
+        w = next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
+                  and k.words[i].text in _LOOP_WORDS), -1)
+        if w >= 0:
+            return w
+    return _late_loop_word(k) if _late_open.get() or _opening.get() else -1     # #853's opened reading too
+
+
+# #864: set while classify reads a call (_classify_read): [met], which _parse_line sets when a line holds a compound
+# opener in command position that main's reading leaves as a `coproc` or `function` argv (`! coproc for ..`,
+# `then coproc { ..`, `coproc NAME { for ..`). classify then reads the call again with _late_open on, where _parse_line
+# opens such a compound as after `;`, and _loop_word finds the loop word behind those words (_late_loop_word), so #479's
+# second pass of a loop that `cd`s into the store runs there too. Main's reading stays beside (_late_reading).
+_late_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_late_met", default=None)
+_late_open: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_late_open", default=False)
+
+
+def _late_loop_word(k: _Cmd) -> int:
+    """#864: where the loop word is in k behind reserved words, a `coproc` or `function`, its NAME and the reserved
+    words after it (`! coproc for`, `then coproc N { while`, `function f { for`), as _parse_line opens it with
+    _late_open on (`coproc { coproc { for` too); or -1. A quoted word ends the search, except as the NAME: a NAME is
+    one word that is not a reserved word, quoted or not (`! coproc 'W' for` finds the loop, as _parse_line opens it;
+    reading on is the stricter side)."""
+    words, i = k.words, 0
+    while i < len(words) and not words[i].quoted:
+        text = words[i].text
+        if text in _LOOP_WORDS:
+            return i
+        if text in ("coproc", "function"):
+            if i + 1 < len(words) and words[i + 1].text not in _OPENERS and words[i + 1].text not in _LOOP_WORDS:
+                i += 1                      # the NAME
+        elif text not in _OPENERS:
+            return -1
+        i += 1
     return -1
 
 
@@ -9237,17 +9562,60 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515). When the gate
     reads what a sudo -s or -i shell runs (#491), each reading is also read as before, and that reading ends its
     chain of floors (readings), so decide never goes below it. A line with a compound command behind a pipeline
-    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading); the
-    ``ordinary`` reading (D-074) of a call is not opened there, as the opened reading reads its own. ``cwd`` is
-    the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
-    (_in_tool_folder sets it)."""
-    timed = [False]
-    met = _timed.set(timed)
+    prefix (`time`, `time -p`, `!` ..) is also read with the compound opened (#853, _opened_reading). A line with a
+    compound command in command position behind a `coproc` or `function` that main's reading leaves unopened
+    (`! coproc for ..`, `{ coproc N { ..; }; }`) is also read with it opened (#864, _late_reading); #853's opened
+    reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
+    (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
+    printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
+    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
+    from there too (_in_tool_folder sets it)."""
+    timed, met = [False], [False]
+    t_timed, t_met = _timed.set(timed), _late_met.set(met)
+    try:
+        c = _printed_reading(action, cwd)
+    finally:
+        _late_met.reset(t_met)
+        _timed.reset(t_timed)
+    if timed[0] and not _opening.get() and not _config_off.get():
+        c = _opened_reading(c, action, cwd)
+    # On a line that sets both marks the opened reading above opens every compound this one does (_parse_line's
+    # `late`); this reading stays as defence in depth (test_a_line_with_both_marks_reads_the_coproc_loop_either_way).
+    # The only nested classify, D-074's ordinary reading, runs under _config_off, so `_opening` is a cheap guard only.
+    if met[0] and not _late_open.get() and not _opening.get() and not _config_off.get():
+        c = _late_reading(c, action, cwd)
+    return c
+
+
+def _printed_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1047: when a shell in it reads a text that printf or `echo -e` writes
+    (_stdin_texts notes it), a second reading of the call beside it, in which each such shell also reads what bash's
+    builtin writes there (a _Printed's ``out``): its escapes expanded and its format filled. The second reading has
+    budgets and memos of its own, as _opened_reading's has, and the output spends them. The reading as before reads
+    no such output, so it is main's reading, with its budgets, memos, parts, lead and listed violations, and its
+    ``ordinary`` reading (D-074) stays beside the second reading's: decide keeps the strictest, so a line never
+    decides lower than before. The ``ordinary`` reading of a call reads no output of its own, as the second reading
+    reads its own, and a reading inside the second reading reads the output with no third reading."""
+    met = [False]
+    token = _printed_met.set(met)
     try:
         c = _one_reading(action, cwd)
     finally:
-        _timed.reset(met)
-    return _opened_reading(c, action, cwd) if timed[0] and not _opening.get() and not _config_off.get() else c
+        _printed_met.reset(token)
+    if not met[0] or _printing.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _printing.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _printing.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
 
 
 def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
@@ -9257,14 +9625,43 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     `cd`s into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before
     stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once (the reading
     as before reads its own without opening it, _classify_read): decide keeps the strictest, and no_grant (and
-    through it the hook's bypass floor) counts each reading, so a line never decides lower than before."""
+    through it the hook's bypass floor) counts each reading, so a line never decides lower than before. #864's
+    opening of a compound behind a `coproc` is on in this reading too (_parse_line, _loop_word), so a compound behind
+    `! time coproc` or `then time coproc` opens here. The opened reading has its printed reading too (#1047,
+    _printed_reading)."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _opening.set(True), _timed.set(None)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_printed_reading)(action, cwd)
     finally:
         _timed.reset(met)
         _opening.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo)
+    return c
+
+
+def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#864: the call as read before (c), with a second reading of it beside it in which each compound command in
+    command position behind a `coproc [NAME]` or `function NAME` that reserved words start (`! coproc for ..`,
+    `if ..; then coproc { ..; }; fi`, `{ coproc N { ..; }; }`), or behind `coproc NAME {` and `function NAME {`, is
+    opened as after `;` (_parse_line, _late_loop_word): its parts and #479's second pass of a loop in it that `cd`s
+    into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before stays as
+    it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once: decide keeps the
+    strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
+    lower than before. It runs after #853's opened reading (_opened_reading), each beside main's. The late reading
+    has its printed reading too (#1047, _printed_reading), as the opened reading has, so a compound only this reading
+    opens is also opened in what printf or `echo -e` writes to a shell."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _late_open.set(True), _late_met.set(None)
+    try:
+        x = _brace_budget(_printed_reading)(action, cwd)
+    finally:
+        _late_met.reset(met)
+        _late_open.reset(token)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
     o, xo = c.ordinary, x.ordinary
@@ -9302,10 +9699,11 @@ def _one_reading(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
-def _beside(c: Classification, j: Classification) -> Classification:
+def _beside(c: Classification, j: Classification, lead: bool = False) -> Classification:
     """Readings c and j of one call: the more severe leads (on a tie, c), and the other ends its ``also`` readings,
-    so decide keeps the stricter (#584)."""
-    first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+    so decide keeps the stricter (#584). With ``lead``, the one _combine would keep of the two leads (_lead: a
+    credentials reading, then a store write, then the more severe), as a part of one line would (#1047)."""
+    first, last = (j, c) if (_lead([c, j]) is j if lead else _severity(j) > _severity(c)) else (c, j)
     x = first
     while x.also is not None:
         x = x.also
@@ -10588,6 +10986,8 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
     """Parse a flow value starting at s[i]; return (value, index after it)."""
     while i < len(s) and s[i] in " \t":
         i += 1
+    if i >= len(s) or s[i] in "]}":
+        raise PolicyError("unclosed or mismatched flow collection")
     if s[i] == "[":
         out, i = [], i + 1
         while True:
@@ -10597,7 +10997,12 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
                 raise PolicyError(f"unterminated flow list: {s!r}")
             if s[i] == "]":
                 return out, i + 1
+            if s[i] == "}":
+                raise PolicyError("unclosed or mismatched flow collection")
+            start = i
             v, i = _flow(s, i)
+            if i <= start:
+                raise PolicyError("unclosed or mismatched flow collection")
             out.append(v)
     if s[i] == "{":
         out, i = {}, i + 1
@@ -10611,7 +11016,13 @@ def _flow(s: str, i: int) -> tuple[Any, int]:
             k, i = _flow_atom(s, i, stop=":")
             if i >= len(s) or s[i] != ":":
                 raise PolicyError(f"flow map key without value: {s!r}")
-            v, i = _flow(s, i + 1)
+            j = i + 1
+            while j < len(s) and s[j] in " \t":
+                j += 1
+            if j < len(s) and s[j] in "]},":
+                v, i = None, j
+            else:
+                v, i = _flow(s, i + 1)
             out[str(k)] = v
     return _flow_atom(s, i, stop=",]}")
 
@@ -10655,7 +11066,10 @@ def parse_yaml(text: str) -> Any:
             lines.append((len(body) - len(body.lstrip(" ")), body.strip(), n))
     if not lines:
         return None
-    val, i = _block(lines, 0, lines[0][0], raw)
+    try:
+        val, i = _block(lines, 0, lines[0][0], raw)
+    except (json.JSONDecodeError, IndexError, RecursionError) as e:
+        raise PolicyError(f"malformed YAML: {e}") from e
     if i != len(lines):
         raise PolicyError(f"unexpected indentation at line {lines[i][2] + 1}: {lines[i][1]!r}")
     return val

@@ -1183,6 +1183,10 @@ editor/evaluator separation and the disjoint held-out gate when changing the
 trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
 `tests/test_cli_lazy.py` and `tests/docs` after a change.
 
+A new path refusal in that command raises `BoundaryError`, so it prints its own
+line instead of the fixture line. Compare paths with `_at_or_below`. It folds
+letter case as D-087 does for the gate, and Unicode form too.
+
 ### Web composer draft ownership
 
 `plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a

@@ -123,6 +123,14 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
     tools = _table(data.get("tools"))
     skills = _table(data.get("skills"))
     plugins = data.get("plugins")
+    if isinstance(plugins, dict):
+        has_plugins = "enabled" in plugins
+        plugin_list = plugins.get("enabled")
+    else:
+        has_plugins = "plugins" in data
+        plugin_list = plugins
+    if has_plugins and not isinstance(plugin_list, list):
+        raise SeatError("plugins must be a list (or [plugins] enabled must be a list)")
     mcp = _table(data.get("mcp"))
     mcp = _table(mcp.get("servers")) if isinstance(mcp.get("servers"), dict) else mcp
     ch = data.get("channels")
@@ -138,7 +146,7 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         env_allow=_strs(tools.get("env_allow")) or [], env_deny=_names(tools.get("env_deny"), "env_deny") or [],
         skill_folders=folders, skill_load=_names(skills.get("load"), "skills.load"),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
-        plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
+        plugins=_strs(plugin_list), channels=channels,
         peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")),
         cwd=str(_table(data.get("session")).get("cwd") or data.get("cwd") or "") or None, soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
 
