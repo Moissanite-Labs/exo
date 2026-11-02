@@ -246,10 +246,13 @@ class Browser:
                 code = self.proc.wait(EXIT_GRACE)
             except subprocess.TimeoutExpired:
                 code = None
-            if code is None:
+            if code is None and not isinstance(exc, ChromeStartError):
                 raise
+            # Read stderr only after the wait, so a Chrome that exits while it does not answer is named with the lines
+            # it wrote last. An exit here is a failed start, like one before the port file, so it is tried once more.
             self._stderr.finish()
-            # An exit here is a failed start, like one before the port file, so it is tried once more.
+            if code is None:
+                raise ChromeStartError(f"{exc}; stderr: {self._stderr.hints()}") from exc.__cause__
             raise ChromeStartError(f"Chrome exited after writing DevToolsActivePort (exit {code}); "
                                    f"stderr: {self._stderr.hints()}") from exc
 
@@ -268,9 +271,7 @@ class Browser:
             try:
                 self.call(method, reply_within=FIRST_REPLY_TIMEOUT, **params)
             except TimeoutError as exc:
-                self._stderr.finish()
-                raise ChromeStartError(f"Chrome did not answer {method} within {FIRST_REPLY_TIMEOUT:g}s; "
-                                       f"stderr: {self._stderr.hints()}") from exc
+                raise ChromeStartError(f"Chrome did not answer {method} within {FIRST_REPLY_TIMEOUT:g}s") from exc
 
     def call(self, method: str, *, reply_within: float = 30, **params: Any) -> dict:
         self.n += 1
