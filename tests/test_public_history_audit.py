@@ -193,6 +193,26 @@ def test_partial_config_refused_before_traversal(tmp_path, monkeypatch):
     assert audit.git_environment()['GIT_NO_LAZY_FETCH'] == '1'
 
 
+@pytest.mark.parametrize('where', ['repository', 'include.path'])
+def test_partial_clone_filter_alone_refused_before_traversal(tmp_path, monkeypatch, where):
+    # Git also makes a remote a promisor when only its partialCloneFilter is set, with promisor
+    # unset, and fetches missing objects from it. Git reads that key from included files too.
+    repo = fixture_repo(tmp_path)
+    if where == 'include.path':
+        included = tmp_path / 'included-filter-config'
+        included.write_text('[remote "origin"]\n\tpartialCloneFilter = blob:none\n')
+        git(repo, 'config', 'include.path', str(included))
+    else:
+        git(repo, 'config', 'remote.origin.partialCloneFilter', 'blob:none')
+    real_git = audit.git
+    def guarded(repo, *args):
+        assert args[0] not in ('rev-list', 'cat-file')
+        return real_git(repo, *args)
+    monkeypatch.setattr(audit, 'git', guarded)
+    report = audit.audit(repo)
+    assert report['partial'] and not report['complete'] and report['targets'] == []
+
+
 def test_whole_object_literals_and_blob_tag(tmp_path):
     repo = fixture_repo(tmp_path)
     (repo / 'safe').write_text('outside-literal')

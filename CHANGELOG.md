@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
+  (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
+  started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
+  repository before any walk.
 - Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
