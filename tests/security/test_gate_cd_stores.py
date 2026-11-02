@@ -782,40 +782,46 @@ def test_a_spent_join_budget_asks(monkeypatch):
 
 
 _NEAR_CAP = ("cd ~/.exo/" + "/".join(f"d{j}" for j in range(62)) + "; cd " + "/".join([".."] * 64) + "; cat "
-             + " ".join(f"n{i}" for i in range(200)))      # 63 store folders and 12,600 names: just under both caps
-SUB_SHAPES = {
+             + " ".join(f"n{i}" for i in range(200)))  # 63 store folders (the cap is 64) and 200 names 64 levels up
+SUB_SHAPES = {      # each line is past the join budget at its first reading: _NEAR_CAP alone is 7 to 9 times it
     "nested-substitutions": lambda k: "".join(f"$(echo $(echo $(echo $({_NEAR_CAP})))) " for _ in range(k)),
     "substitutions": lambda k: "".join(f"$({_NEAR_CAP}) " for _ in range(k)),
     # few joins, each a deep glob: the budget counts path parts, not joins (5.8 s at 77 KB when it counted joins)
     "deep-glob-names": lambda k: _NEAR_CAP.split("; cat ")[0] + "; ls " + " ".join(
         "/".join(f"x{j}*" for j in range(60)) + f"/f{i}" for i in range(k)),
 }
+_READS = "cd ~/.exo/run/jobs && cat " + " ".join(f"n{i}" for i in range(20))     # 20 joins of about 10 parts each
+_GLOB = "/".join(f"x{j}*" for j in range(60))                                     # a name of 60 path parts
+
+
+def _reads(i: int) -> str:
+    """_READS with i + 1 spaces before its `&&`. Its text is its own, so the memo (_shell_seen) reads each such `$( )`.
+    Its folder and names are the same, so a line around it, which reads its body too, reads no more than _READS."""
+    return _READS.replace(" &&", " " * (i + 1) + "&&")
+
+
+SMALL_SHAPES = {    # with the budget cut to 1,000 path parts: (the line, its largest reading alone)
+    "nested-substitutions": ("".join(f"$($($($({_reads(i)})))) " for i in range(2)), _READS),
+    "substitutions": ("".join(f"$({_reads(i)}) " for i in range(8)), _READS),
+    "deep-glob-names": ("cd ~/.exo/run/jobs; ls " + " ".join(f"{_GLOB}/f{i}" for i in range(40)),
+                        f"cd ~/.exo/run/jobs; ls {_GLOB}/f0"),       # 40 joins, but about 2,800 path parts
+}
 
 
 @pytest.mark.parametrize("shape, units", [("nested-substitutions", 2), ("substitutions", 8), ("deep-glob-names", 250)],
                          ids=list(SUB_SHAPES))
 def test_the_join_budget_is_shared_by_every_substitution(shape, units, monkeypatch):
-    """Each `$( )` is classified again by its own classify_shell, nested ones too. The budget is kept in the classify
-    call's memo, so they all draw on one budget and a line pays it once, not once per substitution (a fresh budget
-    each made these lines 34x to 41x slower than without the check). It counts path parts, so a few deep glob names
-    spend it as fast as many short ones. Timed through gate.classify, CPU time,
-    against the same call with the check stubbed out, at two sizes: a ratio with a margin, not a limit."""
-    lines = [SUB_SHAPES[shape](units), SUB_SHAPES[shape](2 * units)]
-    real = gate._exo_relative
-    for _ in range(3):      # CPU time; timed again only when over the bound, so one pause in a call no longer fails it
-        took, base = [], []
-        for line in lines:
-            start = time.process_time()
-            c = _bash(line)
-            took.append(time.process_time() - start)
-            assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
-        monkeypatch.setattr(gate, "_exo_relative", lambda *a, **kw: "")
-        for line in lines:
-            start = time.process_time()
-            _bash(line)
-            base.append(time.process_time() - start)
-        monkeypatch.setattr(gate, "_exo_relative", real)
-        if all(t < 2 * b + 0.5 for t, b in zip(took, base)):
-            break
-    for t, b in zip(took, base):
-        assert t < 2 * b + 0.5, (took, base)
+    """Each `$( )` is classified again by its own classify_shell, nested ones too, and the line around it reads its
+    body as well. The budget is kept in the classify call's memo, so all these readings draw on one budget and a line
+    pays it once, not once per reading. It counts path parts, so a few deep glob names spend it as fast as many short
+    ones. A SUB_SHAPES line is past the budget at its first reading, so it fails closed even with a fresh budget for
+    each reading (#1097). So the budget is then cut to 1,000 parts. No reading of a SMALL_SHAPES line of
+    substitutions spends that alone, and the deep glob line makes only 40 joins. Each fails closed only because its
+    readings share one budget that counts path parts. Counted, not timed, so the machine's load cannot change it."""
+    c = _bash(SUB_SHAPES[shape](units))
+    assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
+    line, alone = SMALL_SHAPES[shape]
+    monkeypatch.setattr(gate, "_EXO_PARTS", 1000)
+    assert "too many to resolve" not in _bash(alone).summary        # under the budget alone
+    c = _bash(line)
+    assert c.category == "credentials" and "too many to resolve" in c.summary, (c.category, c.summary[:80])
