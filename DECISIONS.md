@@ -5947,6 +5947,20 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
   (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
   whole, which the next turn's call can cut.
+- *Amendment 2026-10-31 (#262, summary reads):* each step of a build reads a summary tree once. `note`, the merge
+  check, both views, the overflow check, a thread's tail and `/context` share one read of each tree with every
+  helper they call (`_one_read` in `src/exo/core/context.py`). Before, each helper read the whole tree again, and
+  a skipped merge read it once more to find its two children: a build of a 256-pair test thread with 74 skipped
+  merges made 16 reads, and now makes 2. These steps never await, so no other task can change the tree during one.
+  A step that schedules a node drops its read of that tree, and the view is read after the overflow wait, so a
+  summary that lands during the wait is in the view. One read for the whole build would have to outlive that wait,
+  so the build keeps two, and a third for the overflow check while a job runs. While a private thread's own
+  leaves run and its tail is over budget, each look for spans to cut (`cut_pending`, #244) reads that tree once
+  more. The view is unchanged. A merge job finds its two halves with one read too (`_halves`), and `/compact`
+  sizes all its new summaries with one (`_folded`). With no cached text, a merge above four levels of skipped
+  merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
+  verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
+  `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title

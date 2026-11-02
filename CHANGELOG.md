@@ -181,6 +181,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
 - Short chat windows scroll the chat column when status text expands, keeping the transcript and composer reachable.
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
+- Building a model call reads each summary tree once per step, not once per helper. So do the merge check after
+  each summary, a merge job and the `/compact` report. A skipped merge no longer reads the whole tree again to find
+  its two children. A build of a 256-pair test thread with 74 skipped merges made 16 summary reads and now makes 2.
+  The view is unchanged (#262).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
