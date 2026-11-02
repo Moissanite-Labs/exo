@@ -72,6 +72,30 @@ def test_iter_events_matches_one_unbounded_read(tmp_path, limits):
         store.close()
 
 
+def test_iter_events_matches_one_read_with_skips_and_global_pages():
+    """Mixed event types, a skipped type that runs across page edges, and reads where the session's events and the
+    events of no session each fill more than one page. A ``skip`` kept to the first page, or a union page without
+    its outer LIMIT, both fail here."""
+    store = SessionStore()
+    blocks = [("s1", "notice", 1500), (None, "notice", 1500), ("s1", "message.delta", 2500), ("s2", "tool.output", 700),
+              (None, "message.delta", 1200), ("s1", "mixed", 900), (None, "mixed", 300)]
+    for session, kind, n in blocks:
+        for i in range(n):
+            pick = kind if kind != "mixed" else ("notice", "message.delta", "tool.output")[i % 3]
+            body = {"notice": notice(i), "message.delta": s.MessageDelta(message_id="m", text=f"d{i}"),
+                    "tool.output": s.ToolOutput(call_id="c", text=f"o{i}")}[pick]
+            store.append_event(body, session)
+    try:
+        for args in [(0, "s1", True, ()), (0, "s1", True, ("message.delta",)), (0, None, False, ("message.delta",)),
+                     (0, None, False, ("message.delta", "notice")), (1200, "s1", True, ("message.delta", "tool.output")),
+                     (2800, "s2", True, ("notice",)), (0, "s1", False, ("message.delta",))]:
+            whole = [(e.seq, e.type) for e in store.events_since(args[0], args[1], 1 << 30, args[2], args[3])]
+            assert [(e.seq, e.type) for e in store.iter_events(*args)] == whole, args
+            assert len(whole) > PAGE
+    finally:
+        store.close()
+
+
 def test_a_page_with_global_events_does_not_sort_the_rest_of_the_log():
     """A page that also keeps events of no session costs the same at 2,000 events and at 20,000. The OR form
     collected and sorted every later match on each call, so paging a long log took time that grew with its square."""

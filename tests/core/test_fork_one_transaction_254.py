@@ -229,3 +229,23 @@ def test_a_parent_that_changes_before_the_write_is_copied_as_it_is_then(monkeypa
     assert shape(store, new.id) == shape(store, old.id)
     assert [m.text() for m in store.messages(new.id)][-2:] == ["reply 4", "asked again"]
     store.close()
+
+
+def test_a_fork_that_fails_at_its_last_write_leaves_nothing():
+    """The summaries go in last. A fork that fails there still leaves no session, copy or search row."""
+    store = SessionStore()
+    sid = parent_thread(store)
+
+    def counts() -> tuple:
+        return tuple(store._q("SELECT (SELECT COUNT(*) FROM sessions), (SELECT COUNT(*) FROM messages),"
+                              " (SELECT COUNT(*) FROM messages_fts), (SELECT COUNT(*) FROM summaries)")[0])
+
+    before = counts()
+    store._db.execute("CREATE TEMP TRIGGER no_room BEFORE INSERT ON summaries BEGIN SELECT RAISE(ABORT, 'no room'); END")
+    with pytest.raises(sqlite3.DatabaseError, match="no room"):
+        store.fork(sid)
+    assert counts() == before
+    store._db.execute("DROP TRIGGER no_room")
+    child = store.fork(sid)  # the same fork without the trigger writes summaries, so the trigger fired on them
+    assert store._q("SELECT COUNT(*) FROM summaries WHERE session=?", (child.id,))[0][0] > 0
+    store.close()
