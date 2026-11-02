@@ -36,6 +36,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
+- Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
+  plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
   (`test_the_join_budget_is_shared_by_every_substitution`) timed each line once in CPU time, so one pause in a call,
   such as a full collection of a long run's heap, failed it. It now times again when over the bound, as the file's
@@ -208,8 +210,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   but the turn runs in a background task and files its `tool.error` finding only at the turn end, so a slow turn
   was cancelled before that and the finding was missing. The test now waits for the turn's task to end (30 s
   bound). Test-only.
-- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is not a list no longer loads. A string such
-  as `toolsets = "fs"` read as no list, and the seat got every toolset (exo-desktop #52, D-041 amendment).
+- A seat file whose `toolsets`, `[tools] env_deny` or `[skills] load` is a non-null value that is not a list no
+  longer loads. A string such as `toolsets = "fs"` read as no list, and the seat got every toolset
+  (exo-desktop #52, D-041 amendment).
 - Two folder plugins whose names differ only in punctuation, such as `a-b` and `a_b`, no longer share one module.
   The second replaced the first's package, so the first plugin's later relative imports ran the second's files.
   The second is now refused with an error that names both (exo-desktop #52, D-041 amendment).
