@@ -1462,7 +1462,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value a loop body sets
   after its gh command, which gh reads on the next pass (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`).
   A function whose gh runs where it is called, after the value is set
-  (`f() { gh ..; }; export GH_REPO=pub/repo; f`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
+  (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command of a
+  `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
+  over the words that open a compound but not `coproc`, `function` and the name. A shell fed the same text before and
+  after the value is set (`bash <<<'gh ..'; export GH_REPO=pub/repo; bash <<<'gh ..'`), as each such text is read
+  once per line (`_once`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
   GH_REPO rows of `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
   `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
 - *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL operand on

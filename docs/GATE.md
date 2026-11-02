@@ -363,11 +363,15 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   loop body sets after its gh command, which gh reads on the next pass
   (`for i in 1 2; do gh pr comment 5 -b x; export GH_REPO=pub/repo; done`). A function whose gh
   runs where it is called, after the value is set
-  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). A prefix value followed by four
-  words that an option takes as its value, each written like an assignment
-  (`GH_REPO=pub/repo sudo -E -p GH_REPO=b1/y` and three more such `-p` words): they push it past
-  the four. And `GH_HOST`, which names gh's host. Each of these asks as on a repo the line does not
-  name, as before.
+  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). An export or bare assignment
+  that is the first command of a `coproc` group, or of a function written with `function NAME`
+  (`coproc { export GH_REPO=pub/repo; gh pr comment 5 -b x; }`). A shell fed the same text before
+  and after the value is set, as the gate reads each such text once per line
+  (`bash <<<'gh pr comment 5 -b x'; export GH_REPO=pub/repo; bash <<<'gh pr comment 5 -b x'`).
+  A prefix value followed by four words that an option takes as its value, each written like an
+  assignment (`GH_REPO=pub/repo sudo -E -p GH_REPO=b1/y` and three more such `-p` words): they
+  push it past the four. And `GH_HOST`, which names gh's host. Each of these asks as on a repo the
+  line does not name, as before.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
@@ -435,8 +439,9 @@ Limits. A body that links to another repo still counts that repo, as it did befo
 unseen check found unseen with a row of the table as it was before #399 stays unseen, so
 `gh issue lock 5 -rb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read `GH_HOST`
-or `gh api --hostname`: `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`,
-which gh takes for `-R` when the line has none, so such a line counts as one on the current repo.
+or `gh api --hostname`: `owner/name` counts as a repo on github.com. It reads `GH_REPO` as `-R`
+when the line has none (#566), except in the shapes named above as not read. Such a line counts as
+one on the current repo.
 With `GH_COBRA` set, gh's root has no `--version` flag, so `--version` takes the next word as its
 value there. The gate reads it alone, as gh does without `GH_COBRA`. So in
 `GH_COBRA=1 gh --version x pr comment 5 -R pub/repo -b hi` the gate takes `x` for the command and
