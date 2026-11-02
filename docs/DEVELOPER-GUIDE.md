@@ -908,7 +908,9 @@ res.choice, res.probabilities, res.source, res.route, res.confidence
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
-  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`.
+  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`. The engine
+  closes `ctx.router` when it closes. A script closes the router it built with `await router.aclose()` on the loop
+  that made the calls: the transports keep their HTTP clients open between calls (`docs/PROVIDERS.md` "Connections").
 - Wrap the call. It raises `DecisionError` when every route fails. `error.retryable` says whether trying later can
   help. Keep a safe default, as `exo-gate` does: on failure or after a timeout it keeps the rule outcome.
 - **A decision model may only tighten a gate (D-015).** `tighten_only(current, proposed)` returns the stricter of two

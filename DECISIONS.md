@@ -192,6 +192,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-31 (#263, the HTTP client half of W2-7):** an HTTP transport keeps one `httpx.AsyncClient`
+  for each event loop that calls it, instead of making one for each call and closing it after. Calls on a loop
+  reuse its connections, and the client is built once per loop. A client is bound to the loop that made it, so
+  the engine's loop and the `aux_sync` thread each get their own, and a client whose loop has ended is dropped.
+  The engine's close closes every client the router made (`Router.aclose`), each on its own loop, also for the
+  transports a key reload replaced. The router keeps only those clients, not the replaced keys. A client or a
+  provider instance passed in stays its owner's to close. A command that builds its own router closes it before
+  its loop ends, since a client whose loop has ended cannot be closed: `exo decide` and the baseline decision judge
+  do so after each question. Tests: `tests/core/models/test_http_client_reuse.py`.
 - **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
