@@ -15,6 +15,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
+  redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
+  meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
+  (#1099).
+- Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
+  it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
+  `printf 'r\x6d -rf /srv/data' | bash` hid its delete. They are now a store write and a delete.
+
+  The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
+  written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
+  `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864) read
+  the output too.
+
+  A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
+  Interpreters and SQL clients still read the text as written only. Tests:
+  `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
@@ -34,12 +53,37 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   amendment). Blocks paint after they mount, so a slow terminal could lay the thread out in two steps after the one
   scroll to the end. The view now follows the bottom while the content grows, until you scroll up. This also fixes
   the hosted CI failure `assert 49 == 129` in `test_classic_opens_at_the_latest_message_at_the_bottom`.
+- A turn no longer decodes its whole session twice (#254, W2-4). It loaded every message to count the user turns
+  it passes to memory, then loaded them all again to keep the last 40 for the memory checkpoint. The count is now
+  one SQL `COUNT` and the checkpoint reads only its 40 rows, with the same results. On a 10,000-message session the
+  count went from 196 ms to 7.8 ms and the tail from 190 ms to 0.9 ms. With learning on, the chat capture after
+  the turn loaded the session a third time to keep its last 12 messages, and a review loaded it for its last 6.
+  They now read only those rows. `/handoff` counts user turns the same way (D-010 amendment).
+- A fork writes its copy in one transaction (#254, W2-4). It wrote each copied message, with its search row, in a
+  transaction of its own, then each summary in another statement. Forking a 5,000-message session took 2.9 s,
+  and a fork that failed partway left a new session holding part of the thread. The session, the copies, their
+  search rows and the summaries that still fit now go in one transaction with batched inserts. The same fork takes
+  0.25 s, a failed fork leaves nothing, and the copies are the same as before (D-010 amendment).
+- Event reads with no bound go page by page (#254, W2-4). The hub's replay, `exo trace` and `/handoff` read the
+  events table with a limit of 2^30, so one read decoded every matching event at once. A client that subscribed
+  from seq 0 on a home with 100,000 events waited 733 ms for its first event while the core held all of them
+  (88 MB at the peak). `SessionStore.iter_events` now reads 1,000 events at a time, up to the newest event at
+  the call, and a subscription takes its backlog from it as the client reads. The first event comes in 7 ms and
+  the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
+  `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
+  stream at once (D-010 amendment).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
   branch. It now stamps every event at two fixed anchors and checks 64 days later. The promotion rule is unchanged
   (the same pattern as #1086's decay test).
 - Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
+- Browser test startup no longer names D-Bus or the sandbox as the cause of every failed start on Linux. A healthy
+  start logs D-Bus errors and a sandbox warning, so the categories now match only failure messages, such as running
+  as root without `--no-sandbox` (#1037 review).
+- Browser test startup reports a Chrome that exits after it writes `DevToolsActivePort` with its exit code and
+  categories, also when a first DevTools call is waiting for an answer. Such an exit is a failed start, so it is tried
+  once more (#1037 review).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
@@ -57,6 +101,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
   tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
   open request.
+- The terminal's delegated approval cue no longer reads every task ever written while an unrelated session has an
+  open request (#997 follow-up, D-045 amendment). Such a request, for example from another window, turned on the
+  3 s `tasks.list` read, since only the list shows that the session is unrelated. `tasks.list` now takes `active`,
+  which keeps only queued and running tasks, and the cue asks for those.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
@@ -70,8 +118,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
   `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
   file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
-  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. The gate does not expand a
-  `printf` or `echo -e` escape, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. Since #1047 the gate also
+  reads what a `printf` or `echo -e` writes, with its escapes expanded, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store write.
   D-074's limits say so too, and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that
   paragraph and those limits name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a
@@ -142,6 +191,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
 - Short chat windows scroll the chat column when status text expands, keeping the transcript and composer reachable.
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
+- Building a model call reads each summary tree once per step, not once per helper. So do the merge check after
+  each summary, a merge job and the `/compact` report. A skipped merge no longer reads the whole tree again to find
+  its two children. A build of a 256-pair test thread with 74 skipped merges made 16 summary reads and now makes 2.
+  The view is unchanged (#262).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
@@ -261,6 +314,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed
+- Model calls reuse their HTTP connection (#263, the HTTP client half of W2-7). Each call made a new
+  `httpx.AsyncClient` and closed it after, so each call loaded the CA bundle again (about 10 ms) and opened a new
+  TCP and TLS connection. Each HTTP transport, the decision transport too, now keeps one client per event loop, and
+  a call reuses an idle connection to the same server. The engine closes these clients when it closes, also those
+  of transports a key reload replaced. `exo decide` and the baseline decision judge close theirs after each
+  question (D-010 amendment, `docs/PROVIDERS.md` "Connections").
 - The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
   Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
   `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay

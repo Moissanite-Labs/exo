@@ -353,14 +353,22 @@ def decision_judge(router=None, threshold: float = 0.5) -> Judge:
     the model cannot be asked; it never passes anything the rules failed."""
     import asyncio
 
-    from ..core.models.decision import DecisionError, ask_choice_result
+    from ..core.models.decision import ChoiceResult, DecisionError, ask_choice_result
+    built = router is None
     if router is None:
         from ..models_cmd import build_router
         router = build_router()
 
+    async def ask(text: str, cls: str) -> ChoiceResult:
+        try:
+            return await ask_choice_result(router, text, QUESTION[cls], ["yes", "no"])
+        finally:
+            if built:  # each line runs its own loop, so its HTTP client cannot serve the next one (#263)
+                await router.aclose()
+
     def judge(text: str, cls: str) -> str | None:
         try:
-            res = asyncio.run(ask_choice_result(router, text, QUESTION[cls], ["yes", "no"]))
+            res = asyncio.run(ask(text, cls))
         except (DecisionError, ValueError, OSError) as e:
             return f"not asked ({e})" if cls == "value" else None
         p = float(res.probabilities.get("yes", 0.0))

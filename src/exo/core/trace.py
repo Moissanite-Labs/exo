@@ -25,7 +25,7 @@ import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Iterator
 
 from exo.core.slots import NotConfigured
 from exo.protocol import schema as ev
@@ -528,16 +528,17 @@ class _Parse:
         return self.turns
 
 
-def parse(events: list[ev.Event], session: str) -> list[TurnTrace]:
+def parse(events: Iterable[ev.Event], session: str) -> list[TurnTrace]:
     p = _Parse(session)
     for e in events:
         p.feed(e)
     return p.done()
 
 
-def _events(store: Any, session: str, since: int = 0, deltas: bool = True) -> list[ev.Event]:
-    """Deltas are kept for ``build`` (old sessions derive time to first token from them) and skipped at turn end."""
-    return store.events_since(since, session, limit=1 << 30, skip=SKIP_TYPES if not deltas else SKIP_TYPES[2:])
+def _events(store: Any, session: str, since: int = 0, deltas: bool = True) -> Iterator[ev.Event]:
+    """Deltas are kept for ``build`` (old sessions derive time to first token from them) and skipped at turn end.
+    Read a page at a time (#254)."""
+    return store.iter_events(since, session, skip=SKIP_TYPES if not deltas else SKIP_TYPES[2:])
 
 
 def build(store: Any, session: str, last: int | None = None, th: Thresholds | None = None,

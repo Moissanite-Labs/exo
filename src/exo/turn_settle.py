@@ -112,9 +112,9 @@ def verbatim_overflows(ctx: Any, key: str) -> bool:
     """True when the view as it stands (finished summaries, unfinished spans verbatim, then the tail) is over budget."""
     from exo.core.context import estimate_tokens  # core imports this module
 
-    top = ctx._top(key)
+    top, parts = ctx._plain_view(key)  # one read of the tree (#262)
     frontier = top[-1].end if top else 0
-    used = sum(estimate_tokens(p) for p in ctx._view_parts(top)) + sum(estimate_tokens(m) for m in ctx._read(key, frontier))
+    used = sum(estimate_tokens(p) for p in parts) + sum(estimate_tokens(m) for m in ctx._read(key, frontier))
     return used > ctx.view_budget
 
 

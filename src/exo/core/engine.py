@@ -78,7 +78,7 @@ class SqliteLog:
         self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
-        return self.store.events_since(since, session, limit=1 << 30, with_global=True)
+        return self.store.iter_events(since, session, with_global=True)  # page by page (#254)
 
     def last_seq(self) -> int:
         return self.store.last_event_seq()
@@ -356,7 +356,8 @@ class CoreRuntime:
         self._closing = True  # no new command, turn, tool or job from here
         owned = stop_admission(self, self._tasks, self._started)  # no job wake either; owned turns are cancelled
         errors: list[BaseException] = []  # every step runs, also after a hard stop; the first error is raised last
-        for step in (self.stop_channels, self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        for step in (self.stop_channels, self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp,
+                     self.router.aclose):  # the router's HTTP clients last (#263)
             try:
                 await step()  # jobs end with exod, also when a sync tool outlives the drain below
             except BaseException as exc:  # noqa: BLE001 - re-raised below
@@ -667,7 +668,7 @@ class CoreRuntime:
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
-        return {"tasks": self.agents.list(b.session)}
+        return {"tasks": self.agents.list(b.session, active=b.active)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         self.approvals.respond(b)

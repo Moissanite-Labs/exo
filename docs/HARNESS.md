@@ -187,6 +187,7 @@ Engine shutdown runs in this order:
    has begun. A job that ends from here on is
    recorded for its thread and never starts a turn. Active turns are cancelled.
 2. It stops channels, peers, background jobs (their process groups), the scheduler and MCP.
+   Then it closes the HTTP clients the model router made (#263).
 3. It waits up to five seconds for turns, synchronous tool workers and learning reviews.
    Then it closes the learner.
 4. It closes plugin resources, removes the trace sink, releases the writer claim and
