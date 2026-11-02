@@ -6637,6 +6637,7 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Amendment 2026-11-01 (#1099, #1100): a key typed into a provider row holds back only the provider rows.** `draw()` returned before drawing anything while a provider's key field had focus and held text. So a retry's reply was never drawn: with no cached list, the model section kept no list and no "Try again" (#1100).
   - A custom provider saved meanwhile kept its form open after the save had cleared its entry, and the next Save threw before it sent anything. Add custom provider, Edit and Cancel did nothing either (#1099).
   - Now only the provider rows wait, since they hold the key field. The custom providers section is drawn as at any other time: on a save, Add, Edit or Cancel, and on any reload while its form is closed. The model section is drawn on every reload. Neither holds a provider row's field. A focused key field anywhere else still holds the whole panel, as before.
+  - The readout in the page head is drawn before the hold, so a new default or ready count shows there at once.
   - The custom form reads whether its entry exists once, when it is built, so a submit can no longer throw on a cleared entry.
   - `retryModels()` is unchanged. The key field still has focus after the reply is drawn, so it moves no focus.
   - Tests in `plugins/exo-command/tests/test_provider_retry_web.py`, each with a key typed into a provider row:
@@ -6644,7 +6645,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     - Add, Edit and Cancel
     - an open custom form across a Test's reload
     - a held retry with or without a cached list, answered with a failure or a list
-  - On main, six of the seven fail. The open form case passes on main and fails if the custom section is drawn on every reload.
+    - a reload that changes the default and the ready count, which the page-head readout shows
+  - One more test in that file pins the read at build time. A submit that reaches an edited entry's form after its save cleared the entry sends the save again and throws nothing. Only a script can do that, since Save is disabled while the save runs.
+  - On main, eight of the nine fail. The open form case passes on main and fails if the custom section is drawn on every reload.
   - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).

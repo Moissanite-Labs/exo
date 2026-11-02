@@ -253,6 +253,12 @@ export function mount(root) {
     }
     if (!data) { layout = null; body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
     const rows = data.providers || [];
+    // The readout in the page head holds no field, so it is drawn before any hold below: a new default or ready
+    // count shows there while a key is typed, as the model section shows it.
+    const ready = rows.filter((r) => r.verified || r.ready).length;
+    const def = rows.find((r) => r.default);
+    counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
+      ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
     const active = document.activeElement;
     const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
     if (keep && !(active.closest && active.closest(".xc-custom-form"))) {
@@ -262,10 +268,6 @@ export function mount(root) {
       if (layout && layout.before.contains(keep)) drawSlots(force);
       return;
     }
-    const ready = rows.filter((r) => r.verified || r.ready).length;
-    const def = rows.find((r) => r.default);
-    counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
-      ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
     if (!layout) {
       layout = { before: h("div", { class: "xc-prov-slot" }), custom: h("div", { class: "xc-prov-slot" }),
         after: h("div", { class: "xc-prov-slot" }) };

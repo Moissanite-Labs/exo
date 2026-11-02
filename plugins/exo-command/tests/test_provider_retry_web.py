@@ -247,6 +247,11 @@ COUNT_REPLIES = ("(() => { window.replies = 0; const json = Response.prototype.j
 # The key field holds focus and its text, and it is the same node, so its row was not redrawn.
 KEY_KEPT = "[window.key.isConnected, document.activeElement === window.key, window.key.value]"
 SAVED = {'name': 'demo', 'endpoint': 'https://example.test/v1', 'protocol': 'openai', 'auth': 'key', 'model': 'model-one'}
+READOUT = "[...document.querySelectorAll('.xc-phead-read .xc-rv')].map(e => e.textContent)"
+# TWO_ROWS after a new default: spare is the default, and demo is no longer ready.
+SPARE_DEFAULT = {'providers': [{'provider': 'demo', 'needs': 'none', 'ready': False},
+                               {'provider': 'spare', 'needs': 'key', 'key': 'found', 'ready': True, 'default': True}],
+                 'ready': True, 'store': 'environment'}
 
 
 async def opened(gate):
@@ -266,24 +271,25 @@ def arrived(seen, path, count):
 
 
 class Planned:
-    """Serves the provider routes. `models` holds (reply, gate) pairs for the next model-list reads, and a gate
-    holds its read until the test opens it (None does not hold). A custom provider saved with POST is listed by the
-    next read, and `posts` records each save."""
+    """Serves the provider routes. `rows` is the provider list the next read returns. `models` holds (reply, gate)
+    pairs for the next model-list reads, and a gate holds its read until the test opens it (None does not hold). A
+    custom provider saved with POST is listed by the next read, and `posts` records each save's fields but its key."""
 
     def __init__(self, monkeypatch, rows=TWO_ROWS, saved=()):
-        self.seen, self.models, self.posts, self.saved = [], [], [], list(saved)
+        self.rows, self.seen, self.models, self.posts, self.saved = rows, [], [], [], list(saved)
 
         async def handle(centre, method, path, body, router_factory=None):
             self.seen.append(path)
             if path == '/api/providers':
-                return 200, rows
+                return 200, self.rows
             if path == MODELS:
                 reply, gate = self.models.pop(0) if self.models else ('list', None)
                 await opened(gate)
                 return 200, MODEL_REPLIES[reply]
             if path == '/api/providers/custom':
                 if method == 'POST':
-                    self.posts.append(body)
+                    # A copy without the key: the server clears the body once the handler returns.
+                    self.posts.append({k: v for k, v in body.items() if k != 'key'})
                     self.saved[:] = [{k: body[k] for k in ('name', 'endpoint', 'protocol', 'auth', 'model')}]
                     return 200, {'provider': 'custom-' + body['name'], 'ok': True}
                 return 200, {'providers': list(self.saved)}
@@ -412,6 +418,59 @@ def test_a_retry_reply_is_drawn_while_a_key_is_typed(monkeypatch, cached, outcom
             if outcome == 'succeeds':
                 assert b.eval(f"{SELECT}.value") == 'demo:first'
             assert b.eval(KEY_KEPT) == [True, True, 'synthetic-not-a-key']
+            assert b.eval("window.rejections") == []
+    finally:
+        gate.set()
+        s.srv.close()
+
+
+@pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'), reason='Chrome/websockets missing')
+def test_the_page_head_readout_is_drawn_while_a_key_is_typed(monkeypatch):
+    """A reload while a key is typed into a provider row still draws the readout in the page head, so a new default
+    and ready count show there at once. Only the provider rows wait: the key's row is not redrawn, and the key field
+    keeps focus and its text. The readout used to wait with the rows."""
+    s = Planned(monkeypatch)
+    try:
+        with Browser() as b:
+            b.goto(s.srv.url('providers'))
+            b.wait(f"{SELECT}?.value === 'demo:first'")
+            assert b.eval(READOUT) == ['2 / 2', 'not set']
+            b.type(KEY_FIELD, 'synthetic-not-a-key')
+            b.eval("window.key = document.activeElement")
+            b.eval(COUNT_REPLIES)
+            s.rows = SPARE_DEFAULT
+            b.eval(f"{TEST}.click()")
+            b.wait("window.replies === 1")
+            assert b.eval(READOUT) == ['1 / 2', 'spare']
+            assert b.eval(KEY_KEPT) == [True, True, 'synthetic-not-a-key']
+    finally:
+        s.srv.close()
+
+
+@pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'), reason='Chrome/websockets missing')
+def test_a_late_submit_of_a_saved_entry_sends_and_throws_nothing(monkeypatch):
+    """The custom form reads whether its entry exists once, when it is built. A submit that reaches an edited entry's
+    form after its save cleared `editing`, while the save's reload waits, sends the save again as a replace and
+    throws nothing. Only a script can do this, since Save is disabled while the save runs. The submit used to throw
+    on `editing.existing` before it sent anything (#1099)."""
+    s = Planned(monkeypatch, saved=[SAVED])
+    gate = threading.Event()
+    try:
+        with Browser() as b:
+            b.goto(s.srv.url('providers'))
+            b.wait(f"{SELECT}?.value === 'demo:first' && !!{EDIT_DEMO}")
+            b.eval(REJECTIONS)
+            b.eval(f"{EDIT_DEMO}.click()")
+            s.models.append(('list', gate))
+            count = s.seen.count(MODELS) + 1
+            b.eval(f"window.form = {CUSTOM_FORM}; window.form.requestSubmit()")
+            arrived(s.seen, MODELS, count)   # the save is answered and has cleared its entry, and its reload waits
+            assert [p['replace'] for p in s.posts] == [True]
+            b.eval("window.form.requestSubmit()")
+            end = time.monotonic() + 10
+            while len(s.posts) < 2 and time.monotonic() < end:
+                time.sleep(0.02)
+            assert [p['replace'] for p in s.posts] == [True, True]
             assert b.eval("window.rejections") == []
     finally:
         gate.set()
