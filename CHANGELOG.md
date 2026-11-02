@@ -69,6 +69,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   thousands of prefix values and URL operands stays linear. When a `$".."` word's `opaque_exec` reading ties the
   line's own, the reserved hits of both now stand, so a `GH_REPO` copy cannot drop them.
   `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
+  The line read with it an ordinary variable stays a floor, so a policy that allows `opaque_exec` does not let
+  through a line that logged or asked before.
 - Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
   Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other
   one: a 100 KB line took 290 s of CPU inside the hook. Past eight other targets, the line on each of them now

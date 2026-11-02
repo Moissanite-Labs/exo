@@ -1457,13 +1457,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   hits of both readings stand, so each still keeps a standing grant from covering the call (D-075). That lists more
   hits on some lines than main does, never fewer. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
   change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
-  `editor` commands. So it asks, as `opaque_exec` named in the summary. Left open, each still asking as on a repo
-  the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command that starts a nested
-  shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value a loop body sets
-  after its gh command, which gh reads on the next pass (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`).
-  A function whose gh runs where it is called, after the value is set
-  (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command of a
-  `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
+  `editor` commands. So it asks, as `opaque_exec` named in the summary. That part leads the line, so a policy that
+  allows `opaque_exec` let a line through that main logged as a costly read or asked as a nested line
+  (`ssh host 'GH_CONFIG_DIR=./c sudo -E git status'`, review 5726571369). The call is now also read with
+  `GH_CONFIG_DIR` an ordinary variable, as before, as the last of its floors (`_gh_config_plain`, `_read_core`), as
+  the reading before #491 is, and decide keeps the strictest, so no line decides lower. Left open, each still
+  asking as on a repo the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command
+  that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value
+  a loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`). A function whose gh runs where it is called, after the
+  value is set (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command
+  of a `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
   over the words that open a compound but not `coproc`, `function` and the name. A shell fed the same text before and
   after the value is set (`bash <<<'gh ..'; export GH_REPO=pub/repo; bash <<<'gh ..'`), as each such text is read
   once per line (`_once`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two

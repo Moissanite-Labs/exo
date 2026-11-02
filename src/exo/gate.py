@@ -2427,6 +2427,11 @@ def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> s
         return "is expanded, $( ) included, before each traced command"
     if name in _EXEC_ENV:
         return "holds a command a program runs"
+    if name == "GH_CONFIG_DIR":
+        if _gh_config_plain.get():
+            return ""                            # the call's floor reads it as before #566 (_read_core)
+        if (memo := _call_memo.get()) is not None:
+            memo[_GH_CONFIG_SET] = True
     if name in _EXEC_ENV_OPAQUE and not _harmless_value(name, value, literal):
         return _EXEC_ENV_OPAQUE[name]
     if name == "LESS" and (value is None or "+" in value):
@@ -3529,6 +3534,12 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset, split: frozenset = froze
 # first `-X` word as written, as before #399.
 _gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
 _GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the call needs a floor
+# Set while classify reads a call's floor with GH_CONFIG_DIR an ordinary variable, as before #566 (review 5726571369).
+# GH_CONFIG_DIR joins the opaque config variables, so a part it is on reads as opaque_exec and leads the line: a policy
+# that allows opaque_exec would let through a line main logged as a costly read or asked as a nested one. _read_core
+# keeps the line read as before as a floor, so decide never goes below it.
+_gh_config_plain: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_config_plain", default=False)
+_GH_CONFIG_SET = ("gh", "GH_CONFIG_DIR")    # the mark in _call_memo that the line sets GH_CONFIG_DIR
 # Set while classify reads a gh command: the GH_REPO values it may run with (_gh_env_repos, #566).
 _gh_env_repo: contextvars.ContextVar[tuple[str | None, ...]] = contextvars.ContextVar("exo_gate_gh_env_repo",
                                                                                        default=())
@@ -9754,6 +9765,7 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
     memo, mark = _call_memo.get(), [False]
     if memo is not None:
         memo.pop(_SUDO_READ, None)
+        memo.pop(_GH_CONFIG_SET, None)
     marked = _config_mark.set(mark)
     try:
         c = _classify_call(action)
@@ -9776,6 +9788,17 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
             _shell_seen.reset(seen)
             _brace_left.reset(left)
             _sudo_shell_off.reset(off)
+    if memo is not None and memo.pop(_GH_CONFIG_SET, False) and not _gh_config_plain.get():
+        plain, left, seen = _gh_config_plain.set(True), _brace_left.set(None), _shell_seen.set(None)
+        try:
+            last = c
+            while last.floor is not None:
+                last = last.floor
+            last.floor = _brace_budget(_read_core)(action, cwd)     # GH_CONFIG_DIR as before #566, its own budgets
+        finally:
+            _shell_seen.reset(seen)
+            _brace_left.reset(left)
+            _gh_config_plain.reset(plain)
     if mark[0]:
         off, left, seen = _config_off.set(True), _brace_left.set(None), _shell_seen.set(None)
         try:

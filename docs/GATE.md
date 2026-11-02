@@ -1752,7 +1752,9 @@ gate does not read:
   `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
   `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
   and `~/.exo`), `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` (gh's hosts, tokens and settings, its pager
-  and editor commands among them, #566), `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  and editor commands among them, #566: the call is also read with it an ordinary variable, as
+  the last of its floors, so a policy that allows `opaque_exec` does not lower a line main
+  logged or asked), `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
   `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,

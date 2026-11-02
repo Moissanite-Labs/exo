@@ -211,3 +211,53 @@ def test_gh_config_dir_is_named_in_its_part():
     c = gate.classify({"tool": "bash", "args": {"command": "GH_CONFIG_DIR=/abs/cfg gh pr view 5 -R myorg/app"}})
     parts = [p for p in gate._each_part(c) if p.category == "opaque_exec"]
     assert any("GH_CONFIG_DIR" in p.summary for p in parts), [p.summary for p in gate._each_part(c)]
+
+
+# Review 5726571369: GH_CONFIG_DIR makes the part it is on opaque_exec, and that part leads the line. A policy that
+# allows opaque_exec let such a line through where main logged it as a costly read or asked it as a nested line. The
+# line read with GH_CONFIG_DIR an ordinary variable, as before #566, is now a floor (_read_core), as the reading before
+# #491 is for a sudo shell, so decide never goes below it. The same line with an ordinary variable is that reading.
+OPAQUE_ALLOW = {
+    "category": gate.normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}}),
+    "rule": gate.normalize_policies({"gates": {"rules": [{"match": {"command": ".", "category": "opaque_exec"},
+                                                          "decision": "allow"}]}}),
+    "log-then-allow": gate.normalize_policies({"gates": {"rules": [
+        {"match": {"command": "^ls", "category": "opaque_exec"}, "decision": "log"},
+        {"match": {"command": ".", "category": "opaque_exec"}, "decision": "allow"}]}}),
+}
+RANK = {"allow": 0, "log": 1, "ask": 2, "deny": 3}
+
+
+@pytest.mark.parametrize("line", [
+    "ssh host 'GH_CONFIG_DIR=/abs/cfg sudo -s'",
+    "ssh host 'GH_CONFIG_DIR=./c sudo -E git status'",
+    "ssh host 'GH_CONFIG_DIR=./c sudo -i'",
+    "ssh host 'sudo GH_CONFIG_DIR=./c ls'",
+    "ssh host 'sudo GH_CONFIG_DIR=./c scp -o ControlPath=/tmp/ctl f h:/tmp/'",
+    "bash -c \"ssh host 'GH_CONFIG_DIR=/abs/cfg sudo -E git status'\"",
+    "X='a b' ssh host 'GH_CONFIG_DIR=./c sudo -s'",
+    "! coproc { ssh host 'GH_CONFIG_DIR=./c sudo -E git status'; }",
+    "printf 'ssh host GH_CONFIG_DIR=./c sudo -s' | bash",
+])
+@pytest.mark.parametrize("policy", list(OPAQUE_ALLOW))
+def test_an_opaque_exec_allow_does_not_lower_a_gh_config_dir_line(line, policy):
+    _, d = run(line, OPAQUE_ALLOW[policy])
+    _, plain = run(line.replace("GH_CONFIG_DIR", "CFG_DIR"), OPAQUE_ALLOW[policy])
+    assert plain.outcome in ("log", "ask"), plain
+    assert RANK[d.outcome] >= RANK[plain.outcome], (d, plain)
+
+
+@pytest.mark.parametrize("line, policy, outcome", [
+    ("ssh host 'GH_CONFIG_DIR=/abs/cfg sudo -s'", "category", "log"),
+    ("ssh host 'GH_CONFIG_DIR=./c sudo -E git status'", "rule", "log"),
+    ("bash -c \"ssh host 'GH_CONFIG_DIR=/abs/cfg sudo -E git status'\"", "rule", "ask"),
+])
+def test_the_lines_of_review_5726571369_decide_as_before(line, policy, outcome):
+    _, d = run(line, OPAQUE_ALLOW[policy])
+    assert d.outcome == outcome, d
+
+
+def test_gh_config_dir_still_asks_with_the_floor_beside_it():
+    c, d = run("ssh host 'GH_CONFIG_DIR=./c sudo -E git status'", INTERNAL)
+    assert d.outcome == "ask" and "GH_CONFIG_DIR" in d.reason, d
+    assert c.floor is not None, c
