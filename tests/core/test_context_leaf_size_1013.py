@@ -112,6 +112,51 @@ def test_large_results_are_summarized_and_the_call_is_bounded_once_the_leaves_la
         assert any(m.text() == SUMMARIZING_MARKER for m in last_round) and results(last_round) <= 4
 
 
+class Long:
+    """A summary of 1,500 tokens: longer than the preview of two 20k rounds, far shorter than the rounds in full."""
+
+    async def summarize(self, content, previous=None, session=None, **kw):
+        return "L" * 6000
+
+
+@pytest.mark.parametrize("kind", ["private", "agent"])
+def test_the_shrink_test_and_the_reported_sizes_measure_the_leaf_in_full(kind):
+    """The shrink test measures a leaf as the floor does. Two rounds of 20k results preview at 1,060 tokens,
+    so a summary of 1,500 is kept only when the leaf counts in full, 10,080. The summarized event and the
+    /compact report give that same size, so a summary they report is smaller than its source."""
+    async def go():
+        store = SessionStore()
+        ctx = AgentContext(store, Long(), leaf_size=8, tail_messages=12, min_compact_tokens=1500)
+        events = []
+
+        async def on_event(event, session):
+            events.append(event)
+        ctx.on_event = on_event
+        thread = store.create_session(agent="razi", kind="private" if kind == "private" else "thread").id
+        tree = thread if kind == "private" else AgentContext.key("razi")
+        for i in range(8):
+            store.append_message(thread, Message.user(f"read file {i}"))
+            store.append_message(thread, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file",
+                                                                         arguments={"path": f"f{i}"})]))
+            store.append_message(thread, Message.tool([ToolResult.of_text(f"c{i}", "f" * SIZE)]))
+            store.append_message(thread, Message.assistant(f"ok {i}"))
+        folded = []
+        if kind == "agent":
+            folded = (await ctx.compact(thread, "SYS", timeout=30))["folded"]
+        else:
+            ctx.note(thread)
+            while pending := TreeContext.pending(ctx, tree):
+                await asyncio.wait(pending)
+        leaves = [n for n in store.summaries(tree) if n.level == 0]
+        store.close()
+        return leaves, [(e.before_tokens, e.after_tokens) for e in events if e.level == 0], \
+            [(f["before_tokens"], f["after_tokens"]) for f in folded if f["level"] == 0]
+    leaves, reported, folded = asyncio.run(go())
+    assert leaves and {n.status for n in leaves} == {"done"}
+    assert len(reported) == len(leaves) and all(before > 2 * SIZE // 4 and after == 1500 for before, after in reported)
+    assert folded == (reported if kind == "agent" else [])
+
+
 def test_a_plain_tree_keeps_the_preview_size():
     """The control: a plain session's view shows a skipped leaf as its preview, so a leaf there keeps the preview
     size. The same 13 leaves stay under the floor and are skipped, and the call carries their previews, results
