@@ -22,6 +22,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   denied the plain line. Each now decides as the line with `true;` before the pipe. Tests:
   `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment), `docs/DOCS-MAP.md`.
+- The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
+  (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
+  started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
+  repository before any walk.
 - Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
@@ -85,6 +89,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   branch. It now stamps every event at two fixed anchors and checks 64 days later. The promotion rule is unchanged
   (the same pattern as #1086's decay test).
 - Browser test startup reports a Chrome exit or timeout with sanitized diagnostic categories and cleans up failed launches (#907).
+- Browser test startup no longer names D-Bus or the sandbox as the cause of every failed start on Linux. A healthy
+  start logs D-Bus errors and a sandbox warning, so the categories now match only failure messages, such as running
+  as root without `--no-sandbox` (#1037 review).
+- Browser test startup reports a Chrome that exits after it writes `DevToolsActivePort` with its exit code and
+  categories, also when a first DevTools call is waiting for an answer. Such an exit is a failed start, so it is tried
+  once more (#1037 review).
 - Native conversation restoration retains live messages and tool state arriving during its snapshot read. Reconnect recovery waits for an active open rather than invalidating it, and a list-endpoint 404 cannot erase a saved thread pointer.
 - Native pet display changes are saved while bootstrap is still loading. Older saved conversations restore through their exact session endpoint even when absent from the first list page, retaining their title and running state.
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
@@ -102,6 +112,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   scope remain unchanged. Terminal tasks, retargets and newer snapshots remove stale cues. Past five waiting
   tasks, the cue names the rest by task id. The parent reads the task list only while another thread has an
   open request.
+- The terminal's delegated approval cue no longer reads every task ever written while an unrelated session has an
+  open request (#997 follow-up, D-045 amendment). Such a request, for example from another window, turned on the
+  3 s `tasks.list` read, since only the list shows that the session is unrelated. `tasks.list` now takes `active`,
+  which keeps only queued and running tasks, and the cue asks for those.
 - The Providers page offers a retry after a failed model-list refresh while keeping the last good picker usable. Authority refusals still offer no retry.
 - "Try again" on the Providers page no longer drops keyboard focus to the page body. After the retry, focus is on
   "Try again" when it is offered again, else on the model select. With neither left, it is on the refusal
@@ -290,6 +304,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- Model calls reuse their HTTP connection (#263, the HTTP client half of W2-7). Each call made a new
+  `httpx.AsyncClient` and closed it after, so each call loaded the CA bundle again (about 10 ms) and opened a new
+  TCP and TLS connection. Each HTTP transport, the decision transport too, now keeps one client per event loop, and
+  a call reuses an idle connection to the same server. The engine closes these clients when it closes, also those
+  of transports a key reload replaced. `exo decide` and the baseline decision judge close theirs after each
+  question (D-010 amendment, `docs/PROVIDERS.md` "Connections").
 - The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
   Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
   `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay

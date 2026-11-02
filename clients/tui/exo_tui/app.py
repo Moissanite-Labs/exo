@@ -1907,8 +1907,9 @@ class ExoApp(App):
         return pending
 
     async def refresh_delegated_approvals(self) -> None:
-        """Task records alone prove ancestry. Merge events newer than either snapshot request. ``tasks.list`` sends
-        every task ever written, so it is asked only while another session has an open request (#997)."""
+        """Task records alone prove ancestry. Merge events newer than either snapshot request. ``tasks.list`` is asked
+        only while another session has an open request, and only for active tasks: an unrelated window's request
+        must not pull every task ever written on each tick (#997)."""
         self._delegated_due = False
         self._delegated_asked += 1
         asked, revision = self._delegated_asked, self._delegated_revision
@@ -1920,7 +1921,7 @@ class ExoApp(App):
             listed = approvals.result.get("approvals", [])
             pending = self.delegated_pending(listed, revision).values()
             if any(a.get("session") not in (None, self.session) for a in pending):
-                tasks = await self.client.send(s.TasksList())
+                tasks = await self.client.send(s.TasksList(active=True))  # only queued and running tasks are edges
                 if not tasks.ok:
                     raise ValueError("metadata unavailable")
         except Exception:

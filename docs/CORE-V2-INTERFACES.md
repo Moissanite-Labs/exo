@@ -142,7 +142,8 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `models.set` ModelsSet: model, role = "main", session? (None = default)
 - `tools.list` ToolsList: session?
 - `skills.list` SkillsList: no fields
-- `tasks.list` TasksList: session?
+- `tasks.list` TasksList: session?, active = false (true returns only queued and running tasks, which the
+  terminal's delegated approval cue asks for, D-045)
 - `seat.list` SeatList: no fields
 - `taste.list` TasteList: no fields
 - `taste.edit` TasteEdit: action `add/update/remove`, rule_id?, text = ""
