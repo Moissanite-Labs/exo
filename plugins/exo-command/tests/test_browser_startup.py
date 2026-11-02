@@ -258,6 +258,8 @@ def test_healthy_start_lines_are_not_reported_as_a_cause():
 ])
 def test_sandbox_failure_is_named_beside_healthy_start_lines(lines, hints):
     assert _hints(HEALTHY_LINUX_START + lines + "\n") == hints
+
+
 PORT_THEN_WAIT = (
     "import pathlib, sys, time\n"
     "profile = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--user-data-dir='))\n"
