@@ -15,6 +15,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Tests: headless Chrome startup on hosted runners (#907, D-046 amendment).
+  - The first start in a test run waits up to 90 s for DevTools instead of 20 s. The two hosted startup timeouts on
+    record were each a job's first start, in `test_csp_web.py`, where a fresh runner reads the browser from a cold
+    disk. Later starts get 20 s once a start has reached DevTools, or once one 90 s wait has run out.
+  - A start that fails (an early exit, no DevTools port, or a first DevTools call left unanswered for 90 s, as twice
+    on hosted macOS) is tried once more with a fresh profile, before any test code runs. A start that works on the
+    second try leaves a warning in the test summary.
+  - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
+    never starts costs the first test two waits and each later test one, as with a single try.
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
