@@ -15,6 +15,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
+  prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
+  `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
+  body, or after `!` or `time` were only `opaque_exec`. So `{opaque_exec: allow, delete: deny}` allowed them where it
+  denied the plain line. Each now decides as the line with `true;` before the pipe. Tests:
+  `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
 - Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work

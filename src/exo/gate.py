@@ -4613,9 +4613,12 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         texts.append(_Word(piped))
     # A feed whose text the gate cannot read (#316): the closer's `<` (a file or a descriptor; a lone
     # `< /dev/null` feeds nothing), or a pipe in whose text is not known. The inner commands are marked
-    # instead of fed, so a reader of its stdin (ssh) still asks.
+    # instead of fed, so a reader of its stdin (ssh) still asks. #1104: a pipe main read no text from, as its
+    # writer comes after reserved words (`{ echo .. | { bash; }; }`), is fed and marked both, so each reader
+    # reads the text and still asks as on main, and a post's body stays unseen (_read_cmd).
+    late = src is not None and piped is not None and _pipe_lead(src.words) > 0
     unknown = (any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in closer.redirs)
-               or (src is not None and piped is None and not _own_stdin(closer)))
+               or (src is not None and (piped is None or late) and not _own_stdin(closer)))
     i, sets = start, False
     while i < len(cmds) and not sets:
         if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
@@ -4627,7 +4630,7 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         k.fed = k.fed or fed            # its own text does not name its stdin (#394)
         if fed and unknown:
             k.stdin_unknown = True
-        elif fed and not redirected:
+        if fed and not redirected and (late or not unknown):
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -6411,10 +6414,37 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     return c
 
 
+def _pipe_lead(words: list) -> int:
+    """#1104: where the command that writes to a pipe starts among ``words``, after the reserved words that open the
+    pipeline or a compound around it: `{`, `then`, `do`, `!` and the others of _OPENERS, a `time` with its `-p` and
+    `--` (_time_prefix), and a `coproc [NAME]` or `function NAME` before such an opener (`coproc W {`, `function f {`,
+    as _late_loop_word reads them). bash runs the command after them with its output in the pipe, as it does at the
+    start of a line. A quoted word ends the search, except as the NAME."""
+    i, n = 0, len(words)
+    while i < n and not words[i].quoted:
+        text = words[i].text
+        if text in _OPENERS:
+            i += 1
+        elif text == "time":
+            i += 1
+            for opt in ("-p", "--"):
+                if i < n and not words[i].quoted and words[i].text == opt:
+                    i += 1
+        elif text in ("coproc", "function"):
+            j = i + 1 + (i + 1 < n and (words[i + 1].quoted or words[i + 1].text not in _OPENERS))
+            if j >= n or words[j].quoted or words[j].text not in _OPENERS:
+                break
+            i = j
+        else:
+            break
+    return i
+
+
 def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
-    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`.
+    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`, also as the
+    first command of a group, a body or a condition, or after `!` or `time` (_pipe_lead, #1104).
     memo joins a compound's stdin, which many `cat`s inside it share, once per line."""
-    words = [w for w in k.words]
+    words = k.words[_pipe_lead(k.words):]
     if not words or any(w.dynamic for w in words):
         return None
     prog = words[0].text
@@ -7303,7 +7333,9 @@ def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot:
     so, and so does a loop's second pass (#479)."""
     piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
     # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-    ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+    # A stdin the gate cannot read leaves the body unseen, also where a pipe main read nothing from feeds it (#1104).
+    ctx["post_stdin"] = None if k.stdin_unknown else \
+        _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
     slot[0] = k.own
     own = _literal_assigns(k, ctx["literals"])
     late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
