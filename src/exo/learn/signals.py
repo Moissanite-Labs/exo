@@ -167,7 +167,7 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
     if rt is None:
         return []
     if messages is None:
-        messages = [provenance.flat(m) for m in lr.messages(session)[-12:]]
+        messages = [provenance.flat(m) for m in lr.last_messages(session, 12)]
     msgs = provenance.principal_view(messages)  # D-040: a peer message or job notice is not the principal
     out = []
     with rt.lock:
