@@ -4831,6 +4831,12 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   of order, and a test fails on any `with umask(...)` block in `src` or `plugins` that awaits or yields.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
+- *Amendment 2026-10-30 (#988):* A seat's top-level `plugins` or `[plugins] enabled` must be a list when supplied.
+  A non-list, including JSON null, stops the seat with `SeatError` instead of being treated as omitted and falling
+  back to `core_plugins` or all plugins. Omitted selections and a table without `enabled` retain that default; an
+  empty list selects none. This changes previously accepted invalid files so they cannot silently widen selection.
+  The three name-list settings in the exo-desktop #52 amendment below still treat JSON null as omitted; the plugin
+  selection rejects explicit null. This records the current difference without changing those three settings.
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
 - **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an
   interrupt does. A stream that closes cleanly without a finish event or stop reason is the retryable error
@@ -4971,7 +4977,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   core found more bugs no test caught. Each got a failing test first. A seat's `toolsets`, `[tools] env_deny` and
   `[skills] load` are lists, and no list means more: every toolset, nothing more hidden, every skill. A value of
   another type, such as `toolsets = "fs"`, read as no list, so the seat got more than its file asked for. The
-  loader now refuses it and the seat does not load. `docs/SEATS.md`. A folder plugin imports as
+  loader now refuses a non-null value of another type and the seat does not load. JSON null still reads as omitted.
+  `docs/SEATS.md`. A folder plugin imports as
   `exo_plugins.<name>` with each character that is not a word character made `_`, so `a-b` and `a_b` shared one
   module. Loading the second replaced the first's package, and a later relative import in the first plugin ran
   the second's file. The module now records the plugin that owns it, and another plugin that maps to the same
