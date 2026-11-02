@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -123,3 +124,108 @@ def test_a_failed_fork_leaves_nothing(monkeypatch):
     with pytest.raises(KeyError):
         store.fork(sid, "m_missing")
     assert store._q("SELECT COUNT(*) FROM sessions")[0][0] == before[0]
+
+
+def plain_parent(store: SessionStore, n: int) -> str:
+    """A session of no agent with ``n`` messages and a done summary for each 4 of them."""
+    sid = store.create_session(title="plain").id
+    for i in range(n):
+        store.append_message(sid, Message.user(f"ask {i}") if i % 2 == 0 else Message.assistant(f"reply {i}"))
+    for k in range(n // 4):
+        store.save_summary(SummaryNode(id=new_id("n"), session=sid, level=0, index=k, start=4 * k + 1, end=4 * k + 4,
+                                       text=f"sum {k}", status="done"))
+    return sid
+
+
+def test_a_second_store_opens_and_writes_during_a_fork(tmp_path, monkeypatch):
+    """A fork builds its copies before it takes the write lock. Held through the build, the lock made another seat
+    or a CLI command on the same home fail with "database is locked" after its 5 s wait."""
+    path = tmp_path / "s.sqlite"
+    store = SessionStore(path)
+    store._db.execute("PRAGMA synchronous=OFF")  # build speed only
+    sid = plain_parent(store, 3000)
+    outcome: list[str] = []
+    fts_text = sessions._fts_text
+
+    def open_another(msg):
+        if msg.meta.get("seq") == 1500:  # halfway through the copies
+            try:
+                other = SessionStore(path)
+                try:
+                    other.append_message(other.create_session(title="other seat").id, Message.user("hi"))
+                finally:
+                    other.close()
+                outcome.append("ok")
+            except sqlite3.OperationalError as exc:
+                outcome.append(str(exc))
+        return fts_text(msg)
+
+    monkeypatch.setattr(sessions, "_fts_text", open_another)
+    try:
+        child = store.fork(sid)
+        assert outcome == ["ok"]  # main: ["database is locked"], after 5 s
+        assert child.message_count == 3000
+        assert store._q("SELECT COUNT(*) FROM summaries WHERE session=?", (child.id,))[0][0] == 750
+        assert [i.title for i in store.list_sessions()].count("other seat") == 1
+    finally:
+        store.close()
+
+
+def test_the_summaries_a_fork_keeps_are_found_in_one_pass():
+    """Each summary counted the rows up to its end, so the write transaction grew with summaries times messages.
+    At four times the messages and summaries, it now does about four times the work. On main it did 13 times."""
+
+    def steps(n: int) -> int:
+        store = SessionStore()
+        sid = plain_parent(store, n)
+        count = [0]
+
+        def tick() -> int:
+            count[0] += 1
+            return 0
+
+        tx = store._tx
+
+        def counted(fn):
+            store._db.set_progress_handler(tick, 100)
+            try:
+                return tx(fn)
+            finally:
+                store._db.set_progress_handler(None, 100)
+
+        store._tx = counted  # type: ignore[method-assign]
+        try:
+            assert store.fork(sid).message_count == n
+        finally:
+            store.close()
+        return count[0]
+
+    small = steps(500)
+    assert steps(2000) <= 6 * small
+
+
+@pytest.mark.parametrize("agent", [None, "a"])
+def test_a_parent_that_changes_before_the_write_is_copied_as_it_is_then(monkeypatch, agent):
+    """The copies are built before the write transaction. A turn undone and asked again in between (a plain
+    session reuses the undone seqs) is found there, and the fork is built again under the lock."""
+    store = SessionStore()
+    sid = store.create_session(title="p", agent=agent).id
+    for i in range(6):
+        store.append_message(sid, Message.user(f"ask {i}"), turn_id=f"t{i}")
+        store.append_message(sid, Message.assistant(f"reply {i}"), turn_id=f"t{i}")
+    store.save_summary(SummaryNode(id=new_id("n"), session=sid, level=0, index=0, start=1, end=4, text="s",
+                                   status="done"))
+    tx = store._tx
+
+    def change_first(fn):
+        monkeypatch.setattr(store, "_tx", tx)
+        store.undo(sid, 1)
+        store.append_message(sid, Message.user("asked again"))
+        return tx(fn)
+
+    monkeypatch.setattr(store, "_tx", change_first)
+    new = store.fork(sid)
+    old = old_fork(store, sid)
+    assert shape(store, new.id) == shape(store, old.id)
+    assert [m.text() for m in store.messages(new.id)][-2:] == ["reply 4", "asked again"]
+    store.close()

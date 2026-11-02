@@ -68,6 +68,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
   `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
   stream at once (D-010 amendment).
+- A large fork no longer locks other processes out of the session store (#254, follows #1102). Since #1102 a
+  fork ran in one write transaction that also decoded every message and counted rows for each summary. On a
+  20,000-message session with 4,995 summaries it held the lock for 11 to 17 s, and another seat or CLI command on the
+  same home failed with `database is locked` after its 5 s wait. The fork now builds its copies before it takes
+  the lock and only checks and inserts under it. It takes 1.1 to 1.6 s, holds the lock for 0.4 s at most, and the other
+  process opens and writes at once (D-010 amendment 2026-11-02).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every

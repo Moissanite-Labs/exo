@@ -217,6 +217,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
   `tests/core/test_event_paging_254.py`.
+- **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
+  and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
+  every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
+  that held the lock for 11 to 17 s, so another process on the same home failed with `database is locked` after its
+  5 s wait. The fork now reads the parent and builds its copies and search rows on a read snapshot (`_read`).
+  The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
+  the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
+  kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. Tests:
+  `tests/core/test_fork_one_transaction_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
