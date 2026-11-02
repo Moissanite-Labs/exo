@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import sys
+import unicodedata
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -77,9 +78,14 @@ def _resolve_boundary(path, diagnostic, *, allow_missing=False):
 def _protected_roots():
     # Only the recorded root list is read; no store is constructed or opened.
     from exo.store import explicit_roots
-    home = _resolve_boundary(os.environ.get("EXO_HOME") or Path.home() / ".exo",
-        "cannot resolve EXO_HOME; repair its path or unset that environment variable",
-        allow_missing=True)
+    if os.environ.get("EXO_HOME"):
+        home, label = Path(os.environ["EXO_HOME"]), "EXO_HOME"
+        diagnostic = "cannot resolve EXO_HOME; repair its path or unset that environment variable"
+    else:
+        # Name the default home, not a variable the user did not set.
+        home, label = Path.home() / ".exo", "~/.exo"
+        diagnostic = "cannot resolve the default Exo home ~/.exo; repair that path"
+    home = _resolve_boundary(home, diagnostic, allow_missing=True)
     roots = [home]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append(_resolve_boundary(os.environ["EXO_PRINCIPAL_STORE"],
@@ -88,12 +94,21 @@ def _protected_roots():
     for principal, root in explicit_roots(home).items():
         roots.append(_resolve_boundary(root,
             f"cannot resolve principal root '{principal}'; repair or remove "
-            f"principals.{principal} in EXO_HOME/config.json"))
+            f"principals.{principal} in {label}/config.json"))
     return tuple(roots)
 
 
+def _folded_parts(path):
+    # Each part as a case-insensitive volume compares it (D-087 folds case for
+    # the gate): case folded, Unicode decomposed. Equal parts stay equal, so
+    # folding only adds matches and no refusal is lost.
+    return tuple(unicodedata.normalize("NFD", unicodedata.normalize("NFD", part).casefold())
+                 for part in path.parts)
+
+
 def _at_or_below(path, roots):
-    return any(path == root or root in path.parents for root in roots)
+    key = _folded_parts(path)
+    return any(key[:len(root)] == root for root in map(_folded_parts, roots))
 
 
 def _workspace(roots=None):
@@ -102,10 +117,11 @@ def _workspace(roots=None):
     roots = _protected_roots() if roots is None else roots
     cwd = _resolve_boundary(Path.cwd(), "cannot resolve the working directory; choose a public workspace")
     home = _resolve_boundary(Path.home(), "cannot resolve HOME; repair its path", allow_missing=True)
-    if cwd in (Path(cwd.anchor), home) or _at_or_below(cwd, roots) or any(p.startswith(".") for p in cwd.parts[1:]):
-        raise ValueError("run only in an explicit public workspace")
+    if (cwd == Path(cwd.anchor) or _folded_parts(cwd) == _folded_parts(home) or _at_or_below(cwd, roots)
+            or any(p.startswith(".") for p in cwd.parts[1:])):
+        raise BoundaryError("run only in an explicit public workspace")
     if is_sensitive_path(str(cwd)):
-        raise ValueError("workspace is a protected location")
+        raise BoundaryError("workspace is a protected location")
     return cwd
 
 
@@ -262,9 +278,14 @@ def experiment(fixture, adapter, limits):
 def _output_target(cwd, name, roots=None):
     if name is None:
         return None
-    target = cwd / "improvement-runs" / _slug(name)
+    try:
+        run = _slug(name)
+    except ValueError as exc:
+        raise BoundaryError("output must be a run ID: up to 48 lowercase letters, digits and hyphens, "
+                            "starting with a letter") from exc
+    target = cwd / "improvement-runs" / run
     if target.parent.is_symlink() or target.exists() or target.is_symlink():
-        raise ValueError("output must be a new run; links and overwrites are refused")
+        raise BoundaryError("output must be a new run; links and overwrites are refused")
     roots = _protected_roots() if roots is None else roots
     parent = _resolve_boundary(target.parent, "cannot resolve the output parent; choose a public workspace", allow_missing=True)
     resolved = _resolve_boundary(target, "cannot resolve the output target; choose a public workspace", allow_missing=True)

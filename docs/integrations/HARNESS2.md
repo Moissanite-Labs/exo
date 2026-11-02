@@ -42,25 +42,40 @@ and 2,048 total calls. Saturated or non-improving later rounds discard the candi
 
 Stdout is the default output and creates no files. `--output text-check` creates
 `./improvement-runs/text-check/artifact.json` with owner-only file/directory modes,
-using Exo's private atomic persistence primitive. Existing run names, symlinks,
-paths/traversal, hidden/protected working directories, Exo-home workspaces and
-all principal roots recorded by `exo init --root` (including their descendants)
-are refused. The resolved output parent and target are checked against the same
-root snapshot before any fixture read or output creation, including recorded
-aliases and environment-defined locations. A recorded store at
-`./improvement-runs` therefore cannot receive an export from its public parent.
+using Exo's private atomic persistence primitive.
+
+Existing run names, symlinks, paths/traversal, hidden/protected working
+directories, Exo-home workspaces and all principal roots recorded by
+`exo init --root` (including their descendants) are refused. Each of these
+refusals prints its own line, not the fixture line.
+
+The resolved output parent and target are checked against the same root snapshot
+before any fixture read or output creation, including recorded aliases and
+environment-defined locations. A recorded store at `./improvement-runs` therefore
+cannot receive an export from its public parent.
+
+Paths match the protected roots and HOME in any letter case, as the gate's store
+checks do (D-087). Accented names match whether composed or decomposed. On a
+case-sensitive volume a case variant of a protected folder is refused too.
+
 A recorded root that cannot be resolved (including a symlink cycle or missing
 target) fails closed with path-error exit 2. Its separate diagnostic identifies
-`principals.<id>` in `EXO_HOME/config.json` to repair or remove; it does not blame
-the fixture or disclose private path values. Cycles in `EXO_HOME` and
-`EXO_PRINCIPAL_STORE` also fail closed with an environment-setting diagnostic.
+`principals.<id>` in the Exo home's `config.json` (`EXO_HOME`, or `~/.exo` when
+unset) to repair or remove. It does not blame the fixture or disclose private
+path values.
+
+Cycles in `EXO_HOME` and `EXO_PRINCIPAL_STORE` also fail closed with an
+environment-setting diagnostic. A broken default `~/.exo` is named as that path.
+
 Fresh nonexistent environment roots remain allowed; they are not initialized.
 Missing components are tolerated without hiding later symlink cycles, including
 `missing/../loop` spellings. Resolution uses the standard library's
-`ALLOW_MISSING` when available and strictly rechecks legacy canonical fallbacks. A failed write
-releases its newly reserved run directory only if empty;
-preexisting runs and nonempty output are preserved. Output names come only from
+`ALLOW_MISSING` when available and strictly rechecks legacy canonical fallbacks.
+
+A failed write releases its newly reserved run directory only if empty.
+Preexisting runs and nonempty output are preserved. Output names come only from
 the explicit CLI flag, never fixture contents.
+
 This path policy is not an OS sandbox against another same-user process altering
 the workspace concurrently. Normal agent-tool authorization still applies: no new
 Gate allowance, principal identity, permission bypass or ledger authority is added.

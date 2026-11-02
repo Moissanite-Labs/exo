@@ -686,12 +686,27 @@ working directory cannot export into `improvement-runs` if that directory is a
 recorded store. Choose a different public working directory in that case.
 
 A missing or unresolvable recorded root stops the experiment with exit 2. The
-message names the principal and its `principals.<id>` entry in
-`EXO_HOME/config.json`; repair/remount that location or remove an obsolete entry.
-The diagnostic does not print the private path. A symlink cycle in `EXO_HOME` or
-`EXO_PRINCIPAL_STORE` also exits 2 and identifies the environment setting to repair
-or unset. A not-yet-created Exo home remains usable; no store initialization is
-required for this command.
+message names the principal and its `principals.<id>` entry in `config.json` in
+the Exo home. That is `EXO_HOME`, or `~/.exo` when `EXO_HOME` is unset. Repair or
+remount that location, or remove an obsolete entry. The diagnostic does not print
+the private path.
+
+A symlink cycle in `EXO_HOME` or `EXO_PRINCIPAL_STORE` also exits 2 and names the
+environment setting to repair or unset. A broken default `~/.exo` is named as that
+path. A not-yet-created Exo home remains usable. This command needs no store
+initialization.
+
+Other path refusals also exit 2 and say what to change. "run only in an explicit
+public workspace" means the working directory is the file system root or your home
+folder, or is at or inside a hidden folder, an Exo home or a principal store.
+Choose a different public folder. Folder names match in any letter case, as on a
+default macOS volume.
+
+"workspace is a protected location" means Exo treats that folder as a secret store.
+"output must be a run ID" means the `--output` value is not a plain run name. The
+line says which characters a name may hold. "output must be a new run" means that
+run name already exists or `improvement-runs` is a link. Choose a new name or a
+plain folder.
 
 Supply public synthetic data, not your memory or private examples. A successful synthetic check is evidence of the mechanism, not
 proof that Exo will improve on real tasks. Fixture format, other adapter and limits:
