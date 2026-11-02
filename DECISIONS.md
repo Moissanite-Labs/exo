@@ -217,7 +217,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  `tests/core/test_event_paging_254.py`, `tests/learn/test_learn_signals.py`.
 - **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
   and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
   every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
