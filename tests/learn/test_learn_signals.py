@@ -225,6 +225,25 @@ def test_chat_corrections_are_recorded_once(engine, learner):
     assert learner.runtime.ledger.get(body["target"])["body"]["text"] == "- a\n- b"
 
 
+def test_chat_capture_and_the_review_digest_read_only_the_tail(engine, learner, monkeypatch):
+    """#254: the capture after each turn kept the last 12 messages, and the review digest the last 6, but each
+    decoded the whole thread to get them."""
+    import exo.core.sessions as sessions
+    from exo.learn.review import _digest
+    from exo.learn.signals import record_chat_signals
+    older = [("user", f"question {i}") if i % 2 == 0 else ("assistant", f"answer {i}") for i in range(300)]
+    sid, _ = new_session(engine, *older, ("assistant", "- a\n- b"),
+                         ("user", "Important correction: use a table, NOT bullet lists."))
+    decoded: list[int] = []
+    decode = sessions.from_dict
+    monkeypatch.setattr(sessions, "from_dict", lambda *a, **k: decoded.append(1) or decode(*a, **k))
+    first = record_chat_signals(learner, sid)
+    assert len(first) == 1 and "NOT bullet" in first[0]["body"]["text"]
+    assert len(decoded) <= 12  # main decoded all 302
+    decoded.clear()
+    assert "NOT bullet" in _digest(learner, sid) and len(decoded) <= 6
+
+
 CAPTURED = ("ruling", "verdict", "question")
 
 
