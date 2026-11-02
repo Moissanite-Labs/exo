@@ -192,6 +192,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-31 (#263, the HTTP client half of W2-7):** an HTTP transport keeps one `httpx.AsyncClient`
+  for each event loop that calls it, instead of making one for each call and closing it after. Calls on a loop
+  reuse its connections, and the client is built once per loop. A client is bound to the loop that made it, so
+  the engine's loop and the `aux_sync` thread each get their own, and a client whose loop has ended is dropped.
+  The engine's close closes every client the router made (`Router.aclose`), each on its own loop, also for the
+  transports a key reload replaced. The router keeps only those clients, not the replaced keys. A client or a
+  provider instance passed in stays its owner's to close. A command that builds its own router closes it before
+  its loop ends, since a client whose loop has ended cannot be closed: `exo decide` and the baseline decision judge
+  do so after each question. Tests: `tests/core/models/test_http_client_reuse.py`.
 - **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
@@ -5973,6 +5982,20 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
   (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
   whole, which the next turn's call can cut.
+- *Amendment 2026-10-31 (#262, summary reads):* each step of a build reads a summary tree once. `note`, the merge
+  check, both views, the overflow check, a thread's tail and `/context` share one read of each tree with every
+  helper they call (`_one_read` in `src/exo/core/context.py`). Before, each helper read the whole tree again, and
+  a skipped merge read it once more to find its two children: a build of a 256-pair test thread with 74 skipped
+  merges made 16 reads, and now makes 2. These steps never await, so no other task can change the tree during one.
+  A step that schedules a node drops its read of that tree, and the view is read after the overflow wait, so a
+  summary that lands during the wait is in the view. One read for the whole build would have to outlive that wait,
+  so the build keeps two, and a third for the overflow check while a job runs. While a private thread's own
+  leaves run and its tail is over budget, each look for spans to cut (`cut_pending`, #244) reads that tree once
+  more. The view is unchanged. A merge job finds its two halves with one read too (`_halves`), and `/compact`
+  sizes all its new summaries with one (`_folded`). With no cached text, a merge above four levels of skipped
+  merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
+  verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
+  `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
@@ -6751,6 +6774,21 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
   - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
   - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
+- **Amendment 2026-11-01 (#1099, #1100): a key typed into a provider row holds back only the provider rows.** `draw()` returned before drawing anything while a provider's key field had focus and held text. So a retry's reply was never drawn: with no cached list, the model section kept no list and no "Try again" (#1100).
+  - A custom provider saved meanwhile kept its form open after the save had cleared its entry, and the next Save threw before it sent anything. Add custom provider, Edit and Cancel did nothing either (#1099).
+  - Now only the provider rows wait, since they hold the key field. The custom providers section is drawn as at any other time: on a save, Add, Edit or Cancel, and on any reload while its form is closed. The model section is drawn on every reload. Neither holds a provider row's field. A focused key field anywhere else still holds the whole panel, as before.
+  - The readout in the page head is drawn before the hold, so a new default or ready count shows there at once.
+  - The custom form reads whether its entry exists once, when it is built, so a submit can no longer throw on a cleared entry.
+  - `retryModels()` is unchanged. The key field still has focus after the reply is drawn, so it moves no focus.
+  - Tests in `plugins/exo-command/tests/test_provider_retry_web.py`, each with a key typed into a provider row:
+    - a custom save whose reload is held until the key is typed
+    - Add, Edit and Cancel
+    - an open custom form across a Test's reload
+    - a held retry with or without a cached list, answered with a failure or a list
+    - a reload that changes the default and the ready count, which the page-head readout shows
+  - One more test in that file pins the read at build time. A submit that reaches an edited entry's form after its save cleared the entry sends the save again and throws nothing. Only a script can do that, since Save is disabled while the save runs.
+  - On main, eight of the nine fail. The open form case passes on main and fails if the custom section is drawn on every reload.
   - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).

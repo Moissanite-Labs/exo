@@ -186,6 +186,7 @@ class Router:
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
         self._creds: dict[str, list[Credential]] = {}
+        self._retired: list[Any] = []  # own clients of transports a reload dropped (maybe mid-call), not their keys
         self._cred_lock = threading.Lock()
         self._cred_versions: dict[str, int] = {}
         self._cred_pending: dict[tuple[str, int], concurrent.futures.Future] = {}
@@ -324,13 +325,26 @@ class Router:
                                                                    *(n for n, _ in self._cred_pending)]))
             for n in names:
                 self._cred_versions[n] = self._cred_versions.get(n, 0) + 1
-                self._creds.pop(n, None)
+                self._retired += self._own_clients(self._creds.pop(n, []))
         for n in names:
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
             for k in [k for k in self.breakers if k.startswith(n + ":")]:
                 self.breakers.pop(k, None)
         return names
+
+    def _own_clients(self, creds: list[Credential]) -> list[Any]:
+        """The HTTP clients of the transports this router made. An instance it was given is not its own."""
+        made = [c.provider for c in creds if c.provider not in self.instances.values()]
+        return [pool for p in made if (pool := getattr(p, "own_clients", None)) is not None]
+
+    async def aclose(self) -> None:
+        """Close the HTTP clients of every transport this router made, also those a reload dropped (#263)."""
+        with self._cred_lock:
+            pools = [*self._retired, *self._own_clients([c for cs in self._creds.values() for c in cs])]
+            self._retired = []
+        for pool in pools:
+            await pool.aclose()
 
     def _key(self, name: str) -> str | None:
         return lookup_key(name, self.env, sources=self.key_sources)
