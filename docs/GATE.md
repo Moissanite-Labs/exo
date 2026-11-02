@@ -1421,16 +1421,18 @@ gate does not read:
   dash and zsh expand the escapes of a plain `echo`. A line one of them runs is still read as bash
   runs it, a known limit.
 - The command that writes to such a pipe is found past the reserved words before it (#1104). These
-  are the `{`, `then`, `else`, `do`, `if`, `while` or `until` that opens a group, body or condition,
-  a `!`, a `time` with its `-p` and `--`, and a `coproc [NAME]` or `function NAME` before an opener.
-  bash keeps them out of the command. So `{ echo 'rm -rf /srv/data' | bash; }`, the same pipe in a
-  `then` or `do` body, a function or coproc body, and after `!` or `time` are a delete, as the line
-  with `true;` before the pipe is. Before, each was only `opaque_exec`, which a policy that allows
-  `opaque_exec` let run. An escape (#1047) is read there too.
+  are the `{`, `then`, `else`, `elif`, `do`, `if`, `while` or `until` that opens a group, body or
+  condition, a `!`, a `time` with its `-p` and `--`, and a `coproc [NAME]` or `function NAME` before
+  an opener. bash keeps them out of the command. So `{ echo 'rm -rf /srv/data' | bash; }`, the same
+  pipe in a `then` or `do` body, a function or coproc body, and after `!` or `time` are a delete, as
+  the line with `true;` before the pipe is. Before, each was only `opaque_exec`, which a policy that
+  allows `opaque_exec` let run. An escape (#1047) is read there too.
 
-  A quoted `{` or `time` and a prefix command such as `command` or `nohup` are commands bash runs, so
-  the pipe after them is read as before. So is `coproc echo .. | bash`, whose output goes to the
-  coprocess. A post's body from the first command of a group stays unseen (#208).
+  A quoted `{` is a command name, not a reserved word, and writes nothing. A quoted `time` and a
+  prefix command such as `command` or `nohup` run the command after them, but the gate reads such a
+  pipe as before, as `opaque_exec`, a known limit. So it reads a group piped into a shell
+  (`{ echo ..; } | bash`). `coproc echo .. | bash` is read as before too, since its output goes to
+  the coprocess. A post's body from the first command of a group stays unseen (#208).
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
