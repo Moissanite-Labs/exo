@@ -196,6 +196,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  NaN is the one exception: SQLite reads a stored NaN as null, so a NaN note counts (amendment 2026-11-02).
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
   read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
@@ -237,9 +238,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
   limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
   none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
-  `last_messages`, and now gives none for a limit below 1 there too. Tests:
+  `last_messages`, and now gives none for a limit below 1 there too. `user_turns` counts a NaN note as a turn,
+  where the Python rule it replaced read NaN as true. `undo` reads it the same way, and no writer stores one,
+  so the docstring names it and the rule stays. Tests:
   `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
-  `tests/learn/test_learn_signals.py`.
+  `tests/core/test_session_hot_paths_254.py`, `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

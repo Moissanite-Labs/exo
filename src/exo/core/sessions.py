@@ -331,7 +331,8 @@ class SessionStore:
 
     def user_turns(self, sid: str) -> int:
         """Visible user messages that are not context notes, counted in SQL (#254). A note value Python reads as
-        false (missing, null, false, 0, "", an empty list or object) is no note."""
+        false (missing, null, false, 0, "", an empty list or object) is no note. So is NaN, which Python reads as
+        true: SQLite reads a stored NaN as null, so a NaN note counts as a turn, as it does for ``undo``."""
         note = "json_extract(data, '$.meta.note')"
         return self._q("SELECT COUNT(*) FROM messages WHERE session=? AND role='user' AND hidden=0 AND"
                        f" ({note} IS NULL OR {note} IN (0, '') OR json_type(data, '$.meta.note') IN"
