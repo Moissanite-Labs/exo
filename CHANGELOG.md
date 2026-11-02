@@ -15,6 +15,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
+  it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
+  `printf 'r\x6d -rf /srv/data' | bash` hid its delete. They are now a store write and a delete.
+
+  The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
+  written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
+  `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864) read
+  the output too.
+
+  A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
+  Interpreters and SQL clients still read the text as written only. Tests:
+  `tests/security/test_gate_printf_escapes_1047.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
@@ -70,8 +85,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `echo`), but the paragraph still called `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
   `sudo -s <<< 'rm -rf /srv/data'` a `read`. They are a store write and a delete. A stdin the gate cannot read (a
   file, a variable, `env -S 'sudo -s'`) still asks only as `opaque_exec`, not as a store write: `deny: [store_write]`
-  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. The gate does not expand a
-  `printf` or `echo -e` escape, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  asks for it rather than denying it, and a policy that allows `opaque_exec` lets it run. Since #1047 the gate also
+  reads what a `printf` or `echo -e` writes, with its escapes expanded, so
+  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store write.
   D-074's limits say so too, and `tests/docs/test_gate_store_limits_doc.py` asks the gate for each `sudo` line that
   paragraph and those limits name, and for what they say a policy does with it. Docs only: the gate is unchanged.
 - Two causes of red hosted CI that were not the change under test (#907). `test_search_worker`'s check that a

@@ -1366,6 +1366,72 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
+  writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did
+  not fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, the same line piped to `sudo -s`,
+  and the `echo -e` and `\x0a` forms were only `opaque_exec`.
+
+  The target read as a file named `config.json\n`, and `printf 'r\x6d -rf /srv/data' | bash` hid its delete the
+  same way. Under `deny: [store_write]` or `deny: [delete]` these lines asked, and a policy that allows
+  `opaque_exec` let them run. The default policy asked for each of them.
+
+  Now `_piped_text` gives such a pipe's text as a `_Printed`: the text as written, which every reader reads as
+  before, with `out`, what bash's builtin writes. printf expands its format's escapes and fills `%s`, `%b` and `%%`,
+  using the format again while arguments last. `echo -e` (and `-ne`, `-en`, `-Ee`) expands its escapes. A `\c` ends
+  the output in `echo -e` and in a `%b` argument, not in a format.
+
+  A shell that runs its stdin also reads `out` (`_stdin_texts`): `bash` or `sh` with no script, the shell `sudo -s`
+  starts and `ssh host` with no command. Interpreters and SQL clients still read only the text as written, a known
+  limit, and a gh body with an escape stays unseen (#208).
+
+  The shell reads `out` in a second reading of the call (`_printed_reading`), with budgets and memos of its own, as
+  #853's opened reading and #584's joined reading are read. It reads `out` there in place of the text as written.
+  The first reading reads the text as written only and marks the call (`_printed_met`). It is main's reading.
+
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864,
+  `_late_reading`) each have a printed reading of their own too, so a compound only they open is read in the output.
+
+  `decide` keeps the strictest of the two readings, so no decision is lower than main's. The call leads with the
+  reading `_combine` would pick of the two (`_beside` with `lead`): credentials, then a store write, then the more
+  severe. So the printf line above is a `store_write`, as the line without `\n` is.
+
+  The first build (a561eb76, not merged) read `out` in the line's own reading, beside the text as written. Review
+  found it spent the call's budgets there. Two leave an `opaque_exec` part when spent: the 16 readings of a sudo word
+  that may take a value (`_SUDO_BRANCHES`) and the 24 parts only bash's reading opens (`_WORD_PARTS`). A later
+  command on the line was cut short by them and decided lower than on main.
+
+  A printf of 16 lines of `sudo -u \x24U echo N` into bash, followed by `sudo -u $U echo rm -rf /srv/data`, went
+  from a delete to `opaque_exec`, and a `$( )` in a `${..}` word after 24 printed ones did the same. Main's
+  `scripts/gate_diff.py` found 258 and 830 lowered pairs on two aimed corpora.
+
+  The store path budget (`_EXO_PARTS`) turned a deny into an ask under one policy. And posts in the output took the
+  room decide gives other posts' violations, so a later post's violation went unlisted.
+
+  The second reading spends none of the first reading's budgets, and each reading lists its own violations, which
+  decide merges. Chosen over budgets of its own inside the line's reading: that kept the listing room and the
+  line's lead shared, and lost marks such as gh's floor (`_GH_MOVED`). The brace budget and #479's loop budget fail
+  closed into a hit, and a561eb76 decided their rows as main does. Rows pin them too.
+
+  `out` is set only where the gate is sure of it. Every word must be literal (no expansion, glob, brace, leading `~`
+  or `$".."`). printf may take `--` but no other option, and no conversion but `%s`, `%b` and `%%`. Output past four
+  times the text and 4 KB is not read. A `\u` past ASCII stays as written, and a NUL is dropped, as bash and dash
+  drop one from a script they read.
+
+  Chosen over reading only what the command writes: the reading as written backs it up wherever bash and the gate
+  differ, so the change only adds. `echo` without `-e` keeps main's reading, since bash writes its words as they
+  are. dash and zsh expand them, a known limit. The expansion matches bash 5.2's builtins on 7,500 random formats and
+  texts, but for a `\u` past ASCII.
+
+  Main's `scripts/gate_diff.py` against main 46150d21, whose gate is d995d667's, lowers 0 pairs in each of six runs.
+  The built-in corpus gives 1,265,792 pairs without variants and 8,108,232 with them.
+
+  Three aimed corpora give 29,040 pairs (the first build's 165 printf, `echo -e`, `echo`, `%b`, `%s`, octal, hex,
+  `\c` and nested shell lines), 74,448 (its review's 364 lines) and 56,144 (319 lines that spend each budget in
+  printed output before a strict command).
+
+  The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
+  and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
+  `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
@@ -5977,8 +6043,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
   as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
   `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
-  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
-  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  and a policy that allows `opaque_exec` lets them run. Since #1047 the gate also reads what a `printf` or
+  `echo -e` writes, with its escapes expanded, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store
+  write too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its

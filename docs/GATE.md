@@ -1375,6 +1375,51 @@ gate does not read:
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
   see "Known limits"). The result is the most severe part, and it keeps the `indirection`
   signal, so `decide` asks even when the inner part alone would only log.
+- A pipe from `printf` or `echo -e` into a shell is read as written, as before, and also as the
+  command writes it (#1047). Bash's printf expands the escapes of its format (`\n`, `\x0a`, `\012`)
+  and fills `%s`, `%b` and `%%` from its arguments, using the format again while they last.
+  `echo -e` (also `-ne` or `-en`) expands its escapes. A `\c` ends the output of `echo -e` and of a
+  `%b` argument.
+
+  So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` are a
+  store write, as the line without `\n` is, and `printf 'r\x6d -rf /srv/data' | bash` is a delete.
+  Before, both were only `opaque_exec`. `deny: [store_write]` and `deny: [delete]` asked for them,
+  and a policy that allows `opaque_exec` let them run.
+
+  The gate reads what the command writes in a second reading of the call, with budgets and memos
+  of its own (`_printed_reading`), as it reads a compound behind `time` (#853). The reading as
+  before reads the text as written only, as it did before #1047, and `decide` keeps the strictest
+  of the two. The call leads with the reading a line of both would lead with: credentials, then a
+  store write, then the more severe.
+
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then`
+  or `{` (#864) each read what the command writes in a printed reading of their own too. So
+  `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
+  is read as the same line with `!`, and `deny: [store_write]` denies it.
+
+  So the output spends no budget of the reading as before. A later command on the line is read in
+  full there, also past 16 printed readings of a sudo word that may take a value or 24 printed
+  parts that only bash's reading opens. The posts in the output take no room from the violations
+  the reading as before lists.
+
+  And `printf '%b' 'echo hi\c; rm -rf /srv/data' | bash` is still a delete, though bash writes only
+  `echo hi`.
+
+  Only a shell that runs its stdin reads what the command writes: `bash` or `sh` with no script,
+  the shell `sudo -s` starts and `ssh host` with no command. An interpreter and a SQL client read
+  the text as written only, a known limit: `printf 'import os\nos.remove("x")\n' | python3` is
+  still `opaque_exec`. A gh body with an escape stays unseen (#208).
+
+  The gate reads what the command writes only where it is sure of it. Every word must be literal:
+  no expansion, glob, brace, leading `~` or `$".."`. printf may take `--` but no other option, and
+  no conversion but `%s`, `%b` and `%%`. Output past four times the text and 4 KB is not read.
+
+  A `\u` past ASCII stays as written. Bash writes the character there, or an escape of its own
+  spelling (`\u00E9` for `\u00e9`), as its locale allows. A NUL is dropped, as the shell drops it.
+
+  `echo` without `-e` writes its words as they are in bash, so its text is read as written only.
+  dash and zsh expand the escapes of a plain `echo`. A line one of them runs is still read as bash
+  runs it, a known limit.
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
@@ -3198,9 +3243,9 @@ A stdin the gate cannot read (a file, a variable, a pipe from another command, t
 `sudo -s < /tmp/script.sh`, `cat /tmp/script.sh | sudo -s`, `sudo -s <<< "$CMD"` and
 `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`: `deny: [store_write]`
 asks for them rather than denying them, and a policy that allows `opaque_exec` lets them run.
-The gate takes the text of a `printf` or `echo -e` as written and does not expand an escape such
-as `\n`. So `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too, not a store
-write.
+Since #1047 the gate also reads what a `printf` or `echo -e` writes there, with its escapes
+expanded. So `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store write too, and
+`deny: [store_write]` denies it.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,

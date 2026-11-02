@@ -1827,6 +1827,11 @@ class _LoopBudget(Exception):
 # those `time`, `-p` and `--` words and opens the compound after them, as without them. Main's reading stays beside.
 _timed: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_timed", default=None)
 _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_opening", default=False)
+# #1047: set while classify reads a call (_printed_reading): [met], which _stdin_texts sets when a shell reads a text
+# that printf or `echo -e` writes (a _Printed). classify then reads the call again with _printing on, where each such
+# shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
+_printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
+_printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -4465,10 +4470,19 @@ def _literal_pipe(w: _Cmd | None) -> str | None:
     return None
 
 
-def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
+def _stdin_texts(k: _Cmd, piped: str | None, shell: bool = False) -> list[str]:
+    """The texts k reads on its stdin: its heredoc bodies, here-strings and the text piped in. In the call's printed
+    reading (_printing, #1047) a shell (``shell``) reads what printf or `echo -e` writes there (a _Printed's ``out``)
+    in place of the text as written, which the reading as before reads. That reading notes that it met one
+    (_printed_met)."""
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
         out.append(piped)
+    if shell and any(isinstance(t, _Printed) for t in out):
+        if _printing.get():
+            out = [t.out if isinstance(t, _Printed) else t for t in out]
+        elif (met := _printed_met.get()) is not None:
+            met[0] = True
     return list(dict.fromkeys(out))
 
 
@@ -4633,11 +4647,12 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
     spends the call's budgets (_brace_budget) and a second read could find them spent."""
     memo = ctx.setdefault("stdin", {})
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, getattr(piped, "out", ""), ambiguous)
     if whole in memo:
         return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
-    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
+    shell = key[0] is classify_shell
+    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped, shell):
         if (*key, text) not in memo:
             memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
         got += memo[(*key, text)]
@@ -6410,8 +6425,122 @@ def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
             memo[key] = "\n".join([h.body for h in k.heredocs] + [w.text for w in k.herestrings])
         return memo[key]
     if prog in ("echo", "printf"):
-        return " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        text = " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
+        return _printed(text, prog, words[1:])
     return None
+
+
+class _Printed(str):
+    """A pipe's text as written, which every reader reads as before. ``out`` is what `printf` or `echo -e` writes
+    there once bash expands its escapes and fills its format (#1047). A shell reads it beside the text as written,
+    in a reading of the call of its own (_printed_reading), with budgets and memos of its own: the reading as before
+    stays main's, and decide keeps the strictest."""
+    out = ""
+
+
+def _printed(text: str, prog: str, words: list) -> str:
+    """``text`` with what `printf` or `echo -e` writes as its ``out``, when the gate is sure of it and it differs
+    (#1047). Every word must be one bash leaves as it is: no expansion, glob, brace, leading `~` or `$".."`. Bash
+    drops a NUL in the commands it reads, so ``out`` has none. Else ``text`` alone, read as before."""
+    if any(_expands(w) or w.locale for w in words):
+        return text
+    args = [w.text for w in words]
+    out = _printf_out(args, 4 * len(text) + 4096) if prog == "printf" else _echo_out(args)
+    out = (out or "").replace("\0", "")
+    if not out or out == text:
+        return text
+    p = _Printed(text)
+    p.out = out
+    return p
+
+
+# The one-letter escapes of bash's printf and `echo -e` (#1047).
+_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+            "\\": "\\"}
+
+
+def _escape(s: str, i: int, where: str) -> tuple[str | None, int]:
+    """The escape at s[i], a backslash, as bash reads it in a printf format (``where`` "f"), in a `%b` argument
+    ("b") or after `echo -e` ("e"), and where the text goes on (#1047). None ends the output (`\\c` in "b" and "e").
+    An escape bash keeps as written gives the backslash alone, and the next character is read as usual. So does a
+    `\\u` past ASCII, which bash writes as its locale allows (the character, or `\\u00E9` for `\\u00e9`): to a shell
+    it is the letters of a word either way. A byte from `\\x` or octal past ASCII is the character of that number."""
+    e = s[i + 1:i + 2]
+    if e and e in _ESCAPES:
+        return _ESCAPES[e], i + 2
+    if e == "c" and where != "f":
+        return None, i + 2
+    if e and e in "'\"?" and where == "f":
+        return e, i + 2
+    pat = {"x": "[0-9A-Fa-f]{1,2}", "u": "[0-9A-Fa-f]{1,4}", "U": "[0-9A-Fa-f]{1,8}"}.get(e)
+    if e and e in "01234567" and (where != "e" or e == "0"):
+        # a format takes up to three octal digits; `%b` and `echo -e` take \0 and up to three more, `%b` also \NNN
+        pat = "[0-7]{0,%d}" % (3 if e == "0" and where != "f" else 2)
+    m = re.compile(pat).match(s, i + 2) if pat else None    # from i + 2 without a copy of the rest of the text
+    if m and e in "01234567":
+        return chr(int(e + m.group(), 8) & 0xFF), m.end()
+    if m and (e == "x" or int(m.group(), 16) < 0x80):
+        return chr(int(m.group(), 16)), m.end()
+    return "\\", i + 1
+
+
+def _unescape(s: str, where: str) -> tuple[str, bool]:
+    """``s`` with its escapes expanded as _escape reads them, and whether a `\\c` ended the output in it (#1047)."""
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        j = s.find("\\", i)
+        if j < 0:
+            out.append(s[i:])
+            break
+        out.append(s[i:j])
+        t, i = _escape(s, j, where)
+        if t is None:
+            return "".join(out), True
+        out.append(t)
+    return "".join(out), False
+
+
+def _printf_out(args: list[str], room: int) -> str | None:
+    """What bash's printf writes for these literal words (#1047): its format's escapes expanded, `%%`, and `%s` and
+    `%b` filled from the arguments, the format used again while they last. None for an option, another conversion,
+    a flag or a width, and for output longer than ``room``: the gate is not sure of it then, or would read too much."""
+    if args[:1] == ["--"]:
+        args = args[1:]
+    if not args or args[0].startswith("-"):
+        return None
+    fmt = re.split(r"(%.?)", args[0], flags=re.S)
+    if any(p not in ("%%", "%s", "%b") for p in fmt[1::2]):
+        return None
+    fmt = [p if n % 2 else _unescape(p, "f")[0] for n, p in enumerate(fmt)]
+    rest, k, size, stop = args[1:], 0, 0, False
+    out: list[str] = []
+    while not stop:
+        took = False
+        for n, p in enumerate(fmt):
+            if n % 2 == 0 or p == "%%":
+                text = "%" if n % 2 else p
+            else:                           # an argument, or nothing once they run out
+                text, took, k = (rest[k] if k < len(rest) else ""), took or k < len(rest), k + 1
+                if p == "%b":
+                    text, stop = _unescape(text, "b")
+            out.append(text)
+            size += len(text)
+            if stop:
+                break
+        stop = stop or not took or k >= len(rest) or size > room
+    return "".join(out) if size <= room else None
+
+
+def _echo_out(args: list[str]) -> str | None:
+    """What bash's `echo -e` writes for these literal words (#1047), None without `-e`: echo then writes its words as
+    they are. Its options are the leading words of `n`, `e` and `E` alone (`-ne`, `-eE`), the last `e` or `E`
+    deciding, and a `\\c` ends the output."""
+    n, esc = 0, False
+    while n < len(args) and re.fullmatch(r"-[neE]+", args[n]):
+        esc = {"e": True, "E": False}.get(args[n].replace("n", "")[-1:], esc)
+        n += 1
+    return _unescape(" ".join(args[n:]), "e")[0] if esc else None
 
 
 # Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).
@@ -9337,12 +9466,14 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     compound command in command position behind a `coproc` or `function` that main's reading leaves unopened
     (`! coproc for ..`, `{ coproc N { ..; }; }`) is also read with it opened (#864, _late_reading); #853's opened
     reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
-    (D-074) of a call is not opened in either way, as each opened reading reads its own. ``cwd`` is the folder the
-    tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
+    printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
+    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
+    from there too (_in_tool_folder sets it)."""
     timed, met = [False], [False]
     t_timed, t_met = _timed.set(timed), _late_met.set(met)
     try:
-        c = _one_reading(action, cwd)
+        c = _printed_reading(action, cwd)
     finally:
         _late_met.reset(t_met)
         _timed.reset(t_timed)
@@ -9356,6 +9487,37 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
+def _printed_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1047: when a shell in it reads a text that printf or `echo -e` writes
+    (_stdin_texts notes it), a second reading of the call beside it, in which each such shell also reads what bash's
+    builtin writes there (a _Printed's ``out``): its escapes expanded and its format filled. The second reading has
+    budgets and memos of its own, as _opened_reading's has, and the output spends them. The reading as before reads
+    no such output, so it is main's reading, with its budgets, memos, parts, lead and listed violations, and its
+    ``ordinary`` reading (D-074) stays beside the second reading's: decide keeps the strictest, so a line never
+    decides lower than before. The ``ordinary`` reading of a call reads no output of its own, as the second reading
+    reads its own, and a reading inside the second reading reads the output with no third reading."""
+    met = [False]
+    token = _printed_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _printed_met.reset(token)
+    if not met[0] or _printing.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _printing.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _printing.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
+
+
 def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
     """#853: the call as read before (c), with a second reading of it beside it in which each compound command
     behind bash's pipeline prefixes (`time`, `time -p`, `time --`, `time -p --`, `!` and their combinations, _parse_line)
@@ -9365,11 +9527,12 @@ def _opened_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     as before reads its own without opening it, _classify_read): decide keeps the strictest, and no_grant (and
     through it the hook's bypass floor) counts each reading, so a line never decides lower than before. #864's
     opening of a compound behind a `coproc` is on in this reading too (_parse_line, _loop_word), so a compound behind
-    `! time coproc` or `then time coproc` opens here."""
+    `! time coproc` or `then time coproc` opens here. The opened reading has its printed reading too (#1047,
+    _printed_reading)."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _opening.set(True), _timed.set(None)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_printed_reading)(action, cwd)
     finally:
         _timed.reset(met)
         _opening.reset(token)
@@ -9389,11 +9552,13 @@ def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classifica
     into a store folder (_loop_reading). The reading has budgets and memos of its own. The reading as before stays as
     it is, with its ``ordinary`` reading (D-074) beside the second reading's, each read once: decide keeps the
     strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
-    lower than before. It runs after #853's opened reading (_opened_reading), each beside main's."""
+    lower than before. It runs after #853's opened reading (_opened_reading), each beside main's. The late reading
+    has its printed reading too (#1047, _printed_reading), as the opened reading has, so a compound only this reading
+    opens is also opened in what printf or `echo -e` writes to a shell."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _late_open.set(True), _late_met.set(None)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_printed_reading)(action, cwd)
     finally:
         _late_met.reset(met)
         _late_open.reset(token)
@@ -9434,10 +9599,11 @@ def _one_reading(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
-def _beside(c: Classification, j: Classification) -> Classification:
+def _beside(c: Classification, j: Classification, lead: bool = False) -> Classification:
     """Readings c and j of one call: the more severe leads (on a tie, c), and the other ends its ``also`` readings,
-    so decide keeps the stricter (#584)."""
-    first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+    so decide keeps the stricter (#584). With ``lead``, the one _combine would keep of the two leads (_lead: a
+    credentials reading, then a store write, then the more severe), as a part of one line would (#1047)."""
+    first, last = (j, c) if (_lead([c, j]) is j if lead else _severity(j) > _severity(c)) else (c, j)
     x = first
     while x.also is not None:
         x = x.also
