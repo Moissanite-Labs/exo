@@ -12,6 +12,11 @@ clones, graft-altered repositories, inherited Git environment redirection (`GIT_
 `GIT_CONFIG*`, object/namespace overrides and related selectors), and repositories with multiple
 linked worktrees are refused before object traversal. A linked worktree can retain a detached
 HEAD absent from named refs. These refusals produce exit 2 with incomplete coverage.
+
+The partial check reads the config with its included files. It refuses `extensions.partialClone`
+and any remote with `remote.<name>.promisor` or `remote.<name>.partialCloneFilter` set. Git fetches
+missing objects from a remote that has either key, even when only the filter is set.
+
 Traversal pins the initial named-ref IDs and HEAD; named-ref or HEAD motion marks the local
 report incomplete. Verify the mirror's named remote explicitly:
 

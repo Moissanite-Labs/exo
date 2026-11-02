@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
+  (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
+  started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
+  repository before any walk.
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
