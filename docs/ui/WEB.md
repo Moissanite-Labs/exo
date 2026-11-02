@@ -391,6 +391,12 @@ or "Add custom provider", is on that control again once the reply is drawn (#101
 is not redrawn, so focus in it stays put. Focus moved out of the Providers panel while the retry ran stays where
 it is.
 
+While a key typed into a provider's field is waiting there (the field has focus and holds text), the provider
+rows are not redrawn, so the key and its field stay as they are. The rest of the page is still drawn. The readout at
+the top shows a new default or ready count. Below the rows, a retry's reply shows the list or a new "Try again", and
+a saved custom provider's form closes and shows the entry (#1099, #1100). Add custom provider, Edit and Cancel work
+as at any other time.
+
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.
 

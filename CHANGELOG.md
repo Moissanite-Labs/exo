@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
+  redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
+  meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
+  (#1099).
 - Invalid explicit seat plugin selections now stop seat loading instead of falling back to the default or all
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
