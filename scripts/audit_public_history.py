@@ -123,7 +123,7 @@ def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | Non
     if report["environment_redirected"]:
         return report
     # Refuse before object traversal: older Git versions may ignore NO_LAZY_FETCH.
-    # Git makes a remote a promisor when promisor or partialclonefilter is set for it.
+    # Git makes a remote a promisor when its promisor is true or its partialclonefilter is set.
     shallow = git(repo, "rev-parse", "--is-shallow-repository").strip() == b"true"
     config = git(repo, "config", "--includes", "--list", "--null").lower().split(b"\0")
     partial = any(item.split(b"\n", 1)[0] == b"extensions.partialclone" or
