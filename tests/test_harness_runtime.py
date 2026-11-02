@@ -1,6 +1,7 @@
 """Disabled modules have no workers, stay unavailable, and leave foreground work usable."""
 
 import asyncio
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from exo.core.tools.builtin import shell
 from exo.core.tools.registry import PRE_TOOL_CALL, Registry, ToolContext, ToolError
 from exo.core.types import ToolCall, ToolResult
 from exo.harness_runtime import DisabledDelegator, DisabledJobs
+from exo.server.app import Dispatcher
 
 
 def shell_engine():
@@ -158,7 +160,7 @@ def test_disabled_services_need_no_store_or_workers_and_support_lifecycle():
         assert jobs.target.closed
         delegation.install()
         delegation.fail_stale()
-        assert delegation.list("missing") == []
+        assert delegation.list("missing") == [] and delegation.list("missing", active=True) == []
         assert not delegation.interrupt("missing")
         assert delegation.depth("missing") == 0
         with pytest.raises(ToolError, match="disabled"):
@@ -191,6 +193,9 @@ def test_runtime_accepts_disabled_factories_without_initializing_managers(tmp_pa
             await engine.loop.send(session.id, "hello")
             assert engine.store.messages(session.id)[-1].text() == "offline"
             assert not engine.jobs.rows() and not engine.agents.list()
+            for body in ({}, {"active": True}, {"session": session.id, "active": True}):  # the terminal asks active
+                _, resp = await Dispatcher(engine).dispatch(json.dumps({"id": "1", "type": "tasks.list", "body": body}))
+                assert resp.ok and resp.result == {"tasks": []}, resp.error
             assert engine.registry.get("delegate") is None
             assert "background" not in engine.registry.get("bash").spec.parameters["properties"]
             assert not (engine.home / "run" / "jobs").exists()

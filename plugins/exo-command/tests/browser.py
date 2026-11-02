@@ -38,9 +38,17 @@ FIRST_REPLY_TIMEOUT = 90.0
 # with a fresh profile. No test code has run at that point. A second failure fails the test and names both.
 START_ATTEMPTS = 2
 STDERR_LIMIT = 16384
+# How long a failed start waits for Chrome to exit before it reports the error as is. Chrome can close its
+# DevTools port a moment before its process ends.
+EXIT_GRACE = 2.0
 # Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
-STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
-                (b"zygote", "zygote"), (b"singletonlock", "profile lock"),
+# Match a failure message, not a bare subsystem name. A healthy Linux start also writes D-Bus connection errors and
+# a sandbox warning, so `dbus` or `sandbox` alone would name a cause on every start (#1037).
+STDERR_HINTS = ((b"running as root without --no-sandbox", "sandbox: running as root without --no-sandbox"),
+                (b"no usable sandbox", "sandbox: no usable sandbox"),
+                (b"suid sandbox helper binary", "sandbox: setuid helper"),
+                (b"setuid sandbox", "sandbox: setuid helper"),
+                (b"crashpad", "crashpad"), (b"zygote", "zygote"), (b"singletonlock", "profile lock"),
                 (b"no space left on device", "storage exhausted"), (b"shared memory", "shared memory"))
 
 
@@ -78,7 +86,7 @@ class _StderrTail:
 
     def hints(self):
         tail = self.tail.lower()
-        found = [label for needle, label in STDERR_HINTS if needle in tail]
+        found = list(dict.fromkeys(label for needle, label in STDERR_HINTS if needle in tail))
         return ", ".join(found) if found else "no recognized diagnostic (output withheld)"
 
 # Runs before the page's own scripts in every document: counts the page's requests until their body is read, so
@@ -231,7 +239,24 @@ class Browser:
             raise ChromeStartError(f"Chrome did not create DevToolsActivePort within {limit:g}s; "
                                    f"stderr: {self._stderr.hints()}")
         _started = True  # Chrome is loaded; a failure after this point is not a slow cold start
-        port = port_file.read_text().split()[0]
+        try:
+            self._connect(port_file.read_text().split()[0], width, height)
+        except Exception as exc:
+            try:
+                code = self.proc.wait(EXIT_GRACE)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code is None and not isinstance(exc, ChromeStartError):
+                raise
+            # Read stderr only after the wait, so a Chrome that exits while it does not answer is named with the lines
+            # it wrote last. An exit here is a failed start, like one before the port file, so it is tried once more.
+            self._stderr.finish()
+            if code is None:
+                raise ChromeStartError(f"{exc}; stderr: {self._stderr.hints()}") from exc.__cause__
+            raise ChromeStartError(f"Chrome exited after writing DevToolsActivePort (exit {code}); "
+                                   f"stderr: {self._stderr.hints()}") from exc
+
+    def _connect(self, port, width, height):
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())
         page = next(t for t in targets if t.get("type") == "page")
         from websockets.sync.client import connect
@@ -246,9 +271,7 @@ class Browser:
             try:
                 self.call(method, reply_within=FIRST_REPLY_TIMEOUT, **params)
             except TimeoutError as exc:
-                self._stderr.finish()
-                raise ChromeStartError(f"Chrome did not answer {method} within {FIRST_REPLY_TIMEOUT:g}s; "
-                                       f"stderr: {self._stderr.hints()}") from exc
+                raise ChromeStartError(f"Chrome did not answer {method} within {FIRST_REPLY_TIMEOUT:g}s") from exc
 
     def call(self, method: str, *, reply_within: float = 30, **params: Any) -> dict:
         self.n += 1

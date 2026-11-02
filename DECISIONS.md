@@ -192,6 +192,40 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-31 (#263, the HTTP client half of W2-7):** an HTTP transport keeps one `httpx.AsyncClient`
+  for each event loop that calls it, instead of making one for each call and closing it after. Calls on a loop
+  reuse its connections, and the client is built once per loop. A client is bound to the loop that made it, so
+  the engine's loop and the `aux_sync` thread each get their own, and a client whose loop has ended is dropped.
+  The engine's close closes every client the router made (`Router.aclose`), each on its own loop, also for the
+  transports a key reload replaced. The router keeps only those clients, not the replaced keys. A client or a
+  provider instance passed in stays its owner's to close. A command that builds its own router closes it before
+  its loop ends, since a client whose loop has ended cannot be closed: `exo decide` and the baseline decision judge
+  do so after each question. Tests: `tests/core/models/test_http_client_reuse.py`.
+- **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
+  of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
+  memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
+  it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
+  order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
+  read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
+  `last_messages` has the same text and place as in draft #903,
+  which uses it for the context transcript, so the two merge cleanly. Results are unchanged. A fork now copies
+  in one write transaction: the new session, the copies with `executemany`, their search rows and the summaries
+  that still fit. It wrote each copy in a transaction of its own, so a fork that failed partway left a session with
+  part of the thread. The copies are the same as before, byte for byte. Event reads with no bound go page by
+  page. `SessionStore.iter_events` reads 1,000 events at a time, up to the newest seq at the call, so it returns
+  what one read at the call returned. It reads the first page at once, so a bad `since` still fails when the
+  caller asks. `SqliteLog.read`, trace and `/handoff` use it. A `Subscription` takes the log's iterator from
+  `Hub.replay` as its backlog instead of a list of every event, since a bounded first page alone would skip
+  events. `Hub.since` lists the same replay, so a rule on what the hub replays has one place. A read that also
+  keeps the events of no session (`with_global`) is now two index searches joined by `UNION ALL`. Its `OR` form
+  sorted every later event on each call, so reading it page by page took time that grew with the square of the
+  log. The one-shot `events.subscribe` reply still carries the whole replay, as the protocol says. The stdio
+  transport built that reply and then dropped it to stream. It now opens its subscription at once, and a
+  `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
+  queue back out of the hub, so no queue is left to fill with later events. Tests:
+  `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
+  `tests/core/test_event_paging_254.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -1366,6 +1400,72 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
+  writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did
+  not fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, the same line piped to `sudo -s`,
+  and the `echo -e` and `\x0a` forms were only `opaque_exec`.
+
+  The target read as a file named `config.json\n`, and `printf 'r\x6d -rf /srv/data' | bash` hid its delete the
+  same way. Under `deny: [store_write]` or `deny: [delete]` these lines asked, and a policy that allows
+  `opaque_exec` let them run. The default policy asked for each of them.
+
+  Now `_piped_text` gives such a pipe's text as a `_Printed`: the text as written, which every reader reads as
+  before, with `out`, what bash's builtin writes. printf expands its format's escapes and fills `%s`, `%b` and `%%`,
+  using the format again while arguments last. `echo -e` (and `-ne`, `-en`, `-Ee`) expands its escapes. A `\c` ends
+  the output in `echo -e` and in a `%b` argument, not in a format.
+
+  A shell that runs its stdin also reads `out` (`_stdin_texts`): `bash` or `sh` with no script, the shell `sudo -s`
+  starts and `ssh host` with no command. Interpreters and SQL clients still read only the text as written, a known
+  limit, and a gh body with an escape stays unseen (#208).
+
+  The shell reads `out` in a second reading of the call (`_printed_reading`), with budgets and memos of its own, as
+  #853's opened reading and #584's joined reading are read. It reads `out` there in place of the text as written.
+  The first reading reads the text as written only and marks the call (`_printed_met`). It is main's reading.
+
+  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864,
+  `_late_reading`) each have a printed reading of their own too, so a compound only they open is read in the output.
+
+  `decide` keeps the strictest of the two readings, so no decision is lower than main's. The call leads with the
+  reading `_combine` would pick of the two (`_beside` with `lead`): credentials, then a store write, then the more
+  severe. So the printf line above is a `store_write`, as the line without `\n` is.
+
+  The first build (a561eb76, not merged) read `out` in the line's own reading, beside the text as written. Review
+  found it spent the call's budgets there. Two leave an `opaque_exec` part when spent: the 16 readings of a sudo word
+  that may take a value (`_SUDO_BRANCHES`) and the 24 parts only bash's reading opens (`_WORD_PARTS`). A later
+  command on the line was cut short by them and decided lower than on main.
+
+  A printf of 16 lines of `sudo -u \x24U echo N` into bash, followed by `sudo -u $U echo rm -rf /srv/data`, went
+  from a delete to `opaque_exec`, and a `$( )` in a `${..}` word after 24 printed ones did the same. Main's
+  `scripts/gate_diff.py` found 258 and 830 lowered pairs on two aimed corpora.
+
+  The store path budget (`_EXO_PARTS`) turned a deny into an ask under one policy. And posts in the output took the
+  room decide gives other posts' violations, so a later post's violation went unlisted.
+
+  The second reading spends none of the first reading's budgets, and each reading lists its own violations, which
+  decide merges. Chosen over budgets of its own inside the line's reading: that kept the listing room and the
+  line's lead shared, and lost marks such as gh's floor (`_GH_MOVED`). The brace budget and #479's loop budget fail
+  closed into a hit, and a561eb76 decided their rows as main does. Rows pin them too.
+
+  `out` is set only where the gate is sure of it. Every word must be literal (no expansion, glob, brace, leading `~`
+  or `$".."`). printf may take `--` but no other option, and no conversion but `%s`, `%b` and `%%`. Output past four
+  times the text and 4 KB is not read. A `\u` past ASCII stays as written, and a NUL is dropped, as bash and dash
+  drop one from a script they read.
+
+  Chosen over reading only what the command writes: the reading as written backs it up wherever bash and the gate
+  differ, so the change only adds. `echo` without `-e` keeps main's reading, since bash writes its words as they
+  are. dash and zsh expand them, a known limit. The expansion matches bash 5.2's builtins on 7,500 random formats and
+  texts, but for a `\u` past ASCII.
+
+  Main's `scripts/gate_diff.py` against main 46150d21, whose gate is d995d667's, lowers 0 pairs in each of six runs.
+  The built-in corpus gives 1,265,792 pairs without variants and 8,108,232 with them.
+
+  Three aimed corpora give 29,040 pairs (the first build's 165 printf, `echo -e`, `echo`, `%b`, `%s`, octal, hex,
+  `\c` and nested shell lines), 74,448 (its review's 364 lines) and 56,144 (319 lines that spend each budget in
+  printed output before a strict command).
+
+  The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
+  and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
+  `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
@@ -5149,6 +5249,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-11-01 (#997 follow-up):** the cue's `tasks.list` read asks for active tasks only. `tasks.list`
+  takes an optional `active` field that keeps queued and running tasks, the only ones that make a delegated edge.
+  An open request of an unrelated session, such as another window's, still turns the read on. Only the list shows
+  that the session is unrelated. The finished history no longer travels on each tick. Commands are strict, so a
+  window that joins an older core is refused this read (`bad_body`), as for any new command field. Its cue then
+  rests on the task events it has seen and is marked "(last known)". A test now holds that a burst of request
+  events shares one read.
 - **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
   transcript events to the selected session. Active task records alone establish delegated ancestry. A
   non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
@@ -5220,6 +5327,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-11-01 (#1037 review):** a stderr category names a failure message, such as
+  running as root without `--no-sandbox`, not a bare `sandbox` or `dbus`. The D-Bus errors and sandbox
+  warning of a healthy Linux start are no longer named as a cause. A Chrome that exits after it writes
+  `DevToolsActivePort` is reported with its exit code and categories. See `docs/DEVELOPER-GUIDE.md` §7.
+  - **With #907's retry (2026-11-02):** that exit is a failed start, so it is tried once more, as an early exit is.
+    The start waits up to 2 s for Chrome to exit before it reads stderr. So the categories hold the lines Chrome
+    wrote last, also when a first DevTools call got no answer.
 - **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
   while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
   lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
@@ -5856,6 +5970,20 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
   (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
   whole, which the next turn's call can cut.
+- *Amendment 2026-10-31 (#262, summary reads):* each step of a build reads a summary tree once. `note`, the merge
+  check, both views, the overflow check, a thread's tail and `/context` share one read of each tree with every
+  helper they call (`_one_read` in `src/exo/core/context.py`). Before, each helper read the whole tree again, and
+  a skipped merge read it once more to find its two children: a build of a 256-pair test thread with 74 skipped
+  merges made 16 reads, and now makes 2. These steps never await, so no other task can change the tree during one.
+  A step that schedules a node drops its read of that tree, and the view is read after the overflow wait, so a
+  summary that lands during the wait is in the view. One read for the whole build would have to outlive that wait,
+  so the build keeps two, and a third for the overflow check while a job runs. While a private thread's own
+  leaves run and its tail is over budget, each look for spans to cut (`cut_pending`, #244) reads that tree once
+  more. The view is unchanged. A merge job finds its two halves with one read too (`_halves`), and `/compact`
+  sizes all its new summaries with one (`_folded`). With no cached text, a merge above four levels of skipped
+  merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
+  verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
+  `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
@@ -5977,8 +6105,9 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   are a store write, and `sudo -s <<< 'rm -rf /srv/data'` is a delete. A stdin the gate cannot read still asks only
   as `opaque_exec`, not as a store write: `sudo -s < /tmp/script.sh` and
   `env -S 'sudo -s' <<< 'cp /tmp/x ~/.exo/config.json'` are `opaque_exec`. So `deny: [store_write]` asks for them,
-  and a policy that allows `opaque_exec` lets them run. The gate does not expand a `printf` or `echo -e` escape, so
-  `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is `opaque_exec` too.
+  and a policy that allows `opaque_exec` lets them run. Since #1047 the gate also reads what a `printf` or
+  `echo -e` writes, with its escapes expanded, so `printf 'cp /tmp/x ~/.exo/config.json\n' | sudo -s` is a store
+  write too.
 - **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
   principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
   "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
@@ -6626,6 +6755,21 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
   - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
   - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
+- **Amendment 2026-11-01 (#1099, #1100): a key typed into a provider row holds back only the provider rows.** `draw()` returned before drawing anything while a provider's key field had focus and held text. So a retry's reply was never drawn: with no cached list, the model section kept no list and no "Try again" (#1100).
+  - A custom provider saved meanwhile kept its form open after the save had cleared its entry, and the next Save threw before it sent anything. Add custom provider, Edit and Cancel did nothing either (#1099).
+  - Now only the provider rows wait, since they hold the key field. The custom providers section is drawn as at any other time: on a save, Add, Edit or Cancel, and on any reload while its form is closed. The model section is drawn on every reload. Neither holds a provider row's field. A focused key field anywhere else still holds the whole panel, as before.
+  - The readout in the page head is drawn before the hold, so a new default or ready count shows there at once.
+  - The custom form reads whether its entry exists once, when it is built, so a submit can no longer throw on a cleared entry.
+  - `retryModels()` is unchanged. The key field still has focus after the reply is drawn, so it moves no focus.
+  - Tests in `plugins/exo-command/tests/test_provider_retry_web.py`, each with a key typed into a provider row:
+    - a custom save whose reload is held until the key is typed
+    - Add, Edit and Cancel
+    - an open custom form across a Test's reload
+    - a held retry with or without a cached list, answered with a failure or a list
+    - a reload that changes the default and the ready count, which the page-head readout shows
+  - One more test in that file pins the read at build time. A submit that reaches an edited entry's form after its save cleared the entry sends the save again and throws nothing. Only a script can do that, since Save is disabled while the save runs.
+  - On main, eight of the nine fail. The open form case passes on main and fails if the custom section is drawn on every reload.
   - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).

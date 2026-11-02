@@ -702,8 +702,9 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
-  - A failed Chrome startup distinguishes early exit from timeout and reports only fixed, sanitized stderr
-    categories; it never prints the raw browser output.
+  - A failed Chrome startup says whether Chrome exited, with its exit code, or timed out. It reports only fixed
+    stderr categories and never prints the raw browser output. A category names a failure message, so the D-Bus
+    errors and the sandbox warning that a healthy Linux start logs are not reported as a cause.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
@@ -948,7 +949,9 @@ res.choice, res.probabilities, res.source, res.route, res.confidence
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
-  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`.
+  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`. The engine
+  closes `ctx.router` when it closes. A script closes the router it built with `await router.aclose()` on the loop
+  that made the calls: the transports keep their HTTP clients open between calls (`docs/PROVIDERS.md` "Connections").
 - Wrap the call. It raises `DecisionError` when every route fails. `error.retryable` says whether trying later can
   help. Keep a safe default, as `exo-gate` does: on failure or after a timeout it keeps the rule outcome.
 - **A decision model may only tighten a gate (D-015).** `tighten_only(current, proposed)` returns the stricter of two
