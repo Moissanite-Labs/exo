@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
+  redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
+  meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
+  (#1099).
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
