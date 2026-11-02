@@ -4982,6 +4982,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         c = _make("store_write", summary=what[:120], target=t, link=t, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
+    # #1096: a forward's socket on a secret store is a credentials part beside the line (_classify_shell adds it)
+    if secrets := _ssh_secrets(words):
+        ctx.setdefault("ssh_secrets", []).extend(secrets)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
         # The words are classified as decoded, so category, target and vetoes still see them, but a message
         # catalog can replace them: the indirection signal asks unless opaque_exec is named.
@@ -5556,7 +5559,11 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
-def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
+# ssh's forward options and settings: `-L`, `-R`, `-D` and the settings that name the same forwards (#484, #1096).
+_SSH_FORWARDS = ("L", "R", "D", "localforward", "remoteforward", "dynamicforward")
+
+
+def _ssh_file_words(words: list, forwards: bool = False) -> list[tuple[_Word, list[str]]]:
     """ssh's own option values that name a file ssh makes on this machine, whatever its remote line runs (#484): its
     control socket (`-S`, `-o ControlPath`), the known-hosts file it adds a key to (`-o UserKnownHostsFile`) and a
     forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`). `-F` only reads
@@ -5566,7 +5573,8 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
     one (`-S~/x`, `-oControlPath=x`) is its option's word with the letters before the value cut off, when the
     source spells them as they read. The options are read as _ssh_options reads them, before the host and after it,
     up to the remote command. scp's and sftp's end at their first operand. A setting's value is split into words as
-    ssh splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields)."""
+    ssh splits it (_ssh_split) and a forward into its fields (_ssh_fwd_fields). With ``forwards`` only the forwards
+    come (#1096)."""
     texts, out = [w.text for w in words], []
     prog = texts[0].rsplit("/", 1)[-1]
     letters = _VALUE_OPTS[prog][0]
@@ -5591,9 +5599,9 @@ def _ssh_file_words(words: list) -> list[tuple[_Word, list[str]]]:
                 continue
             key, rest = _ssh_setting(value) if a[v] == "o" else (a[v], value)
             args = _ssh_split(rest) if a[v] == "o" else [rest]
-            if key in ("S", "controlpath", "userknownhostsfile"):
+            if key in ("S", "controlpath", "userknownhostsfile") and not forwards:
                 paths = args if key == "userknownhostsfile" else args[:1]
-            elif key in ("L", "R", "D", "localforward", "remoteforward", "dynamicforward"):
+            elif key in _SSH_FORWARDS:
                 paths = [f for t in args[:2] for f in _ssh_fwd_fields(t) if "/" in f]   # a socket path holds a /
             else:
                 continue
@@ -5617,6 +5625,43 @@ def _ssh_file_hits(x: str) -> list[str]:
     for t in _ssh_split(x) + _ssh_split(_ssh_setting(x)[1]):
         found += [t] + re.split(r"[:=,]", t) + _ssh_fwd_fields(t)
     return [p for p in dict.fromkeys(found) if p and _store_word(_ssh_home(p))]
+
+
+def _ssh_secrets(words: list) -> list[str]:
+    """Each field of an ssh forward in a simple command that names a secret store (#1096), spelled out as the line's
+    words are (`~`, and ssh's `%d` as the home folder). A forward's socket is a file ssh makes, here or on a host
+    that may be this one, and with `StreamLocalBindUnlink=yes` it first removes what is at that path. The fields are
+    the ones _ssh_file_words reads (`-L`, `-R`, `-D` and their `-o` settings, also for scp and sftp), and the same
+    fields of each word bash makes of a brace set in the word (`~/.exo/keys.env{:a,:b}:5432`, quotes removed) and of
+    each form an expansion in it may print (_unknown_words). A brace set past the cap is a hit, as in the store
+    check. Each field meets the test a path argument meets (args_sensitive): a secret name, a dynamic store
+    (EXO_KEYS_FILE, `$EXO_HOME/keys`), a glob that may match one, or a brace set that names one or runs past the cap.
+    The line's own words are cut only at whitespace and quotes, so `~/.exo/keys.env:localhost:5432` met no name
+    there, while the same path as ssh's `-S` value did."""
+    if not words or words[0].text.rsplit("/", 1)[-1] not in ("ssh", "scp", "sftp"):
+        return []
+    hits: list[str] = []
+    for w, paths in _ssh_file_words(words, forwards=True):
+        src = w.raw.replace("\\\n", "")
+        alts = _brace_words(src) if "{" in src else [src]
+        if alts is None:
+            hits.append(_expand_text(w.text))
+            continue
+        braced = [d for a in alts[1:] for d in _dequote(a)]
+        forms = [f for a in alts[1:] or alts for f in _unknown_words(a)] if "$" in src or "`" in src else []
+        for p in dict.fromkeys(paths + [f for x in braced + forms for f in _ssh_fwd_paths(x)]):
+            names = _brace_words(_ssh_home(p))
+            if names is None or _sensitive_words(names) or _glob_words(names):
+                hits.append(_expand_text(_ssh_home(p)))
+    return hits
+
+
+def _ssh_fwd_paths(x: str) -> list[str]:
+    """The fields of one forward word that hold a `/`, the ones ssh reads as a socket path (#1096): those of an
+    `-L`, `-R` or `-D` value, or of the first two words of a forward setting (`LocalForward ~/s localhost:1`)."""
+    key, rest = _ssh_setting(x)
+    specs = _ssh_split(rest)[:2] if key in _SSH_FORWARDS[3:] else [x]
+    return [f for t in specs for f in _ssh_fwd_fields(t) if "/" in f]
 
 
 def _ssh_home(path: str) -> str:
@@ -7625,6 +7670,16 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             c.parts = [*c.parts, *(replace(seat, summary=f"shell touching {w}"[:120], target=w,
                                            signals=list(seat.signals), parts=[replace(q, target=w) for q in seat.parts])
                                    for w in others[1:])]
+    # #1096: an ssh forward's socket on a secret store (_ssh_secrets) is a credentials part beside the line, which keeps
+    # its own reading, as a store read from a shell call's own folder does (#311). So the credentials floor asks, deny
+    # and reserved entries and `target:` entries on the store meet the part, and every reading main made of the line
+    # stays: its category, its targets on an ssh hop's host, its parts. A store the line already names as a secret is
+    # not added again.
+    if fwd := ctx.get("ssh_secrets"):
+        have = {p.target for p in _each_part(c) if p.category == "credentials"}
+        for p in dict.fromkeys(fwd):
+            if p not in have:
+                c = secret(c, p, p, True)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
