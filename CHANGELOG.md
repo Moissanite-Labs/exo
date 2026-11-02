@@ -80,7 +80,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   fork ran in one write transaction that also decoded every message and counted rows for each summary. On a
   20,000-message session with 4,995 summaries it held the lock for 11 to 17 s, and another seat or CLI command on the
   same home failed with `database is locked` after its 5 s wait. The fork now builds its copies before it takes
-  the lock and only checks and inserts under it. It takes 1.1 to 1.6 s, holds the lock for 0.4 s at most, and the other
+  the lock and only checks and inserts under it. It takes 1.1 to 2.1 s, holds the lock for under 0.5 s, and the other
   process opens and writes at once (D-010 amendment 2026-11-02).
 - A stdio client whose event replay hits an event the core cannot read gets a typed reply, not silence (#254,
   follows #1102). Since #1102 the replay reads its backlog a page at a time after `events.subscribe` answers. A
