@@ -5320,6 +5320,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-11-01 (#1037 review):** a stderr category names a failure message, such as
+  running as root without `--no-sandbox`, not a bare `sandbox` or `dbus`. The D-Bus errors and sandbox
+  warning of a healthy Linux start are no longer named as a cause. A Chrome that exits after it writes
+  `DevToolsActivePort` is reported with its exit code and categories. See `docs/DEVELOPER-GUIDE.md` §7.
+  - **With #907's retry (2026-11-02):** that exit is a failed start, so it is tried once more, as an early exit is.
+    The start waits up to 2 s for Chrome to exit before it reads stderr. So the categories hold the lines Chrome
+    wrote last, also when a first DevTools call got no answer.
 - **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
   while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
   lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of

@@ -6,10 +6,26 @@ import os
 import sys
 import time
 import types
+import urllib.error
 
 import pytest
 
 import browser
+
+EXIT_GRACE = browser.EXIT_GRACE  # the real wait for Chrome to exit after an error past the port file
+
+# Lines a healthy headless Chromium 141 start writes on Linux. The D-Bus errors come from a start in a container,
+# the sandbox warning is the one the #1037 review saw. They name no cause, so a failed start must not report them.
+HEALTHY_LINUX_START = (
+    "[10:12:1101/072846.697327:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket"
+    " /run/dbus/system_bus_socket: No such file or directory\n"
+    "[10:12:1101/072846.817876:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address:"
+    " Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n"
+    "[10:10:1101/072846.959192:ERROR:dbus/object_proxy.cc:573] Failed to call method:"
+    " org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \n"
+    "[31:31:1101/072847.012345:WARNING:sandbox/policy/linux/sandbox_linux.cc] InitializeSandbox() called with"
+    " multiple threads in process gpu-process.\n"
+)
 
 
 @pytest.fixture
@@ -43,6 +59,9 @@ def fake_chrome(tmp_path, monkeypatch):
     # A fake start that writes DevToolsActivePort must not end the first real start's longer wait for the rest of the
     # run (this file runs before the first real browser test), so each test gets the run's state back.
     monkeypatch.setattr(browser, "_started", browser._started)
+    # Most stand-ins stay up after an error past the port file, so the wait for their exit would only add 2 s to each
+    # test. The tests of an exit after the port file set the real wait back.
+    monkeypatch.setattr(browser, "EXIT_GRACE", 0.1)
 
     def make(source):
         script.write_text(f"#!{sys.executable}\n" + source)
@@ -60,7 +79,8 @@ def test_early_exit_is_distinct_and_stderr_is_sanitized(fake_chrome, monkeypatch
     monkeypatch.setattr(browser._StderrTail, "hints", record)
     profiles, processes = fake_chrome(
         "import sys\n"
-        "sys.stderr.write('x' * 200000 + ' sandbox https://user:secret@127.0.0.1/ token=synthetic-private\\n')\n"
+        "sys.stderr.write('x' * 200000 + ' No usable sandbox! https://user:secret@127.0.0.1/'\n"
+        "                 ' token=synthetic-private\\n')\n"
         "sys.stderr.flush()\n"
         "sys.exit(17)\n"
     )
@@ -70,7 +90,7 @@ def test_early_exit_is_distinct_and_stderr_is_sanitized(fake_chrome, monkeypatch
     assert time.monotonic() - started < 5  # A dead process must not consume the 20 s startup timeout.
     msg = str(exc.value)
     assert "exited before DevTools was ready (exit 17)" in msg
-    assert "sandbox" in msg and "synthetic-private" not in msg and "127.0.0.1" not in msg
+    assert "sandbox: no usable sandbox" in msg and "synthetic-private" not in msg and "127.0.0.1" not in msg
     assert lengths and max(lengths) <= browser.STDERR_LIMIT
     assert processes[0].poll() == 17 and not os.path.exists(profiles[0])
 
@@ -91,7 +111,9 @@ def test_timeout_terminates_chrome_and_removes_profile(fake_chrome, monkeypatch)
     monkeypatch.setattr(browser._StderrTail, "hints", finished_hints)
     profiles, processes = fake_chrome(
         "import sys, time\n"
-        "sys.stderr.write('dbus synthetic-private\\n'); sys.stderr.flush()\n"
+        f"sys.stderr.write({HEALTHY_LINUX_START!r})\n"
+        "sys.stderr.write('Failed to create /synthetic-private/SingletonLock: File exists (17)\\n')\n"
+        "sys.stderr.flush()\n"
         "time.sleep(30)\n"
     )
     monkeypatch.setattr(browser, "START_TIMEOUT", 0.5)
@@ -99,7 +121,7 @@ def test_timeout_terminates_chrome_and_removes_profile(fake_chrome, monkeypatch)
     with pytest.raises(RuntimeError) as exc:
         browser.Browser()
     msg = str(exc.value)
-    assert "did not create DevToolsActivePort within 0.5s" in msg and "D-Bus" in msg
+    assert msg.endswith("did not create DevToolsActivePort within 0.5s; stderr: profile lock")
     assert "synthetic-private" not in msg
     assert processes[0].poll() is not None and not os.path.exists(profiles[0])
 
@@ -176,6 +198,66 @@ def test_missing_connection_dependency_also_cleans_up(fake_chrome, monkeypatch):
     with pytest.raises(ModuleNotFoundError, match="synthetic missing optional dependency"):
         browser.Browser()
     assert processes[0].poll() is not None and not os.path.exists(profiles[0])
+
+
+def test_exit_after_port_creation_reports_exit_code_and_hints(fake_chrome, monkeypatch):
+    """#1037 review: a Chrome that exits after it writes DevToolsActivePort is named with its exit code and categories.
+    Such an exit is a failed start, so it is tried once more, as an early exit is."""
+    profiles, processes = fake_chrome(
+        "import pathlib, sys, time\n"
+        "profile = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--user-data-dir='))\n"
+        "pathlib.Path(profile, 'DevToolsActivePort').write_text('12345\\n')\n"
+        "time.sleep(0.2)\n"  # Still running when the connection fails: only waiting for the exit can see it.
+        "sys.stderr.write('Creating shared memory in /dev/shm/synthetic-private failed: No space left on device\\n')\n"
+        "sys.exit(5)\n"
+    )
+    monkeypatch.setattr(browser, "EXIT_GRACE", EXIT_GRACE)
+    refused = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+    def refuse(*args, **kwargs):
+        raise refused
+    monkeypatch.setattr(browser.urllib.request, "urlopen", refuse)
+    with pytest.raises(browser.ChromeStartError) as exc:
+        browser.Browser()
+    exited = "Chrome exited after writing DevToolsActivePort (exit 5); stderr: storage exhausted, shared memory"
+    assert str(exc.value) == f"Chrome did not start in 2 attempts: (1) {exited}; then (2) {exited}"
+    assert exc.value.__cause__.__cause__ is refused
+    assert len(processes) == 2 and all(p.poll() == 5 for p in processes)
+    assert not any(os.path.exists(p) for p in profiles)
+
+
+def _hints(text):
+    read, write = os.pipe()
+    os.write(write, text.encode())
+    os.close(write)
+    tail = browser._StderrTail(os.fdopen(read, "rb"))
+    tail.finish()
+    tail.stream.close()
+    return tail.hints()
+
+
+def test_healthy_start_lines_are_not_reported_as_a_cause():
+    assert _hints(HEALTHY_LINUX_START) == "no recognized diagnostic (output withheld)"
+
+
+# Sandbox failure messages as Chromium 141 writes them. The "No usable sandbox" text mentions the SUID sandbox
+# too, and must not be read as the setuid helper failing.
+@pytest.mark.parametrize("lines, hints", [
+    ("[1:1:1101/000000.000000:ERROR:content/browser/zygote_host/zygote_host_impl_linux.cc:101] Running as root"
+     " without --no-sandbox is not supported. See https://crbug.com/638180.",
+     "sandbox: running as root without --no-sandbox, zygote"),
+    ("No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro that has disabled unprivileged"
+     " user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/"
+     "apparmor-userns-restrictions.md. Otherwise see https://chromium.googlesource.com/chromium/src/+/main/docs/"
+     "linux/suid_sandbox_development.md for more information on developing with the (older) SUID sandbox. If you"
+     " want to live dangerously and need an immediate workaround, you can try using --no-sandbox.",
+     "sandbox: no usable sandbox"),
+    ("The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing"
+     " I'm aborting now.", "sandbox: setuid helper"),
+    ("Failed to instantiate the setuid sandbox client.\nThe SUID sandbox helper binary is missing: /synthetic/"
+     "chrome-sandbox Aborting now.", "sandbox: setuid helper"),
+])
+def test_sandbox_failure_is_named_beside_healthy_start_lines(lines, hints):
+    assert _hints(HEALTHY_LINUX_START + lines + "\n") == hints
 
 
 PORT_THEN_WAIT = (
@@ -305,3 +387,36 @@ def test_an_error_reply_to_a_first_call_is_raised_at_once(fake_chrome, monkeypat
         browser.Browser()
     assert type(exc.value) is RuntimeError and calls == [(1, "Page.enable")] and len(processes) == 1
     assert processes[0].poll() is not None and not os.path.exists(profiles[0])
+
+
+def test_an_exit_after_an_unanswered_first_call_is_named_with_its_last_lines(fake_chrome, monkeypatch, tmp_path):
+    """The exit report and the retry meet: a first DevTools call gets no answer because Chrome exits. That start is
+    named by its exit, with the lines Chrome wrote just before it, and the next start runs. A start whose Chrome
+    stays up and does not answer keeps its own message and categories."""
+    count = tmp_path / "starts"
+    profiles, processes = fake_chrome(
+        "import pathlib, sys, time\n"
+        f"count = pathlib.Path({str(count)!r})\n"
+        "n = int(count.read_text()) + 1 if count.exists() else 1\n"
+        "count.write_text(str(n))\n"
+        f"sys.stderr.write({HEALTHY_LINUX_START!r}); sys.stderr.flush()\n"
+        "profile = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--user-data-dir='))\n"
+        "pathlib.Path(profile, 'DevToolsActivePort').write_text('12345\\n')\n"
+        "if n == 1:\n"
+        "    time.sleep(0.2)\n"  # Chrome writes its last line and exits after the first call has had no answer
+        "    sys.stderr.write('No usable sandbox! synthetic-private\\n'); sys.stderr.flush()\n"
+        "    sys.exit(6)\n"
+        "time.sleep(30)\n"
+    )
+    monkeypatch.setattr(browser, "EXIT_GRACE", EXIT_GRACE)
+    calls = _fake_devtools(monkeypatch, lambda start, m: False)
+    with pytest.raises(browser.ChromeStartError) as exc:
+        browser.Browser()
+    assert str(exc.value) == (
+        "Chrome did not start in 2 attempts:"
+        " (1) Chrome exited after writing DevToolsActivePort (exit 6); stderr: sandbox: no usable sandbox;"
+        " then (2) Chrome did not answer Page.enable within 90s; stderr: no recognized diagnostic (output withheld)")
+    assert isinstance(exc.value.__cause__.__cause__, TimeoutError)
+    assert calls == [(1, "Page.enable"), (2, "Page.enable")]
+    assert len(processes) == 2 and processes[0].poll() == 6 and processes[1].poll() is not None
+    assert not any(os.path.exists(p) for p in profiles)
