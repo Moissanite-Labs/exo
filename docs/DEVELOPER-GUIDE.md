@@ -666,11 +666,16 @@ these tests so that only the defect they guard against can fail them:
     categories; it never prints the raw browser output.
   - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
     hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
-    were each a job's first start (#907). A start that never reaches DevTools leaves the next one the longer wait.
+    were each a job's first start (#907). The 90 s ends once a start reaches DevTools, or once one 90 s wait runs out.
   - A Chrome start that fails (it exits early, never writes `DevToolsActivePort`, or does not answer one of its first
     DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile before any test code
     runs. Any other error is raised at once. A second failed start fails the test and names both. Hosted macOS has
     twice left a first call unanswered (#907).
+  - A start that works after a failed one emits a `ChromeStartWarning` that names the failure. Pytest lists it in its
+    warnings summary, so the stall still shows in a CI log.
+  - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
+    Chrome that never writes `DevToolsActivePort` costs the first test 90 + 20 s and each later test 20 s. One that
+    writes it and never answers costs the first test two 90 s waits and each later test one.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,

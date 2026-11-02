@@ -5234,19 +5234,27 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
   failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
   startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
-- **Test-harness amendment 2026-11-01 (#907):** the first Chrome start in a test process waits up to 90 s for
-  `DevToolsActivePort`. Later starts keep the 20 s deadline. The two hosted `DevToolsActivePort` timeouts on record,
-  in the ubuntu jobs of #1036 (reported in #907) and #1092, were each the job's first real start, in
-  `test_csp_web.py`, out of many starts per job. A fresh hosted runner reads the browser from a cold disk on that
-  start. The longer wait ends only once a start has reached DevTools, so a failed cold start does not shorten the
-  next one. Like the 90 s for the first DevTools replies, this is a wait for Chrome to start, not a bound a test
-  asserts. On hosted macOS, Chrome has twice started and then not answered one of its first DevTools calls within
-  90 s (`Page.enable` in #894's job, `Page.addScriptToEvaluateOnNewDocument` in #887's), in a different test each
-  time. A start that fails in any of these ways (an early exit, no `DevToolsActivePort`, or an unanswered first call)
-  is closed, and Chrome starts once more with a fresh profile. No test code has run at that point, so no test result
-  is retried. Any other error is raised at once. A second failed start fails the test, and its message names both. A
-  different error on the second start keeps the first failure as a note. A Chrome that never starts now costs two
-  waits per test, not one.
+- **Test-harness amendment 2026-11-01 (#907):** the first Chrome start in a test process gets a longer wait, and a
+  start that fails is tried once more. A Chrome that never starts costs a run 90 s more than before, not a second
+  wait in every test.
+  - The first start waits up to 90 s for `DevToolsActivePort`. Later starts keep the 20 s deadline. The two hosted
+    `DevToolsActivePort` timeouts on record, in the ubuntu jobs of #1036 (reported in #907) and #1092, were each the
+    job's first real start, in `test_csp_web.py`, out of many starts per job. A fresh hosted runner reads the
+    browser from a cold disk on that start.
+  - The 90 s ends once a start has reached DevTools, or once one 90 s wait has run out. Like the 90 s for the first
+    DevTools replies, it is a wait for Chrome to start, not a bound a test asserts.
+  - On hosted macOS, Chrome has twice started and then not answered one of its first DevTools calls within 90 s
+    (`Page.enable` in #894's job, `Page.addScriptToEvaluateOnNewDocument` in #887's), in a different test each time.
+  - A start that fails in any of these ways (an early exit, no `DevToolsActivePort`, or an unanswered first call) is
+    closed, and Chrome starts once more with a fresh profile. No test code has run at that point, so no test result
+    is retried. Any other error is raised at once.
+  - A second failed start fails the test, and its message names both. A different error on the second start keeps
+    the first failure as a note. A start that works after a failed one emits a `ChromeStartWarning` that names the
+    first failure, so pytest's warnings summary still shows the stall.
+  - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
+    Chrome that never writes `DevToolsActivePort` costs the first test 90 + 20 s and each later test 20 s. One that
+    writes it and never answers costs the first test two 90 s reply waits and each later test one. A later test
+    costs what one start cost before this amendment.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls

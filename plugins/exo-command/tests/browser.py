@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,17 +27,22 @@ START_TIMEOUT = 20.0
 # reads the browser and its libraries from a cold disk. The two hosted DevToolsActivePort timeouts on record (#1036's
 # ubuntu job, reported in #907, and #1092's) were each the job's first real start, in test_csp_web.py, out of many
 # starts in each job. Like the 90 s for the first replies in Browser._start, this is a wait for Chrome to start, not
-# a bound any test asserts.
+# a bound any test asserts. The long wait is given until a Chrome has written DevToolsActivePort or until one long
+# wait has run out, so a Chrome that never starts costs it once per run, not once per start.
 FIRST_START_TIMEOUT = 90.0
 _started = False  # set once a Chrome in this process has written DevToolsActivePort
+_long_wait_spent = False  # set once a wait of FIRST_START_TIMEOUT for DevToolsActivePort has run out
 # The first DevTools answers can wait for the new tab's renderer to start. On a loaded macOS runner one of them
 # (Emulation.setDeviceMetricsOverride) once took more than the 30 s an ordinary command gets.
 FIRST_REPLY_TIMEOUT = 90.0
 # #907: on hosted macOS runners Chrome has twice started and then not answered one of its first DevTools calls within
 # FIRST_REPLY_TIMEOUT (Page.enable in #894's job, Page.addScriptToEvaluateOnNewDocument in #887's), in a different
 # test each time. A start that fails like that, or exits early, or never writes DevToolsActivePort, is tried once more
-# with a fresh profile. No test code has run at that point. A second failure fails the test and names both.
+# with a fresh profile. No test code has run at that point. A second failure fails the test and names both. Once a
+# whole Browser() has failed, later ones start Chrome once, until a start works again: a Chrome that never starts
+# then costs each later test one wait, not two.
 START_ATTEMPTS = 2
+_gave_up = False  # set once a Browser() failed all START_ATTEMPTS starts, cleared by a start that works
 STDERR_LIMIT = 16384
 # Do not emit raw Chrome output: it can contain URLs, paths, environment values, or credentials.
 STDERR_HINTS = ((b"sandbox", "sandbox"), (b"dbus", "D-Bus"), (b"crashpad", "crashpad"),
@@ -175,19 +181,29 @@ class ChromeStartError(RuntimeError):
     """Chrome did not start: it exited early, never wrote DevToolsActivePort, or never answered a first DevTools call."""
 
 
+class ChromeStartWarning(UserWarning):
+    """Chrome started only after a failed start. #907 still collects such stalls from CI logs, and pytest lists this
+    warning in its summary, so a stall that the second start absorbs still shows there."""
+
+
 class Browser:
     def __init__(self, width: int = 1440, height: int = 900):
+        global _gave_up
         chrome = find_chrome()
         if not chrome:
             raise RuntimeError("no Chrome found")
         failures = []
-        for _ in range(START_ATTEMPTS):
+        for _ in range(1 if _gave_up else START_ATTEMPTS):
             self.profile = tempfile.mkdtemp(prefix="exo-chrome-")
             self.proc = None
             self._stderr = None
             self._cm = None
             try:
                 self._start(chrome, width, height)
+                _gave_up = False
+                if failures:
+                    warnings.warn("Chrome started after a failed start: " + "; then ".join(map(str, failures)),
+                                  ChromeStartWarning, stacklevel=2)
                 return
             except ChromeStartError as exc:
                 self.close()
@@ -197,13 +213,14 @@ class Browser:
                 if failures:
                     exc.add_note("after a failed Chrome start: " + "; then ".join(map(str, failures)))
                 raise
+        _gave_up = True
         if len(failures) == 1:
             raise failures[0]
         raise ChromeStartError(f"Chrome did not start in {len(failures)} attempts: "
                                + "; then ".join(f"({i}) {f}" for i, f in enumerate(failures, 1))) from failures[-1]
 
     def _start(self, chrome, width, height):
-        global _started
+        global _started, _long_wait_spent
         self.proc = subprocess.Popen(
             # #907: keep a headless page's timers and frames running at full rate, whatever the runner's window state
             [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
@@ -215,7 +232,8 @@ class Browser:
         self._stderr = _StderrTail(self.proc.stderr)
         atexit.register(self.close)  # never leave a browser behind, even when a test dies
         port_file = Path(self.profile) / "DevToolsActivePort"
-        limit = START_TIMEOUT if _started else FIRST_START_TIMEOUT
+        long_wait = not (_started or _long_wait_spent)
+        limit = FIRST_START_TIMEOUT if long_wait else START_TIMEOUT
         end = time.monotonic() + limit
         while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:
             if self.proc.poll() is not None:
@@ -228,6 +246,8 @@ class Browser:
             if self.proc.poll() is not None:
                 raise ChromeStartError(f"Chrome exited before DevTools was ready (exit {self.proc.returncode}); "
                                        f"stderr: {self._stderr.hints()}")
+            if long_wait:
+                _long_wait_spent = True  # the long wait is given once: later starts get START_TIMEOUT
             raise ChromeStartError(f"Chrome did not create DevToolsActivePort within {limit:g}s; "
                                    f"stderr: {self._stderr.hints()}")
         _started = True  # Chrome is loaded; a failure after this point is not a slow cold start
