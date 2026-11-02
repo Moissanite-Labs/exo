@@ -57,7 +57,9 @@ the middle dot as separator come straight from the site.
    `/open <task>`. Past five, one more line names the other task ids, because `/tasks` lists only this thread's own
    tasks. The cue never takes focus and never answers. It sits above the activity line in the classic layout and
    below it in the inverse layout. The cue reads `approvals.list` every 3 s. It reads `tasks.list` only while
-   another session has an open request, and at once when such a request arrives.
+   another session has an open request, and at once when such a request arrives. A burst of such requests shares
+   one read. That read asks only for active tasks, so another window's request does not pull every finished task
+   on each tick.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer sending ›` while its reply is pending, `steer queued ›` after the core queues it, then `steer delivered ›` on its matching `message.completed` or a successful `unsteer` reply confirming it already left the queue. Delivery means the text reached the conversation, not that the model has acted on it. Delivery events received before the send reply are retained only for in-flight sends. A send reply alone never proves delivery. A lost reply says `steer delivery unknown`; a refused send says `steer not sent`. `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts queued text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.

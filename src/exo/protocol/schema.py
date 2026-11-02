@@ -265,6 +265,7 @@ class SkillsList:
 @command("tasks.list")
 class TasksList:
     session: str | None = None
+    active: bool = False  # True: only queued and running tasks, not every task ever written (#997)
 
 
 @command("seat.list")

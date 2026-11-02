@@ -123,11 +123,13 @@ def audit(repo: Path, literals: tuple[bytes, ...] = (), verify_remote: str | Non
     if report["environment_redirected"]:
         return report
     # Refuse before object traversal: older Git versions may ignore NO_LAZY_FETCH.
+    # Git makes a remote a promisor when its promisor is true or its partialclonefilter is set.
     shallow = git(repo, "rev-parse", "--is-shallow-repository").strip() == b"true"
     config = git(repo, "config", "--includes", "--list", "--null").lower().split(b"\0")
     partial = any(item.split(b"\n", 1)[0] == b"extensions.partialclone" or
                   (item.split(b"\n", 1)[0].startswith(b"remote.") and
-                   item.split(b"\n", 1)[0].endswith(b".promisor")) for item in config)
+                   item.split(b"\n", 1)[0].endswith((b".promisor", b".partialclonefilter")))
+                  for item in config)
     # --git-path info/grafts follows GIT_GRAFT_FILE, which we disable for reads.
     # Resolve the common directory to inspect the repository's default file too.
     graft_path = Path(os.fsdecode(git(repo, "rev-parse", "--git-common-dir").strip()))
