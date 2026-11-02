@@ -15,6 +15,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
+  the principal. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line
+  with `-o StreamLocalBindUnlink=yes` were reads that the default policy allowed. ssh makes that socket, and with that
+  setting it first removes the file at the path.
+
+  Each forward field the store check reads (#484) now meets the secret test that `ssh -S ~/.exo/keys.env` already met.
+  That covers a forward's brackets, the `-o` settings, scp's and sftp's `-o` settings and a custom `EXO_KEYS_FILE`. A
+  port and a socket outside the secret stores stay reads.
+
+  The line keeps its own reading, with the part beside it, so no decision is lower (main's `scripts/gate_diff.py`: 0
+  lowered pairs in four runs, 10,240,472 pairs on the built-in corpus with variants). Tests:
+  `tests/security/test_gate_ssh_forward_keys_1096.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
