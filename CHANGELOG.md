@@ -35,6 +35,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
+- Providers: while a key typed into a provider's field waits there, only the provider rows are held back from a
+  redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
+  meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
+  (#1099).
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
@@ -197,6 +201,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `undercounted_calls` apart from `unpriced_calls`, and marks the call in its table and JSON (D-093).
 - Short chat windows scroll the chat column when status text expands, keeping the transcript and composer reachable.
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
+- Building a model call reads each summary tree once per step, not once per helper. So do the merge check after
+  each summary, a merge job and the `/compact` report. A skipped merge no longer reads the whole tree again to find
+  its two children. A build of a 256-pair test thread with 74 skipped merges made 16 summary reads and now makes 2.
+  The view is unchanged (#262).
 - The web workspace guidance line no longer tells the reader to check keys after a connection or timeout failure; credential advice is shown only when the recorded error reads as an authentication or permission failure, and an unreadable error points at `/trace` (#756).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining
   their output. Failed write-shaped commands no longer count as successful file progress in repeat detection.
@@ -295,6 +303,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 
 ### Changed
+- Model calls reuse their HTTP connection (#263, the HTTP client half of W2-7). Each call made a new
+  `httpx.AsyncClient` and closed it after, so each call loaded the CA bundle again (about 10 ms) and opened a new
+  TCP and TLS connection. Each HTTP transport, the decision transport too, now keeps one client per event loop, and
+  a call reuses an idle connection to the same server. The engine closes these clients when it closes, also those
+  of transports a key reload replaced. `exo decide` and the baseline decision judge close theirs after each
+  question (D-010 amendment, `docs/PROVIDERS.md` "Connections").
 - The repository moved to the Moissanite-Labs organization and is public as an early preview (#931). The README
   Quick start, `docs/INSTALL.md` and the site say so and clone `https://github.com/Moissanite-Labs/exo`.
   `AGENTS.md` and `docs/REPOSITORY-WORKFLOW.md` say that exo-cli is a fork snapshot and that shared changes stay
