@@ -376,7 +376,6 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
     cursor: dict[str, Any] = {}  # last seq written and session filter of the active feed
 
     async def pump(sub: Subscription) -> None:
-        cursor.update(seq=sub.last, session=sub.session)
         try:
             while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
                 async for ev in sub:
@@ -384,6 +383,9 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
                     cursor["seq"] = ev.seq
                 if not dispatcher.hub.closed:
                     sub = dispatcher.hub.subscribe(cursor["seq"], sub.session)
+        except Exception as exc:  # a replay page the log cannot read ends the feed with a typed reply, not silence
+            write(_fail(cursor["id"], "internal", f"{type(exc).__name__}: {exc}").to_json())
+            cursor.clear()  # nothing to flush at EOF
         finally:
             sub.close()
 
@@ -401,17 +403,25 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
                     continue
                 if feed:
                     feed.cancel()
-                write(s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()}).to_json())
+                try:
+                    write(s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()}).to_json())
+                except BaseException:  # a client gone before the reply leaves no queue in the hub to fill
+                    sub.close()
+                    raise
+                cursor.update(seq=sub.last, session=sub.session, id=cmd.id)
                 feed = asyncio.create_task(pump(sub))
                 await asyncio.sleep(0)  # start the replay before the next command
                 continue
             write((cmd if isinstance(cmd, s.Response) else await dispatcher.run(cmd, pr.LOCAL)).to_json())
     finally:
-        if feed:
+        if feed and cursor:
             feed.cancel()
             # Flush events already published but not yet written, so a piped client sees them.
-            for ev in dispatcher.hub.since(cursor.get("seq", 0), cursor.get("session")):
-                write(ev.to_json())
+            try:
+                for ev in dispatcher.hub.replay(cursor["seq"], cursor["session"]):
+                    write(ev.to_json())
+            except Exception as exc:  # a page the log cannot read: the same typed reply as in the feed
+                write(_fail(cursor["id"], "internal", f"{type(exc).__name__}: {exc}").to_json())
 
 
 async def serve_stdio(dispatcher: Dispatcher) -> None:
