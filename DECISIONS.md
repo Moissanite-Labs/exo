@@ -1433,7 +1433,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `{` or `time`, a prefix command (`command`, `nohup`) and a coproc of a simple command, whose output goes to the
   coprocess, read as on main.
 
-  Main's `scripts/gate_diff.py` lowers no pair against main b724f255. The PR lists each run's numbers.
+  Main's `scripts/gate_diff.py` lowers no pair against main d007348e. The PR lists each run's numbers.
   Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`.
 - *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
   writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did

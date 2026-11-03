@@ -1469,9 +1469,10 @@ gate does not read:
 
   A quoted `{` is a command name, not a reserved word, and writes nothing. A quoted `time` and a
   prefix command such as `command` or `nohup` run the command after them, but the gate reads such a
-  pipe as before, as `opaque_exec`, a known limit. So it reads a group piped into a shell
-  (`{ echo ..; } | bash`). `coproc echo .. | bash` is read as before too, since its output goes to
-  the coprocess. A post's body from the first command of a group stays unseen (#208).
+  pipe as before, as `opaque_exec`, a known limit. A group piped into a shell
+  (`{ echo ..; } | bash`) is also read as before, a limit of the same kind. `coproc echo .. | bash`
+  is read as before as well, since its output goes to the coprocess. A post's body from the first
+  command of a group stays unseen (#208).
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
