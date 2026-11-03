@@ -9,6 +9,9 @@ RIPGREP_CONFIG_PATH.
 
 Every string here is data for the classifier. Nothing is run; the paths are placeholders.
 """
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -574,10 +577,34 @@ UNCHANGED = [
 ]
 
 
+# A home whose every folder is known (#1029). The gate matches a relative glob such as `[HOME=x]*` against the full
+# paths of the secret files under HOME, and its `*` crosses `/`. So under a temp home the row asked when a folder on
+# the way to it started with x or =, as on a runner whose temp folder was named so. Nothing is run, so the folder
+# need not exist.
+FIXED_HOME = "/exo-test-home"
+
+
 @pytest.mark.parametrize("cmd,category,outcome", UNCHANGED)
-def test_everything_else_is_unchanged(cmd, category, outcome):
+def test_everything_else_is_unchanged(cmd, category, outcome, monkeypatch):
+    monkeypatch.setenv("HOME", FIXED_HOME)
+    monkeypatch.setenv("EXO_HOME", FIXED_HOME + "/.exo")
     c = classify(sh(cmd))
     assert (c.category, decide(c).outcome) == (category, outcome), c
+
+
+def test_the_unchanged_rows_pass_under_a_temp_folder_named_like_the_class(tmp_path):
+    """#1029: the rows above run again in a child pytest whose temp folder lies below a folder that starts with
+    each character of the class `[HOME=x]`. They must pass there as they pass anywhere."""
+    base = tmp_path.joinpath("x", "=", "H", "O", "M", "E")
+    base.mkdir(parents=True)
+    here = Path(__file__).resolve()
+    src = str(Path(gate.__file__).resolve().parents[1])   # the exo this suite imports
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    env.update(TMPDIR=str(base), PYTHONPATH=os.pathsep.join(filter(None, (src, env.get("PYTHONPATH")))))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                        f"--basetemp={base / 'pytest'}", f"tests/{here.name}::test_everything_else_is_unchanged"],
+                       cwd=here.parents[1], env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0 and f"{len(UNCHANGED)} passed" in r.stdout, r.stdout[-3000:] + r.stderr[-2000:]
 
 
 # On #164 a parametrized node id, quoted for pytest, was shell, or credentials or store_write when the id

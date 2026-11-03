@@ -1799,6 +1799,33 @@ gate does not read:
   reads `+cmd` as keystrokes: `!` runs a shell command after any of them (`+G!cmd`, `+:n!cmd`),
   while a search (`+/pattern`) takes the rest as its pattern unless a newline or another control
   key ends it.
+- Commands an ssh setting runs on this machine (#1083). ssh runs `ProxyCommand` and `LocalCommand`
+  with the user's shell, and `KnownHostsCommand` as a program, here and not on the host. Each is
+  read as the line it holds, as above, and also as `bash -c` is: an `opaque_exec` part beside the
+  line's own reading.
+
+  So `ssh -o 'ProxyCommand=touch /tmp/x' host ls` asks, as `bash -c 'touch /tmp/x'` does, though a
+  known program in another option's value stays `allow` (below).
+
+  A delete, a post or a store path in the value still counts, and `opaque_exec: allow` allows a
+  known program there again. `XAuthLocation` names the program ssh runs for X11 forwarding, which
+  a config file can turn on, so it is an `opaque_exec` part too. scp's and sftp's `-o` settings
+  count the same way. `none` stays `allow`, and so do `ProxyJump` and `-J`, which name a host.
+
+  ssh fills in its %-tokens before it runs the command. `%%` is `%` and `%d` is the home folder,
+  so a value that holds them is read once more with `%d` as `~`: `ssh -o 'LocalCommand=rm -rf
+  %d/.exo' host ls` gets a store write part.
+
+  The other tokens (`%h`, `%p`, `%r` and the rest) name a host, a port or a user. They stay as
+  written, so a path built from them is read as the path it spells, and the `opaque_exec` part
+  still asks.
+
+  These parts sit beside the line, which keeps the category main gave it, its targets on an ssh
+  hop's host and the store check of its words. So `ssh -o 'ProxyCommand=touch /tmp/x' host ls`
+  stays a `read` that asks, and a `deny`, `reserved` or rule entry meets each part.
+
+  A store write read through `%d` is such a part too: `deny: [store_write]` denies the line, but
+  the part does not lead, so the store floor does not apply to it.
 - A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
   `allow`; a program the gate does not know asks, as it would on its own. The compressors `tar
   -I` usually names are known programs, none of them with an exec option: `gzip`, `bzip2`, `xz`,
@@ -3447,11 +3474,12 @@ call is read once more with each loop's second pass in its own folder, beside th
 are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when each
 loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). It is made in #864's reading too, so
 it counts when each loop is in its own `coproc` (`{ coproc for ..; done; }; { coproc for ..; done; }`, also after
-`then` and as `coproc NAME { ..; }`). And it is made in each of the two readings of a line whose `${..}` words are
-read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names
-`/proc/self/fd` too. A loop inside another that holds such a `cd` of its own counts too (the pair inside `while :;
-do ..; done`). Two known limits stay, as on main (#888). A command that runs once, outside any loop's second pass,
-after a second descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
+`then` and as `coproc NAME { ..; }`), and in #1047's printed reading, so it counts in a text that printf or `echo -e`
+pipes into a shell. And it is made in each of the two readings of a line whose `${..}` words are read both ways
+(#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too. A loop
+inside another that holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). Two known
+limits stay, as on main (#888). A command that runs once, outside any loop's second pass, after a second
+descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
 cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only. And a loop whose own commands `cd` into two different
 descriptor folders is named by its first descriptor `cd`, though bash starts its second pass where the last one
 left, so `while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only. bash also takes

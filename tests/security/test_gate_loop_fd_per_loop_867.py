@@ -146,6 +146,22 @@ WORD_ROWS = [
     f"sudo -i <<< '{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done'",
     f"env -S 'bash -c \"{_A}; for i in 1 2; do {_W}; cd /proc/self/fd; done\"'",
 ]
+_PA = r"for i in 1 2; do c\x70 /tmp/evil 3; cd /dev/fd; done"
+_PB = r"for i in 1 2; do c\x70 /tmp/evil 3; cd /proc/self/fd; done"
+_PS = r"for i in 1 2; do c\x70 /tmp/evil gates.yaml; cd ~/.exo/policies; done"
+# The pair in a text printf or `echo -e` pipes into a shell (#1047), in both orders, with printf, `echo -e` and printf
+# `%b`. A `\n` ends the printf format and joins the loops in the other forms, so the text as written holds no second
+# loop (bash reads `done\n` there as `donen`). The second folder is named only if the reading this change adds is
+# made inside the printed reading too (_printed_reading). The `cp` is also spelt `c\x70`. On main 2a9ba976 each names
+# the first loop's folder only.
+PRINTED_ROWS = [
+    rf"printf '{_PA}; {_PB}\n' | bash",
+    rf"printf '{_PB}; {_PA}\n' | bash",
+    rf"echo -e '{_PA}\n{_PB}' | bash",
+    rf"echo -e '{_PB}\n{_PA}' | bash",
+    rf"printf '%b\n' '{_PA}\n{_PB}' | bash",
+    rf"printf '%b\n' '{_PB}\n{_PA}' | bash",
+]
 # A store `cd` in one loop and a descriptor `cd` in the other: the store loop's second pass starts in the store, so it
 # is named as one, where main named it by the first loop's descriptor folder (`target:*store*` asked on d742d1bb).
 _CDW = "for i in 1 2; do cp /tmp/evil 3; cd ${v:-/proc/self/fd}; done"
@@ -160,10 +176,13 @@ STORE_ROWS = [
     # d3cbd874 names it so alone, and by the first loop's /dev/fd after it)
     f"{_A}; {_CDW}",
     f'{_A}; for i in 1 2; do cp /tmp/evil 3; cd "${{v:-/proc/self/fd}}"; done',
+    # in a printed text (#1047): named in the printed reading only
+    rf"printf '{_PA}; {_PS}\n' | bash",
+    rf"echo -e '{_PA}\n{_PS}' | bash",
 ]
 
 
-@pytest.mark.parametrize("line", ISSUE_ROWS + TWO_ROWS + NEST_ROWS + WORD_ROWS)
+@pytest.mark.parametrize("line", ISSUE_ROWS + TWO_ROWS + NEST_ROWS + WORD_ROWS + PRINTED_ROWS)
 def test_each_loop_names_its_own_descriptor_folder(line):
     c = _bash(line)
     got = _targets(c)
@@ -222,6 +241,8 @@ GUARD_ROWS = [
     # call, its #479 second reading, and the reading as before #143, ``flat``)
     (f"{_A}; for i in 1 2; do cp /tmp/evil 3; echo ${{v:-$(cd /proc/self/fd)}}; done", [{"/dev/fd"}, {"/dev/fd"}]),
     (f"{_A}; for i in 1 2; do {_W}; cd /dev/fd; done", [{"/dev/fd"}, {"/dev/fd"}, {"/dev/fd"}, set()]),
+    # #1047: two loops into one folder in a printed text (main 2a9ba976 gives the same two readings)
+    (rf"printf '{_PA}; {_PA}\n' | bash", [{"/dev/fd"}, {"/dev/fd"}]),
 ]
 
 
