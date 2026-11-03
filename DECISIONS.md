@@ -1613,7 +1613,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
   or block when an executor is required).
 - *Amendment 2026-11-01 (issue #1083):* a command an ssh setting runs on this machine is an `opaque_exec` part beside
-  the line, as `bash -c` is. On main d007348e `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand`
+  the line, as `bash -c` is. On main a2f6ec3d `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand`
   line were reads, allowed under `deny: [local_write]`, while `bash -c 'touch /tmp/x'` asks there. `ssh -X -o
   XAuthLocation=/tmp/evil host ls` was a read too.
 
@@ -1656,12 +1656,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   -J jump host ls` stays `allow`. A store write read through `%d` does not lead, so `deny: [store_write]` meets it but
   the store floor does not.
 
-  Main's `scripts/gate_diff.py` against main d007348e lowers 0 pairs in each of three runs. The built-in corpus gives
-  1,422,960 pairs without variants (4,347 tightened) and 10,312,632 with them (30,979 tightened).
+  Main's `scripts/gate_diff.py` against main a2f6ec3d, after #458 and #1104 changed the gate, lowers 0 pairs in each of
+  four runs. The built-in corpus gives 1,432,816 pairs without variants (4,347 tightened) and 10,339,296 with them
+  (30,979 tightened).
 
   An aimed corpus of 7,277 lines puts each setting in each form, with values that read, write, delete, post, touch a
   store or hold %-tokens, in each position and wrapper. Under the 88 built-in policies and 64 deny, reserved and rule
-  policies on the categories it meets, it gives 1,106,104 pairs (141,900 tightened). Tests:
+  policies on the categories it meets, it gives 1,106,104 pairs (141,900 tightened).
+
+  A second one of 2,060 lines adds other spellings, wrappers, compounds and nested lines, `find -exec`, `xargs` and `git
+  bisect run`, #1104's pipes into a shell that starts a group or a body, and lines bash rejects. Under 273 policies,
+  with `command` rules beside a category deny (#458), it gives 562,380 pairs (141,338 tightened). Tests:
   `tests/security/test_gate_ssh_command_settings_1083.py`.
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts

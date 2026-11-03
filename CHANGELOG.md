@@ -57,7 +57,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
   (#1099).
 - Gate (#1083, D-038 amendment): a command an ssh setting runs on this machine asks as `bash -c` does. On main
-  d007348e `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand` line were reads that `deny:
+  a2f6ec3d `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand` line were reads that `deny:
   [local_write]` allowed, and so was `ssh -X -o XAuthLocation=/tmp/evil host ls`.
 
   `ProxyCommand`, `LocalCommand`, `KnownHostsCommand` and `XAuthLocation` now each add an `opaque_exec` part beside
@@ -67,7 +67,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   ssh's `%d` token reads as the home folder, so `LocalCommand=rm -rf %d/.exo` gets a store write part. `none`,
   `ProxyJump` and `-J` stay reads.
 
-  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in three runs, 10,312,632 pairs on the built-in
+  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in four runs, 10,339,296 pairs on the built-in
   corpus with variants). Tests: `tests/security/test_gate_ssh_command_settings_1083.py`. **Docs:** `docs/GATE.md`,
   `docs/USER-GUIDE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
