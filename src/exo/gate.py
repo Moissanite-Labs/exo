@@ -270,6 +270,34 @@ class _StandIn(str):
 _READER = _StandIn("the reader's own text")
 
 
+class _OwnText(str):
+    """An own text without words the command does not run as written (#458): a here-string, or the program around a
+    command that `find -exec`, `xargs` or `git bisect run` runs. ``whole`` is the text with them, the own text before
+    #458. A rule names it only when it matches both (_names_own), so the own text test is never looser than before."""
+    whole: str
+
+
+def _own_of(bare: str, whole: str) -> str:
+    """``bare`` as an own text that ``whole`` was before (#458), or ``whole`` itself when they are the same."""
+    if bare == whole:
+        return whole
+    t = _OwnText(bare)
+    t.whole = getattr(whole, "whole", whole)
+    return t
+
+
+def _own_key(t: str | None) -> tuple:
+    """An own text for a dict key: two texts alike but for ``whole`` are not the same own text (#458)."""
+    return t, getattr(t, "whole", None)
+
+
+def _names_own(t: str | None, regexes: Iterable[re.Pattern]) -> bool:
+    """Whether a rule's patterns name an own text (#394): one of them matches it, and one matches its ``whole`` too."""
+    regexes = list(regexes)
+    return t is not None and any(rx.search(t) for rx in regexes) and \
+        (not isinstance(t, _OwnText) or any(rx.search(t.whole) for rx in regexes))
+
+
 def _severity(c: Classification) -> tuple:
     return (REVERSIBILITY.index(c.reversibility), EXPOSURE.index(c.exposure), c.third_party,
             c.category not in ("shell", "read", "code", "unknown"))
@@ -1835,6 +1863,11 @@ _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_openin
 # shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
 _printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
 _printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
+# #1104: set while classify reads a call (_lead_reading): [met], which _piped_text sets when an `echo`, `printf` or `cat`
+# that writes to a pipe comes after reserved words (_pipe_lead), where main's reading reads no text. classify then reads
+# the call again with _leading on, where such a pipe's text is read as at the start of a line. Main's reading stays.
+_lead_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_lead_met", default=None)
+_leading: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_leading", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -1960,16 +1993,34 @@ class _PipeTexts:
     """The pipeline texts that a line's stdin readers carry as their own text (#394, _runs_stdin), each built once.
     Each text holds every command before its reader, so a long pipeline of readers (`x|sh|sh|..`) would hold the
     square of its length. So together they hold at most four times the line's length plus 4 KB, and a reader past
-    that has no own text."""
+    that has no own text. A here-string is left out of every own text (#458, source)."""
 
     def __init__(self, lx: _Lexer) -> None:
         self.lx, self.left = lx, 4 * len(lx.s) + 4096
         self.built: dict[tuple[int, int], str | None] = {}
+        self.stdin: list[tuple[int, int]] = []     # where each here-string, `<<<` and its word, starts and ends
+
+    def source(self, a: int, b: int) -> str:
+        """The line's text from a to b without its here-strings (#458), with the text as written as its ``whole``
+        (_OwnText). A here-string is the command's stdin, as a here-doc body is, so a rule that names only its word
+        names no command."""
+        whole = self.lx._source(a, b)
+        k = bisect.bisect_left(self.stdin, (a,))
+        if k == len(self.stdin) or self.stdin[k][0] >= b:
+            return whole
+        out = []
+        for x, y in self.stdin[k:]:
+            if x >= b:
+                break
+            out.append(self.lx._source(a, x).strip())
+            a = y
+        out.append(self.lx._source(a, b).strip())
+        return _own_of(" ".join(t for t in out if t), whole)
 
     def text(self, a: int, b: int) -> str | None:
         if (a, b) not in self.built:
             fits = b - a <= self.left
-            self.built[(a, b)] = self.lx._source(a, b) if fits else None
+            self.built[(a, b)] = self.source(a, b) if fits else None
             self.left -= b - a if fits else 0
         return self.built[(a, b)]
 
@@ -2015,7 +2066,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
-            cur.own = lx._source(at, o_end)
+            cur.own = pipes.source(at, o_end)
             cur.subs_met = lx.met[o_tok]
             cur.opens = (shut[1], shut_met) if shut is not None else None
             if cur.piped_in and p_at >= 0:
@@ -2079,6 +2130,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             if i + 1 < len(toks) and toks[i + 1][0] == "w":
                 if v == "<<<":
                     cur.herestrings.append(toks[i + 1][1])
+                    pipes.stdin.append((marks[i][0], marks[i + 1][1]))
                 else:
                     cur.redirs.append((v, toks[i + 1][1]))
                 a, o_end, o_tok = marks[i][0], marks[i + 1][1], i + 1
@@ -2902,7 +2954,8 @@ def _run_privileged(c: Classification) -> None:
     _raise_axes(c, reversibility="costly")          # with the part a sudo write copy displaced (#454)
 
     def key(p: Classification) -> tuple:
-        return p.category, p.tool, p.target, p.exposure, p.third_party, p.command, p.own, tuple(p._command_views)
+        return p.category, p.tool, p.target, p.exposure, p.third_party, p.command, _own_key(p.own), \
+            tuple(p._command_views)
     parts, copies = list(_each_part(c))[1:], []
     have = {key(p) for p in parts if p.reversibility == "costly"}
     for p in parts:
@@ -4713,9 +4766,12 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         texts.append(_Word(piped))
     # A feed whose text the gate cannot read (#316): the closer's `<` (a file or a descriptor; a lone
     # `< /dev/null` feeds nothing), or a pipe in whose text is not known. The inner commands are marked
-    # instead of fed, so a reader of its stdin (ssh) still asks.
+    # instead of fed, so a reader of its stdin (ssh) still asks. #1104: a pipe main read no text from, as its
+    # writer comes after reserved words (`{ echo .. | { bash; }; }`), is fed and marked both, so each reader
+    # reads the text and still asks as on main, and a post's body stays unseen (_read_cmd).
+    late = src is not None and piped is not None and _pipe_lead(src.words) > 0
     unknown = (any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in closer.redirs)
-               or (src is not None and piped is None and not _own_stdin(closer)))
+               or (src is not None and (piped is None or late) and not _own_stdin(closer)))
     i, sets = start, False
     while i < len(cmds) and not sets:
         if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
@@ -4727,7 +4783,7 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         k.fed = k.fed or fed            # its own text does not name its stdin (#394)
         if fed and unknown:
             k.stdin_unknown = True
-        elif fed and not redirected:
+        if fed and not redirected and (late or not unknown):
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -4773,6 +4829,21 @@ def _read_as_reader(read: Callable[[str], list[Classification]], text: str) -> l
         slot[0] = was
 
 
+def _run_own(words: list, read: Callable[[], list[Classification]]) -> list[Classification]:
+    """read(), with ``words`` as written for the own text of each part it makes (#458): the command that `find -exec`,
+    `xargs` or `git bisect run` runs is a command of its own, as the value of `git rebase -x` is, so a rule written
+    for the program that runs it does not lower it. The program's own text stays its ``whole`` (_OwnText), so a rule
+    must still match it too, as before. A part that had no own text, or a stand-in, keeps what it had."""
+    slot = _own_text.get()
+    if slot is None or slot[0] is None or isinstance(slot[0], _StandIn):
+        return read()
+    was, slot[0] = slot[0], _own_of(" ".join(w.raw or w.text for w in words), slot[0])
+    try:
+        return read()
+    finally:
+        slot[0] = was
+
+
 def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Classification:
     """``c``, a part _once stored, with ``own`` as the own text of each part in it that has _READER (#394). Only those
     parts and the parts built from them are copied, once per line for each part and own text: the many readers
@@ -4789,9 +4860,10 @@ def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Cl
     def walk(p: Classification) -> Classification:
         if not held(p):
             return p
-        if (id(p), own) not in done:
-            done[(id(p), own)] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
-        return done[(id(p), own)]
+        key = (id(p), _own_key(own))
+        if key not in done:
+            done[key] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
+        return done[key]
     return walk(c)
 
 
@@ -5203,7 +5275,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         i = 1
         while i < len(words) and words[i].text.startswith("-"):
             i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
-        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + inner_words(words[i:])
+        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + \
+            _run_own(words[i:], lambda: inner_words(words[i:]))
     if prog == "find":
         parts = [_make("read", summary="find", command=cmd)]
         i = 1
@@ -5212,7 +5285,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 j = i + 1
                 while j < len(words) and words[j].text not in (";", "+"):
                     j += 1
-                parts += [_opaque(f"find {words[i].text} runs a command per file", cmd)] + inner_words(words[i + 1:j])
+                ran = words[i + 1:j]
+                parts += [_opaque(f"find {words[i].text} runs a command per file", cmd)] + \
+                    _run_own(ran, lambda: inner_words(ran))
                 i = j
             elif words[i].text == "-delete":
                 parts.append(_make("delete", summary="find -delete", target=argv[1] if len(argv) > 1 else "",
@@ -6015,7 +6090,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
-            parts += _classify_simple(_wrapped(k, words[i + 2:]), cmd, depth + 1, ctx, piped)
+            parts += _run_own(words[i + 2:], lambda: _classify_simple(_wrapped(k, words[i + 2:]), cmd, depth + 1, ctx,
+                                                                         piped))
         if sub == "submodule":
             j = 0
             while j < len(rest) and rest[j].startswith("-") and rest[j] != "--":
@@ -6516,13 +6592,47 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     return c
 
 
+def _pipe_lead(words: list) -> int:
+    """#1104: where the command that writes to a pipe starts among ``words``, after the reserved words that open the
+    pipeline or a compound around it: `{`, `then`, `do`, `!` and the others of _OPENERS, a `time` with its `-p` and
+    `--` (_time_prefix), and a `coproc [NAME]` or `function NAME` before such an opener (`coproc W {`, `function f {`,
+    as _late_loop_word reads them). bash runs the command after them with its output in the pipe, as it does at the
+    start of a line. A quoted word ends the search, except as the NAME."""
+    i, n = 0, len(words)
+    while i < n and not words[i].quoted:
+        text = words[i].text
+        if text in _OPENERS:
+            i += 1
+        elif text == "time":
+            i += 1
+            for opt in ("-p", "--"):
+                if i < n and not words[i].quoted and words[i].text == opt:
+                    i += 1
+        elif text in ("coproc", "function"):
+            j = i + 1 + (i + 1 < n and (words[i + 1].quoted or words[i + 1].text not in _OPENERS))
+            if j >= n or words[j].quoted or words[j].text not in _OPENERS:
+                break
+            i = j
+        else:
+            break
+    return i
+
+
 def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
-    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`.
+    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`, also as the
+    first command of a group, a body or a condition, or after `!` or `time` (_pipe_lead, #1104). Main's reading reads
+    no text there and notes the pipe (_lead_met): the call's second reading (_lead_reading, _leading) reads it.
     memo joins a compound's stdin, which many `cat`s inside it share, once per line."""
-    words = [w for w in k.words]
+    lead = _pipe_lead(k.words)
+    words = k.words[lead:]
     if not words or any(w.dynamic for w in words):
         return None
     prog = words[0].text
+    if lead and not _leading.get():
+        if (prog in ("echo", "printf") or prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings)) and \
+                (met := _lead_met.get()) is not None:
+            met[0] = True
+        return None
     if prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings):
         memo = {} if memo is None else memo
         key = (id(k.heredocs), id(k.herestrings))
@@ -7410,7 +7520,9 @@ def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot:
     so, and so does a loop's second pass (#479)."""
     piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
     # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-    ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+    # A stdin the gate cannot read leaves the body unseen, also where a pipe main read nothing from feeds it (#1104).
+    ctx["post_stdin"] = None if k.stdin_unknown else \
+        _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
     slot[0] = k.own
     own = _literal_assigns(k, ctx["literals"])
     late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
@@ -7631,8 +7743,8 @@ def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple
 
 def _part_key(p: Classification) -> tuple:
     """What a policy reads of one part, so a loop's second pass (#479) adds only the parts the line does not have."""
-    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, p.own, p.text,
-            p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
+    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, _own_key(p.own),
+            p.text, p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
 
 
 def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
@@ -7836,7 +7948,8 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
     string literals, as in subprocess.run([...])) as a shell command. Only results that matter count.
     The code part and each call found carry `own` as their own text (#394): by default the shell command that runs
     the code (`python3 -c '..'`), or the code itself for execute_code. A literal read as a command is only a guess
-    at one, so no part of its result has own text, and no rule keyed on `command` lowers it."""
+    at one, so no part of its result has own text, and no rule keyed on `command` lowers it, on a line of one command
+    too (#458, _one_text)."""
     if own is ...:
         slot = _own_text.get()
         own = slot[0] if slot is not None else code
@@ -7844,8 +7957,9 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
 
 
 def _unowned(c: Classification, seen: dict[int, Classification]) -> Classification:
-    """``c`` and the parts it was built from, without own text or setters (#394), so code with a literal stays one
-    text for _one_text however the literal reads. Parts shared within ``c`` stay shared."""
+    """``c`` and the parts it was built from, without own text or setters (#394): a setter in a literal runs in the
+    shell the code starts, not in the line around it. Each part with no own text makes the line not one text for
+    _one_text (#458). Parts shared within ``c`` stay shared."""
     if id(c) not in seen:
         seen[id(c)] = replace(c, own=None, setters=[], parts=[_unowned(p, seen) for p in c.parts])
     return seen[id(c)]
@@ -9656,7 +9770,7 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     met = [False]
     token = _printed_met.set(met)
     try:
-        c = _one_reading(action, cwd)
+        c = _lead_reading(action, cwd)
     finally:
         _printed_met.reset(token)
     if not met[0] or _printing.get() or _config_off.get():
@@ -9664,11 +9778,46 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token2 = _printing.set(True)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_lead_reading)(action, cwd)
     finally:
         _printing.reset(token2)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
+
+
+def _lead_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1104: when a pipe in it is written by an `echo`, `printf` or `cat` that comes
+    after reserved words (`{ echo .. | bash; }`, a `then` or `do` body, after `!` or `time`: _pipe_lead), whose text
+    that reading does not read (_piped_text notes it), a second reading of the call beside it, in which each such
+    pipe's text is read as at the start of a line. The second reading has budgets and memos of its own, as
+    _printed_reading's has, and the text spends them: a text that uses up a cap (_WORD_PARTS, _BRACE_BUDGET) leaves
+    no part after it unread that main's reading read. The reading as before is main's, with its ``ordinary`` reading
+    (D-074) beside the second reading's, and decide keeps the strictest, so a line never decides lower than before.
+    A second reading that adds no part (_part_key) is left out, so a line it reads no more of keeps main's reading
+    alone. A reading inside the second reading reads such pipes with no third reading."""
+    met = [False]
+    token = _lead_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _lead_met.reset(token)
+    if not met[0] or _leading.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _leading.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _leading.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    keys = {_part_key(p) for r in readings(c) for p in _each_part(r)}
+    if all(_part_key(p) in keys for r in readings(x) for p in _each_part(r)):
+        return c
     o, xo = c.ordinary, x.ordinary
     c = _beside(c, x, lead=True)
     c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
@@ -10302,12 +10451,25 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
 
 def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
-    parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
-    its code). The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516),
-    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as
-    it names the `cd` in the cd form; naming the folder lifts no deny of the part's."""
-    texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
-    return len(texts) < 2
+    secret path it names, a part the gate made for it with no own text (`cat ~/.kube/config`). A call with no own
+    text at all (a tool other than a shell or execute_code) is one text too.
+    Any other part with no own text makes the line not one text (#458): a string literal in code read as a command
+    (only a guess at one), a reader a compound feeds, a nest past a cap, the reading of a word bash rejects or the
+    gate cannot read (`echo 'unclosed ; rm -rf ./work`). Where such a part decides the line or would be stricter
+    alone, no rule keyed on `command` lowers it, as beside a second command: `python3 -c 'import os;
+    os.system("git push --force origin main")'` under an allow rule for `^python3 -c`.
+    Nor is a line whose text holds `<<` (#458): a here-string's word and a here-doc's body are stdin, not the
+    command's own text, so a rule that would lower the line must name that text, as on a line of two commands. Where
+    the `<<` starts neither (a quoted `<<`, a shift), the own text is the line's, and the pass decides as before.
+    The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516), so a line
+    with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as it names
+    the `cd` in the cd form; naming the folder lifts no deny of the part's."""
+    texts: set[str] = set()
+    guess = False
+    for p in _each_part(c):
+        guess = guess or (p.own is None and p.category != "credentials")
+        texts.update(t for t in (p.own, *p.setters) if t is not None)
+    return not texts or (len(texts) < 2 and not guess and "<<" not in c.command)
 
 
 def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
@@ -10331,7 +10493,7 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
         # The part alone, without the parts it was built from (each is tested in turn): no rule lowers it here.
         # Parts alike decide alike, so a long line of the same few commands is decided a few times. A gh part is
         # also decided on each other target it may land on (#399), so those are part of what makes parts alike.
-        text = p.own if p.own is not None else p.command
+        text = getattr(p.own, "whole", p.own) if p.own is not None else p.command   # as before #458
         key = (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.tool, p.summary, p.target, p.text,
                p.title, p.text_file, text, tuple(p.signals), tuple(p.alt_targets))
         if key not in alone:
@@ -10344,9 +10506,10 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
         regexes, seen, level = [re.compile(x) for x in patterns], {}, OUTCOMES.index(decision)
 
         def named(t: str | None) -> bool:
-            if t not in seen:
-                seen[t] = t is not None and any(rx.search(t) for rx in regexes)
-            return seen[t]
+            key = _own_key(t)
+            if key not in seen:
+                seen[key] = _names_own(t, regexes)
+            return seen[key]
         return all(named(t) for t in setters) and \
             all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
     return test
@@ -10416,8 +10579,8 @@ def _override_deny(c: Classification, gates: Mapping, passed: list[Mapping] | No
             if r["decision"] != "deny" and "command" in r["match"] and p.command != c.command and \
                     not _rule_matches({"command": r["match"]["command"]}, c):
                 continue
-            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
-                    p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):
+            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and \
+                    not _names_own(p.own, (re.compile(str(x)) for x in _as_list(r["match"]["command"]))):
                 passed.append(r)
                 continue
             if passed is not None and whole is not None and r["decision"] != "deny" and "command" in r["match"] and \
@@ -10535,10 +10698,13 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
-    command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
-    folder added is on it. That part carries a `_StandIn` for `cd <folder>` among its setters (#516), so the line
-    goes through the own text pass: a rule that names only the command is passed over, and the part's matrix deny
-    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of.
+    command, beside the secret paths it names, is decided as before (_one_text). Any other part with no own text (a
+    string literal in its code read as a command, a reader a compound feeds, a word bash rejects) makes the line go
+    through the own text pass (#458). So does the part the call's own folder added, which carries a `_StandIn` for
+    `cd <folder>` among its setters (#516): a rule that names only the command is passed over, and the part's matrix
+    deny stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of. A line whose text
+    holds `<<` goes through that pass too (#458): a here-string's word and a here-doc's body are not the command's
+    own text, so a rule that names only them lowers nothing.
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
@@ -10692,7 +10858,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         if not _rule_matches(r["match"], eff):
             continue
         first = first or r
-        if passed is not None and eff.parts and "command" in r["match"] and \
+        if passed is not None and "command" in r["match"] and \
                 (OUTCOMES.index(r["decision"]) < base or names_opaque(r)):
             own = own or _line_own_test(eff, pol, ctx)
             if not own(r["decision"], [str(x) for x in _as_list(r["match"]["command"])]):
