@@ -9,8 +9,8 @@ short options run together whose last letter takes the next word (`-rn 1`), and 
 options are now read as getopt reads them for GNU and BSD xargs (`_xargs_start`). Where that start differs from main's,
 the call is read again with each xargs's command read from it (`_xargs_reading`), beside main's reading, so no line
 decides lower. The command read from that start has its own words as its own text (#458, `_run_own`). Each new row fails
-on main c05f0ca1, but for the rows that keep main's reading. Classification and decision only: nothing here runs the
-lines.
+on main c05f0ca1 and a2f6ec3d, but for the rows that keep main's reading. Classification and decision only: nothing here
+runs the lines.
 """
 from pathlib import Path
 
@@ -73,6 +73,30 @@ def test_the_issues_pipe_row_is_read():
     line = r"printf 'a\n' | xargs --max-args 1 PUSH"
     assert decided(line)[:2] == ("force_push", ("deny", "category"))      # main: opaque_exec, allow
     assert decided(line) == decided(r"printf 'a\n' | xargs -n 1 PUSH")
+
+
+# The second reading reads the whole call again, so an xargs inside a wrapper, a nested shell, a group, a loop, a
+# substitution, a here-string, a printed line, an `env -S` text or behind a quoted prefix assignment is read from
+# getopt's start too. So is an xargs in what an echo or printf pipe at the start of a group or body, or after `!` or
+# `time`, prints into a shell (#1104). Each line decides as the same line with `-n 1` in place of its options.
+NESTED = [("bash -c 'xargs {} PUSH'", "--max-args 1"), ("sudo xargs {} PUSH", "-rn 1"),
+          (r"find . -exec xargs {} PUSH \;", "-J %"), ("time xargs {} PUSH", "--max-a 1"),
+          ("{{ xargs {} PUSH; }}", "--arg-file list"), (r"printf 'xargs {} PUSH\n' | bash", "-rn 1"),
+          ("bash <<< 'xargs {} PUSH'", "--max-args 1"), ("env -S 'xargs {} PUSH'", "--max-procs 4"),
+          ("echo $(xargs {} PUSH)", "--max-args 1"), ("xargs -n 1 xargs {} PUSH", "--max-args 1"),
+          ("for f in a; do xargs {} PUSH; done", "-tP 4"), ("X='a b' xargs {} PUSH", "--max-args 1"),
+          ("git bisect run xargs {} PUSH", "-0n 1"), ("ssh h xargs {} PUSH", "--max-args 1"),
+          ("{{ echo 'xargs {} PUSH' | bash; }}", "--max-args 1"),
+          (r"if true; then printf 'xargs {} PUSH\n' | sh; fi", "-rn 1"),
+          ("while false; do echo 'xargs {} PUSH' | bash; done", "-J %"),
+          ("! echo 'xargs {} PUSH' | bash", "--max-a 1"), (r"time printf 'xargs {} PUSH\n' | bash", "--arg-file list")]
+
+
+@pytest.mark.parametrize("form, options", NESTED)
+def test_the_command_after_the_options_is_read_in_each_form_of_the_line(form, options):
+    line = form.format(options)
+    assert decided(line)[:2] == ("force_push", ("deny", "category"))      # main: opaque_exec, allow
+    assert decided(line) == decided(form.format("-n 1"))
 
 
 # Another command after such options is read too: a delete and a post, under deny entries on them.
