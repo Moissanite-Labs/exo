@@ -89,9 +89,9 @@ def test_other_commands_after_the_options_are_read(options, command, category):
 # `-n 1` in place of its options). Flags alone, `-I` with its value, GNU's `-i`, `-e` and `-l` with an attached value,
 # GNU's long flags and the forms main read already decide as on main. A value option at the end of the line has no
 # command to read, and xargs with no command runs echo: both stay xargs's opaque part alone. An unknown or ambiguous
-# option makes xargs fail, so main's reading is the one kept. A word xargs takes as a value that main read as the
-# program is still read there too (`-J rm echo hi`), and so is a word after `--` or a lone `-`, which xargs runs as the
-# program.
+# option makes xargs fail (neither GNU nor BSD xargs has `-h`), so main's reading is the one kept. A word xargs takes
+# as a value that main read as the program is still read there too (`-J rm echo hi`), and so is a word after `--` or a
+# lone `-`, which xargs runs as the program.
 KEPT = [
     ("xargs PUSH", "xargs -n 1 PUSH", "xargs --max-a 1 PUSH"),
     ("xargs -n1 PUSH", "xargs -n 1 PUSH", "xargs -rn 1 PUSH"),
@@ -118,6 +118,7 @@ KEPT = [
     ("xargs", "xargs", "xargs -tP 4 PUSH"),
     (r"printf 'a\n' | xargs", r"printf 'a\n' | xargs", r"printf 'a\n' | xargs -rn 1 PUSH"),
     ("xargs -q 1 PUSH", "xargs 1 PUSH", "xargs -rs 1 PUSH"),
+    ("xargs -hn 1 PUSH", "xargs 1 PUSH", "xargs -rn 1 PUSH"),
     ("xargs --max 1 PUSH", "xargs 1 PUSH", "xargs --max-p 1 PUSH"),
     ("xargs --foo PUSH", "xargs PUSH", "xargs --proc V PUSH"),
     ("xargs -J rm echo hi", "xargs rm echo hi", "xargs -J % PUSH"),
@@ -199,6 +200,7 @@ def test_where_getopt_starts_the_command():
     assert start("xargs - echo hi") == 1
     assert start("xargs --max 1 echo hi") is None               # ambiguous: xargs fails, main's reading stays alone
     assert start("xargs -q 1 echo hi") is None
+    assert start("xargs -hn 1 echo hi") is None                 # neither GNU nor BSD xargs has -h
     assert start("xargs -rn") is None
     assert start("xargs --max-args") is None
     assert start("xargs") == 1

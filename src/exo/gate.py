@@ -5198,7 +5198,7 @@ _XARGS_LONG = {"arg-file": 1, "delimiter": 1, "max-chars": 1, "max-args": 1, "ma
                "eof": 0, "replace": 0, "max-lines": 0, "null": 0, "open-tty": 0, "interactive": 0,
                "no-run-if-empty": 0, "verbose": 0, "show-limits": 0, "exit": 0, "version": 0, "help": 0}
 _XARGS_VALUE = "adEILnPsJRS"     # takes the rest of its word, or the next word: GNU's, and BSD's -J, -R and -S
-_XARGS_FLAGS = "0hoprtx"         # takes no value. GNU's -e, -i and -l take the rest of their word only.
+_XARGS_FLAGS = "0oprtx"          # takes no value. GNU's -e, -i and -l take the rest of their word only.
 # #1116: set while classify reads a call (_classify_read): [met], which an xargs sets when getopt starts its command
 # at another word than main's reading does (_xargs_start). classify then reads the call again with _xargs_getopt on,
 # where each xargs reads its command from getopt's start (_xargs_reading). Main's reading stays beside.
