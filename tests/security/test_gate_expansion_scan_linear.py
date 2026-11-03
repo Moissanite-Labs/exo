@@ -80,3 +80,59 @@ def test_a_command_value_nest_reads_each_value_once():
     n = _times("${GIT_PAGER:=less }") // 4
     c = _timed("echo " + "${GIT_PAGER:=less " * n + "}" * n, SLACK)
     assert (c.category, gate.decide(c).outcome) == ("read", "allow"), c
+
+
+_URLS = " ".join(f"https://ghe.corp/o/r/pull/{i}" for i in range(_times("https://ghe.corp/o/r/pull/1234 ")))
+
+
+@pytest.mark.parametrize("cmd", [
+    f"gh pr comment {_URLS} -b x",
+    f"gh pr close {_URLS} --comment x",
+    f"gh pr merge {_URLS} --subject x",
+    f"true && gh pr comment {_URLS} -b x",
+], ids=["comment", "close", "merge", "compound"])
+def test_a_gh_line_of_many_url_operands_is_linear(cmd):
+    """#550: each URL operand on another instance is another target, with a copy of the action on it. classify read a
+    close's comment or a merge's subject once per copy, and decide read the line on each target with every copy: some
+    3,000 targets took minutes. The line on each other target is now decided without the copies, as the first
+    decision met each of them. The lexer and the per-word store check take most of classify's time (#293)."""
+    c = _timed(cmd, SLACK)
+    assert len(c.alt_targets) > 3000, len(c.alt_targets)
+    t = time.process_time()
+    d = gate.decide(c, gate.normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]},
+                                                          "deny": ["target:ghe.corp/o/r#3000"]}}))
+    took = time.process_time() - t
+    assert took < BOUND, took
+    assert d.outcome == "deny", d       # a deny on one far target still reaches the line
+
+
+def test_a_long_line_of_gh_repo_values_and_gh_commands_is_linear():
+    """#566: each gh command reads the GH_REPO values the line set before it, in a compound too, each one another
+    target with a copy of the action. Only the last few count, so a line of many values and many gh commands stays
+    linear, and a deny on a value deep in the line still reaches it."""
+    unit = "{ export GH_REPO=o/r1234; gh pr comment 1234 -b x; }; "
+    cmd = "".join(f"{{ export GH_REPO=o/r{i}; gh pr comment {i} -b x; }}; " for i in range(_times(unit)))
+    c = _timed(cmd, SLACK)
+    t = time.process_time()
+    d = gate.decide(c, gate.normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]},
+                                                          "deny": ["target:o/r1500#*"]}}))
+    took = time.process_time() - t
+    assert took < BOUND, took
+    assert d.outcome == "deny", d
+
+
+def test_many_prefix_gh_repo_values_before_many_url_operands_are_linear():
+    """#566, review 5722148651: each GH_REPO value before gh is read on every operand. bash passes gh only the last,
+    and the gate keeps the last few, so 4,687 values before 806 URL operands no longer take the product of the two.
+    A deny on the last value still reaches the line."""
+    values = SIZE * 3 // 4 // len("GH_REPO=a1234/r ")
+    unit = "https://ghe.corp/o/r/pull/1234 "
+    urls = " ".join(f"https://ghe.corp/o/r/pull/{i}" for i in range(SIZE // 4 // len(unit)))
+    cmd = " ".join(f"GH_REPO=a{i}/r" for i in range(values)) + f" gh pr comment {urls} -b x"
+    assert len(cmd) > SIZE * 0.95, len(cmd)
+    c = _timed(cmd, SLACK)
+    t = time.process_time()
+    d = gate.decide(c, gate.normalize_policies({"gates": {"deny": [f"target:a{values - 1}/*"]}}))
+    took = time.process_time() - t
+    assert took < BOUND, took
+    assert d.outcome == "deny", d

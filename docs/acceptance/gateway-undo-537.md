@@ -10,6 +10,8 @@ A pin then goes only when its lead is that one or a later one, no principal mess
 
 That tells an undo from a truncated host window. A window fails at its first row when that row differs from the session's first row, and one that opens with the same words as a lead but goes on past it fails at its end. A window whose rows read word for word like the session's first rows still looks the same as an undo.
 
+For a host that leaves the turn's message out, the check stops before a last user row that the message repeats. Its window then also looks the same as an undo when the rows before that row read word for word like the session's first rows.
+
 The check keeps folded pins and tombstones, and drops through the undo path, so the drop is logged and later carries skip it. Absence from a fresh transcript alone still drops nothing. `DECISIONS.md` D-041, 2026-10-30 note, lists the cases that stay uncovered, including the handoff file an earlier compaction wrote.
 
 An explicit post-undo provider event from the host would still help: it reaches a live engine, and this check waits for a new one. A live engine that runs a turn after the undo leaves a transcript that goes on past the noted lead, so no later check drops the pin.

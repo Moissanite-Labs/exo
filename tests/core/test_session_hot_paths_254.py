@@ -68,6 +68,22 @@ def test_user_turns_counts_as_the_full_load_did_without_decoding(decoded):
         store.close()
 
 
+def test_a_nan_note_counts_as_a_turn_as_undo_reads_it():
+    """Review 5732419504 of #1102: the one value where the SQL count and the old Python rule differ. Python reads
+    NaN as true, a note. SQLite reads the stored NaN as null, no note, and ``undo`` has always read it so."""
+    store = SessionStore()
+    try:
+        sid = store.create_session().id
+        store.append_message(sid, Message.user("ask"))
+        store.append_message(sid, note("nan note", float("nan")))
+        store.append_message(sid, note("inf note", float("inf")))
+        assert old_turns(store, sid) == 1 and store.user_turns(sid) == 2
+        assert store.undo(sid) == 1  # the NaN note is the last turn, and the Infinity note stays as notes do
+        assert [m.meta.get("note") for m in store.messages(sid)] == [None, float("inf")]
+    finally:
+        store.close()
+
+
 def test_last_messages_is_the_tail_of_the_full_load(decoded):
     store = SessionStore()
     try:

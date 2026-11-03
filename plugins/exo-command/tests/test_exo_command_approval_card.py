@@ -1,6 +1,8 @@
 """The Command tab's approval card, run offline in node: allow always takes a separate Confirm always click, as on the
-Chat card, and the card shows the whole call. Production dom.js and command.js build the page; the harness only
-stands in for the DOM, fetch, sessionStorage and EventSource."""
+Chat card, and the card shows the whole call.
+
+Production dom.js and command.js build the page. The harness only stands in for the DOM, focus, fetch,
+sessionStorage and EventSource. As in a browser, focus falls to the body when the focused element leaves the page."""
 import json
 import re
 import shutil
@@ -20,11 +22,16 @@ class El {
   getAttribute(k) { return this.attrs[k] ?? null; }
   addEventListener(k,f) { (this.listeners[k] ||= []).push(f); }
   appendChild(c) { this.children.push(c); c.parent=this; return c; }
-  replaceChildren(...xs) { this.children=[]; xs.forEach(x=>this.appendChild(x)); }
+  replaceChildren(...xs) { this.children.forEach(x=>{ x.parent=null; }); this.children=[]; xs.forEach(x=>this.appendChild(x)); }
   get textContent() { return this.text ?? this.children.map(x=>x.textContent).join(""); }
   all() { return [this, ...this.children.flatMap(x=>x.all ? x.all() : [])]; }
+  focus() { focused=this; }
 }
+let focused=null;
 globalThis.document=Object.assign(new El("document"),{hidden:false});
+document.body=document.appendChild(new El("body"));
+Object.defineProperty(document,"activeElement",{get() {   // the body once the focused element has left the page
+  let x=focused; while(x && x!==document) x=x.parent; return x ? focused : document.body; }});
 document.createElement=tag=>new El(tag);
 document.createTextNode=text=>Object.assign(new El("#text"),{text});
 globalThis.sessionStorage={getItem:()=>"tok"};
@@ -45,13 +52,18 @@ globalThis.fetch=async(path,opt)=>{
   return {ok:true,status:200,json:async()=>(path.startsWith("/api/snapshot")?snap():{ok:true})};
 };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const root=new El("div");
+const root=document.body.appendChild(new El("div"));
 const {mount}=await import("./command.mjs");
 const unmount=mount(root);
 await sleep(20);
 const buttons=()=>root.all().filter(x=>x.tagName==="BUTTON");
 const button=label=>buttons().find(b=>b.textContent===label);
-const click=(b,detail=1)=>{ assert.ok(b,"no such button"); (b.listeners.click||[]).forEach(f=>f({target:b,detail})); };
+// A click focuses its button first, as Chrome does.
+const click=(b,detail=1)=>{ assert.ok(b,"no such button"); b.focus(); (b.listeners.click||[]).forEach(f=>f({target:b,detail})); };
+const press=key=>{   // a keydown on the focused element, bubbling up to the document
+  const e={key,target:document.activeElement,preventDefault(){},stopPropagation(){}};
+  for(let x=document.activeElement; x; x=x.parent) (x.listeners.keydown||[]).forEach(f=>f(e));
+};
 const changed=async()=>{ streams[0].onmessage({data:"{}"}); await sleep(200); };   // the core published something
 '''
 
@@ -109,6 +121,34 @@ assert.equal(posts.length,0);
 click(button("allow")); await sleep(20);            // allow and deny still answer in one click
 click(button("deny")); await sleep(20);
 assert.deepEqual(posts,[["/api/approvals/a_1",{decision:"allow"}],["/api/approvals/a_1",{decision:"deny"}]]);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_the_confirm_takes_focus_keeps_it_through_core_events_and_escape_or_cancel_gives_it_back(tmp_path):
+    """Allow always redraws the page, so the focused button leaves it. Focus goes to Cancel, the safe default for a
+    standing grant: a second Enter cancels instead of saving it. A core event redraws the page too, and focus stays on
+    the same button. Cancel and Escape put it back on allow always."""
+    execute(tmp_path, r'''
+click(button("allow always")); await sleep(20);
+assert.equal(document.activeElement,button("Cancel"));
+await changed();
+assert.equal(document.activeElement,button("Cancel"));
+press("a"); await sleep(20);                        // only Escape cancels
+assert.ok(button("Confirm always"));
+press("Escape"); await sleep(20);
+assert.equal(button("Confirm always"),undefined);
+assert.equal(document.activeElement,button("allow always"));
+await changed();
+assert.equal(document.activeElement,button("allow always"));
+click(button("allow always")); await sleep(20);
+button("Confirm always").focus();
+press("Escape"); await sleep(20);                   // Escape on Confirm always cancels too
+assert.equal(button("Confirm always"),undefined);
+assert.equal(document.activeElement,button("allow always"));
+click(button("allow always")); click(button("Cancel")); await sleep(20);
+assert.equal(document.activeElement,button("allow always"));
+assert.equal(posts.length,0);
 ''')
 
 

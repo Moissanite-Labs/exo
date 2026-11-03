@@ -192,10 +192,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
   its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
   Tests: `tests/integration/test_engine_start_retry.py`.
+- **Amendment 2026-10-31 (#263, the HTTP client half of W2-7):** an HTTP transport keeps one `httpx.AsyncClient`
+  for each event loop that calls it, instead of making one for each call and closing it after. Calls on a loop
+  reuse its connections, and the client is built once per loop. A client is bound to the loop that made it, so
+  the engine's loop and the `aux_sync` thread each get their own, and a client whose loop has ended is dropped.
+  The engine's close closes every client the router made (`Router.aclose`), each on its own loop, also for the
+  transports a key reload replaced. The router keeps only those clients, not the replaced keys. A client or a
+  provider instance passed in stays its owner's to close. A command that builds its own router closes it before
+  its loop ends, since a client whose loop has ended cannot be closed: `exo decide` and the baseline decision judge
+  do so after each question. Tests: `tests/core/models/test_http_client_reuse.py`.
 - **Amendment 2026-11-01 (#254, W2-4):** a turn reads only what it uses from the session. It decoded every message
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  NaN is the one exception: SQLite reads a stored NaN as null, so a NaN note counts (amendment 2026-11-02).
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
   read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
@@ -216,7 +226,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  `tests/core/test_event_paging_254.py`, `tests/learn/test_learn_signals.py`.
+- **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
+  and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
+  every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
+  that held the lock for 11 to 17 s, so another process on the same home failed with `database is locked` after its
+  5 s wait. The fork now reads the parent and builds its copies and search rows on a read snapshot (`_read`).
+  The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
+  the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
+  kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. A replay page the log
+  cannot read ends the stream. Since the amendment above, only the first page is read at subscribe, so a later
+  page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
+  once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
+  the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
+  subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
+  when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
+  disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
+  written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
+  `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
+  limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
+  none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
+  `last_messages`, and now gives none for a limit below 1 there too. `user_turns` counts a NaN note as a turn,
+  where the Python rule it replaced read NaN as true. `undo` reads it the same way, and no writer stores one,
+  so the docstring names it and the rule stays. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
+  `tests/core/test_session_hot_paths_254.py`, `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -1457,6 +1492,76 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
   and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
   `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
+- *Amendment 2026-10-30 (issue #566):* gh reads `GH_REPO` as `-R` when the line gives none, and `GH_CONFIG_DIR`
+  picks its config. The gate read neither. `GH_REPO=pub/repo gh pr comment 5` posts on `pub/repo#5`, but the gate
+  read the target as `#5`, a repo the line does not name: the line asked as public with a third party, yet a
+  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix assignment
+  (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read as `-R` is,
+  on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). An export or a bare assignment in a compound, or
+  before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
+  `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
+  four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
+  linear. A value past the four adds no reading, as a value the gate cannot read. Of the prefix assignments before
+  one command, the last four values are kept too, before the line's own values are added (review 5722148651). Each
+  value is read on every operand, so 6,000 prefix values before 400 URL operands took 20 s of CPU in classify.
+  bash, `env` and `sudo` pass gh the last one, but an option can take a later word as its value
+  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. Four
+  such option values after the real one still push it out, and that line asks as on main (#1041). gh api's
+  `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as gh's
+  `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks. A `$".."` word also reads the line as `opaque_exec` (#136), and
+  the stricter of the two readings stood, the first one on a tie. The copy on a `GH_REPO` value is public, so on each
+  other target it could raise the post's reading to the ask of a reserved `opaque_exec` reading, and that reading's
+  reserved hits then dropped out (`export GH_REPO=pub/repo; gh pr comment <URLs> -b $"ok"` under
+  `reserved: [opaque_exec]`, found by gate_diff's aimed corpus in #1042's fourth round). Now on a tie the reserved
+  hits of both readings stand, so each still keeps a standing grant from covering the call (D-075). That lists more
+  hits on some lines than main does, never fewer. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
+  change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
+  `editor` commands. So it asks, as `opaque_exec` named in the summary. That part leads the line, so a policy that
+  allows `opaque_exec` let a line through that main logged as a costly read or asked as a nested line
+  (`ssh host 'GH_CONFIG_DIR=./c sudo -E git status'`, review 5726571369). The call is now also read with
+  `GH_CONFIG_DIR` an ordinary variable, as before, as the last of its floors (`_gh_config_plain`, `_read_core`), as
+  the reading before #491 is, and decide keeps the strictest, so no line decides lower. Left open, each still
+  asking as on a repo the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command
+  that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value
+  a loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`). A function whose gh runs where it is called, after the
+  value is set (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command
+  of a `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
+  over the words that open a compound but not `coproc`, `function` and the name. A shell fed the same text before and
+  after the value is set (`bash <<<'gh ..'; export GH_REPO=pub/repo; bash <<<'gh ..'`), as each such text is read
+  once per line (`_once`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
+  GH_REPO rows of `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
+  `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL operand on
+  another instance is another target (#399), with a copy of the action among the line's parts. `decide` read the line
+  on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook. Past eight other
+  targets (`_ALTS_IN_FULL`), the line on each of them now keeps, among the copies of each action, only the first copy
+  of each reading the policy tells apart (`_one_copy_each`). The line on its own target keeps every copy. A copy's
+  reading is how the policy reads its target (`_alt_key`: its exposure and third party after the scopes, and which
+  target patterns of the rules and of the deny and reserved entries match it), with every other field `decide` reads
+  of it. Nothing else `decide` reads turns on a copy's target, so copies of one reading decide alike, and each step
+  that meets one meets the first: a deny or reserved entry, a cell or rule that denies it alone (#191), the own text
+  test (#394), the `$".."` reading (#136) and the rule that picks it. The posting rules list a copy's finding once,
+  under the first copy that finds it, and that is the first of its reading. So the line on each other target decides
+  as with every copy: the same outcome, reason, rule, exposure, third party, findings and hidden count. Only its
+  reserved hits differ, by those of the copies it leaves out, and the line on its own target lists every one of them.
+  So the merged decision is the one every part gives, reserved hits and their order included. The work grows with the
+  URL operands times the readings the policy tells apart, which its patterns bound. Up to eight other targets the
+  decision is as before, word for word, so no line gh accepts changes. A close's or reopen's comment and a merge's
+  subject are read once per line too, as #920 reads the body and the title. Rejected: a cap on URL operands that fails
+  closed past it. A deny on a target past the cap would then only ask, and #920's test keeps every target. Rejected
+  too: no copies on any other target. On a line whose targets differ in exposure it listed a finding once where main
+  listed it under a copy's name too. Rejected as well: one target of each exposure. With a deny rule on
+  `git.example/*` that the `$".."` reading meets, it dropped a copy's finding there, at an equal deny. And rejected:
+  the first other target of each reading of the line's own target keeps every copy and the rest keep none (the head
+  reviewed in 5722148651). Under a deny entry on one host, a reserved entry on another and `opaque_exec: deny`, the
+  copies' deny made the github_post reading tie the `$".."` reading on each target, and decide kept the github_post
+  one. Without them the `$".."` reading stood alone, so the lean decision listed `(opaque_exec, target)` reserved hits
+  that the full one does not. Stricter, never lower, but not the same. Tests:
+  `tests/security/test_gate_gh_field_work_550.py`,
+  `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
+  `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
@@ -4317,6 +4422,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the irreversible or costly cells, anchored, unanchored, log and ask rules on the push, rules that name every
   command, category lines, deny and reserved entries), lowers 0 of 1,892,784 pairs and tightens 32,334 pairs on
   4,686 actions, all `store_write ask -> store_write deny`; 7,682 pairs keep their outcome with another reason.
+  A line whose #479/#857 loop-`cd` second reading writes the store is a store line in that reading
+  (`gate.readings`, which `decide` decides too), so the pass asks the same there: under that matrix and the
+  `'^git push'` rule, `git push --force origin main && while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` is `force_push deny matrix`, where main d742d1bb asked (`force_push ask floor`; review 5693575235).
   Tests: `tests/security/test_gate_store_lift_own_text_547.py`.
   *Revisit if:* the #191 pass should ask the whole line test on every compound line, not only on one a store write
   leads. Elsewhere a rule that names a part still lifts that part's deny when the line's lead is not denied by its
@@ -4348,6 +4457,82 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   mixed lines under the split rules. The 4,804 condition lines: six condition shapes, `cd`, `pushd`, `builtin cd`
   and `cd -P`, eight folders, five substitution forms, five bodies. Tests:
   `tests/security/test_gate_loop_cd_store_479.py` (`COND_ROWS`; 11 of its tests fail without the change: the six condition rows, the descriptor row and four hook rows).
+  *Revisit if:* the same as #479's.
+- *Amendment 2026-10-29 (issue #867, a #479 follow-up):* each loop's second pass is named by its own folder. The
+  second reading named a loop's second pass with `ctx.setdefault("fd_cwd", ..)`, once per line, so the second of
+  two loops kept the folder of the first descriptor `cd` the line made: `for i in 1; do cd /dev/fd; done; while cd
+  /proc/self/fd < <(cp /tmp/evil 3); do break; done` read the `cp` in `/dev/fd` only, and under `deny:
+  [target:/proc*]` asked where it should deny (the same on b3efb5e7, 75d72a7f and 69e33d50, so not a lowering). The same
+  held for two body or condition `cd`s in either order, `&&`, `||` or a newline between the loops, `pushd`,
+  `builtin cd`, `/dev/fd/3`, the pair in `$( )`, `bash -c` or a function body, the pair inside one outer loop
+  (`for`, `while`, `until`, `select`, a `{ }` body, in `$( )`, two loops deep; the outer loop is one span, named
+  by its first descriptor `cd`, so the inner `/proc/self/fd` loop's own second pass was never named), a `cd
+  /dev/fd` before the loop or in the outer body before it, a loop in a `$( )` read in `/dev/fd` already, and a
+  store loop after a descriptor loop (named `/dev/fd`, so `deny: [target:*store*]` asked). The fix is additive:
+  the second reading is kept as it is, and when it meets a loop, or a loop inside it that holds a store `cd` of its
+  own, whose own folder (`_loop_folder`: the loop's first descriptor `cd` after its first command, else the
+  condition's own when the loop holds no other store `cd`, else "" for the store) is not the one that reading has
+  there, it notes it (`_loop_pass[3]`), and `_loop_reading` reads the call once more with each such loop's second
+  pass, inner ones too, starting in its own folder (an inner loop's `$( )`s are read in it as well), beside the
+  other readings. Main's readings stay, so each target main named is still named, and decide keeps the strictest.
+  A line with one loop, or loops into the same folder, is not read again. The added reading has the second
+  reading's budget and fails closed past it as that one does; when only the added reading runs past it, the
+  joined form (#584) still gets its second reading, as on main. `_loop_reading` runs in `_one_reading`, so the
+  added reading is also made inside #853's opened reading (`_opened_reading`). That matters when each loop is
+  behind its own prefix, so only the opened reading sees them: `time for i in 1 2; do cp /tmp/evil 3; cd /dev/fd;
+  done; time for i in 1 2; do cp /tmp/evil 3; cd /proc/self/fd; done`, the same with `!` before the
+  `/proc/self/fd` loop and `time -p` before the `/dev/fd` one, and a store loop behind its own `time` after the
+  `/dev/fd` one, name both folders, where main 69e33d50 named the first only. #864's reading (`_late_reading`) also
+  reaches `_one_reading`, so the added reading is made inside it too. That matters when each loop is in its own
+  `coproc`, which only that reading opens: `{ coproc for ..; done; }; { coproc for ..; done; }`, the pair after
+  `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only. On
+  main d3cbd874 (#158) a call whose `${..}` words or `$((` bash may read otherwise than the reading before #143 is
+  read both ways (`_classify_reading` around `_classify_read`, the second reading `flat`); each of the two reaches
+  `_one_reading`, so each makes its own #867 reading with its own budget, and so does each one's opened reading (the
+  budget test checks the sequence of readings in each of them). A write in a `${v:-$( )}` word of the second loop's
+  body (also in a `$((`, a nested word, a loop inside the word, the pair inside a word, a quoted-prefix command, a
+  condition `<( )`, behind `time`, in `bash -c`, a `sudo -i` shell's stdin and an `env -S` text) names
+  `/proc/self/fd`, where main d3cbd874 named `/dev/fd` only and `deny: [target:/proc*]` asked; a `cd` to a
+  `${v:-..}` word in the second loop names the store, as for that loop alone, where main named it `/dev/fd` and
+  `deny: [target:*store*]` asked. A `cd` in a word's `$( )` runs in a subshell and adds no second pass (a guard
+  row). Differential (main's `scripts/gate_diff.py` from a d3cbd874 worktree, main d3cbd874 against this change, as
+  merged; against 69e33d50 and d742d1bb, before the later merges, the aimed corpora lowered and tightened the same
+  counts): the built-in corpus without variants lowers 0 of 1,258,576 pairs (14,302 actions, 88 policies; the built-in
+  `deny_target_dev_proc` denies both folders at once, so it tightens none), and an aimed corpus of 21,000 loop
+  lines (two loops in both orders into `/dev/fd`, `/proc/self/fd`, `/dev/fd/3` and `~/.exo/policies`; `for`,
+  `while`, `until`, `select` and `{ }` bodies; `cd`, `pushd`, `builtin cd`; body and condition `cd`s; `cp`, `rm
+  -rf`, `git push` bodies; `< <(..)`, `$( )` and here-strings; `;`, `&&`, `||`, newline, `$( )`, `bash -c`, a
+  function body, a `cd` before the loop; the pair inside one outer `for`, `while`, `until`, `select`, `{ }`, `$(
+  )`, `bash -c` or function loop and two loops deep, with inner `$( )` writes and a `cd` in the outer body; a
+  straight command after the loops; one loop alone and two loops into one folder) under the 88 built-in policies
+  and 15 that keep `/dev*`, `/proc*` and `*store*` target rules apart (deny and reserved) lowers 0 of 2,163,000
+  pairs and tightens 34,612 on 10,352 actions (`store_write` ask to deny). #853's aimed corpus (10,572 lines
+  behind `time` and `!` prefixes, under 214 policies, 2,262,408 pairs) decides every pair as main d3cbd874 does.
+  An aimed corpus of 1,140 #158 lines (a `${v:-$( )}`, `${v:+$( )}`, `${v:=$( )}`, quoted, nested or `$((` word,
+  behind a quoted prefix too, in one loop or both, for `cp`, `rm -rf` and `git push` writes and five folder
+  pairs, also inside an outer loop, behind `time`, inside a word, after a `cd`, in a condition `<( )`, and a `cd`
+  to a `${v:-..}` word) under the same 103 policies lowers 0 of 117,420 pairs and tightens 3,776 on 936 actions
+  (`store_write` ask to deny).
+  Cost (`time.process_time`, best of 5, two rounds, on a shared machine under load 12 to 14, so noisy): 100
+  loops alternating `/dev/fd` and `/proc/self/fd` on one line (5,398 characters), 100 alternating `/dev/fd` and
+  the store, 25 outer loops each holding the pair, and 100 alternating loops whose `/proc/self/fd` ones write in a
+  `${v:-$( )}` word cost about 1.2 to 2.2 times what they cost on main d3cbd874 (the last round: 0.24, 0.33,
+  0.15 and 0.45 s against 0.17, 0.21, 0.13 and 0.25 s); 100 loops into `/dev/fd` alone cost about the same
+  (0.13 to 0.20 against 0.14 to 0.18 s; no reading is added). Tests:
+  `tests/security/test_gate_loop_fd_per_loop_867.py`. 117 of its 130 tests fail on main 6ec085b6. The other 13,
+  the 11 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too.
+  Known limit, as on main: a command that runs once, outside any loop's second pass, after a second descriptor
+  `cd` is still named by the first descriptor folder of the line, since the line's first reading keeps one folder
+  (`fd_cwd`) for the whole line. That holds on a straight line (`cd /dev/fd; cd /proc/self/fd; cp /tmp/evil 3`)
+  and for a straight command after a loop whose `cd` changes the folder (`cd /dev/fd; for i in 1; do cd
+  /proc/self/fd; done; cp /tmp/evil 3`, `for i in 1; do cd /dev/fd; done; for i in 1; do cd /proc/self/fd;
+  done; cp /tmp/evil 3`): each names only `/dev/fd`, and `deny: [target:/proc*]` asks there. It is the first
+  reading's single folder, not a loop's second pass, and is left for its follow-up issue #888. Also as on main,
+  a loop whose own commands hold two `cd`s into different descriptor folders is named by its first descriptor one
+  (`_loop_folder`), while bash starts its second pass where the last one left: `while :; do cp /tmp/evil 3; cd
+  /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only, and `while :; do for i in 1 2; do cp /tmp/evil 3; cd
+  /proc/self/fd; done; cd /dev/fd; done` names `/proc/self/fd` only. It is the same one-folder choice, inside one
+  loop, and is left for the same follow-up.
   *Revisit if:* the same as #479's.
 - *Amendment 2026-10-29 (issue #853, to the #479 amendment's decision):* a compound command behind bash's
   pipeline prefixes is read as the same compound without them, beside main's reading, which lifts the #479
@@ -5143,31 +5328,33 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
   (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
   ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
-  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
-  with the same words as the lead
-  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
-  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
-  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
-  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
-  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
-  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
-  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
-  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
-  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
-  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
-  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
-  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
-  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
-  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
-  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
-  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
-  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
-  ruling. An unreported undo waits for a new
-  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
-  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
-  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
-  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
-  written until the next compaction.
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens with
+  the same words as the lead but goes on past it fails at its end. For a host that leaves the turn's message out, the
+  check stops before a last user row that the message repeats (see below). A pin a compaction folded stays while the
+  transcript holds the summary row: that row comes after the pin's lead or replaces part of it. A folded ruling the
+  principal said again stays as well: its lead moves to the later message, and an undo of that message alone leaves the
+  summary row before the lead, which carries it. The drop is an undo's: logged as counts, its digests kept out of every
+  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  transcript lacks it, since a transcript cut short lacks it too (the controls from #817). Rejected too: dropping a pin
+  when the transcript only starts with its lead. A transcript cut short at its start may open with the same words, and
+  an undo that also takes the turn before the pin's leaves only part of the lead. The check also settles an undo before
+  the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new
+  engine. Not covered now, six cases. An unreported undo of every turn leaves nothing before the turn's own message, so
+  it keeps every pin, and a pin said in the session's first message has no lead. A host may leave the turn's own message
+  out of its transcript. Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the
+  last turn before an undo has none and stays. If the next turn's message repeats the last user row an undo left, and no
+  user or summary row comes before that row, every pin stays too: the engine takes that row for the turn's own message.
+  After `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut
+  short at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops
+  the pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. A host that leaves the turn's message out gets the same drop when the next turn's message repeats the window's
+  last user row and the rows before that row read that way. The engine takes that row for the turn's own message and
+  checks only the rows before it: after `continue`, the ruling, `continue` and `go on`, a window of the last two turns
+  and a next turn of `go on` drop the ruling. An unreported undo waits for a new engine: while the same engine runs the
+  session, only a notice drops pins. If that engine runs a turn after the undo, no later engine drops them either. The
+  transcript then goes on past the noted lead, the same as a window that only opens like it. A compaction after the last
+  request that noted the leads keeps the pins: its summary row is not in the noted transcript. A summary row and a
+  handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
@@ -5284,6 +5471,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-11-01 (#997 follow-up):** the cue's `tasks.list` read asks for active tasks only. `tasks.list`
+  takes an optional `active` field that keeps queued and running tasks, the only ones that make a delegated edge.
+  An open request of an unrelated session, such as another window's, still turns the read on. Only the list shows
+  that the session is unrelated. The finished history no longer travels on each tick. Commands are strict, so a
+  window that joins an older core is refused this read (`bad_body`), as for any new command field. Its cue then
+  rests on the task events it has seen and is marked "(last known)". A test now holds that a burst of request
+  events shares one read.
 - **Amendment 2026-10-30 (#996):** the terminal observes global task and approval metadata before filtering
   transcript events to the selected session. Active task records alone establish delegated ancestry. A
   non-focusable parent cue names descendant requests and directs the user to `/open <task>`. Child cards and
@@ -5355,6 +5549,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Test-harness amendment 2026-11-01 (#1037 review):** a stderr category names a failure message, such as
+  running as root without `--no-sandbox`, not a bare `sandbox` or `dbus`. The D-Bus errors and sandbox
+  warning of a healthy Linux start are no longer named as a cause. A Chrome that exits after it writes
+  `DevToolsActivePort` is reported with its exit code and categories. See `docs/DEVELOPER-GUIDE.md` §7.
+  - **With #907's retry (2026-11-02):** that exit is a failed start, so it is tried once more, as an early exit is.
+    The start waits up to 2 s for Chrome to exit before it reads stderr. So the categories hold the lines Chrome
+    wrote last, also when a first DevTools call got no answer.
 - **Terminal classic follows the bottom amendment (2026-10-30, #1023):** the classic transcript stays at the bottom
   while its content grows, until the reader scrolls up. A block paints its text in `on_mount`, so a slow terminal can
   lay a long thread out in two steps. The one scroll to the end then landed after the first step (hosted CI: row 49 of
@@ -5854,6 +6055,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
   `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
   Cancel and remove would never run there.
+- **Amendment 2026-10-29 (#863 follow-up, review 5692507751):** the confirm step takes focus, on Schedule's remove
+  and on Command's allow always. Opening it redraws the cards, so the focused button leaves the page. Focus moves
+  to Cancel, the safe default for a remove or a standing grant, so a second Enter cancels. Cancel, or Escape while
+  focus is in the step, closes it and puts focus back on the button that opened it. Command redraws on every core
+  event, so a redraw puts focus back on the approval button that had it. While a remove is in flight its step
+  stays, with Confirm remove and Cancel disabled, since Cancel can no longer stop it. Each job in flight keeps its
+  own step (review 5707362258). A failed remove puts focus on that card's remove, unless the person has put focus
+  on a control outside the job list since. Rejected: focus on Confirm, as on the Chat card, whose help says Enter
+  confirms. Here a second Enter would remove or grant. Rejected: closing the step before the POST, which is one
+  call. The card's pause, run now and remove then come back under the pointer. In headless Chromium, on a card
+  shorter than its grid row, the second click of a double click on Confirm remove then landed on pause and sent a
+  pause for the job being removed.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
@@ -5991,6 +6204,48 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
   (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
   whole, which the next turn's call can cut.
+- *Amendment 2026-10-31 (#262, summary reads):* each step of a build reads a summary tree once. `note`, the merge
+  check, both views, the overflow check, a thread's tail and `/context` share one read of each tree with every
+  helper they call (`_one_read` in `src/exo/core/context.py`). Before, each helper read the whole tree again, and
+  a skipped merge read it once more to find its two children: a build of a 256-pair test thread with 74 skipped
+  merges made 16 reads, and now makes 2. These steps never await, so no other task can change the tree during one.
+  A step that schedules a node drops its read of that tree, and the view is read after the overflow wait, so a
+  summary that lands during the wait is in the view. One read for the whole build would have to outlive that wait,
+  so the build keeps two, and a third for the overflow check while a job runs. While a private thread's own
+  leaves run and its tail is over budget, each look for spans to cut (`cut_pending`, #244) reads that tree once
+  more. The view is unchanged. A merge job finds its two halves with one read too (`_halves`), and `/compact`
+  sizes all its new summaries with one (`_folded`). With no cached text, a merge above four levels of skipped
+  merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
+  verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
+  `tests/core/test_turn_settle.py`.
+- *Amendment 2026-11-02 (#1013, leaf size):* an agent tree and a private thread's own tree size a leaf as the tail
+  carries it. The size floor (`min_compact_tokens`) and the shrink test sum `_cost` from `src/exo/turn_settle.py`
+  over the leaf's messages: text and tool results in full, plus the tool-call arguments past 400 characters (#524).
+
+  Before, a leaf measured `render_message`, which cuts each tool result at 2000 characters and each text part at
+  4000. Those trees end their view at the last summary, so a span skipped as too small after it rode the tail in
+  full. Merges of the previews moved the frontier past it only later.
+
+  In a private thread with a floor of 1500 and a fast summarizer, 30 rounds of 20k `read_file` results left all 13
+  leaves skipped. The next call carried 22 of the results, 441,149 characters. Now all 13 are summarized, and the
+  call carries the 4 rounds in no leaf yet, 80,764 characters.
+
+  With a slow summarizer the leaves now wait for it, so the private call cuts their spans (#244). Before, they were
+  skipped at once, and the last round's call carried all 30 results.
+
+  These leaves now go to the summarizer, where they were skipped at once. A tail of large results keeps the view
+  over `view_budget`, so a call waits up to `overflow_settle` for them, as this decision allows. With a fake
+  summarizer that takes 3 s a leaf, those 30 rounds took 39.54 s, where they took 3.35 s.
+
+  For an agent tree that call can be in any thread of the agent, a private one included. The agent tree's check
+  counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+  thread's results. That turn's call carries only a short note of those turns, so the wait does not shrink it. A
+  later change could measure each thread's overflow on its own call instead.
+
+  A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
+  merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
+  the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
+  `tests/core/test_context_leaf_size_1013.py`, `tests/core/test_agent_context.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
@@ -6343,6 +6598,52 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   and checking policy patterns when the policy loads (#466).
   A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
   so `target:*/.exo/keys/*` matches neither.
+  *Amendment 2026-10-30 (issue #458):* text a command does not run as written still named it for a rule that would
+  lower the line. A here-string's word was part of its command's own text, and a line of one command was matched on
+  its whole text, a here-doc body included. So under `categories: {force_push: deny}` and allow rules for `^ls` and
+  `npm test`, `ls; git push --force origin main <<< 'npm test'` was allowed, and so was `rm -rf build <<< 'npm test'`
+  under `categories: {delete: deny}`. Now a here-string, `<<<` and its word, is left out of a part's own text and of a
+  pipeline text, as a here-doc body and a comment already were. The text as written stays its `whole`
+  (`_OwnText`), and a rule names the own text only when it matches both, so an anchored rule for the bare command
+  (`'^rm -rf build$'`) lowers no line it did not lower before. A line whose text holds `<<` is not one text
+  (`_one_text`), so it goes through the #394 test, which now runs on a line with no parts too. Where the `<<` starts
+  no stdin, the own text is the line's, and the line is decided as before. A call with no own text at all, a tool
+  other than a shell, is one text as before. Like #394, this only passes more rules over, and the line is then also
+  decided as before, so no decision is looser. Rejected: dropping the here-string from the own text with no
+  `whole`. Main's `scripts/gate_diff.py` found that draft lowering 20 pairs: under
+  `['^ls', '^rm -rf build$']` it allowed `ls; rm -rf build <<< 'npm test'`, which main asks about or denies.
+  A string literal in code that the gate reads as a command has no own text, but it left a line of one command one
+  text, so a rule for the interpreter lowered it: with `opaque_exec: allow` and an allow rule for `^python3 -c`,
+  `python3 -c 'import os; os.system("git push --force origin main")'` was allowed under a force_push deny. Now a part
+  with no own text makes a line not one text, unless it is a secret path the command names (a `credentials` part):
+  the command's own text names that path, while a literal is only a guess at another command. The same holds for the
+  other parts with no own text: a reader a compound feeds (`{ bash; } < f`), a nest past a cap, and the reading of
+  a word bash rejects or the gate cannot read (an unclosed quote, `$(`, `${` or `$((`). So such a part
+  that decides the line, or would be stricter alone, is lowered by no rule keyed on `command`, on a line of one
+  command or in `execute_code` as beside a second command. A category or tool key still lowers it.
+  The command that `find -exec`, `-execdir`, `-ok`, `-okdir`, `xargs` or `git bisect run` runs carried the text of
+  the command around it, so a rule for `^find`, `xargs` or `^git bisect` lowered it: with `opaque_exec: allow`,
+  `find . -exec git push --force origin main \;`, `echo x | xargs git push --force origin main` and
+  `git bisect run git push --force origin main` were allowed under a force_push deny. Now that command has its words
+  as its own text (`_run_own`), as an `-x` value has, with the program's own text as its `whole`, which a rule must
+  match too: a rule for the bare push (`'^git push --force origin main$'`) lowers no line it did not lower before.
+  The program that runs it keeps its own text. A rule that names both still lowers it.
+  Main's `scripts/gate_diff.py` against main ef4d7252 lowers no pair: on the built-in corpus 8,097,936 pairs (92,022
+  actions under 88 policies), 1,274 of them tightened on 401 actions. On an aimed corpus of these lines under
+  unanchored and anchored rules (3,017 actions under 245 policies, 739,165 pairs) it lowers none and tightens 9,114.
+  Not done: a line of one command with a comment and no `<<` is still matched on its whole text
+  (`git push --force origin main # --dry-run` under an allow rule for `--dry-run`). A redirection target, a quoted
+  argument, a `$'..'` word or a brace word is part of its command's own text, so an unanchored rule that matches
+  its text still names the command. So are a here-doc's `<<` and its end word: under an allow rule for `npm test`,
+  `rm -rf build <<'npm test'` with `npm test` as its end line is still allowed. Leaving them out would also change the
+  own text of a reader of its here-doc (`python3 - <<'EOF'`, #394) and pass over rules that name `<<'EOF'`, so it
+  needs the same decision as a redirection target. Rejected: giving the command after `sudo`, `env` or `timeout` its
+  own text. Those prefixes stay part of the simple command as written (#394), so `'^sudo git push'` still names the
+  push it runs. Not done either: a wrapper that runs its words once as written (`setsid`, `flock`, `chroot`, `taskset`
+  and the rest of the #160 list) is read as `xargs` is, beside an opaque part, but runs its command as a prefix does.
+  Its command keeps the wrapper's text, as does the command after `coproc`, so under `opaque_exec: allow` a rule for
+  `^setsid` still names the push in `setsid git push --force origin main`. Whether these follow `xargs` or the
+  prefixes is left to a decision.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
@@ -6769,6 +7070,21 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   - If focus is on the page body after the redraw, the new control with that name takes it. If no control has that name, the order in the focus line applies. Focus moved out of the panel is still left alone. An open custom provider form is not redrawn, so focus in it stays where it is.
   - Test: `test_held_retry_keeps_focus_moved_inside_the_panel` in `plugins/exo-command/tests/test_provider_retry_web.py` holds the reply. It moves focus to the second provider's Test button, the model select or "Add custom provider", and releases a failure or a success. On main, five of the six cases fail. The select with a success reply passes on main too, because main already falls back to the select there.
   - #850 rewrites `retryModels()` and is still open. When it is reconciled, the focus block runs only when `generation === loadGeneration`, and the picker's search field takes the select's place in the order. #850 still redraws the provider rows, so the name match applies there as it is.
+  - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
+- **Amendment 2026-11-01 (#1099, #1100): a key typed into a provider row holds back only the provider rows.** `draw()` returned before drawing anything while a provider's key field had focus and held text. So a retry's reply was never drawn: with no cached list, the model section kept no list and no "Try again" (#1100).
+  - A custom provider saved meanwhile kept its form open after the save had cleared its entry, and the next Save threw before it sent anything. Add custom provider, Edit and Cancel did nothing either (#1099).
+  - Now only the provider rows wait, since they hold the key field. The custom providers section is drawn as at any other time: on a save, Add, Edit or Cancel, and on any reload while its form is closed. The model section is drawn on every reload. Neither holds a provider row's field. A focused key field anywhere else still holds the whole panel, as before.
+  - The readout in the page head is drawn before the hold, so a new default or ready count shows there at once.
+  - The custom form reads whether its entry exists once, when it is built, so a submit can no longer throw on a cleared entry.
+  - `retryModels()` is unchanged. The key field still has focus after the reply is drawn, so it moves no focus.
+  - Tests in `plugins/exo-command/tests/test_provider_retry_web.py`, each with a key typed into a provider row:
+    - a custom save whose reload is held until the key is typed
+    - Add, Edit and Cancel
+    - an open custom form across a Test's reload
+    - a held retry with or without a cached list, answered with a failure or a list
+    - a reload that changes the default and the ready count, which the page-head readout shows
+  - One more test in that file pins the read at build time. A submit that reaches an edited entry's form after its save cleared the entry sends the save again and throws nothing. Only a script can do that, since Save is disabled while the save runs.
+  - On main, eight of the nine fail. The open form case passes on main and fails if the custom section is drawn on every reload.
   - **Docs and user impact:** `docs/ui/WEB.md` (Providers section), `docs/DOCS-MAP.md`, `CHANGELOG.md`. No settings change.
 ## D-092 (2026-10-30) The page's key advice follows the error, not the fact of an error
 - **Status:** Accepted for implementation in this PR. Records after D-091 (#845).

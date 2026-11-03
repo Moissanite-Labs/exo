@@ -343,6 +343,35 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
 - The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
   source names (`ghe.corp/pub/repo#5`), as above.
+- The repo `GH_REPO` names (#566). gh reads `GH_REPO` as `-R` when the line gives none. So each
+  value the line sets for it is read as `-R` is, on each reading with no `-R`: a prefix assignment
+  (`GH_REPO=pub/repo gh pr comment 5`, also through `env`), and a value set earlier on the line
+  (`export GH_REPO=pub/repo; gh pr comment 5`). A bare assignment counts too, since gh sees it
+  when the variable was exported before the line. So does an export or assignment in a compound,
+  or before a nested line that inherits it: `{ export GH_REPO=pub/repo; gh pr comment 5; }`,
+  `export GH_REPO=pub/repo; x=$(gh pr comment 5)` and `bash -c`. The gate keeps the last four
+  values the line set, so a long line stays linear. Of the prefix assignments before one command
+  it keeps the last four too. bash, `env` and `sudo` pass gh the last one, but an option can take
+  a later word as its value (`sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt). gh api
+  fills `{owner}` and `{repo}` in its endpoint from it, and `:owner` and `:repo` up to a word
+  boundary, so `repos/{owner}/{repo}/issues/5/comments` and `repos/:owner/:repo/issues/5/comments`
+  read as `pub/repo` too. The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks as on a repo the line does not name. A value from
+  an expansion adds nothing, as that reading already stands, and so does a value past the four.
+  Not read here: a prefix assignment on a command that starts a nested shell
+  (`GH_REPO=pub/repo bash -c '..'`) or that calls a function (`GH_REPO=pub/repo f`). A value a
+  loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh pr comment 5 -b x; export GH_REPO=pub/repo; done`). A function whose gh
+  runs where it is called, after the value is set
+  (`f() { gh pr comment 5 -b x; }; export GH_REPO=pub/repo; f`). An export or bare assignment
+  that is the first command of a `coproc` group, or of a function written with `function NAME`
+  (`coproc { export GH_REPO=pub/repo; gh pr comment 5 -b x; }`). A shell fed the same text before
+  and after the value is set, as the gate reads each such text once per line
+  (`bash <<<'gh pr comment 5 -b x'; export GH_REPO=pub/repo; bash <<<'gh pr comment 5 -b x'`).
+  A prefix value followed by four words that an option takes as its value, each written like an
+  assignment (`GH_REPO=pub/repo sudo -E -p GH_REPO=b1/y` and three more such `-p` words): they
+  push it past the four. And `GH_HOST`, which names gh's host. Each of these asks as on a repo the
+  line does not name, as before.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
@@ -350,13 +379,16 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. The posting rules list a post's violations under the post's own name, and right after
-them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
-target can be public where the post's is internal). On a line with such copies, the other posts
-keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
-own, so it lists all that main lists while those list no more than 200. Its question merges the
-readings of the line, so a copy's finding can show both under the copy's name and under the
-post's, and it lists one `and N more on other posts`, which counts each entry a reading left out
+part. Past eight other targets, the line on each of them keeps one copy of each reading the
+policy tells apart, and the line on its own target keeps them all, so the decision stays the
+same ("Invariant gh field parsing (#550)" below). The posting rules list a post's violations
+under the post's own name, and right after them what a copy finds that neither the post nor
+another copy of it does (under a scope a copy's target can be public where the post's is
+internal). On a line with such copies, the other posts keep the room of twenty, and the posts
+with copies and their copies have a room of 200 of their own, so it lists all that main lists
+while those list no more than 200. Its question merges the readings of the line, so a copy's
+finding can show both under the copy's name and under the post's, and it lists one
+`and N more on other posts`, which counts each entry a reading left out
 that the merged list does not hold. The ledger row lists the other targets as `alt_targets`, with a user and password in a
 URL as `***@`. The question the principal sees
 names each of them, also when none decides the line:
@@ -407,8 +439,9 @@ Limits. A body that links to another repo still counts that repo, as it did befo
 unseen check found unseen with a row of the table as it was before #399 stays unseen, so
 `gh issue lock 5 -rb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read `GH_HOST`
-or `gh api --hostname`: `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`,
-which gh takes for `-R` when the line has none, so such a line counts as one on the current repo.
+or `gh api --hostname`: `owner/name` counts as a repo on github.com. It reads `GH_REPO` as `-R`
+when the line has none (#566), except in the shapes named above as not read. Such a line counts as
+one on the current repo.
 With `GH_COBRA` set, gh's root has no `--version` flag, so `--version` takes the next word as its
 value there. The gate reads it alone, as gh does without `GH_COBRA`. So in
 `GH_COBRA=1 gh --version x pr comment 5 -R pub/repo -b hi` the gate takes `x` for the command and
@@ -1193,7 +1226,10 @@ target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and 
 still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
 expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
 `opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
-stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc ends on the
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. When the two outcomes
+are the same, the reserved hits of both readings stand (#566). A copy of a gh post on another
+target can raise the line's own reading to the outcome of the `opaque_exec` one, and a reservation
+on `opaque_exec` still keeps a standing grant from covering the line then. A heredoc ends on the
 line that equals its delimiter exactly, and the delimiter is the opener word after quote removal, so
 whitespace or any other character in it is part of it (#328): `cat <<'EOF '` (and `<<"EOF "`,
 `<<' EOF'`, `<<EOF\ `) ends on the line `EOF ` (with the space), never on bare `EOF`. The gate
@@ -1461,7 +1497,21 @@ gate does not read:
 - How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
   its simple command as written, with its redirections, after leading reserved words such as `then`
   (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
-  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
+  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`), and so does a
+  wrapper that runs its words once as written, such as `setsid`, `flock` or `chroot`, or `coproc`
+  (left open by #458). A here-string,
+  `<<<` and its word, is left out of it (#458), as a comment and a here-doc body are: a
+  here-string and a here-doc body are the command's stdin. So `rm -rf build <<< 'npm test'` has
+  `rm -rf build` as its own text. A here-doc's command keeps its operator and end word
+  (`rm -rf build <<EOF`), so an unanchored rule that matches the end word still names the command,
+  as one that matches a redirection target does (#458 leaves both open). A pipeline text leaves
+  its here-strings out too. A rule must still
+  match the text as written as well, as before, so `'^rm -rf build$'` does not lower
+  `ls; rm -rf build <<< 'npm test'`. The command that `find -exec`, `-execdir`, `-ok` or
+  `-okdir`, `xargs` or `git bisect run` runs has the words it runs as its own text (#458), as the
+  value of `git rebase -x` has: `git push --force origin main` in
+  `find . -exec git push --force origin main \;`. The program that runs it keeps its own, and a
+  rule must match that text as well, as before. A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
@@ -1535,14 +1585,25 @@ gate does not read:
   text. The regex sees the text as written: an allow rule for `git push` does not match
   `g''it push --force origin main`, and a deny rule for `git push` still denies it. A line the gate
   reads as one part is matched on its command text as before. So is a line of one simple command
-  whose other parts the gate made for it with no own text, a secret path it names
-  (`cat ~/.kube/config`) or a string literal in its code
-  (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
-  different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. The one exception is the part a
-  shell call's own folder added: it carries the `cd <folder>` stand-in among its setters (#516), so
-  a line with it is not one text, and a rule that would lower the line or lift the part's deny
-  names the folder, as it names the `cd` in the cd form ("The tool's own folder"). A command the gate finds run inside
+  beside a secret path it names (`cat ~/.kube/config`), a part the gate made for it with no own
+  text. No two of its parts have different own texts, so a rule that matches the line names its
+  one command, and the line is decided as before. There are three exceptions. A line whose text
+  holds `<<` goes through the own text test (#458), so a rule that names only a here-string or a
+  here-doc body lowers nothing: under `categories: {delete: deny}` and an allow rule for
+  `npm test`, `rm -rf build <<< 'npm test'` is denied. Where the `<<` starts neither (a quoted
+  `<<`, a shift), the own text is the line's and the line is decided as before. A part with no
+  own text other than a secret path is not beside the command as that path is (#458): a string
+  literal in code read as a command (only a guess at a command), a reader a compound feeds
+  (`{ bash; } < f`), a nest past a cap, or the reading of a word bash rejects or the gate cannot
+  read (`echo 'unclosed ; rm -rf ./work`). Where it decides the line or would be stricter alone,
+  no rule keyed on `command` lowers it, on a line of one command as beside a second
+  (`node -e "require('child_process').execSync('gh pr comment 3')"`, an `execute_code` call). A
+  call with no own text at all, a tool other than a shell, is matched on its command text as
+  before. And the part a shell call's own folder added carries the `cd <folder>` stand-in among
+  its setters (#516), so a line with it is not one text, and a rule that would lower the line or
+  lift the part's deny names the folder, as it names the `cd` in the cd form ("The tool's own
+  folder"). A line of one command with a comment and no `<<` is still matched on its whole text,
+  comment included (a row of #458 this change leaves open). A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`
@@ -1550,8 +1611,9 @@ gate does not read:
   heredoc a shell reads and a `$( )`. In code (`execute_code`, `python -c`) the code part and a
   call the gate recognizes carry the code's text, or the command that runs it
   (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal read as a
-  command (`os.system('rm -rf build')`) has none, so beside another command no `command` rule
-  lowers it: use a category or tool key. A rule written for a whole compound line, such as
+  command (`os.system('rm -rf build')`) has none, so where it decides the line or would be
+  stricter alone no `command` rule lowers it, alone or beside another command (#458): use a
+  category or tool key. A rule written for a whole compound line, such as
   `'^git push origin main && git push origin dev$'`, now has to name each command on it too, for
   example as `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`.
   Until it does, the line gets its matrix or category outcome (here log). The ledger view of a classification
@@ -1715,7 +1777,10 @@ gate does not read:
   `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
   `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
   `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
-  and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  and `~/.exo`), `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` (gh's hosts, tokens and settings, its pager
+  and editor commands among them, #566: the call is also read with it an ordinary variable, as
+  the last of its floors, so a policy that allows `opaque_exec` does not lower a line main
+  logged or asked), `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
   `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,
@@ -3335,28 +3400,44 @@ commands and substitutions of the loop on that reading are parts of a second rea
 `deny: [store_write]` denies them, and only the principal answers; `decide` keeps the strictest of the two, so no
 line decides lower than it did. The loop's first command counts too (#857): for `while` and `until` it is the
 condition's, which runs on every pass, so in `while cd ~/.exo/policies$(cp /tmp/evil gates.yaml); do sleep 1;
-done` the `cp` runs in the store from the second pass and the line is a `store_write`. bash also takes a `{ ..; }` group as the body of a `for` or `select` loop (`for i
-in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++))
-{ ..; }`) and runs it once per pass in the same shell, so such a loop is read again as a `do ..; done` one is; a
-`{ ..; }` group that is no loop's body runs once and is not. A `for ((..))` header is found from its own `((..))`
-(the parser counts the `(` and `)` tokens and marks the `{` right after the closing `))`, a `;` or newline
-between), whatever the arithmetic holds: a reserved word as the variable (`for ((do=0; do<2; do++)) { ..; }`,
-`while`, `done`, `if`), a `!`, and any number of `|`, `&&` or `||` in it, each of which the parser reads as a
-command of its own. A `cd` back out later in the body (`cd -`, `cd /tmp`) is not followed: fails closed, and a
-`cd -` that goes back into the store on a later pass is covered by the same reading. The folder is the one the
-`cd` names, so a store spelt through a form the `cd` check reads (`"$HOME/.exo/policies"`,
-`${X:-~/.exo/policies}`, `~/.exo/pol*`) counts. Known limit: a `cd` through a variable set earlier
-(`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`) or through the loop variable (`for d
-in /tmp ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop (`d=~/.exo/policies; cd
-$d; cp /tmp/evil gates.yaml` is allowed on main too): the `cd` check reads no variable's value where it is set.
-bash expands a `for` or `select` word list and the redirections of the loop's `done` (or `}`) once, before the
-first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd ~/.exo/policies; done` is
-read as before). A command before the loop runs once and keeps its folder too. A function the loop calls is not
-followed into, but its call is a command in the store on that reading, which asks and is denied by `deny:
-[store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A compound behind
-bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading. bash takes
-`time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`, `time
-time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
+done` the `cp` runs in the store from the second pass and the line is a `store_write`. Each loop's second pass is
+named by its own folder (#867): the second reading names a loop by the first descriptor folder the line entered, so
+of two loops into `/dev/fd` and `/proc/self/fd` on one line (`for i in 1; do cd /dev/fd; done; while cd
+/proc/self/fd < <(cp /tmp/evil 3); do break; done`) only `/dev/fd` was named, and `deny: [target:/proc*]` asked.
+When a loop's own folder (the store, for a loop with no descriptor `cd`) is not the one that reading gives it, the
+call is read once more with each loop's second pass in its own folder, beside the other readings, so both folders
+are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when each
+loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). It is made in #864's reading too, so
+it counts when each loop is in its own `coproc` (`{ coproc for ..; done; }; { coproc for ..; done; }`, also after
+`then` and as `coproc NAME { ..; }`). And it is made in each of the two readings of a line whose `${..}` words are
+read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names
+`/proc/self/fd` too. A loop inside another that holds such a `cd` of its own counts too (the pair inside `while :;
+do ..; done`). Two known limits stay, as on main (#888). A command that runs once, outside any loop's second pass,
+after a second descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
+cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only. And a loop whose own commands `cd` into two different
+descriptor folders is named by its first descriptor `cd`, though bash starts its second pass where the last one
+left, so `while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only. bash also takes
+a `{ ..; }` group as the body of a `for` or `select` loop (`for i in 1 2; { cp /tmp/evil gates.yaml; cd
+~/.exo/policies; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++)) { ..; }`) and runs it once per pass in the
+same shell, so such a loop is read again as a `do ..; done` one is. A `{ ..; }` group that is no loop's body runs
+once and is not. A `for ((..))` header is found from its own `((..))` (the parser counts the `(` and `)` tokens and
+marks the `{` right after the closing `))`, a `;` or newline between), whatever the arithmetic holds: a reserved
+word as the variable (`for ((do=0; do<2; do++)) { ..; }`, `while`, `done`, `if`), a `!`, and any number of `|`, `&&`
+or `||` in it, each of which the parser reads as a command of its own. A `cd` back out later in the body (`cd -`,
+`cd /tmp`) is not followed: fails closed, and a `cd -` that goes back into the store on a later pass is covered by
+the same reading. The folder is the one the `cd` names, so a store spelt through a form the `cd` check reads
+(`"$HOME/.exo/policies"`, `${X:-~/.exo/policies}`, `~/.exo/pol*`) counts. Known limit: a `cd` through a variable set
+earlier (`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`) or through the loop variable
+(`for d in /tmp ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop
+(`d=~/.exo/policies; cd $d; cp /tmp/evil gates.yaml` is allowed on main too): the `cd` check reads no variable's
+value where it is set. bash expands a `for` or `select` word list and the redirections of the loop's `done` (or `}`)
+once, before the first pass, so those keep their folder (`for f in $(cp /tmp/evil gates.yaml); do cd
+~/.exo/policies; done` is read as before). A command before the loop runs once and keeps its folder too. A function
+the loop calls is not followed into, but its call is a command in the store on that reading, which asks and is
+denied by `deny: [store_write]` (`f() { cp /tmp/evil gates.yaml; }; while :; do f; cd ~/.exo/policies; done`). A
+compound behind bash's pipeline prefixes is read as the same compound without them (#853), beside main's reading.
+bash takes `time`, `time -p`, `time --`, `time -p --` and `!` before a pipeline, also together (`time !`, `! time`,
+`time time`, `! !`), where a command starts (the start of the line, after `&&`, `||`, `;`, `&`, a newline, `(`, `{`,
 `do`, `then`, `else`, `elif`, `if`, `while`, `until` or a case pattern's `)`, never after `|` or `|&`), and runs
 the compound after them
 (`for`, `while`, `until`, `select`, `if`, `case`, `{ ..; }`, `coproc`, and a `function f { ..; }` definition,
@@ -3660,6 +3741,24 @@ Git gc.recentObjectsHook is read as shell execution across git configuration for
 
 ### Invariant gh field parsing (#550)
 
-The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.
+The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only.
 
 The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.
+
+Since the D-038 amendment of 2026-10-30, the rest of #550 is closed too. A close's or reopen's comment and a merge's
+subject are read once per line, with the body and the title. `decide` reads the line on its own target with every
+part, the copies on its other targets among them. Past eight other targets (`_ALTS_IN_FULL`), it reads the line on
+each of them with one copy of each reading the policy tells apart (`_one_copy_each`). A copy's reading is how the
+policy reads its target (its exposure and third party after the scopes, and which target patterns of the policy
+match it), with everything else `decide` reads of it. Copies of one reading decide alike, so each step that meets
+one meets the first. The posting rules list a copy's finding once, under the first copy that finds it, which is
+the first of its reading. So the line on each other target decides as it does with every copy: the same outcome,
+reason, exposure, third party and findings. The copies it leaves out add only their own reserved hits, and the line
+on its own target lists those. So the merged decision is the one every part gives, reserved hits and their order
+included. The work grows with the number of URL operands times the readings the policy tells apart, not with the
+square of the operands. A 100 KB line of URL operands on another instance took 290 s of CPU in `decide`. It now
+takes under half a second. Up to eight other targets the decision is as before, word for word. Tests:
+`tests/security/test_gate_gh_field_work_550.py` and `tests/security/test_gate_expansion_scan_linear.py`.
+
+Two smaller points from the issue. The ledger row's `alt_targets` already read a user and a password in a URL as
+`***@`. `gh pr --repo="$R" comment 5` still reads as `opaque_exec`, which asks: stricter than needed, never lower.
