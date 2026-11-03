@@ -332,6 +332,48 @@ def test_a_word_in_a_loop_that_enters_the_store_beside_a_post_is_held_as_on_main
     assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
 
 
+# #1126: main a2f6ec3d read `busybox sh` as busybox running a script named sh, and `ash` and `hush` as programs it does
+# not know. So a store write piped or heredoc'd into BusyBox's shell was only an opaque_exec, and bypass and observe
+# mode ran it. Now the shell reads its stdin as `sh` does, and the store write asks at the floor. `sh` is the twin.
+_BB_CP = "cp /tmp/x ~/.exo/config.json"
+BUSYBOX_FLOOR = [f"echo '{_BB_CP}' | {s}" for s in ("sh", "busybox sh", "ash", "/bin/busybox ash", "hush")] + \
+    [f"{s} <<EOF\n{_BB_CP}\nEOF" for s in ("sh", "busybox sh", "ash")]
+
+
+@pytest.mark.parametrize("line", BUSYBOX_FLOOR)
+def test_a_store_write_into_busyboxs_shell_asks_at_the_floor_in_bypass(keyed_store, as_caller, line):
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve" and r.get("once") is True, r
+    [row] = rows(store)
+    assert row["outcome"] == "ask" and "decided_by" not in row and row["bypass"] == {"floor": "store_write"}, row
+    assert g.permissions.floor_asks == 1 and g.permissions.auto_approved == 0
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.parametrize("line", BUSYBOX_FLOOR)
+def test_a_store_write_into_busyboxs_shell_asks_once_in_observe_mode(keyed_store, as_caller, line, bypass):
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, decision_model=False, mode="observe")
+    if bypass:
+        as_caller("principal:tui")
+        hook.permissions_command(g, "bypass")
+        assert g.bypass_on
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve" and r.get("once") is True, r
+
+
+@pytest.mark.parametrize("line", ["echo 'rm -rf build' | sh", "echo 'rm -rf build' | busybox sh",
+                                  "echo 'rm -rf build' | ash", "busybox rm -rf build", "busybox --install"])
+def test_bypass_still_runs_a_line_into_busyboxs_shell_with_no_floor(keyed_store, as_caller, line):
+    """A delete is no floor category: bypass runs it into BusyBox's shell as into `sh`, and logs it as bypass."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    assert call(ctx, "terminal", {"command": line}) is None
+    [row] = rows(store)
+    assert row["outcome"] == "allow" and row["decided_by"] == "bypass"
+    assert g.permissions.auto_approved == 1 and g.permissions.floor_asks == 0
+
+
 def test_secrets_in_an_auto_approved_call_are_redacted_in_the_ledger(keyed_store, as_caller):
     _, ctx, store = bypassed(keyed_store, as_caller)
     tok = "ghp_" + "a1B2c3D4e5" * 4

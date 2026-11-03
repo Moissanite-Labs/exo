@@ -1494,6 +1494,27 @@ gate does not read:
   (`{ echo ..; } | bash`) is also read as before, a limit of the same kind. `coproc echo .. | bash`
   is read as before as well, since its output goes to the coprocess. A post's body from the first
   command of a group stays unseen (#208).
+- BusyBox is one binary that runs the applet its first operand names (#1126). On Alpine images
+  `/bin/sh`, `/bin/ash` and `busybox` are that binary. The gate reads `busybox sh`, `busybox ash`,
+  `busybox hush`, `busybox bash`, `ash` and `hush`, by path too, as it reads `sh`: its `-c` text, a
+  pipe, a heredoc and what printf writes (#1047).
+
+  `busybox rm -rf /srv/data` is a delete, as `rm -rf /srv/data` is. Before, each was only
+  `opaque_exec`, so a policy that allows `opaque_exec` let it run.
+
+  busybox runs its applet so by path (`/bin/busybox`) and behind a prefix (`sudo`, `env`) too. The
+  gate reads the applet in a second reading of the call, beside the reading as before, with budgets
+  of its own, and `decide` keeps the strictest. A store write or a secret leads. So a store write
+  piped into `busybox sh` or `ash` asks at the floor in bypass and once in observe mode, as one
+  piped into `sh` does.
+
+  busybox with no applet, or with an option of its own first (`--install`, `--list`, `--help`), is
+  read as before. So `echo 'rm -rf /srv/data' | busybox` is still a delete, though busybox with no
+  applet runs nothing.
+
+  An applet that only reads still asks as `opaque_exec`, a known limit. So `busybox ls`, `ash -c ls`
+  and `ash --version` ask where `ls` is a read, since taking the read there would lower the line
+  against the reading as before.
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the

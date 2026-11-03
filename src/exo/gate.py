@@ -5208,6 +5208,28 @@ def _on_other_targets(c: Classification) -> Classification:
     return c
 
 
+# #1126: BusyBox is one binary that runs the applet its first operand names (`busybox sh`, `busybox rm ..`), and its
+# shells also go by ash and hush. Main's reading takes the applet for a script busybox runs, and ash and hush for
+# programs the gate does not know. _applet_met is set while classify reads a call (_classify_read): [met], which a
+# call that names an applet, ash or hush sets (_applet). classify then reads the call again with _applets on, where
+# each applet is the program it names and ash and hush are shells (_applet_reading). Main's reading stays beside.
+_APPLET_SHELLS = frozenset({"ash", "hush"})
+_applet_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_applet_met", default=None)
+_applets: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_applets", default=False)
+
+
+def _applet(prog: str, rest: list[str]) -> bool:
+    """#1126: whether the command ``prog`` ``rest`` reads otherwise once BusyBox's applets are read: busybox with an
+    applet, its first operand, or ash or hush. An option of busybox's own there (`--install`, `--list`, `--help`) or
+    no operand at all runs no applet, so main's reading alone reads it. True only in the second reading
+    (_applet_reading). In the first, such a command notes the call in _applet_met."""
+    if not (prog in _APPLET_SHELLS or prog == "busybox" and rest[:1] and not rest[0].startswith("-")):
+        return False
+    if (met := _applet_met.get()) is not None:
+        met[0] = True
+    return _applets.get()
+
+
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                       piped: str | None) -> list[Classification]:
     p = words[0]
@@ -5235,6 +5257,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return [_too_deep(cmd)]
         return _classify_simple(_wrapped(k, ws), cmd, inner_depth, ctx, piped)
 
+    applet = _applet(prog, argv[1:])
+    if applet and prog == "busybox":
+        # #1126: busybox runs the applet its first operand names, with the rest for its arguments: that command
+        return _run_own(words[1:], lambda: inner_words(words[1:]))
     if prog in _WRAPPERS:
         return _classify_wrapper(prog, words, cmd, depth, inner_words)
     if prog in _OPAQUE_PROGRAMS:
@@ -5268,7 +5294,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if depth < _DEPTH:
             parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
         return parts
-    if prog in _SHELLS:
+    if prog in _SHELLS or applet:                       # #1126: ash and hush too, in the applet reading
         args = argv[1:]
         if args[:1] in (["--version"], ["--help"]):
             return [_make("read", summary=f"{prog} {args[0]}", command=cmd)]
@@ -7014,7 +7040,9 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                                                        if t.startswith(pre) and t[start:]])
             skip.add(j)
 
-        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
+        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES
+                               or ws[i].rsplit("/", 1)[-1] == "busybox" and _applet("busybox", ws[i + 1:])):
+            # #1126: in the applet reading busybox with an applet is a prefix that takes no option
             base = "" if ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) else ws[i].rsplit("/", 1)[-1]
             i += 1
             while base in _PREFIXES and i < len(ws) and ws[i].startswith("-") and ws[i] != "-":
@@ -7072,7 +7100,7 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                             for a in rest)
             if first is not None and not from_file:
                 skip.add(i + 1 + first)
-        elif prog in _SHELLS:
+        elif prog in _SHELLS or prog in _APPLET_SHELLS and _applet(prog, rest):
             for j, a in enumerate(rest):
                 if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
                     bodies += rest[j + 1:j + 2]
@@ -9838,8 +9866,24 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
     (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
     printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
-    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
-    from there too (_in_tool_folder sets it)."""
+    in each opened one. A line that runs a BusyBox applet (`busybox sh`, `busybox rm ..`), ash or hush is also read
+    with each applet as the program it names and ash and hush as shells (#1126, _applet_reading), opened readings and
+    all. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
+    (_in_tool_folder sets it)."""
+    met = [False]
+    token = _applet_met.set(met)
+    try:
+        c = _read_ways(action, cwd)
+    finally:
+        _applet_met.reset(token)
+    if met[0] and not _applets.get() and not _config_off.get():
+        c = _applet_reading(c, action, cwd)
+    return c
+
+
+def _read_ways(action: Any, cwd: str | None) -> Classification:
+    """_classify_read's reading of the call in one reading of BusyBox's applets (#1126): the call, with its printed
+    (#1047) and lead (#1104) readings, and its opened (#853) and late (#864) ones."""
     timed, met = [False], [False]
     t_timed, t_met = _timed.set(timed), _late_met.set(met)
     try:
@@ -9854,6 +9898,31 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     # The only nested classify, D-074's ordinary reading, runs under _config_off, so `_opening` is a cheap guard only.
     if met[0] and not _late_open.get() and not _opening.get() and not _config_off.get():
         c = _late_reading(c, action, cwd)
+    return c
+
+
+def _applet_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#1126: the call as read before (c), with a second reading of it beside it in which busybox with an applet runs
+    that applet as the program it names, also behind a prefix or a path (`sudo busybox rm ..`, `/bin/busybox sh`),
+    and ash and hush are shells as sh is: their `-c` text, stdin, heredoc and #1047's printed text are read, and
+    _cd_walk reads them so too. The reading has budgets and memos of its own, with its printed, opened and late
+    readings (_read_ways). The reading as before stays as it is, with its ``ordinary`` reading (D-074) beside the
+    second reading's: decide keeps the strictest, and no_grant (and through it the hook's bypass floor) counts each
+    reading, so a line never decides lower than before. So `busybox ls` still asks as main asks, though `ls` is a
+    read. The call leads with the reading a line of both would lead with (_lead: credentials, then a store write,
+    then the more severe), as #1047's does, so `echo 'cp ..' | busybox sh` leads with its store write as `| sh` does."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _applets.set(True), _applet_met.set(None)
+    try:
+        x = _brace_budget(_read_ways)(action, cwd)
+    finally:
+        _applet_met.reset(met)
+        _applets.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
     return c
 
 
