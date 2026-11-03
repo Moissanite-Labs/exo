@@ -1462,9 +1462,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   BSD xargs runs only echo and GNU xargs refuses `-J`. Known limit, as on main: a word from an expansion in an
   option's place (`xargs $FLAGS git push ...`) is read as the program, as for `nice`, `timeout` and `setsid`.
 
-  *Measured:* main's `scripts/gate_diff.py` against c05f0ca1 lowers 0 of 1,429,384 pairs on the built-in corpus
-  without variants and 0 of 10,373,968 with them. On an aimed corpus of 13,789 xargs lines under 197 policies it
-  lowers 0 of 2,716,433 pairs, and 0 of 997,608 on the compound forms of 288 of them. Tests:
+  *Measured:* main's `scripts/gate_diff.py` lowers no pair against main a2f6ec3d, which reads #1104's lead pipes.
+  It ran on the built-in corpus and on two aimed corpora of xargs lines, one of them with xargs in wrappers, nested
+  shells and lead pipes, under up to 240 policies. The PR lists each run's numbers. Tests:
   `tests/security/test_gate_xargs_options_1116.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
   command it prints also where the pipe is the first command of a group, a body or a condition, or comes after `!` or

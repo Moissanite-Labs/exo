@@ -33,8 +33,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
   On main c05f0ca1 `xargs --max-args 1 git push --force origin main` was allowed under `force_push: deny` and
   `opaque_exec: allow`. It is denied now, as `xargs -n 1 git push --force origin main` is. Where the two readings
-  differ, the call is read both ways, so no line decides lower (main's `scripts/gate_diff.py`: 0 lowered pairs in
-  four runs, 10,373,968 pairs on the built-in corpus with variants).
+  differ, the call is read both ways, so no line decides lower (main's `scripts/gate_diff.py` against main a2f6ec3d:
+  no lowered pair, on the built-in corpus and on two aimed corpora).
   Tests: `tests/security/test_gate_xargs_options_1116.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment), `docs/DOCS-MAP.md`.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
