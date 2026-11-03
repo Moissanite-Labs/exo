@@ -205,6 +205,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  NaN is the one exception: SQLite reads a stored NaN as null, so a NaN note counts (amendment 2026-11-02).
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
   read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
@@ -225,7 +226,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  `tests/core/test_event_paging_254.py`, `tests/learn/test_learn_signals.py`.
+- **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
+  and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
+  every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
+  that held the lock for 11 to 17 s, so another process on the same home failed with `database is locked` after its
+  5 s wait. The fork now reads the parent and builds its copies and search rows on a read snapshot (`_read`).
+  The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
+  the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
+  kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. A replay page the log
+  cannot read ends the stream. Since the amendment above, only the first page is read at subscribe, so a later
+  page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
+  once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
+  the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
+  subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
+  when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
+  disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
+  written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
+  `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
+  limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
+  none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
+  `last_messages`, and now gives none for a limit below 1 there too. `user_turns` counts a NaN note as a turn,
+  where the Python rule it replaced read NaN as true. `undo` reads it the same way, and no writer stores one,
+  so the docstring names it and the rule stays. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
+  `tests/core/test_session_hot_paths_254.py`, `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
