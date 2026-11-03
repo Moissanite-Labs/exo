@@ -1455,11 +1455,6 @@ gate does not read:
   of the two. The call leads with the reading a line of both would lead with: credentials, then a
   store write, then the more severe.
 
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then`
-  or `{` (#864) each read what the command writes in a printed reading of their own too. So
-  `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
-  is read as the same line with `!`, and `deny: [store_write]` denies it.
-
   So the output spends no budget of the reading as before. A later command on the line is read in
   full there, also past 16 printed readings of a sudo word that may take a value or 24 printed
   parts that only bash's reading opens. The posts in the output take no room from the violations
@@ -1468,10 +1463,36 @@ gate does not read:
   And `printf '%b' 'echo hi\c; rm -rf /srv/data' | bash` is still a delete, though bash writes only
   `echo hi`.
 
-  Only a shell that runs its stdin reads what the command writes: `bash` or `sh` with no script,
-  the shell `sudo -s` starts and `ssh host` with no command. An interpreter and a SQL client read
-  the text as written only, a known limit: `printf 'import os\nos.remove("x")\n' | python3` is
-  still `opaque_exec`. A gh body with an escape stays unseen (#208).
+  The readings that open a compound each read what the command writes in a printed reading of
+  their own too. #853's reading opens one behind `time`, `time -p`, `time --` or `time -p --`,
+  with or without `!`. #864's reading opens one behind a `coproc [NAME]` or `function NAME` that
+  comes after `!`, `then`, `else`, `elif`, `if`, `while`, `until`, `do` or `{`, and one right
+  after `coproc NAME {` or `function NAME {`.
+
+  So `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
+  is read as the same line with `!`, and `deny: [store_write]` denies it. It denies the same loop
+  after `else \x63oproc` too, and in `coproc W \x7b for ..; done; }`.
+
+  Only a shell that runs its stdin reads what the command writes. The gate reads it for these:
+
+  - `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` with no `-c` and no script, by
+    any path and with other options (`/bin/sh`, `bash -s`, `zsh -l`).
+  - The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command, also in long form or with
+    other options (`sudo --login`, `sudo -u bob -s`).
+  - The shell of `ssh host` with no remote command (`ssh -T host`), and of an ssh whose remote
+    command is an ssh with none (`ssh host ssh h2`).
+  - Any of these behind a prefix or wrapper the gate reads through (`env bash`, `sudo bash`,
+    `timeout 5 bash`, `nice bash`, `nohup bash`, `setsid bash`, `command bash`, `exec bash`).
+  - Any of these inside a compound the pipe feeds (`{ bash; }`, `( bash )`,
+    `if true; then bash; fi`).
+
+  So `printf 'r\x6d -rf /srv/data' | sudo -i` is a delete, and so is the same pipe into
+  `timeout 5 bash` or `{ bash; }`. `ssh host bash` is not one: the gate reads no pipe into a
+  shell that ssh runs as its remote command, escaped or written out.
+
+  An interpreter and a SQL client read the text as written only, a known limit:
+  `printf 'import os\nos.remove("x")\n' | python3` is still `opaque_exec`. A gh body with an
+  escape stays unseen (#208).
 
   The gate reads what the command writes only where it is sure of it. Every word must be literal:
   no expansion, glob, brace, leading `~` or `$".."`. printf may take `--` but no other option, and
@@ -1805,6 +1826,33 @@ gate does not read:
   reads `+cmd` as keystrokes: `!` runs a shell command after any of them (`+G!cmd`, `+:n!cmd`),
   while a search (`+/pattern`) takes the rest as its pattern unless a newline or another control
   key ends it.
+- Commands an ssh setting runs on this machine (#1083). ssh runs `ProxyCommand` and `LocalCommand`
+  with the user's shell, and `KnownHostsCommand` as a program, here and not on the host. Each is
+  read as the line it holds, as above, and also as `bash -c` is: an `opaque_exec` part beside the
+  line's own reading.
+
+  So `ssh -o 'ProxyCommand=touch /tmp/x' host ls` asks, as `bash -c 'touch /tmp/x'` does, though a
+  known program in another option's value stays `allow` (below).
+
+  A delete, a post or a store path in the value still counts, and `opaque_exec: allow` allows a
+  known program there again. `XAuthLocation` names the program ssh runs for X11 forwarding, which
+  a config file can turn on, so it is an `opaque_exec` part too. scp's and sftp's `-o` settings
+  count the same way. `none` stays `allow`, and so do `ProxyJump` and `-J`, which name a host.
+
+  ssh fills in its %-tokens before it runs the command. `%%` is `%` and `%d` is the home folder,
+  so a value that holds them is read once more with `%d` as `~`: `ssh -o 'LocalCommand=rm -rf
+  %d/.exo' host ls` gets a store write part.
+
+  The other tokens (`%h`, `%p`, `%r` and the rest) name a host, a port or a user. They stay as
+  written, so a path built from them is read as the path it spells, and the `opaque_exec` part
+  still asks.
+
+  These parts sit beside the line, which keeps the category main gave it, its targets on an ssh
+  hop's host and the store check of its words. So `ssh -o 'ProxyCommand=touch /tmp/x' host ls`
+  stays a `read` that asks, and a `deny`, `reserved` or rule entry meets each part.
+
+  A store write read through `%d` is such a part too: `deny: [store_write]` denies the line, but
+  the part does not lead, so the store floor does not apply to it.
 - A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
   `allow`; a program the gate does not know asks, as it would on its own. The compressors `tar
   -I` usually names are known programs, none of them with an exec option: `gzip`, `bzip2`, `xz`,
@@ -3453,11 +3501,12 @@ call is read once more with each loop's second pass in its own folder, beside th
 are targets and each target rule denies. That reading is also made in #853's opened reading, so it counts when each
 loop is behind its own `time` or `!` (`time for ..; done; time for ..; done`). It is made in #864's reading too, so
 it counts when each loop is in its own `coproc` (`{ coproc for ..; done; }; { coproc for ..; done; }`, also after
-`then` and as `coproc NAME { ..; }`). And it is made in each of the two readings of a line whose `${..}` words are
-read both ways (#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names
-`/proc/self/fd` too. A loop inside another that holds such a `cd` of its own counts too (the pair inside `while :;
-do ..; done`). Two known limits stay, as on main (#888). A command that runs once, outside any loop's second pass,
-after a second descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
+`then` and as `coproc NAME { ..; }`), and in #1047's printed reading, so it counts in a text that printf or `echo -e`
+pipes into a shell. And it is made in each of the two readings of a line whose `${..}` words are read both ways
+(#158), so the write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too. A loop
+inside another that holds such a `cd` of its own counts too (the pair inside `while :; do ..; done`). Two known
+limits stay, as on main (#888). A command that runs once, outside any loop's second pass, after a second
+descriptor `cd` is still named by the line's first descriptor folder, so `cd /dev/fd; for i in 1; do
 cd /proc/self/fd; done; cp /tmp/evil 3` names `/dev/fd` only. And a loop whose own commands `cd` into two different
 descriptor folders is named by its first descriptor `cd`, though bash starts its second pass where the last one
 left, so `while :; do cp /tmp/evil 3; cd /dev/fd; cd /proc/self/fd; done` names `/dev/fd` only. bash also takes

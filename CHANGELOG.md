@@ -15,6 +15,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Tests: headless Chrome startup on hosted runners (#907, D-046 amendment).
+  - The first start in a test run waits up to 90 s for DevTools instead of 20 s. The two hosted startup timeouts on
+    record were each a job's first start, in `test_csp_web.py`, where a fresh runner reads the browser from a cold
+    disk. Later starts get 20 s once a start has reached DevTools, or once one 90 s wait has run out.
+  - A start that fails (an early exit, no DevTools port, or a first DevTools call left unanswered for 90 s, as twice
+    on hosted macOS) is tried once more with a fresh profile, before any test code runs. A start that works on the
+    second try leaves a warning in the test summary.
+  - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
+    never starts costs the first test two waits and each later test one, as with a single try.
 - Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
   prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
   `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
@@ -50,11 +59,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   pairs, 0 of 2,163,000 pairs on 21,000 aimed loop lines with `/dev*`, `/proc*` and `*store*` target rules kept
   apart (34,612 tightened, ask to deny) and 0 of 117,420 pairs on 1,140 such lines with `${..}` words (3,776
   tightened). The reading is also made in #853's opened reading, so it counts when each loop is behind its own
-  `time` or `!` (`time for ..; done; time for ..; done`), and in each of #158's two readings of a line with `${..}`
-  words, so a write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body names `/proc/self/fd` too (main
-  d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2 times main's CPU time. Known limits,
-  as on main (#888): a command run once after a second descriptor `cd`, outside a loop's second pass, keeps the line's
-  first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
+  `time` or `!` (`time for ..; done; time for ..; done`), in #864's reading (each loop in its own `coproc`), in
+  #1047's printed reading (the pair in a text that printf or `echo -e` pipes into a shell), and in each of #158's two
+  readings of a line with `${..}` words, so a write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body
+  names `/proc/self/fd` too (main d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2
+  times main's CPU time. Known limits, as on main (#888): a command run once after a second descriptor `cd`,
+  outside a loop's second pass, keeps the line's first folder, and a loop whose own commands `cd` into two
+  descriptor folders is named by its first one.
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
   `docs/DOCS-MAP.md`.
@@ -66,6 +77,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   redraw. A model retry's reply is drawn, so the model list or "Try again" comes back (#1100). A custom provider saved
   meanwhile closes its form instead of leaving one whose next Save threw, and Add custom provider, Edit and Cancel work
   (#1099).
+- Gate (#1083, D-038 amendment): a command an ssh setting runs on this machine asks as `bash -c` does. On main
+  a2f6ec3d `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand` line were reads that `deny:
+  [local_write]` allowed, and so was `ssh -X -o XAuthLocation=/tmp/evil host ls`.
+
+  `ProxyCommand`, `LocalCommand`, `KnownHostsCommand` and `XAuthLocation` now each add an `opaque_exec` part beside
+  the line, which keeps its own reading, also as scp's and sftp's `-o` settings. A delete, a post or a store path in
+  the value still counts, and `opaque_exec: allow` allows a known program there again.
+
+  ssh's `%d` token reads as the home folder, so `LocalCommand=rm -rf %d/.exo` gets a store write part. `none`,
+  `ProxyJump` and `-J` stay reads.
+
+  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in four runs, 10,339,296 pairs on the built-in
+  corpus with variants). Tests: `tests/security/test_gate_ssh_command_settings_1083.py`. **Docs:** `docs/GATE.md`,
+  `docs/USER-GUIDE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
@@ -74,8 +99,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
   written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
   `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864) read
-  the output too.
+  The readings that open a compound read the output too: behind `time` (#853), and behind a `coproc` or
+  `function NAME` after `!`, `then`, `else`, `elif`, `if`, `while`, `until`, `do` or `{`, or right after
+  `coproc NAME {` or `function NAME {` (#864).
 
   A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
   Interpreters and SQL clients still read the text as written only. Tests:
