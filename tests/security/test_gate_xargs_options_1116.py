@@ -8,9 +8,9 @@ push. The same held for GNU's other long options that take a value (also as an u
 short options run together whose last letter takes the next word (`-rn 1`), and for BSD's `-J`, `-R` and `-S`. The
 options are now read as getopt reads them for GNU and BSD xargs (`_xargs_start`). Where that start differs from main's,
 the call is read again with each xargs's command read from it (`_xargs_reading`), beside main's reading, so no line
-decides lower. The command read from that start has its own words as its own text (#458, `_run_own`). Each new row fails
-on main c05f0ca1 and a2f6ec3d, but for the rows that keep main's reading. Classification and decision only: nothing here
-runs the lines.
+decides lower. The command read from that start has its own words as its own text (#458, `_run_own`). Each row fails
+on main c05f0ca1 and a2f6ec3d, but for the guard that a line without such options is read once. A row that keeps main's
+reading fails there through the line beside it. Classification and decision only: nothing here runs the lines.
 """
 from pathlib import Path
 
