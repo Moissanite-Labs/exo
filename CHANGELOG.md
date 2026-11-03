@@ -25,7 +25,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   port and a socket outside the secret stores stay reads.
 
   The line keeps its own reading, with the part beside it, so no decision is lower (main's `scripts/gate_diff.py`: 0
-  lowered pairs in four runs, 10,240,472 pairs on the built-in corpus with variants). Tests:
+  lowered pairs in five runs against main a2f6ec3d, 10,369,128 pairs on the built-in corpus with variants). Tests:
   `tests/security/test_gate_ssh_forward_keys_1096.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
   `docs/DOCS-MAP.md`.
 - Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it

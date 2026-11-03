@@ -1462,14 +1462,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this one. A dynamic forward on a path is a socket, as #484 found in OpenSSH's parse_forward. *Cost:* such a line
   asks the principal even when the remote command only reads.
 
-  Main's `scripts/gate_diff.py` against main f8f1d28b lowers 0 pairs in each of four runs. The built-in corpus gives
-  1,404,040 pairs without variants and 10,240,472 with them.
+  Main's `scripts/gate_diff.py` against main a2f6ec3d lowers 0 pairs in each of five runs. The built-in corpus gives
+  1,436,688 pairs without variants and 10,369,128 with them.
 
   An aimed corpus of 10,865 ssh, scp and sftp lines puts each forward form on secret, store and plain paths, in each
   position and wrapper. Under the 88 built-in policies and 60 deny, reserved and rule policies on the categories it
   meets, it gives 1,608,020 pairs (213,336 tightened).
 
-  The aimed corpus's 2,202 simple lines in their compound forms give 5,719,016 pairs (379,752 tightened). Tests:
+  A second corpus of 14,448 lines puts the forward forms under about 90 wrappers and nests. Under 225 policies, 77
+  of them command rules beside a category deny (#458), it gives 3,250,800 pairs (633,110 tightened).
+
+  A third corpus of 2,944 lines prints the forward lines into a shell as the first command of a group or a body
+  (#1104), and puts them first in those shapes. Under 232 policies it gives 683,008 pairs (101,551 tightened). Tests:
   `tests/security/test_gate_ssh_forward_keys_1096.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
   command it prints also where the pipe is the first command of a group, a body or a condition, or comes after `!` or
