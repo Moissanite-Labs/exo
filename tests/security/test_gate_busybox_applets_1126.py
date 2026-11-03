@@ -158,6 +158,33 @@ def test_a_pipe_after_reserved_words_into_busybox_reads_as_with_sh(line, twin, w
     _reads_as(line, twin)
 
 
+# #1083 (main 0f413c7f) reads the command an ssh setting runs on this machine. BusyBox's applets and shells there,
+# and the ssh line inside BusyBox's shell, read as without busybox or with `sh`. On main each line here was OPAQUE.
+SSH_ROWS = [
+    (f"ssh -o ProxyCommand='busybox {RM}' h", f"ssh -o ProxyCommand='{RM}' h", DELETE),
+    (f"ssh -o 'ProxyCommand /bin/busybox {RM}' h", f"ssh -o 'ProxyCommand {RM}' h", DELETE),
+    (f"busybox ssh -o ProxyCommand='{RM}' h", f"ssh -o ProxyCommand='{RM}' h", DELETE),
+    (f"sudo busybox ssh -o ProxyCommand='{RM}' h", f"sudo ssh -o ProxyCommand='{RM}' h", DELETE),
+    (f"busybox scp -o ProxyCommand='{RM}' a h:b", f"scp -o ProxyCommand='{RM}' a h:b", DELETE),
+    (f"ssh -o ProxyCommand='ash -c \"{RM}\"' h", f"ssh -o ProxyCommand='sh -c \"{RM}\"' h", DELETE),
+    (f"ssh -o ProxyCommand='busybox sh -c \"{RM}\"' h", f"ssh -o ProxyCommand='sh -c \"{RM}\"' h", DELETE),
+    (f"scp -o ProxyCommand='busybox sh -c \"{PUSH}\"' a h:b", f"scp -o ProxyCommand='sh -c \"{PUSH}\"' a h:b", FORCE),
+    (f"ash -c \"ssh -o ProxyCommand='{RM}' h\"", f"sh -c \"ssh -o ProxyCommand='{RM}' h\"", DELETE),
+    (f"echo \"ssh -o ProxyCommand='{RM}' h\" | busybox sh", f"echo \"ssh -o ProxyCommand='{RM}' h\" | sh", DELETE),
+    (f"{{ echo \"ssh -o ProxyCommand='{RM}' h\" | ash; }}", f"{{ echo \"ssh -o ProxyCommand='{RM}' h\" | sh; }}",
+     DELETE),
+    # `%d` is the home folder, so this deletes the store: a no_grant call, as without busybox
+    ("ssh -o PermitLocalCommand=yes -o LocalCommand='busybox rm -rf %d/.exo' h",
+     "ssh -o PermitLocalCommand=yes -o LocalCommand='rm -rf %d/.exo' h", ("ask", "deny", "deny", "ask", True)),
+]
+
+
+@pytest.mark.parametrize("line, twin, want", SSH_ROWS)
+def test_busybox_in_or_around_an_ssh_setting_reads_as_without_it(line, twin, want):
+    assert _decided(twin) == want
+    _reads_as(line, twin)
+
+
 # busybox's own options and busybox with no applet run no applet, so the call keeps main's reading alone: no second
 # reading, the same category, outcomes and summary as on main 0f413c7f. A bare _PREFIXES entry for busybox read the
 # first five as reads and allowed them (the issue's warning).
