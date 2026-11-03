@@ -281,7 +281,7 @@ def test_command_in_exec_option_subscript_is_classified(line):
     ("tar --to-command=\"unset 'a[\\$i]'\" -xf a.tar", "ask"),
     ("rsync -e \"read 'a[\\${x}]' <<< x\" src host:dst", "ask"),
     ("sqlite3 db \".shell printf -v 'a[\\$(cat f)]' %s x\"", "ask"),
-    ("ssh -o \"ProxyCommand=unset 'a[0]'\" host", "allow"),
+    ("tar --to-command=\"unset 'a[0]'\" -xf a.tar", "allow"),   # an ssh ProxyCommand asks since #1083
     ("rsync -e \"wait -p 'a[0]'\" src host:dst", "allow"),
 ])
 def test_exec_option_subscript_expansion_asks(line, outcome):
