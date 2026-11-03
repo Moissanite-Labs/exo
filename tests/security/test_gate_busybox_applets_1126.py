@@ -1,7 +1,7 @@
 """#1126: BusyBox's shell and applets are read as the program each one names.
 
 BusyBox is one binary that runs the applet its first operand names: `busybox sh`, `busybox rm -rf /srv/data`. Its
-shells also go by `ash` and `hush`. On main a2f6ec3d the gate read `busybox sh` as busybox running a script named
+shells also go by `ash` and `hush`. On main dde4e0d8 the gate read `busybox sh` as busybox running a script named
 `sh`, so it read neither the `-c` text, the stdin, a heredoc nor #1047's printed text. `ash` and `hush` were
 programs the gate does not know, and every applet was only `opaque_exec`. Under `deny: [delete]` or
 `deny: [store_write]` such a line asked where the same line with `sh` denies. Under `opaque_exec: allow` it ran
@@ -131,7 +131,7 @@ def test_more_spellings_decide_as_the_same_line_with_sh(line, twin, want):
     _reads_as(line, twin)
 
 
-# #1104 (main a2f6ec3d) reads an echo or printf pipe into a shell that starts a group, a then or do body, or follows
+# #1104 (main dde4e0d8) reads an echo or printf pipe into a shell that starts a group, a then or do body, or follows
 # `!` or `time`. With BusyBox's shell in that place both readings meet: the pipe's text is read, as with `sh`. On main
 # each line here was OPAQUE.
 LEAD_ROWS = [
@@ -157,7 +157,7 @@ def test_a_pipe_after_reserved_words_into_busybox_reads_as_with_sh(line, twin, w
 
 
 # busybox's own options and busybox with no applet run no applet, so the call keeps main's reading alone: no second
-# reading, the same category, outcomes and summary as on main a2f6ec3d. A bare _PREFIXES entry for busybox read the
+# reading, the same category, outcomes and summary as on main dde4e0d8. A bare _PREFIXES entry for busybox read the
 # first five as reads and allowed them (the issue's warning).
 KEPT = [
     ("busybox --install", "opaque_exec", OPAQUE, "busybox runs shell commands"),
@@ -205,7 +205,7 @@ def _rule(command, decision="allow"):
 
 # #458 and #1082: the applet's command has its own words as its own text, with busybox's text as its whole, as the
 # command xargs runs has. So on a line of two commands a rule for `^busybox` names neither the delete nor the push
-# busybox runs: each denies by its category line, as it does without busybox. On main a2f6ec3d the rule named the
+# busybox runs: each denies by its category line, as it does without busybox. On main dde4e0d8 the rule named the
 # `opaque_exec` part, the only one, and `opaque_exec: allow` let the line run.
 RULES = [
     ({"rules": [_rule("^busybox")], "categories": {"delete": "deny", "opaque_exec": "allow"}},

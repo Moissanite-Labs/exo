@@ -1484,7 +1484,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `tests/security/test_gate_ssh_forward_keys_1096.py`.
 - *Amendment 2026-11-03 (issue #1126):* BusyBox's shell and applets are read as the program each one names.
   BusyBox is one binary that runs the applet its first operand names, and on Alpine images `/bin/sh` and `/bin/ash`
-  are that binary. On main a2f6ec3d `busybox` was in `_SHELLS`, but that branch takes the first word
+  are that binary. On main dde4e0d8 `busybox` was in `_SHELLS`, but that branch takes the first word
   that is not an option for a script, so `busybox sh` read as busybox running a script named `sh`.
 
   Neither its `-c` text, its stdin, a heredoc nor #1047's printed text was read, and `_cd_walk` stopped at the same
@@ -1510,14 +1510,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a delete. So busybox with no applet, or with an option of its own first, keeps main's reading alone.
 
   `busybox` stays in `_SHELLS`, and `ash` and `hush` are in `_APPLET_SHELLS`, which only the second reading reads.
+  The #1047 amendment above and `docs/GATE.md` now name them among the shells that read what printf writes, and
+  `tests/docs/test_gate_printf_readers_doc.py` (#1119) checks both sets.
 
   Left open: an applet that only reads keeps main's `opaque_exec` beside it. So `busybox ls` and `ash --version`
   still ask, and `opaque_exec: allow` allows them, where `ls` and `sh --version` are reads. Taking the second
   reading alone there lowers the line against main, which needs a decision of its own. `ash -c ls` asks as
   `sh -c ls` does, in both readings.
 
-  Main's `scripts/gate_diff.py` lowers no pair against main a2f6ec3d. The PR lists each run's numbers.
-  Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`.
+  Main's `scripts/gate_diff.py` lowers no pair against main dde4e0d8. The PR lists each run's numbers.
+  Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/docs/test_gate_printf_readers_doc.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
   command it prints also where the pipe is the first command of a group, a body or a condition, or comes after `!` or
   `time`. On main 6ec085b6 `echo 'rm -rf /srv/data' | bash` was a delete, and so was the same pipe after `true;` in a
@@ -1569,7 +1572,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   A shell that runs its stdin also reads `out` (`_stdin_texts`, for the texts `_once` reads with `classify_shell`).
   That is `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` (`_SHELLS`) with no `-c` and no script
-  (`/bin/sh`, `bash -s`).
+  (`/bin/sh`, `bash -s`). Since #1126 `ash`, `hush` (`_APPLET_SHELLS`) and BusyBox's shell by its applet
+  (`busybox sh`, `busybox ash`) read it too, in `_applet_reading`.
 
   The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command reads it too (`_sudo_shells`). So does
   `ssh host` with no command, and an ssh whose command is such an ssh (`ssh host ssh h2`).

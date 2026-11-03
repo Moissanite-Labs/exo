@@ -40,14 +40,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
     never starts costs the first test two waits and each later test one, as with a single try.
 - Gate (#1126, D-038 amendment): BusyBox's shell and applets are read as the program each one names. On main
-  a2f6ec3d `busybox sh`, `ash` and `hush` read no `-c` text, stdin or heredoc, and `busybox rm -rf /srv/data` was
+  dde4e0d8 `busybox sh`, `ash` and `hush` read no `-c` text, stdin or heredoc, and `busybox rm -rf /srv/data` was
   only `opaque_exec`. So `deny: [delete]` asked for `printf 'rm -rf /srv/data' | busybox sh` where it denies the
   line with `sh`. A store write piped into `busybox sh` ran in bypass and observe mode.
 
   Each now decides as the line with `sh` or without busybox, read in a second reading beside main's, so that store
   write asks at the floor. busybox with no applet or with an option of its own reads as before, and `busybox ls`
-  still asks. Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`.
-  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
+  still asks.
+
+  The #1047 texts name `ash`, `hush` and `busybox sh` among the shells that read what printf writes. Tests:
+  `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/docs/test_gate_printf_readers_doc.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
   prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
   `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc

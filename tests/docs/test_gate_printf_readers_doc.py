@@ -8,10 +8,11 @@ approving reviews found that docs/GATE.md and the D-038 amendment named only `ba
 where #864's reading opens a compound after `else`, `elif`, `if`, `while`, `until` and `do` too, and right after
 `coproc NAME {` and `function NAME {`, and that reading has a printed reading of its own.
 
-Each list is taken from the gate where the gate keeps one: `_SHELLS`, and the reserved words in `_OPENERS` that
-close no compound. So a list that grows in the code fails here until the texts name it. Each reader and opener a
-text names is also run through the gate: the escaped line must decide as the same line written out does.
-Classification and decision only: nothing here runs the lines.
+Each list is taken from the gate where the gate keeps one: `_SHELLS` with `_APPLET_SHELLS` (`ash` and `hush`, read as
+shells in #1126's second reading), and the reserved words in `_OPENERS` that close no compound. So a list that grows
+in the code fails here until the texts name it. Each reader and opener a text names is also run through the gate:
+the escaped line must decide as the same line written out does. Classification and decision only: nothing here runs
+the lines.
 """
 import re
 from pathlib import Path
@@ -97,8 +98,8 @@ NAMED_READERS = [(name, r) for name, spec in READER_TEXTS.items() for r in _read
 @pytest.mark.parametrize("name", READER_TEXTS)
 def test_the_text_names_every_shell_the_gate_reads_it_for(name):
     text = _text(*READER_TEXTS[name])
-    missing = [s for s in sorted(gate._SHELLS) if f"`{s}`" not in text]
-    assert not missing, f"{name} does not name {missing}, which the gate reads as shells (_SHELLS)"
+    missing = [s for s in sorted(gate._SHELLS | gate._APPLET_SHELLS) if f"`{s}`" not in text]
+    assert not missing, f"{name} does not name {missing}, which the gate reads as shells (_SHELLS, _APPLET_SHELLS)"
 
 
 @pytest.mark.parametrize("reader", REVIEW_READERS)

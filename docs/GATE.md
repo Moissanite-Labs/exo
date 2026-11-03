@@ -1450,6 +1450,8 @@ gate does not read:
 
   - `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` with no `-c` and no script, by
     any path and with other options (`/bin/sh`, `bash -s`, `zsh -l`).
+  - `ash` or `hush` the same way, and BusyBox's shell by its applet (`busybox sh`, `busybox ash`,
+    `busybox hush`, `/bin/busybox sh`), in #1126's second reading.
   - The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command, also in long form or with
     other options (`sudo --login`, `sudo -u bob -s`).
   - The shell of `ssh host` with no remote command (`ssh -T host`), and of an ssh whose remote
