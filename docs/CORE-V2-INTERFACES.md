@@ -135,6 +135,8 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
   terminal window and stdio subscribe again on their own, and their stream ends only when the core shuts down.
   A stream replays its backlog from the event log 1,000 events at a time, up to the newest event when it
   subscribed, then goes live, so a client far behind costs the core one page, not its whole gap (#254).
+  A page the log cannot read ends the stream. Over stdio the client then gets an `internal` error `Response`
+  with the subscribe's id, after the events before that page.
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
 - `config.get` ConfigGet: key? (None = whole config)
 - `config.set` ConfigSet: key, value: Any
