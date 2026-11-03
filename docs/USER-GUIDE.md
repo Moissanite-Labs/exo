@@ -347,6 +347,9 @@ The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
 
 Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
 appears on the Tasks page) and remove it. Remove cannot be undone, so it asks for a second click on Confirm remove.
+Focus moves to Cancel, so pressing Enter again cancels. Escape cancels too. If a remove fails, the page says why and
+puts focus back on that job's remove. If you have moved focus outside the job cards by then, to the form for
+example, it stays there.
 Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
@@ -461,7 +464,13 @@ What the gate asks about, and why:
   `^git push --force origin main$` still covers only the push on its own. A rule written for a whole line such as
   `^git push origin main && git push origin dev$` now has to name each command too, for example as
   `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Ask and deny rules still see the
-  whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
+  whole line, but an ask rule lifts a deny only from the commands it names. The regex is matched against each command
+  as you wrote it, without a here-string (`<<< 'npm test'`) or a here-doc body, which are its input: a rule for
+  `npm test` does not allow `rm -rf build <<< 'npm test'` (#458). The command that `find -exec`, `xargs` or
+  `git bisect run` runs must be named too, so a rule for `^find` does not cover the `rm` in `find . -exec rm {} +`. A
+  command the gate only finds in a string in code (`os.system("git push --force origin main")` in `python3 -c` or an
+  `execute_code` call) is lowered by no `command` rule: use a `category` or `tool` key. `docs/GATE.md` has the
+  details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
   (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into

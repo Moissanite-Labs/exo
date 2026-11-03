@@ -28,7 +28,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
-from exo.turn_settle import settle_for_turn, thread_tail
+from exo.turn_settle import leaf_tokens, settle_for_turn, thread_tail
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -457,12 +457,13 @@ class TreeContext:
                 if node.level == 0:
                     msgs = self._read(node.session, node.start - 1, node.end)
                     source = "\n\n".join(render_message(m) for m in msgs)
+                    size = leaf_tokens(self, node.session, msgs, source)  # an agent or private tree: in full (#1013)
                     principal = [m for m in msgs if is_principal(m)]
                     extra = ""
                     if self.on_pre_compress is not None and self._hooked(node.session):
                         extra = str(await maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
-                    text = "" if estimate_tokens(source) < self.min_compact_tokens else \
+                    text = "" if size < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
                     if text:
                         lost = missing_directives(text, principal)
@@ -472,12 +473,13 @@ class TreeContext:
                 else:
                     left, right = self._halves(node)  # a skipped child counts verbatim
                     source = left + right
-                    text = "" if estimate_tokens(source) < self.min_compact_tokens else \
+                    size = estimate_tokens(source)
+                    text = "" if size < self.min_compact_tokens else \
                         await self._summarize(node.session, right, previous=left)
                 # #279: a summary is never the principal's words; a summarizer may decode an escaped tag or write one
                 text = provenance.defuse_pins(text)
                 # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
-                node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
+                node.text, node.status = (text, "done") if text and estimate_tokens(text) < size \
                     else ("", "skipped")
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
@@ -504,7 +506,7 @@ class TreeContext:
                 from exo.protocol.schema import MemorySummarized
 
                 await self.on_event(MemorySummarized(node_id=node.id, level=node.level, start=node.start,
-                                                     end=node.end, before_tokens=estimate_tokens(source),
+                                                     end=node.end, before_tokens=size,
                                                      after_tokens=estimate_tokens(node.text), tree=node.session),
                                     self._event_session(node.session))
             if self.on_compacted is not None and self._hooked(node.session):
@@ -989,7 +991,8 @@ class AgentContext(TreeContext):
 
     def _source_tokens(self, node: SummaryNode) -> int:
         if node.level == 0:
-            return estimate_tokens("\n\n".join(render_message(m) for m in self._read(node.session, node.start - 1, node.end)))
+            msgs = self._read(node.session, node.start - 1, node.end)
+            return leaf_tokens(self, node.session, msgs, "\n\n".join(render_message(m) for m in msgs))
         return estimate_tokens("".join(self._halves(node)))
 
     @_one_read

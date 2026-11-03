@@ -206,7 +206,8 @@ class SessionStore:
             try:
                 out = fn(self._db)
             except BaseException:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:  # SQLite rolls back a full disk itself: keep that error, not ROLLBACK's
+                    self._db.execute("ROLLBACK")
                 raise
             self._db.execute("COMMIT")
             return out
@@ -220,7 +221,8 @@ class SessionStore:
             try:
                 return fn(self._db)
             finally:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
 
     # ---------------------------------------------------------------- sessions
 
@@ -340,7 +342,8 @@ class SessionStore:
 
     def user_turns(self, sid: str) -> int:
         """Visible user messages that are not context notes, counted in SQL (#254). A note value Python reads as
-        false (missing, null, false, 0, "", an empty list or object) is no note."""
+        false (missing, null, false, 0, "", an empty list or object) is no note. So is NaN, which Python reads as
+        true: SQLite reads a stored NaN as null, so a NaN note counts as a turn, as it does for ``undo``."""
         note = "json_extract(data, '$.meta.note')"
         return self._q("SELECT COUNT(*) FROM messages WHERE session=? AND role='user' AND hidden=0 AND"
                        f" ({note} IS NULL OR {note} IN (0, '') OR json_type(data, '$.meta.note') IN"
@@ -391,7 +394,8 @@ class SessionStore:
         return rows[0]["seq"] if rows else None
 
     def last_messages(self, sid: str, limit: int) -> list[Message]:
-        """Decode at most ``limit`` visible messages, returned in transcript order."""
+        """Decode at most ``limit`` visible messages, returned in transcript order. A ``limit`` of 0 gives none, where
+        the slice ``[-0:]`` gave every message. A negative ``limit`` raises ``ValueError``."""
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("message limit must be a non-negative integer")
         rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 ORDER BY seq DESC LIMIT ?",
@@ -429,13 +433,15 @@ class SessionStore:
 
     def fork(self, sid: str, at_message: str | None = None, title: str = "") -> SessionInfo:
         """New session holding the parent's messages up to and including ``at_message``. One write transaction
-        adds the session, its copies, their search rows and summaries, so a failed fork leaves nothing (#254)."""
+        adds the session, its copies, their search rows and summaries, so a failed fork leaves nothing (#254).
+        The copies are built on a read snapshot first. The write transaction checks that the parent's rows up to
+        the fork point are the same and only inserts, so another process waits for it as for any short write."""
         parent = self.get_session(sid)
         if parent is None:
             raise KeyError(sid)
         cwd = canonical_cwd(parent.cwd)
 
-        def copy(db: sqlite3.Connection) -> str:
+        def build(db: sqlite3.Connection) -> tuple[int, list[str], int, list[tuple], list[tuple]]:
             if at_message is None:
                 upto = db.execute("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,)).fetchone()[0]
             else:
@@ -443,26 +449,40 @@ class SessionStore:
                 if row is None:
                     raise KeyError(at_message)
                 upto = row[0]
-            child = self._new_session(db, None, title or parent.title, parent.seat, parent.model, cwd, sid, upto,
-                                      parent.agent, parent.kind if parent.kind != "scheduled" else "thread")
-            rows, fts, ts = [], [], now_ts()
-            for seq, r in enumerate(db.execute("SELECT data FROM messages WHERE session=? AND seq<=? AND hidden=0"
-                                               " ORDER BY seq", (sid, upto)).fetchall(), 1):
+            ids, whole, copies, fts, ts = [], -1, [], [], now_ts()
+            for seq, r in enumerate(db.execute("SELECT id, seq, data FROM messages WHERE session=? AND seq<=? AND"
+                                               " hidden=0 ORDER BY seq", (sid, upto)).fetchall(), 1):
+                if whole < 0 and r["seq"] != seq:  # rows 1..whole are all there: a summary up to it keeps its range
+                    whole = seq - 1
                 m = from_dict(Message, json.loads(r["data"]), strict=False)
                 m.meta["forked_from"] = m.id
                 m.meta["local"] = "fork"  # the original is already in the agent log; the copy takes no place in it
                 m.id, m.meta["seq"] = new_id("m"), seq
                 data = json.dumps(to_dict(m), ensure_ascii=False)
-                rows.append((m.id, child, seq, m.role, ts, data, data))
+                ids.append(r["id"])
+                copies.append((m.id, seq, m.role, ts, data))
                 if text := _fts_text(m):
-                    fts.append((text, m.id, child))
+                    fts.append((text, m.id))
+            return upto, ids, len(ids) if whole < 0 else whole, copies, fts
+
+        plan = self._read(build)
+
+        def copy(db: sqlite3.Connection) -> str:
+            nonlocal plan
+            if [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq<=? AND hidden=0 ORDER BY"
+                                         " seq", (sid, plan[0]))] != plan[1]:
+                plan = build(db)  # the parent changed after the snapshot: build again, under the lock this time
+            upto, _ids, whole, copies, fts = plan
+            child = self._new_session(db, None, title or parent.title, parent.seat, parent.model, cwd, sid, upto,
+                                      parent.agent, parent.kind if parent.kind != "scheduled" else "thread")
             db.executemany("INSERT INTO messages (id, session, seq, role, created, data, copy_pos)"
-                           " VALUES (?,?,?,?,?,?,json_extract(?, '$.meta.pos'))", rows)
-            db.executemany("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)", fts)
+                           " VALUES (?,?,?,?,?,?,json_extract(?, '$.meta.pos'))",
+                           [(mid, child, seq, role, ts, data, data) for mid, seq, role, ts, data in copies])
+            db.executemany("INSERT INTO messages_fts (text, msg_id, session) VALUES (?,?,?)",
+                           [(text, mid, child) for text, mid in fts])
             # the copies are renumbered 1..n: a range with an undone (hidden or deleted) row up to its end would shift
-            done = db.execute("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done' AND end_seq=("
-                              "SELECT COUNT(*) FROM messages m WHERE m.session=? AND hidden=0 AND"
-                              " seq<=summaries.end_seq)", (sid, upto, sid)).fetchall()
+            done = db.execute("SELECT * FROM summaries WHERE session=? AND status='done' AND end_seq BETWEEN 0 AND ?",
+                              (sid, whole)).fetchall()
             db.executemany("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status, lane)"
                            " VALUES (?,?,?,?,?,?,?,?,?)", [(new_id("sum"), child, r["level"], r["idx"], r["start_seq"],
                                                             r["end_seq"], r["text"], r["status"], r["lane"]) for r in done])
@@ -670,7 +690,10 @@ class SessionStore:
                     skip: tuple[str, ...] = (), page: int = 1000) -> Iterator[Event]:
         """``events_since`` with no bound, read ``page`` events at a time, so a long read holds one page (#254). It
         stops at the newest seq at the call, as one read would. The first page is read now: a bad ``since`` fails
-        here, not at the first ``next``."""
+        here, not at the first ``next``. A ``page`` below 1 raises ``ValueError``, as a negative limit does in
+        ``last_messages``. SQLite reads LIMIT -1 as no limit, and both 0 and -1 ended in an ``IndexError``."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("event page must be a positive integer")
         upto = self.last_event_seq()
         first = self.events_since(since, session, page, with_global, skip)
 

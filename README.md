@@ -146,6 +146,10 @@ centre and orchestra, `research/` the groundwork, `site/` the project website.
 - **Replicate for anyone.** The core is generic. Everything about a person lives in their own
   principal store. See `DECISIONS.md` (D-004).
 
+The aim is greater capability without requiring more of a person's life to keep the system moving.
+Design choices should leave more room for their judgment, curiosity and imagination, and demand less
+effort coordinating the machinery. This is an aspiration to evaluate Exo against, not a measured outcome.
+
 ## Credits and inspirations
 
 - [dzhng/jevgrep](https://github.com/dzhng/jevgrep) (MIT): the `jg` code search behind the `code_find` tool and
