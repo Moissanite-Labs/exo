@@ -4745,7 +4745,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   Now `_parse_line` ends the command at the closer before such a word (`_AFTER_CLOSER`), as it does at a `;`. Each
   closer is then a command of its own, with its own `opens` and feed, so the line is read as its form with a `;`,
-  by main's reading and by #479's second reading alike.
+  by main's reading and by #479's second reading alike. #867's reading (#894) finds each loop there too, so
+  `{ for ..; cd /dev/fd; done; for ..; cd /proc/self/fd; done }` names both folders, as with the `;`.
 
   Unlike #853 and #864, this needs no reading beside main's. bash runs the two forms the same, and the change only
   gives the first form what the second already has.

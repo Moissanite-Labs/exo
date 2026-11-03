@@ -146,6 +146,37 @@ def test_a_pipe_into_a_compound_before_such_a_word_reaches_its_commands(row):
     assert _reading(plain) == _reading(semi), plain
 
 
+# #867 (#894): each loop's second pass is named by its own descriptor folder. Two such loops closed right before such
+# a word are each found there, as with the `;`. On main c05f0ca1, which holds #894, each first form names one folder
+# only, so one of the two target rules asks where its `;` form denies.
+FD = "for i in 1 2; do cp /tmp/evil 3; cd /dev/fd; done"
+PROC = "for i in 1 2; do cp /tmp/evil 3; cd /proc/self/fd; done"
+FOLDER_ROWS = [
+    "{ " + FD + "; " + PROC + "@ }",
+    "{ " + PROC + "; " + FD + "@ }",
+    "if true; then " + FD + "; " + PROC + "@ fi",
+    "if true; then " + PROC + "; " + FD + "@ fi",
+    "f() { " + FD + "; " + PROC + "@ }",
+    "case x in x) " + FD + "; " + PROC + "@ esac",
+    "for j in 1 2; do " + FD + "; " + PROC + "@ done",
+    "while :; do " + PROC + "; " + FD + "@ done",
+]
+DEV_DENY, PROC_DENY = _pol(deny=["target:/dev*"]), _pol(deny=["target:/proc*"])
+
+
+def _folders(c):
+    return {p.target for r in gate.readings(c) for p in gate._each_part(r) if p.category == "store_write"}
+
+
+@pytest.mark.parametrize("row", FOLDER_ROWS)
+def test_each_loop_closed_before_such_a_word_is_named_by_its_own_folder(row):
+    for line in _forms(row):
+        c = _bash(line)
+        folders = _folders(c)
+        assert any(t.startswith("/dev/fd") for t in folders) and "/proc/self/fd" in folders, (line, folders)
+        assert (gate.decide(c, DEV_DENY).outcome, gate.decide(c, PROC_DENY).outcome) == ("deny", "deny"), line
+
+
 # The hook: the issue's lines ask the principal, and permissions bypass keeps the store floor.
 class MockCtx:
     def __init__(self, settings):
