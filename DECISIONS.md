@@ -4753,8 +4753,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   Words bash rejects there are read as before: any other word right after a closer (`done if`, `done {`,
   `done !`, `done for`), a word after a closer's redirection (`done > f }`) and a quoted word (`done "}"`).
-  One of the eight words in a place where bash rejects it (`done then` outside an `if` condition, `done do`
-  outside a `while` condition) is read as its `;` form, which bash rejects as well, and bash runs nothing there.
+  Each of the eight words in a place where bash rejects it (`done then` outside an `if` condition, `done do`
+  outside a `while` condition, `done fi` with no `if` open) is read as its `;` form. bash rejects that form as well
+  and runs nothing there.
 
   `done )` was already read as `done; )`, since the lexer ends a command at `)`. So were nested loops closed by
   `done done` alone or in a subshell, since the outer loop's span holds the inner one.

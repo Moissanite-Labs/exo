@@ -3485,8 +3485,8 @@ is found and the loop is read again. On main b6670ab8 these two lines were allow
 A pipe into a loop or an `if` closed right before such a word reaches the commands inside it too, as with the `;`
 (`{ cat cmds | while read l; do ssh h; done }` asks, #316). Any other word right after a closer (`done if`,
 `done {`, `done !`), a closer with a redirection before the word (`done > f }`) and a quoted word are bash syntax
-errors or plain words, and are read as before. One of these words where bash rejects it (`done then` outside an
-`if` condition) is read as its form with a `;`, which bash rejects too.
+errors or plain words, and are read as before. Each of the eight words in a place where bash rejects it (`done then`
+outside an `if` condition, `done fi` with no `if` open) is read as its form with a `;`, which bash rejects too.
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret for a
