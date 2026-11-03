@@ -1,5 +1,5 @@
 """The Command tab's approval card, run offline in node: allow always takes a separate Confirm always click, as on the
-Chat card, and the card shows the whole call.
+Chat card, the card shows the whole call, and a card whose answer is out takes no second answer (#1117).
 
 Production dom.js and command.js build the page. The harness only stands in for the DOM, focus, fetch,
 sessionStorage and EventSource. As in a browser, focus falls to the body when the focused element leaves the page."""
@@ -25,6 +25,7 @@ class El {
   replaceChildren(...xs) { this.children.forEach(x=>{ x.parent=null; }); this.children=[]; xs.forEach(x=>this.appendChild(x)); }
   get textContent() { return this.text ?? this.children.map(x=>x.textContent).join(""); }
   all() { return [this, ...this.children.flatMap(x=>x.all ? x.all() : [])]; }
+  contains(c) { for(let x=c; x; x=x.parent) if(x===this) return true; return false; }
   focus() { focused=this; }
 }
 let focused=null;
@@ -42,13 +43,18 @@ const ask={request_id:"a_1",summary:"send the release notes",risk:"high",session
   options:["allow","deny","allow_always"],call:{name:"send_message",arguments:{target:"channel:ops",message:LONG}}};
 let pending=[ask];
 const posts=[];
+let hold=null, refuse=false;   // a POST waits for hold while it is set, and is refused while refuse is set
+const holds={};                // or waits for the hold of its request, when that request has one
 const snap=()=>({connected:true,seq:5,error:null,approvals:{ok:true,pending,counts:{pending:pending.length},recent:[]},
   decisions:{ok:true,configured:false,waiting:[],counts:{}},
   sessions:{ok:true,active:[],past:[],counts:{},live_window_seconds:600},
   tasks:{ok:true,columns:[],open:0},projects:{ok:true,lanes:[],counts:{projects:0,sessions:0}},
   costs:{ok:true,top:[],by_seat:[],by_model:[],window_days:7}});
 globalThis.fetch=async(path,opt)=>{
-  if(opt.method==="POST") posts.push([path,JSON.parse(opt.body)]);
+  if(opt.method==="POST") {
+    posts.push([path,JSON.parse(opt.body)]); await (holds[path.split("/").pop()] ?? hold);
+    if(refuse) return {ok:false,status:502,json:async()=>({error:"the core refused the answer"})};
+  }
   return {ok:true,status:200,json:async()=>(path.startsWith("/api/snapshot")?snap():{ok:true})};
 };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -58,6 +64,11 @@ const unmount=mount(root);
 await sleep(20);
 const buttons=()=>root.all().filter(x=>x.tagName==="BUTTON");
 const button=label=>buttons().find(b=>b.textContent===label);
+const card=summary=>root.all().find(x=>x.tagName==="ARTICLE"&&x.textContent.includes(summary));
+const onCard=(summary,label)=>card(summary).all().find(x=>x.tagName==="BUTTON"&&x.textContent===label);
+// A card's buttons as "label" or "label (disabled)".
+const shown=summary=>card(summary).all().filter(x=>x.tagName==="BUTTON")
+  .map(x=>x.textContent+(x.getAttribute("disabled")!==null?" (disabled)":""));
 // A click focuses its button first, as Chrome does.
 const click=(b,detail=1)=>{ assert.ok(b,"no such button"); b.focus(); (b.listeners.click||[]).forEach(f=>f({target:b,detail})); };
 const press=key=>{   // a keydown on the focused element, bubbling up to the document
@@ -149,6 +160,137 @@ assert.equal(document.activeElement,button("allow always"));
 click(button("allow always")); click(button("Cancel")); await sleep(20);
 assert.equal(document.activeElement,button("allow always"));
 assert.equal(posts.length,0);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_cancel_or_escape_after_confirm_always_does_nothing_while_the_grant_is_out(tmp_path):
+    """Cancel cannot stop a grant the page has sent. Before #1117 the step stayed with both buttons live, and Cancel
+    drew allow, deny and allow always again, as if nothing was sent, while the grant still landed. Now the step stays
+    with both buttons disabled until the POST settles. A browser sends no click to a disabled button. The harness
+    does, so this also checks that Cancel, Escape and a slow second Confirm always do nothing then."""
+    execute(tmp_path, r'''
+const S="send the release notes", held=["Confirm always (disabled)","Cancel (disabled)"];
+let land; hold=new Promise(r=>{ land=r; });
+click(button("allow always")); click(button("Confirm always")); await sleep(20);
+assert.deepEqual(posts,[["/api/approvals/a_1",{decision:"allow_always"}]]);
+assert.ok(root.textContent.includes("Allow always? This saves a standing grant."));
+assert.deepEqual(shown(S),held);
+assert.equal(document.activeElement,document.body);   // Confirm always went disabled, so focus fell to the body
+click(button("Cancel")); await sleep(20);
+assert.deepEqual(shown(S),held);
+button("Cancel").focus(); press("Escape"); await sleep(20);
+assert.deepEqual(shown(S),held);
+click(button("Confirm always")); await sleep(20);    // a slow second click: detail is 1
+assert.equal(posts.length,1);
+pending=[]; land(); hold=null; await sleep(20);     // the grant lands, and the core closes the request
+assert.equal(card(S),undefined);
+assert.equal(posts.length,1);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_a_second_choice_while_an_answer_is_out_sends_nothing(tmp_path):
+    """Allow and deny answer in one click, and the card goes disabled until the POST settles. Before #1117 the card
+    stayed live, and a second click sent a second answer for the same request after the first."""
+    execute(tmp_path, r'''
+const S="send the release notes", held=["allow (disabled)","deny (disabled)","allow always (disabled)"];
+for(const first of ["allow","deny"]) {
+  posts.length=0; pending=[ask]; await changed();
+  let land; hold=new Promise(r=>{ land=r; });
+  click(button(first)); await sleep(20);
+  assert.deepEqual(shown(S),held);
+  for(const next of ["allow","deny","allow always"]) click(button(next));
+  await sleep(20);
+  assert.deepEqual(shown(S),held);                  // allow always opens no step either
+  assert.deepEqual(posts,[["/api/approvals/a_1",{decision:first}]]);
+  pending=[]; land(); hold=null; await sleep(20);
+  assert.equal(card(S),undefined);
+  assert.deepEqual(posts,[["/api/approvals/a_1",{decision:first}]]);
+}
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_a_redraw_while_an_answer_is_out_keeps_the_card_disabled_and_a_request_closed_elsewhere_drops(tmp_path):
+    """render() redraws the page on every core event. Before #1117 a redraw while a grant was out drew allow, deny and
+    allow always live again. A request answered in another client while ours is out leaves the page, and our
+    refused answer shows its error with no card to come back to."""
+    execute(tmp_path, r'''
+const S="send the release notes";
+let land; hold=new Promise(r=>{ land=r; });
+click(button("allow always")); click(button("Confirm always")); await sleep(20);
+await changed();                                    // the core published something
+assert.deepEqual(shown(S),["Confirm always (disabled)","Cancel (disabled)"]);
+click(button("Refresh")); await sleep(20);
+assert.deepEqual(shown(S),["Confirm always (disabled)","Cancel (disabled)"]);
+pending=[]; await changed();                        // answered in another client
+assert.equal(card(S),undefined);
+refuse=true; land(); hold=null; await sleep(20);    // the core refuses ours
+assert.ok(root.textContent.includes("the core refused the answer"));
+assert.equal(card(S),undefined);
+assert.equal(document.activeElement,document.body);
+refuse=false; pending=[ask]; await changed();
+assert.deepEqual(shown(S),["allow","deny","allow always"]);
+hold=new Promise(r=>{ land=r; });
+click(button("deny")); await changed();
+assert.deepEqual(shown(S),["allow (disabled)","deny (disabled)","allow always (disabled)"]);
+land(); hold=null; await sleep(20);
+assert.deepEqual(posts.map(p=>p[1].decision),["allow_always","deny"]);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_a_refused_answer_gives_the_card_its_buttons_back_with_the_error_and_focus(tmp_path):
+    """A refused answer redraws the card live and keeps the error. The pressed button left the page when the card
+    went disabled, so focus fell to the body. It goes to the card's button for that answer, allow always for a
+    grant, as a failed Schedule remove puts focus on that card's remove."""
+    execute(tmp_path, r'''
+const S="send the release notes";
+refuse=true;
+for(const [answer,via,back] of [["allow",["allow"],"allow"],["deny",["deny"],"deny"],
+    ["allow_always",["allow always","Confirm always"],"allow always"]]) {
+  let land; hold=new Promise(r=>{ land=r; });
+  for(const b of via) click(button(b));
+  await sleep(20);
+  assert.ok(shown(S).every(x=>x.endsWith(" (disabled)")),String(shown(S)));
+  assert.equal(document.activeElement,document.body);
+  land(); hold=null; await sleep(20);
+  assert.ok(root.textContent.includes("the core refused the answer"));
+  assert.deepEqual(shown(S),["allow","deny","allow always"]);
+  assert.equal(document.activeElement,button(back));
+  assert.deepEqual(posts.at(-1),["/api/approvals/a_1",{decision:answer}]);
+}
+assert.equal(posts.length,3);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_two_answers_out_each_keep_their_own_card_and_focus_on_another_approval_stays(tmp_path):
+    """Each card whose answer is out stays disabled until its own POST settles, and the other cards stay live. When an
+    answer is refused while focus is on another approval's button, focus stays there: the redraw gives it back by
+    key, as on any core event."""
+    execute(tmp_path, r'''
+const A="send the release notes", B="delete the old branch", C="restart the worker";
+const ask2={...ask,request_id:"a_2",summary:B,call:{name:"git_push",arguments:{branch:"old"}}};
+const ask3={...ask,request_id:"a_3",summary:C,call:{name:"restart",arguments:{unit:"worker"}}};
+pending=[ask,ask2]; await changed();
+let landA, landB; holds.a_1=new Promise(r=>{ landA=r; }); holds.a_2=new Promise(r=>{ landB=r; });
+click(onCard(A,"allow always")); click(onCard(A,"Confirm always")); await sleep(20);
+assert.deepEqual(shown(B),["allow","deny","allow always"]);
+click(onCard(B,"deny")); await sleep(20);
+assert.deepEqual(shown(A),["Confirm always (disabled)","Cancel (disabled)"]);
+assert.deepEqual(shown(B),["allow (disabled)","deny (disabled)","allow always (disabled)"]);
+pending=[ask,ask3]; landB(); await sleep(20);       // B lands first: A's card stays as it is
+assert.equal(card(B),undefined);
+assert.deepEqual(shown(A),["Confirm always (disabled)","Cancel (disabled)"]);
+assert.deepEqual(shown(C),["allow","deny","allow always"]);
+onCard(C,"deny").focus();
+refuse=true; landA(); await sleep(20);
+assert.ok(root.textContent.includes("the core refused the answer"));
+assert.deepEqual(shown(A),["allow","deny","allow always"]);
+assert.equal(document.activeElement,onCard(C,"deny"));
+assert.deepEqual(posts.map(p=>p[1].decision),["allow_always","deny"]);
 ''')
 
 
