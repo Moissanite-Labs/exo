@@ -81,6 +81,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in four runs, 10,339,296 pairs on the built-in
   corpus with variants). Tests: `tests/security/test_gate_ssh_command_settings_1083.py`. **Docs:** `docs/GATE.md`,
   `docs/USER-GUIDE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
+- Gate (#1134, D-038 amendment): setting `SSH_SK_PROVIDER` asks as `LD_PRELOAD` does. ssh loads the FIDO security
+  key library it names on this machine. On main 0f413c7f `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` was a read that
+  every policy allowed, also behind `env` or `export` and before `git fetch`, while `ssh -o
+  SecurityKeyProvider=/tmp/evil.so host ls` asked.
+
+  The variable now adds an `opaque_exec` part wherever the line sets it. The part sits beside the line, as #1083's
+  parts for ssh's command settings do, so the line keeps the category, targets and reserved hits main gave it.
+  `internal`, ssh's built-in support, stays a read, as it does in the `-o` setting.
+
+  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in three runs, 10,429,496 pairs on the
+  built-in corpus with variants). Tests: `tests/security/test_gate_ssh_sk_provider_1134.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and

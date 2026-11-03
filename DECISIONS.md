@@ -1691,6 +1691,49 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   bisect run`, #1104's pipes into a shell that starts a group or a body, and lines bash rejects. Under 273 policies,
   with `command` rules beside a category deny (#458), it gives 562,380 pairs (141,338 tightened). Tests:
   `tests/security/test_gate_ssh_command_settings_1083.py`.
+- *Amendment 2026-11-03 (issue #1134):* `SSH_SK_PROVIDER` is one of the variables that change which libraries are
+  loaded (`_EXEC_ENV_OPAQUE`), beside `LD_PRELOAD`. On main 0f413c7f `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` was a
+  read that every policy allowed, also behind `env` or `export ..;` and before `git fetch`, which runs ssh.
+
+  `ssh -o SecurityKeyProvider=/tmp/evil.so host ls` and `LD_PRELOAD=/tmp/evil.so ssh host ls` were `opaque_exec`
+  there. ssh takes its FIDO security key library from `SecurityKeyProvider`, whose default is `$SSH_SK_PROVIDER`.
+  ssh-sk-helper loads that library on this machine when a key is used. So the variable picks code that runs here, as
+  the setting does.
+
+  The variable is now read wherever the line sets it, as `LD_PRELOAD` is. That is before a program, through `env`,
+  `sudo` or `timeout`, exported or bare, through `read`, `printf -v`, a `for` loop or `${..:=}`, and in a nested line.
+  A command an ssh setting runs here (#1083) is such a line. Each sets an `opaque_exec` part named `SSH_SK_PROVIDER
+  changes which libraries are loaded`.
+
+  That part goes beside the line (`_ENV_BESIDE`), as #1083's parts do (`ssh_here`). The line keeps the category main
+  gave it, its targets and its reserved hits, so `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` is a `read` that asks.
+  `LD_PRELOAD`'s part leads the line instead.
+
+  *Rejected:* the part leading the line, as `LD_PRELOAD`'s does. Main's `scripts/gate_diff.py` found 643 pairs lower
+  with it on an aimed corpus. On `SSH_SK_PROVIDER=/tmp/evil.so ssh -o 'ProxyCommand=touch /tmp/x' host ls` a category
+  rule on `opaque_exec` allowed the line, and #1083's part with it.
+
+  A reserved hit on that part became the line's own, which a standing grant may cover (D-075). Under `reserved:
+  [command:SSH_SK_PROVIDER]` the line also lost its own `read` hit. A floor of the line read as before, as for
+  `GH_CONFIG_DIR` (#566), kept the outcomes but not the first of these.
+
+  `internal`, in any case, names ssh's built-in support and loads no file. `_harmless_value` keeps it a read, as `-o
+  SecurityKeyProvider=internal` is. Any other value asks. That includes `none`, which the gate takes as off only in
+  the `-o` setting (#232), and an empty value.
+
+  *Cost:* a line that sets the variable before a program that never runs ssh asks too (`SSH_SK_PROVIDER=/tmp/x.so
+  ls`), as `LD_PRELOAD` does. The variable before `ssh-add` or `ssh-keygen` was already `credentials` and asked. It
+  now also has the `opaque_exec` part, so `deny: [opaque_exec]` denies it.
+
+  Main's `scripts/gate_diff.py` against main 0f413c7f lowers 0 pairs on every axis in each of three runs. The built-in
+  corpus gives 1,446,984 pairs without variants (5,525 tightened) and 10,429,496 with them (27,854 tightened).
+
+  An aimed corpus of 7,694 lines sets the variable in each form, with values such as `internal`, `none`, an empty one,
+  a name and a store path. It puts them before ssh, scp, git, ssh-add and other programs, beside #1083's settings and
+  in the command they run. It adds the `-o` settings and near names.
+
+  Under the 88 built-in policies and 185 deny, reserved and rule policies, the aimed corpus gives 2,100,462 pairs
+  (404,033 tightened). Tests: `tests/security/test_gate_ssh_sk_provider_1134.py`.
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
   file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
