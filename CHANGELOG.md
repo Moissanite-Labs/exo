@@ -564,9 +564,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   A second click on allow or deny sent a second answer for the same request. Now every button on the card is
   disabled until the POST settles, and an allow always answer keeps its confirm step. A redraw on a core event
   keeps it so, and each card waits for its own answer. A failed answer shows the error and gives the card its
-  buttons back, with focus on the button for that answer. Tests:
-  `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
-  D-061 amendment.
+  buttons back, with focus on the button for that answer, unless focus is on another approval or outside the page
+  by then. Tests: `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md`
+  "Sub-pages (D-061)", D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.

@@ -269,7 +269,7 @@ assert.equal(posts.length,3);
 def test_two_answers_out_each_keep_their_own_card_and_focus_on_another_approval_stays(tmp_path):
     """Each card whose answer is out stays disabled until its own POST settles, and the other cards stay live. When an
     answer is refused while focus is on another approval's button, focus stays there: the redraw gives it back by
-    key, as on any core event."""
+    key, as on any core event. Focus outside the page, such as on the app's nav, stays there too."""
     execute(tmp_path, r'''
 const A="send the release notes", B="delete the old branch", C="restart the worker";
 const ask2={...ask,request_id:"a_2",summary:B,call:{name:"git_push",arguments:{branch:"old"}}};
@@ -291,6 +291,14 @@ assert.ok(root.textContent.includes("the core refused the answer"));
 assert.deepEqual(shown(A),["allow","deny","allow always"]);
 assert.equal(document.activeElement,onCard(C,"deny"));
 assert.deepEqual(posts.map(p=>p[1].decision),["allow_always","deny"]);
+const nav=document.body.appendChild(new El("a")); nav.text="Chat";   // app.js draws the nav beside the page
+let landC; holds.a_3=new Promise(r=>{ landC=r; });
+click(onCard(C,"allow")); await sleep(20);
+assert.ok(shown(C).every(x=>x.endsWith(" (disabled)")),String(shown(C)));
+nav.focus(); landC(); await sleep(20);              // focus has moved out of the page when the refusal comes
+assert.deepEqual(shown(C),["allow","deny","allow always"]);
+assert.equal(document.activeElement,nav);
+assert.deepEqual(posts.map(p=>p[1].decision),["allow_always","deny","allow"]);
 ''')
 
 

@@ -444,7 +444,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   While an answer is in flight, every button on its card is disabled, and an allow always answer keeps its confirm
   (#1117). Cancel cannot stop a POST that is out, and a second click would send a second answer. A redraw on a core
   event keeps the card disabled, and each card waits for its own answer. A failed answer shows the error and gives
-  the card its buttons back, with focus on the button for that answer, unless focus is on another approval's button.
+  the card its buttons back, with focus on the button for that answer. Focus on another approval's button, or on a
+  control outside the page such as the nav, stays where it is.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
 - **Providers** offers a Google AI Studio Gemini key using Google's OpenAI-compatible endpoint and a custom provider form

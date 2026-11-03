@@ -6004,10 +6004,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   The page maps each request in flight to the answer it sent, so each card waits for its own POST, and a redraw on
   a core event keeps it disabled. The entry leaves the map in a finally after the POST. A failed answer gives the
   card its buttons back with the error, and puts focus on the button for that answer, allow always for a grant.
-  Focus on another approval's button stays, since every redraw gives it back by key. Rejected: a set of ids, as
-  Schedule keeps. Schedule holds only remove, while an approval card must know whether to draw its step or its
-  choices. Limit: the snapshot read after a successful POST can still list the request until the core's
-  `approval.resolved` event arrives, and the card is live again for that moment, as before.
+  Focus on another approval's button stays, since every redraw gives it back by key. Focus on a control outside the
+  page, such as the nav, stays too. Rejected: a set of ids, as Schedule keeps. Schedule holds only remove, while an
+  approval card must know whether to draw its step or its choices. Limit: the snapshot read after a successful POST
+  can still list the request until the core's `approval.resolved` event arrives, and the card is live again for
+  that moment, as before.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root

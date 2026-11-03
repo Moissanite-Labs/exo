@@ -87,7 +87,8 @@ export function mount(app) {
         render();
         // The pressed button left the page when the card went disabled, so focus fell to the body. A failed answer
         // puts it on the card's button for that answer (allow always for a grant), as a failed Schedule remove does.
-        // Focus on another approval's button stays there: render() gives it back by key.
+        // Focus on another approval's button stays there: render() gives it back by key. Focus outside the page,
+        // such as on the nav, stays too.
         var at = document.activeElement, mine = keyed[id + " " + decision];
         if (mine && (!at || at.contains(page))) mine.focus();
       });
