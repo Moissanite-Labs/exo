@@ -1511,9 +1511,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   `busybox` stays in `_SHELLS`, and `ash` and `hush` are in `_APPLET_SHELLS`, which only the second reading reads.
 
-  Left open: an applet that only reads keeps main's `opaque_exec` beside it. So `busybox ls`, `ash -c ls` and
-  `ash --version` still ask, and `opaque_exec: allow` allows them, where `ls` is a read. Taking the second reading
-  alone there lowers the line against main, which needs a decision of its own.
+  Left open: an applet that only reads keeps main's `opaque_exec` beside it. So `busybox ls` and `ash --version`
+  still ask, and `opaque_exec: allow` allows them, where `ls` and `sh --version` are reads. Taking the second
+  reading alone there lowers the line against main, which needs a decision of its own. `ash -c ls` asks as
+  `sh -c ls` does, in both readings.
 
   Main's `scripts/gate_diff.py` lowers no pair against main a2f6ec3d. The PR lists each run's numbers.
   Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`.

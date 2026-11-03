@@ -1512,9 +1512,9 @@ gate does not read:
   read as before. So `echo 'rm -rf /srv/data' | busybox` is still a delete, though busybox with no
   applet runs nothing.
 
-  An applet that only reads still asks as `opaque_exec`, a known limit. So `busybox ls`, `ash -c ls`
-  and `ash --version` ask where `ls` is a read, since taking the read there would lower the line
-  against the reading as before.
+  An applet that only reads still asks as `opaque_exec`, a known limit. So `busybox ls` and
+  `ash --version` ask where `ls` and `sh --version` are reads, since taking the read there would
+  lower the line against the reading as before.
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
