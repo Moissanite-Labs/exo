@@ -217,6 +217,9 @@ private thread's own leaves run and its tail is over budget, each look for spans
 #244, above) reads its own tree once more too. A merge job reads the tree once to find its two halves, and
 `/compact` reads it once to report the size of every summary it made. Tests: `tests/core/test_context_reads_262.py`.
 
+The no-await rule is checked. `_one_read` refuses an async step where it is defined, and a call that hands back an
+awaitable fails. An await in such a step would let another task use the shared read while it goes stale.
+
 ## Undo and failed summaries (D-041)
 
 - **Undo.** Undo hides the entries of the undone turns. It also deletes each tree node whose range holds one of
