@@ -98,10 +98,11 @@ async def test_start_returns_at_once_and_output_streams_to_the_log(tmp_path):
     eng = engine(tmp_path)
     sid = (await eng.loop.create_session(title="t", agent="tester")).id
     # The job holds until the test makes `go`, so the call returns only if it does not wait for the job. A wall-clock
-    # bound here failed on a loaded runner, where the start alone took 0.3 to 0.5 s. The job's 30 s limit ends it if
-    # the start does wait, so a failing run does not hang.
-    res = await asyncio.wait_for(bash(eng, sid, "echo first; until [ -e go ]; do sleep 0.02; done; echo second",
-                                      background=True, timeout=30), 8)
+    # bound here failed on a loaded runner, where the start alone took 0.3 s to nearly 1 s. The call has 8 s and the
+    # job a 30 s limit, so a start that waits fails and does not hang. That limit is a timer in this process, so the
+    # loop also gives up by itself after 1500 polls, in under a minute: a failed run leaves no shell behind.
+    res = await asyncio.wait_for(bash(eng, sid, "echo first; i=0; until [ -e go ] || [ $i -ge 1500 ]; do sleep 0.02; "
+                                      "i=$((i+1)); done; echo second", background=True, timeout=30), 8)
     assert not res.is_error
     text = res.text()
     jid = text.split()[3]
