@@ -1517,6 +1517,11 @@ gate does not read:
   An applet that only reads still asks as `opaque_exec`, a known limit. So `busybox ls` and
   `ash --version` ask where `ls` and `sh --version` are reads, since taking the read there would
   lower the line against the reading as before.
+
+  Where the reading as before already holds the applet reading's lead on another part, the reading
+  as before keeps the lead, a known limit too. So a reserved hit there stays off the line's own
+  act, and no standing grant covers the call, as before. `cd ~/.exo && busybox cat config` leads
+  with its store write, where `cd ~/.exo && cat config` leads with the secret. Both ask.
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the

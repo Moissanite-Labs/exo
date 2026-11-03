@@ -1501,9 +1501,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   are shells as `sh` is, in `_classify_program` and in `_cd_walk`.
 
   `decide` keeps the strictest of the two readings, and a credentials or store write reading leads, as a part of
-  one line would. So each such line decides and reads as its twin with `sh`, or without busybox. That holds also
-  behind #1104's reserved words (`{ echo .. | busybox sh; }`). The exo-gate hook's floor and observe mode count each
-  reading (`gate.no_grant`), so the store write asks at the floor.
+  one line would, unless main's reading holds it on another part. So each such line decides as its twin with `sh`,
+  or without busybox, and most read as it too. That holds also behind #1104's reserved words
+  (`{ echo .. | busybox sh; }`).
+
+  The exo-gate hook's floor and observe mode count each reading (`gate.no_grant`), so the store write asks at the
+  floor.
 
   Rejected: a bare `_PREFIXES` entry for busybox. In a probe it read `busybox --install`, `busybox --list`, `busybox`
   alone and `echo 'rm -rf /srv/data' | busybox` as reads and allowed them. Main asks for each and reads the last as
@@ -1517,6 +1520,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   still ask, and `opaque_exec: allow` allows them, where `ls` and `sh --version` are reads. Taking the second
   reading alone there lowers the line against main, which needs a decision of its own. `ash -c ls` asks as
   `sh -c ls` does, in both readings.
+
+  Also left open: where main's reading holds the second reading's lead on another part or reading, main's reading
+  keeps the lead (`_applet_beside`). A reserved hit there then stays on another part than the line's own, so the hook
+  keeps a standing grant off the call (D-075), as on main.
+
+  So `cd ~/.exo && busybox cat config` leads with its store write, where `cd ~/.exo && cat config` leads with the
+  secret. A #479 loop with `busybox cp` leads with `opaque_exec`.
 
   Main's `scripts/gate_diff.py` lowers no pair against main dde4e0d8. The PR lists each run's numbers.
   Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,

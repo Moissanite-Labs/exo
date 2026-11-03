@@ -9910,7 +9910,8 @@ def _applet_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
     second reading's: decide keeps the strictest, and no_grant (and through it the hook's bypass floor) counts each
     reading, so a line never decides lower than before. So `busybox ls` still asks as main asks, though `ls` is a
     read. The call leads with the reading a line of both would lead with (_lead: credentials, then a store write,
-    then the more severe), as #1047's does, so `echo 'cp ..' | busybox sh` leads with its store write as `| sh` does."""
+    then the more severe), as #1047's does, so `echo 'cp ..' | busybox sh` leads with its store write as `| sh` does,
+    unless the reading as before holds that lead on another part (_applet_beside)."""
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token, met = _applets.set(True), _applet_met.set(None)
     try:
@@ -9921,9 +9922,26 @@ def _applet_reading(c: Classification, action: Any, cwd: str | None) -> Classifi
         _shell_seen.reset(memo)
         _brace_left.reset(left)
     o, xo = c.ordinary, x.ordinary
-    c = _beside(c, x, lead=True)
-    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    c = _applet_beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _applet_beside(o, xo)
     return c
+
+
+def _applet_beside(c: Classification, x: Classification) -> Classification:
+    """#1126: the reading as before (c) and the applet reading (x) of one call, as _beside with ``lead`` puts them,
+    unless x would lead with a (category, target) that c holds on a part or reading other than its own lead. Then c
+    keeps the lead and x ends its ``also`` readings. A reserved hit there stays on another part than the line's own,
+    so the exo-gate hook still keeps a standing grant off the call (D-075), as for c alone: `cd ~/.exo && busybox cat
+    config` leads with its store write as before, though `cd ~/.exo && cat config` leads with the secret."""
+    own = {(y.category, y.target) for y in (c, c.displaced) if y is not None}
+    held = {(p.category, p.target) for r in readings(c) for p in _each_part(r)} - own
+    if _lead([c, x]) is x and any((y.category, y.target) in held for y in (x, x.displaced) if y is not None):
+        y = c
+        while y.also is not None:
+            y = y.also
+        y.also = x
+        return c
+    return _beside(c, x, lead=True)
 
 
 def _printed_reading(action: Any, cwd: str | None) -> Classification:

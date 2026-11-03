@@ -10,8 +10,10 @@ where that line asks. A store write piped into `busybox sh` was no `no_grant` ca
 
 The gate now also reads such a call in a second reading, beside main's. There busybox with an applet runs that
 applet, also by path or behind a prefix, and `ash` and `hush` are shells. `decide` keeps the strictest of the two,
-and a store write or a secret leads, so each line reads as its twin with `sh` reads. busybox's own options and busybox with no applet keep main's reading alone. Where the second reading alone would
-decide lower (`busybox ls` is `ls`, a read), main's `opaque_exec` still decides. Those rows are pinned here and
+and a store write or a secret leads, so each line reads as its twin with `sh` reads. busybox's own options and
+busybox with no applet keep main's reading alone. Where the second reading alone would decide lower (`busybox ls` is
+`ls`, a read), main's `opaque_exec` still decides. Where main's reading holds the second reading's lead on another
+part, main's reading keeps the lead, so a reserved hit stays off the line's own act. Those rows are pinned here and
 left for a follow-up. Classification and decision only: nothing here runs the lines.
 """
 import pytest
@@ -197,6 +199,35 @@ def test_an_applet_that_only_reads_still_asks_as_on_main(line):
     c = sh(line)
     assert {r.category for r in gate.readings(c)} == {"opaque_exec", "read"}
     assert c.category == "opaque_exec" and _decided(line) == OPAQUE
+
+
+# Left open too: a reserved hit on another part than the line's own (category, target) keeps the exo-gate hook from
+# covering the call with a standing grant (D-075, the hook's _grant_for, gate_diff's reserved_elsewhere). Where main's
+# reading holds the second reading's lead on another part, main's reading keeps the lead, so the hit stays on another
+# part as on main. Here the secret that `cat config` reads after a `cd` into the store is a part of main's store write,
+# and the store write of a #479 loop's second pass is main's second reading. The plain lines lead with those.
+KEPT_LEAD = [
+    ("cd ~/.exo/policies && busybox cat config", "credentials", "store_write"),
+    ("cd ~/.exo && sudo busybox cat config", "credentials", "store_write"),
+    ("cd ~/.exo && /bin/busybox cat config", "credentials", "store_write"),
+    ("for i in 1 2; do busybox cp /tmp/evil gates.yaml; cd ~/.exo/policies; done", "store_write", "opaque_exec"),
+    ("while :; do sudo busybox cp /tmp/evil gates.yaml; cd $EXO_HOME/policies; done", "store_write", "opaque_exec"),
+]
+
+
+def _elsewhere(c, d):
+    return any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved)
+
+
+@pytest.mark.parametrize("line, reserved, lead", KEPT_LEAD)
+def test_a_reserved_hit_main_read_on_another_part_stays_there(line, reserved, lead):
+    c = sh(line)
+    assert c.category == lead and reserved in {r.category for r in gate.readings(c)[1:]}
+    for gates in ({"reserved": [reserved]}, {"reserved": [reserved], "categories": {"opaque_exec": "allow"}}):
+        d = decide(c, normalize_policies({"gates": gates}))
+        assert d.outcome == "ask" and d.reserved and _elsewhere(c, d)
+    plain = sh(line.replace("sudo busybox ", "").replace("/bin/busybox ", "").replace("busybox ", ""))
+    assert plain.category == reserved
 
 
 def _rule(command, decision="allow"):
