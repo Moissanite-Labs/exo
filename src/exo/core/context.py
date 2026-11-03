@@ -365,16 +365,28 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 def _one_read(fn: _F) -> _F:
     """Run a method that never awaits with one read of each summary tree it looks at (#262). No other task runs
     meanwhile, so the tree cannot change except through this context, and ``_schedule`` drops what it changes."""
+    # The no-await rule is load-bearing: an await would let other tasks share a read that is going stale. Refuse it.
+    if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
+        raise TypeError(f"_one_read: {fn.__qualname__} is async, and a step that shares one read must never await")
     @functools.wraps(fn)
     def run(self: Any, *args: Any, **kw: Any) -> Any:
         if self._read_once is not None:  # inside another such call: share its reads
-            return fn(self, *args, **kw)
+            return _no_await(fn, fn(self, *args, **kw))
         self._read_once = {}
         try:
-            return fn(self, *args, **kw)
+            return _no_await(fn, fn(self, *args, **kw))
         finally:
             self._read_once = None
     return cast(_F, run)
+
+
+def _no_await(fn: Callable[..., Any], out: Any) -> Any:
+    """``out``, unless the step handed back an awaitable: that work would run later, outside its one read."""
+    if inspect.isawaitable(out):
+        if inspect.iscoroutine(out):
+            out.close()  # it never runs, and closing it stops a "never awaited" warning
+        raise TypeError(f"_one_read: {fn.__qualname__} returned an awaitable, which would run outside its one read")
+    return out
 
 
 class TreeContext:
