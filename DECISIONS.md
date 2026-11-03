@@ -205,6 +205,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  NaN is the one exception: SQLite reads a stored NaN as null, so a NaN note counts (amendment 2026-11-02).
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
   read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
@@ -225,7 +226,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  `tests/core/test_event_paging_254.py`, `tests/learn/test_learn_signals.py`.
+- **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
+  and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
+  every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
+  that held the lock for 11 to 17 s, so another process on the same home failed with `database is locked` after its
+  5 s wait. The fork now reads the parent and builds its copies and search rows on a read snapshot (`_read`).
+  The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
+  the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
+  kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. A replay page the log
+  cannot read ends the stream. Since the amendment above, only the first page is read at subscribe, so a later
+  page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
+  once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
+  the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
+  subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
+  when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
+  disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
+  written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
+  `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
+  limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
+  none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
+  `last_messages`, and now gives none for a limit below 1 there too. `user_turns` counts a NaN note as a turn,
+  where the Python rule it replaced read NaN as true. `undo` reads it the same way, and no writer stores one,
+  so the docstring names it and the rule stays. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
+  `tests/core/test_session_hot_paths_254.py`, `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -1466,6 +1492,76 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
   and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
   `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
+- *Amendment 2026-10-30 (issue #566):* gh reads `GH_REPO` as `-R` when the line gives none, and `GH_CONFIG_DIR`
+  picks its config. The gate read neither. `GH_REPO=pub/repo gh pr comment 5` posts on `pub/repo#5`, but the gate
+  read the target as `#5`, a repo the line does not name: the line asked as public with a third party, yet a
+  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix assignment
+  (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read as `-R` is,
+  on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). An export or a bare assignment in a compound, or
+  before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
+  `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
+  four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
+  linear. A value past the four adds no reading, as a value the gate cannot read. Of the prefix assignments before
+  one command, the last four values are kept too, before the line's own values are added (review 5722148651). Each
+  value is read on every operand, so 6,000 prefix values before 400 URL operands took 20 s of CPU in classify.
+  bash, `env` and `sudo` pass gh the last one, but an option can take a later word as its value
+  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. Four
+  such option values after the real one still push it out, and that line asks as on main (#1041). gh api's
+  `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as gh's
+  `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks. A `$".."` word also reads the line as `opaque_exec` (#136), and
+  the stricter of the two readings stood, the first one on a tie. The copy on a `GH_REPO` value is public, so on each
+  other target it could raise the post's reading to the ask of a reserved `opaque_exec` reading, and that reading's
+  reserved hits then dropped out (`export GH_REPO=pub/repo; gh pr comment <URLs> -b $"ok"` under
+  `reserved: [opaque_exec]`, found by gate_diff's aimed corpus in #1042's fourth round). Now on a tie the reserved
+  hits of both readings stand, so each still keeps a standing grant from covering the call (D-075). That lists more
+  hits on some lines than main does, never fewer. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
+  change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
+  `editor` commands. So it asks, as `opaque_exec` named in the summary. That part leads the line, so a policy that
+  allows `opaque_exec` let a line through that main logged as a costly read or asked as a nested line
+  (`ssh host 'GH_CONFIG_DIR=./c sudo -E git status'`, review 5726571369). The call is now also read with
+  `GH_CONFIG_DIR` an ordinary variable, as before, as the last of its floors (`_gh_config_plain`, `_read_core`), as
+  the reading before #491 is, and decide keeps the strictest, so no line decides lower. Left open, each still
+  asking as on a repo the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command
+  that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value
+  a loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`). A function whose gh runs where it is called, after the
+  value is set (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command
+  of a `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
+  over the words that open a compound but not `coproc`, `function` and the name. A shell fed the same text before and
+  after the value is set (`bash <<<'gh ..'; export GH_REPO=pub/repo; bash <<<'gh ..'`), as each such text is read
+  once per line (`_once`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
+  GH_REPO rows of `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
+  `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL operand on
+  another instance is another target (#399), with a copy of the action among the line's parts. `decide` read the line
+  on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook. Past eight other
+  targets (`_ALTS_IN_FULL`), the line on each of them now keeps, among the copies of each action, only the first copy
+  of each reading the policy tells apart (`_one_copy_each`). The line on its own target keeps every copy. A copy's
+  reading is how the policy reads its target (`_alt_key`: its exposure and third party after the scopes, and which
+  target patterns of the rules and of the deny and reserved entries match it), with every other field `decide` reads
+  of it. Nothing else `decide` reads turns on a copy's target, so copies of one reading decide alike, and each step
+  that meets one meets the first: a deny or reserved entry, a cell or rule that denies it alone (#191), the own text
+  test (#394), the `$".."` reading (#136) and the rule that picks it. The posting rules list a copy's finding once,
+  under the first copy that finds it, and that is the first of its reading. So the line on each other target decides
+  as with every copy: the same outcome, reason, rule, exposure, third party, findings and hidden count. Only its
+  reserved hits differ, by those of the copies it leaves out, and the line on its own target lists every one of them.
+  So the merged decision is the one every part gives, reserved hits and their order included. The work grows with the
+  URL operands times the readings the policy tells apart, which its patterns bound. Up to eight other targets the
+  decision is as before, word for word, so no line gh accepts changes. A close's or reopen's comment and a merge's
+  subject are read once per line too, as #920 reads the body and the title. Rejected: a cap on URL operands that fails
+  closed past it. A deny on a target past the cap would then only ask, and #920's test keeps every target. Rejected
+  too: no copies on any other target. On a line whose targets differ in exposure it listed a finding once where main
+  listed it under a copy's name too. Rejected as well: one target of each exposure. With a deny rule on
+  `git.example/*` that the `$".."` reading meets, it dropped a copy's finding there, at an equal deny. And rejected:
+  the first other target of each reading of the line's own target keeps every copy and the rest keep none (the head
+  reviewed in 5722148651). Under a deny entry on one host, a reserved entry on another and `opaque_exec: deny`, the
+  copies' deny made the github_post reading tie the `$".."` reading on each target, and decide kept the github_post
+  one. Without them the `$".."` reading stood alone, so the lean decision listed `(opaque_exec, target)` reserved hits
+  that the full one does not. Stricter, never lower, but not the same. Tests:
+  `tests/security/test_gate_gh_field_work_550.py`,
+  `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
+  `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
@@ -5188,31 +5284,33 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
   (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
   ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
-  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
-  with the same words as the lead
-  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
-  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
-  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
-  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
-  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
-  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
-  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
-  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
-  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
-  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
-  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
-  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
-  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
-  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
-  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
-  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
-  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
-  ruling. An unreported undo waits for a new
-  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
-  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
-  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
-  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
-  written until the next compaction.
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens with
+  the same words as the lead but goes on past it fails at its end. For a host that leaves the turn's message out, the
+  check stops before a last user row that the message repeats (see below). A pin a compaction folded stays while the
+  transcript holds the summary row: that row comes after the pin's lead or replaces part of it. A folded ruling the
+  principal said again stays as well: its lead moves to the later message, and an undo of that message alone leaves the
+  summary row before the lead, which carries it. The drop is an undo's: logged as counts, its digests kept out of every
+  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  transcript lacks it, since a transcript cut short lacks it too (the controls from #817). Rejected too: dropping a pin
+  when the transcript only starts with its lead. A transcript cut short at its start may open with the same words, and
+  an undo that also takes the turn before the pin's leaves only part of the lead. The check also settles an undo before
+  the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new
+  engine. Not covered now, six cases. An unreported undo of every turn leaves nothing before the turn's own message, so
+  it keeps every pin, and a pin said in the session's first message has no lead. A host may leave the turn's own message
+  out of its transcript. Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the
+  last turn before an undo has none and stays. If the next turn's message repeats the last user row an undo left, and no
+  user or summary row comes before that row, every pin stays too: the engine takes that row for the turn's own message.
+  After `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut
+  short at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops
+  the pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. A host that leaves the turn's message out gets the same drop when the next turn's message repeats the window's
+  last user row and the rows before that row read that way. The engine takes that row for the turn's own message and
+  checks only the rows before it: after `continue`, the ruling, `continue` and `go on`, a window of the last two turns
+  and a next turn of `go on` drop the ruling. An unreported undo waits for a new engine: while the same engine runs the
+  session, only a notice drops pins. If that engine runs a turn after the undo, no later engine drops them either. The
+  transcript then goes on past the noted lead, the same as a window that only opens like it. A compaction after the last
+  request that noted the leads keeps the pins: its summary row is not in the noted transcript. A summary row and a
+  handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
@@ -5934,6 +6032,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
   `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
   Cancel and remove would never run there.
+- **Amendment 2026-10-29 (#863 follow-up, review 5692507751):** the confirm step takes focus, on Schedule's remove
+  and on Command's allow always. Opening it redraws the cards, so the focused button leaves the page. Focus moves
+  to Cancel, the safe default for a remove or a standing grant, so a second Enter cancels. Cancel, or Escape while
+  focus is in the step, closes it and puts focus back on the button that opened it. Command redraws on every core
+  event, so a redraw puts focus back on the approval button that had it. While a remove is in flight its step
+  stays, with Confirm remove and Cancel disabled, since Cancel can no longer stop it. Each job in flight keeps its
+  own step (review 5707362258). A failed remove puts focus on that card's remove, unless the person has put focus
+  on a control outside the job list since. Rejected: focus on Confirm, as on the Chat card, whose help says Enter
+  confirms. Here a second Enter would remove or grant. Rejected: closing the step before the POST, which is one
+  call. The card's pause, run now and remove then come back under the pointer. In headless Chromium, on a card
+  shorter than its grid row, the second click of a double click on Confirm remove then landed on pause and sent a
+  pause for the job being removed.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
@@ -6085,6 +6195,34 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
   verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
   `tests/core/test_turn_settle.py`.
+- *Amendment 2026-11-02 (#1013, leaf size):* an agent tree and a private thread's own tree size a leaf as the tail
+  carries it. The size floor (`min_compact_tokens`) and the shrink test sum `_cost` from `src/exo/turn_settle.py`
+  over the leaf's messages: text and tool results in full, plus the tool-call arguments past 400 characters (#524).
+
+  Before, a leaf measured `render_message`, which cuts each tool result at 2000 characters and each text part at
+  4000. Those trees end their view at the last summary, so a span skipped as too small after it rode the tail in
+  full. Merges of the previews moved the frontier past it only later.
+
+  In a private thread with a floor of 1500 and a fast summarizer, 30 rounds of 20k `read_file` results left all 13
+  leaves skipped. The next call carried 22 of the results, 441,149 characters. Now all 13 are summarized, and the
+  call carries the 4 rounds in no leaf yet, 80,764 characters.
+
+  With a slow summarizer the leaves now wait for it, so the private call cuts their spans (#244). Before, they were
+  skipped at once, and the last round's call carried all 30 results.
+
+  These leaves now go to the summarizer, where they were skipped at once. A tail of large results keeps the view
+  over `view_budget`, so a call waits up to `overflow_settle` for them, as this decision allows. With a fake
+  summarizer that takes 3 s a leaf, those 30 rounds took 39.54 s, where they took 3.35 s.
+
+  For an agent tree that call can be in any thread of the agent, a private one included. The agent tree's check
+  counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+  thread's results. That turn's call carries only a short note of those turns, so the wait does not shrink it. A
+  later change could measure each thread's overflow on its own call instead.
+
+  A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
+  merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
+  the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
+  `tests/core/test_context_leaf_size_1013.py`, `tests/core/test_agent_context.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title

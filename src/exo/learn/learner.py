@@ -102,10 +102,13 @@ class Learner:
             return []
 
     def last_messages(self, session: str, limit: int) -> list[Any]:
-        """The newest ``limit`` messages, in order. The session store reads only those rows (#254)."""
+        """At most the newest ``limit`` messages, in order, and none for a ``limit`` below 1. The session store reads
+        only those rows (#254)."""
         tail = getattr(getattr(self.engine, "store", None), "last_messages", None)
         try:
-            return list(tail(session, limit)) if tail is not None else self.messages(session)[-limit:]
+            if tail is not None:
+                return list(tail(session, limit))
+            return self.messages(session)[-limit:] if limit > 0 else []
         except Exception:
             return []
 
