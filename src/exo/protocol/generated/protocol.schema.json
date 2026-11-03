@@ -1678,6 +1678,10 @@
             }
           ],
           "default": null
+        },
+        "active": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false

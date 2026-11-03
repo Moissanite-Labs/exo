@@ -8,7 +8,9 @@ export function mount(app) {
   // It reads /api/snapshot and re-reads it whenever /api/stream says the core published something.
   // The only write is answering an approval (POST /api/approvals/<id>). Allow always is a standing grant, so it takes a
   // separate Confirm always click, as on the Chat card; `confirming` names the one request asking it.
-  var snap = null, err = null, view = "all", timer = null, confirming = null;
+  // `keyed` holds this draw's approval buttons by request and choice. render() replaces the page on every core event,
+  // so it gives focus back to the button with the same key.
+  var snap = null, err = null, view = "all", timer = null, confirming = null, keyed = {};
   var page = h("div", { class: "xc-pg xc-cmd" });
   app.replaceChildren(page);
 
@@ -72,15 +74,19 @@ export function mount(app) {
       .then(function () { load(); })
       .catch(function (e) { err = e.message || String(e); render(); });
   }
+  function key(a, k, button) { keyed[a.request_id + " " + k] = button; return button; }
+  // Cancel and Escape put focus back on allow always.
+  function cancel(a) { confirming = null; render(a.request_id + " allow_always"); }
   function choices(a) {
     if (confirming === a.request_id) return [
       h("span", { role: "status", "aria-live": "polite" }, "Allow always? This saves a standing grant."),
       // e.detail > 1: the second click of a double click on "allow always" is not a confirmation
-      h("button", { class: "xc-btn", onclick: function (e) { if (e.detail > 1 || confirming !== a.request_id) return; confirming = null; respond(a.request_id, "allow_always"); } }, "Confirm always"),
-      h("button", { class: "xc-btn", onclick: function () { confirming = null; render(); } }, "Cancel")];
+      key(a, "confirm", h("button", { class: "xc-btn", onclick: function (e) { if (e.detail > 1 || confirming !== a.request_id) return; confirming = null; respond(a.request_id, "allow_always"); } }, "Confirm always")),
+      key(a, "cancel", h("button", { class: "xc-btn", onclick: function () { cancel(a); } }, "Cancel"))];
     return (a.options || ["allow", "deny"]).map(function (o) {
-      return h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""),
-        onclick: o === "allow_always" ? function () { confirming = a.request_id; render(); } : function () { confirming = null; respond(a.request_id, o); } }, o.replace("_", " "));
+      // The step opens on Cancel, the safe default: a second Enter cancels instead of saving the grant.
+      return key(a, o, h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""),
+        onclick: o === "allow_always" ? function () { confirming = a.request_id; render(a.request_id + " cancel"); } : function () { confirming = null; respond(a.request_id, o); } }, o.replace("_", " ")));
     });
   }
   function approvals(d) {
@@ -90,7 +96,8 @@ export function mount(app) {
         h("div", { class: "xc-card-top" }, h("h3", null, a.summary), h("div", { class: "xc-tags" }, pill(a.risk + " risk", a.risk === "high" ? "alert" : "warn"))),
         a.call ? h("div", { class: "xc-tool" }, h("span", null, "tool"), " ", a.call.name) : null,
         a.call ? h("pre", { class: "xc-pre-body xc-args" }, JSON.stringify(a.call.arguments || {}, null, 2)) : null,   // the whole call, never cut or boxed: a redraw resets a scroll box
-        h("div", { class: "xc-foot" }, h("span", null, a.requested_at ? "asked " + ago(a.requested_at) : ""), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
+        h("div", { class: "xc-foot", onkeydown: function (e) { if (e.key === "Escape" && confirming === a.request_id) cancel(a); } },
+          h("span", null, a.requested_at ? "asked " + ago(a.requested_at) : ""), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
     })) : empty("No approvals waiting.", "When an agent asks before it acts, the request shows here and in Chat.");
     return panel("approvals", "Approvals", "answered here or in any other client", body, d.ok === false ? d.error : null);
   }
@@ -187,7 +194,9 @@ export function mount(app) {
   var VIEWS = [["all", "All"], ["approvals", "Approvals"], ["decisions", "Decisions"], ["sessions", "Sessions"], ["tasks", "Tasks"], ["projects", "Projects"], ["costs", "Cost"]];
   var PANELS = { approvals: approvals, decisions: decisions, sessions: sessions, tasks: tasks, projects: projects, costs: costs };
 
-  function render() {
+  function render(want) {   // want: the key of the button to focus once drawn
+    for (var k in keyed) if (!want && keyed[k] === document.activeElement) want = k;
+    keyed = {};
     var top = pageHead({ eyebrow: "04 / Command", title: "Command",
       lede: "What waits on you and what is running, read from the core. Approvals can be answered here.",
       aside: h("div", { class: "xc-phead-read" }, readout([
@@ -203,6 +212,7 @@ export function mount(app) {
     page.replaceChildren.apply(page, [top, err ? h("div", { class: "xc-error" }, err) : null,
       snap && snap.error ? h("div", { class: "xc-error" }, snap.error) : null, snap ? kpis(snap) : h("div", { class: "xc-loading" }, "Reading the core..."), seg, body]
       .filter(Boolean));
+    if (keyed[want]) keyed[want].focus();
   }
 
   function load(fresh) {

@@ -42,6 +42,10 @@ path that uses held-out evaluation, decision models for small choices, subagents
 can do the job, and a provider-agnostic model router with fallback. Other promotion paths use principal
 rulings or repeated, high-confidence evidence.
 
+The opt-in [`exo improve --offline` command](docs/integrations/HARNESS2.md) runs
+Harness² experiments on explicit public fixtures, checks disjoint held-out tasks,
+and exports typed proposals and evidence for review.
+
 ## Screenshots
 
 These are historical screenshots driven by scripted test data for a demo agent named `atlas`, fixing a failing
@@ -134,6 +138,10 @@ centre and orchestra, `research/` the groundwork, `site/` the project website.
 - **Fit one person as closely as possible.** The first principal is the project's author.
 - **Replicate for anyone.** The core is generic. Everything about a person lives in their own
   principal store. See `DECISIONS.md` (D-004).
+
+The aim is greater capability without requiring more of a person's life to keep the system moving.
+Design choices should leave more room for their judgment, curiosity and imagination, and demand less
+effort coordinating the machinery. This is an aspiration to evaluate Exo against, not a measured outcome.
 
 ## Credits and inspirations
 
