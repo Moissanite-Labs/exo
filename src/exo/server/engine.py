@@ -106,8 +106,16 @@ class Subscription:
             raise
 
     async def next(self, timeout: float | None = None) -> Event | None:
-        """Next event, or None after ``timeout`` seconds idle. Raises Closed."""
-        ev = next(self._backlog, None)
+        """Next event, or None after ``timeout`` seconds idle. Raises Closed. A backlog page the log cannot read
+        raises once and ends the stream: the queue leaves the hub, and a later call raises Closed instead of
+        skipping the rest of the backlog to live events."""
+        try:
+            ev = next(self._backlog, None)
+        except Exception:
+            self.close()
+            self._backlog, self._queue = iter(()), asyncio.Queue()
+            self._queue.put_nowait(None)
+            raise
         if ev is not None:
             self.last = ev.seq
             return ev

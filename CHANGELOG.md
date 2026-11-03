@@ -15,6 +15,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
+  prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
+  `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
+  body, or after `!` or `time` were only `opaque_exec`. So `{opaque_exec: allow, delete: deny}` allowed them where it
+  denied the plain line. Each now decides as the line with `true;` before the pipe. The text is read in a second
+  reading of the call beside main's, with budgets of its own, so a long text spends no cap a later command needs.
+  Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
+- A private or agent thread no longer carries a span of large tool results in full because its leaves measured too
+  small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
+  summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
+  `overflow_settle` for those summaries. A plain session keeps the preview size.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
   `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
   in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the
@@ -64,8 +76,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
   (`test_the_join_budget_is_shared_by_every_substitution`) timed each line once in CPU time, so one pause in a call,
-  such as a full collection of a long run's heap, failed it. It now times again when over the bound, as the file's
-  other timing tests do. The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
+  such as a full collection of a long run's heap, failed it. It no longer times its lines. It checks them on a smaller
+  budget (#1097). The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
   as soon as the job's row said done, but the done event is published after the job's notice. It now waits for the
   event.
 - Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
@@ -98,6 +110,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
   `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
   stream at once (D-010 amendment).
+- A large fork no longer locks other processes out of the session store (#254, follows #1102). Since #1102 a
+  fork ran in one write transaction that also decoded every message and counted rows for each summary. On a
+  20,000-message session with 4,995 summaries it held the lock for 11 to 17 s, and another seat or CLI command on the
+  same home failed with `database is locked` after its 5 s wait. The fork now builds its copies before it takes
+  the lock and only checks and inserts under it. It takes 1.1 to 2.1 s, holds the lock for under 0.5 s, and the other
+  process opens and writes at once (D-010 amendment 2026-11-02).
+- A stdio client whose event replay hits an event the core cannot read gets a typed reply, not silence (#254,
+  follows #1102). Since #1102 the replay reads its backlog a page at a time after `events.subscribe` answers. A
+  page that failed after the first ended the feed with nothing sent: the client stayed subscribed, got no live
+  event, and the core raised the error again at EOF. The feed now ends with an `internal` error `Response` for
+  the subscribe, as the one-shot read before #1102 did, and the EOF flush is guarded the same way (D-010
+  amendment 2026-11-02).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
@@ -534,6 +558,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part a later rule lifts, so on 3,000 `git push` parts before a store send `decide` takes 0.06, 0.28 and 0.96 s of
   CPU with 0, 19 and 99 such rules ahead of one that names every command (main a1dd4fec: 0.05, 0.10, 0.12 s). Tests:
   `tests/security/test_gate_store_lift_own_text_547.py`.
+
+- Gate: a rule keyed on `command` that would lower the line must name the command's own text, not its stdin, a command
+  the gate only guessed in code or the text of the program that runs it (#458). Under `categories: {delete: deny}` and
+  an allow rule for `npm test`, `rm -rf build <<< 'npm test'` was allowed by the rule, and so was a here-doc body
+  holding `npm test`. A here-string is now left out of its command's own text, as a here-doc body is, and a line whose
+  text holds `<<` goes through the own text test (#394). A rule must still match the text as written too, so no line is
+  decided lower than before. A part with no own text, such as a string literal in code read as a command, is lowered by
+  no rule keyed on `command` on a line of one command too: with `opaque_exec: allow` and an allow rule for
+  `^python3 -c`, a force push that `python3 -c` code runs through `os.system` was allowed under
+  `categories: {force_push: deny}`. The command that `find -exec`, `xargs` or `git bisect run` runs has its own words as
+  its own text, so a rule for `^find`, `xargs` or `^git bisect` no longer lowers it. A rule that names the command too,
+  or a category or tool key, still lowers each. A line of one command with a comment is still matched on its whole text.
+  An unanchored rule that matches a here-doc's end word, a redirection target, or `sudo`, `setsid` or `flock` before the
+  command still names the command. Against main ef4d7252 the gate differential lowers no pair: 8,097,936 built-in pairs,
+  1,274 tightened, and 739,165 aimed pairs, 9,114 tightened. Tests: `tests/security/test_gate_command_rule_parts.py`.
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
   any string with a `${VAR}` in it. Both now use one test (#691, PR #674).
@@ -560,6 +599,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `plugins/exo-command/tests/test_schedule_web.py`,
   `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
   `docs/USER-GUIDE.md` §5, D-061 amendment.
+- Web Command: an approval takes one answer (#1117). While its answer was in flight, the card stayed live. After
+  Confirm always, Cancel drew allow, deny and allow always again as if nothing was sent, and the grant still landed.
+  A second click on allow or deny sent a second answer for the same request. Now every button on the card is
+  disabled until the POST settles, and an allow always answer keeps its confirm step. A redraw on a core event
+  keeps it so, and each card waits for its own answer. A failed answer shows the error and gives the card its
+  buttons back, with focus on the button for that answer, unless focus is on another approval or outside the page
+  by then. Tests: `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md`
+  "Sub-pages (D-061)", D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
@@ -648,7 +695,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
   provider check failed. With no main role set, every start runs that check, so every command failed, retry or
   not. The probe now reads such a URL as nothing listening. Tests:
-  `tests/core/test_providers_setup.py`.
+  `tests/core/test_providers_setup.py`. **Docs:** `docs/PROVIDERS.md` "Roles".
 
 - `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
   broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:

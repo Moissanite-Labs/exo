@@ -10,7 +10,11 @@ export function mount(app) {
   // separate Confirm always click, as on the Chat card; `confirming` names the one request asking it.
   // `keyed` holds this draw's approval buttons by request and choice. render() replaces the page on every core event,
   // so it gives focus back to the button with the same key.
+  // `sending` maps each request whose answer is in flight to that answer. Its card draws every button disabled, and
+  // an Allow always answer keeps its confirm step, since Cancel cannot stop a POST that is out (#1117). A Map, not
+  // one id, so a second card's answer does not give the first card its buttons back.
   var snap = null, err = null, view = "all", timer = null, confirming = null, keyed = {};
+  var sending = new Map();
   var page = h("div", { class: "xc-pg xc-cmd" });
   app.replaceChildren(page);
 
@@ -69,24 +73,43 @@ export function mount(app) {
     }));
   }
 
-  function respond(id, decision) {
+  // One answer per request: the card goes disabled before the POST, and gets its buttons back once it settles.
+  function respond(a, decision) {
+    var id = a.request_id, took = false;
+    if (sending.has(id)) return;
+    sending.set(id, decision);
+    render();
     api("POST", "/api/approvals/" + encodeURIComponent(id), { decision: decision })
-      .then(function () { load(); })
-      .catch(function (e) { err = e.message || String(e); render(); });
+      .then(function () { took = true; }, function (e) { err = e.message || String(e); })
+      .finally(function () {
+        sending.delete(id);
+        if (took) return load();
+        render();
+        // The pressed button left the page when the card went disabled, so focus fell to the body. A failed answer
+        // puts it on the card's button for that answer (allow always for a grant), as a failed Schedule remove does.
+        // Focus on another approval's button stays there: render() gives it back by key. Focus outside the page,
+        // such as on the nav, stays too.
+        var at = document.activeElement, mine = keyed[id + " " + decision];
+        if (mine && (!at || at.contains(page))) mine.focus();
+      });
   }
-  function key(a, k, button) { keyed[a.request_id + " " + k] = button; return button; }
-  // Cancel and Escape put focus back on allow always.
-  function cancel(a) { confirming = null; render(a.request_id + " allow_always"); }
+  // A card in `sending` is not keyed: its buttons are disabled, and a browser does not focus a disabled button.
+  function key(a, k, button) { if (!sending.has(a.request_id)) keyed[a.request_id + " " + k] = button; return button; }
+  // Cancel and Escape put focus back on allow always. Neither acts while the answer is out.
+  function cancel(a) { if (sending.has(a.request_id)) return; confirming = null; render(a.request_id + " allow_always"); }
   function choices(a) {
-    if (confirming === a.request_id) return [
+    var id = a.request_id, held = sending.has(id);
+    // A browser sends no click to a disabled button. idle() drops one all the same.
+    function idle(f) { return function (e) { if (!sending.has(id)) f(e); }; }
+    if (confirming === id || sending.get(id) === "allow_always") return [
       h("span", { role: "status", "aria-live": "polite" }, "Allow always? This saves a standing grant."),
       // e.detail > 1: the second click of a double click on "allow always" is not a confirmation
-      key(a, "confirm", h("button", { class: "xc-btn", onclick: function (e) { if (e.detail > 1 || confirming !== a.request_id) return; confirming = null; respond(a.request_id, "allow_always"); } }, "Confirm always")),
-      key(a, "cancel", h("button", { class: "xc-btn", onclick: function () { cancel(a); } }, "Cancel"))];
+      key(a, "confirm", h("button", { class: "xc-btn", disabled: held, onclick: idle(function (e) { if (e.detail > 1 || confirming !== id) return; confirming = null; respond(a, "allow_always"); }) }, "Confirm always")),
+      key(a, "cancel", h("button", { class: "xc-btn", disabled: held, onclick: idle(function () { cancel(a); }) }, "Cancel"))];
     return (a.options || ["allow", "deny"]).map(function (o) {
       // The step opens on Cancel, the safe default: a second Enter cancels instead of saving the grant.
-      return key(a, o, h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""),
-        onclick: o === "allow_always" ? function () { confirming = a.request_id; render(a.request_id + " cancel"); } : function () { confirming = null; respond(a.request_id, o); } }, o.replace("_", " ")));
+      return key(a, o, h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""), disabled: held,
+        onclick: idle(o === "allow_always" ? function () { confirming = id; render(id + " cancel"); } : function () { confirming = null; respond(a, o); }) }, o.replace("_", " ")));
     });
   }
   function approvals(d) {

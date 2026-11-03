@@ -12,7 +12,7 @@ from exo.core import trace
 from exo.core.engine import CoreEngine, SqliteLog
 from exo.core.sessions import SessionStore
 from exo.protocol import schema as s
-from exo.server.engine import Hub
+from exo.server.engine import Closed, Hub
 
 PAGE = 1000
 
@@ -68,6 +68,44 @@ def test_iter_events_matches_one_unbounded_read(tmp_path, limits):
         events = store.iter_events(0, None)
         store.append_event(notice(-1), "s1")  # after the call: not in this read, as with one read at the call
         assert [e.seq for e in events] == list(range(1, 2 * PAGE + 518)) and max(limits) <= PAGE
+    finally:
+        store.close()
+
+
+def test_iter_events_matches_one_read_with_skips_and_global_pages():
+    """Mixed event types, a skipped type that runs across page edges, and reads where the session's events and the
+    events of no session each fill more than one page. A ``skip`` kept to the first page, or a union page without
+    its outer LIMIT, both fail here."""
+    store = SessionStore()
+    blocks = [("s1", "notice", 1500), (None, "notice", 1500), ("s1", "message.delta", 2500), ("s2", "tool.output", 700),
+              (None, "message.delta", 1200), ("s1", "mixed", 900), (None, "mixed", 300)]
+    for session, kind, n in blocks:
+        for i in range(n):
+            pick = kind if kind != "mixed" else ("notice", "message.delta", "tool.output")[i % 3]
+            body = {"notice": notice(i), "message.delta": s.MessageDelta(message_id="m", text=f"d{i}"),
+                    "tool.output": s.ToolOutput(call_id="c", text=f"o{i}")}[pick]
+            store.append_event(body, session)
+    try:
+        for args in [(0, "s1", True, ()), (0, "s1", True, ("message.delta",)), (0, None, False, ("message.delta",)),
+                     (0, None, False, ("message.delta", "notice")), (1200, "s1", True, ("message.delta", "tool.output")),
+                     (2800, "s2", True, ("notice",)), (0, "s1", False, ("message.delta",))]:
+            whole = [(e.seq, e.type) for e in store.events_since(args[0], args[1], 1 << 30, args[2], args[3])]
+            assert [(e.seq, e.type) for e in store.iter_events(*args)] == whole, args
+            assert len(whole) > PAGE
+    finally:
+        store.close()
+
+
+def test_iter_events_refuses_a_page_below_one():
+    """Review 5732419504: on main a page of 0 raised IndexError at the first event, and -1 read the whole log
+    as one page (SQLite reads LIMIT -1 as no limit) and then raised IndexError."""
+    store = SessionStore()
+    try:
+        fill(store, 7, "s1", "s2")
+        for page in (0, -1, True, 2.0, "3"):
+            with pytest.raises(ValueError, match="page"):
+                store.iter_events(0, "s1", page=page)
+        assert [e.seq for e in store.iter_events(0, None, page=1)] == list(range(1, 8))
     finally:
         store.close()
 
@@ -241,6 +279,130 @@ def test_a_stdio_subscribe_the_log_cannot_read_is_a_typed_reply_and_leaves_no_qu
     assert [(o["id"], o["ok"]) for o in out] == [("c0", False), ("c1", True)]
     assert out[0]["error"]["code"] == "internal" and "OverflowError" in out[0]["error"]["message"]
     assert not hub._subs  # no queue is left behind to fill with every later event
+
+
+def bad_row_on_page_two(store: SessionStore) -> Hub:
+    """3,000 events of s1 with the body of seq 1,500 one the decoder rejects, so the replay fails on its second page."""
+    hub = Hub(SqliteLog(store))
+    for i in range(3 * PAGE):
+        hub.publish(notice(i), "s1")
+    store._db.execute("UPDATE events SET body='{}' WHERE seq=1500")
+    return hub
+
+
+def test_a_subscription_whose_backlog_fails_ends_instead_of_skipping_to_live_events():
+    """Main kept the queue after the error, so a second call skipped the other 1,999 backlog events and returned
+    the next live one."""
+    store = SessionStore()
+    hub = bad_row_on_page_two(store)
+
+    async def go():
+        sub = hub.subscribe(0, "s1")
+        got = [(await sub.next(timeout=1)).seq for _ in range(PAGE)]
+        with pytest.raises(ValueError):
+            await sub.next(timeout=1)
+        assert not hub._subs  # the queue left the hub with the error
+        hub.publish(notice(-1), "s1")
+        with pytest.raises(Closed):  # the client resumes with since, from got[-1]
+            await sub.next(timeout=1)
+        return got
+
+    try:
+        assert asyncio.run(go()) == list(range(1, PAGE + 1))
+    finally:
+        store.close()
+
+
+def test_a_stdio_feed_whose_replay_fails_on_a_later_page_gets_a_typed_reply():
+    """Main sent the first page, then nothing: no reply, no live event, and its EOF flush raised the error."""
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = bad_row_on_page_two(store)
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json(), "wait",
+             s.Command.of(s.SessionList(), id="c2").to_json()]
+    out: list[dict] = []
+
+    async def read():
+        line = lines.pop(0) if lines else None
+        if line == "wait":  # until the feed ends, or 3 s
+            for _ in range(300):
+                if any(o.get("id") == "c1" and o.get("ok") is False for o in out):
+                    break
+                await asyncio.sleep(0.01)
+            hub.publish(notice(-1), "s1")
+            line = lines.pop(0)
+        return line
+
+    try:
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append(json.loads(text))), 30))
+    finally:
+        store.close()
+    assert [o["seq"] for o in out if "seq" in o] == list(range(1, PAGE + 1))
+    replies = [(o["id"], o["ok"]) for o in out if "ok" in o]
+    assert replies == [("c1", True), ("c1", False), ("c2", True)]
+    failure = next(o for o in out if o.get("ok") is False)
+    assert failure["error"]["code"] == "internal" and failure["error"]["message"].startswith("ValueError: ")
+    assert not hub._subs
+
+
+def test_a_stdio_flush_at_eof_the_log_cannot_read_gets_a_typed_reply():
+    """At EOF the feed stops and the events it has not written yet are read from the log. Main raised the error of
+    a row it could not read out of serve_lines there, with no reply."""
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = Hub(SqliteLog(store))
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json()]
+    out: list[dict] = []
+
+    async def read():
+        if lines:
+            return lines.pop(0)
+        hub.publish(notice(1), "s1")
+        for _ in range(300):  # until the feed writes seq 1, or 3 s
+            if any(o.get("seq") == 1 for o in out):
+                break
+            await asyncio.sleep(0.01)
+        hub.publish(notice(2), "s1")
+        store._db.execute("UPDATE events SET body='{}' WHERE seq=2")
+        return None  # EOF before the feed runs again, so the flush reads seq 2 from the log
+
+    try:
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append(json.loads(text))), 10))
+    finally:
+        store.close()
+    assert [o["seq"] for o in out if "seq" in o] == [1]
+    assert [(o["id"], o["ok"]) for o in out if "ok" in o] == [("c1", True), ("c1", False)]
+    assert out[-1]["error"]["code"] == "internal" and out[-1]["error"]["message"].startswith("ValueError: ")
+    assert not hub._subs
+
+
+def test_a_stdio_subscribe_whose_reply_cannot_be_written_leaves_no_queue():
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = Hub(SqliteLog(store))
+    hub.publish(notice(0), "s1")
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json()]
+
+    async def read():
+        return lines.pop(0) if lines else None
+
+    def gone(text: str) -> None:
+        raise BrokenPipeError("the client closed its end")
+
+    try:
+        with pytest.raises(BrokenPipeError):
+            asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read, gone), 10))
+    finally:
+        store.close()
+    assert not hub._subs  # main left the subscription's queue to fill until MAX_LAG dropped it
 
 
 def test_trace_reads_its_events_in_pages(tmp_path, limits):
