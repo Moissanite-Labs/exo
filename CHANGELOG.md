@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- A private or agent thread no longer carries a span of large tool results in full because its leaves measured too
+  small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
+  summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
+  `overflow_settle` for those summaries. A plain session keeps the preview size.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
   `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
   in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the
