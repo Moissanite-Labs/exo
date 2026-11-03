@@ -97,7 +97,8 @@ def test_issue_rows_decide_as_the_same_line_with_sh(line, twin, want):
 
 # More spellings: busybox by path and behind prefixes and wrappers, an applet behind busybox's own env, busybox run
 # by busybox, the applet by path, the store write as a heredoc and here-string, options before the text, and
-# _cd_walk's reading of a `cd` into a secret folder before the shell. On main each was OPAQUE.
+# _cd_walk's reading of a `cd` into a secret folder before the shell. On main each was OPAQUE but `busybox cp ..`
+# into the store, which main's word scan already read as its twin.
 MORE_ROWS = [
     *[(f"printf '{RM}' | {s}", f"printf '{RM}' | sh", DELETE)
       for s in ("/usr/bin/busybox sh", "sudo busybox sh", "nice busybox sh", "env busybox sh",
@@ -132,7 +133,7 @@ def test_more_spellings_decide_as_the_same_line_with_sh(line, twin, want):
 
 # #1104 (main a2f6ec3d) reads an echo or printf pipe into a shell that starts a group, a then or do body, or follows
 # `!` or `time`. With BusyBox's shell in that place both readings meet: the pipe's text is read, as with `sh`. On main
-# each line here was OPAQUE, or asked as OPAQUE does with the store write's no_grant.
+# each line here was OPAQUE.
 LEAD_ROWS = [
     *[(f"{{ echo '{RM}' | {s}; }}", f"{{ echo '{RM}' | sh; }}", DELETE) for s in ("busybox sh", "ash", "busybox hush")],
     *[(f"if true; then printf '{RM}' | {s}; fi", f"if true; then printf '{RM}' | sh; fi", DELETE)
