@@ -1863,6 +1863,11 @@ _opening: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_openin
 # shell also reads what bash's builtin writes (``out``). Main's reading, which reads no ``out``, stays beside.
 _printed_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_printed_met", default=None)
 _printing: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_printing", default=False)
+# #1104: set while classify reads a call (_lead_reading): [met], which _piped_text sets when an `echo`, `printf` or `cat`
+# that writes to a pipe comes after reserved words (_pipe_lead), where main's reading reads no text. classify then reads
+# the call again with _leading on, where such a pipe's text is read as at the start of a line. Main's reading stays.
+_lead_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_lead_met", default=None)
+_leading: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_leading", default=False)
 # The compound openers bash runs behind a pipeline prefix, which _parse reads as a program's argv behind `time`,
 # `coproc`, whose compound _parse opens only in command position (`time coproc for ..; done`, bash -n accepts it),
 # and `function`, whose body _parse reads behind `time` or `!` alone but not behind both (`time ! function f {..}`).
@@ -4761,9 +4766,12 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         texts.append(_Word(piped))
     # A feed whose text the gate cannot read (#316): the closer's `<` (a file or a descriptor; a lone
     # `< /dev/null` feeds nothing), or a pipe in whose text is not known. The inner commands are marked
-    # instead of fed, so a reader of its stdin (ssh) still asks.
+    # instead of fed, so a reader of its stdin (ssh) still asks. #1104: a pipe main read no text from, as its
+    # writer comes after reserved words (`{ echo .. | { bash; }; }`), is fed and marked both, so each reader
+    # reads the text and still asks as on main, and a post's body stays unseen (_read_cmd).
+    late = src is not None and piped is not None and _pipe_lead(src.words) > 0
     unknown = (any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in closer.redirs)
-               or (src is not None and piped is None and not _own_stdin(closer)))
+               or (src is not None and (piped is None or late) and not _own_stdin(closer)))
     i, sets = start, False
     while i < len(cmds) and not sets:
         if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
@@ -4775,7 +4783,7 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         k.fed = k.fed or fed            # its own text does not name its stdin (#394)
         if fed and unknown:
             k.stdin_unknown = True
-        elif fed and not redirected:
+        if fed and not redirected and (late or not unknown):
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -6584,13 +6592,47 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     return c
 
 
+def _pipe_lead(words: list) -> int:
+    """#1104: where the command that writes to a pipe starts among ``words``, after the reserved words that open the
+    pipeline or a compound around it: `{`, `then`, `do`, `!` and the others of _OPENERS, a `time` with its `-p` and
+    `--` (_time_prefix), and a `coproc [NAME]` or `function NAME` before such an opener (`coproc W {`, `function f {`,
+    as _late_loop_word reads them). bash runs the command after them with its output in the pipe, as it does at the
+    start of a line. A quoted word ends the search, except as the NAME."""
+    i, n = 0, len(words)
+    while i < n and not words[i].quoted:
+        text = words[i].text
+        if text in _OPENERS:
+            i += 1
+        elif text == "time":
+            i += 1
+            for opt in ("-p", "--"):
+                if i < n and not words[i].quoted and words[i].text == opt:
+                    i += 1
+        elif text in ("coproc", "function"):
+            j = i + 1 + (i + 1 < n and (words[i + 1].quoted or words[i + 1].text not in _OPENERS))
+            if j >= n or words[j].quoted or words[j].text not in _OPENERS:
+                break
+            i = j
+        else:
+            break
+    return i
+
+
 def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
-    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`.
+    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`, also as the
+    first command of a group, a body or a condition, or after `!` or `time` (_pipe_lead, #1104). Main's reading reads
+    no text there and notes the pipe (_lead_met): the call's second reading (_lead_reading, _leading) reads it.
     memo joins a compound's stdin, which many `cat`s inside it share, once per line."""
-    words = [w for w in k.words]
+    lead = _pipe_lead(k.words)
+    words = k.words[lead:]
     if not words or any(w.dynamic for w in words):
         return None
     prog = words[0].text
+    if lead and not _leading.get():
+        if (prog in ("echo", "printf") or prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings)) and \
+                (met := _lead_met.get()) is not None:
+            met[0] = True
+        return None
     if prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings):
         memo = {} if memo is None else memo
         key = (id(k.heredocs), id(k.herestrings))
@@ -7478,7 +7520,9 @@ def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot:
     so, and so does a loop's second pass (#479)."""
     piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
     # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-    ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+    # A stdin the gate cannot read leaves the body unseen, also where a pipe main read nothing from feeds it (#1104).
+    ctx["post_stdin"] = None if k.stdin_unknown else \
+        _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
     slot[0] = k.own
     own = _literal_assigns(k, ctx["literals"])
     late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
@@ -9726,7 +9770,7 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     met = [False]
     token = _printed_met.set(met)
     try:
-        c = _one_reading(action, cwd)
+        c = _lead_reading(action, cwd)
     finally:
         _printed_met.reset(token)
     if not met[0] or _printing.get() or _config_off.get():
@@ -9734,11 +9778,46 @@ def _printed_reading(action: Any, cwd: str | None) -> Classification:
     left, memo = _brace_left.set(None), _shell_seen.set(None)
     token2 = _printing.set(True)
     try:
-        x = _brace_budget(_one_reading)(action, cwd)
+        x = _brace_budget(_lead_reading)(action, cwd)
     finally:
         _printing.reset(token2)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x, lead=True)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)
+    return c
+
+
+def _lead_reading(action: Any, cwd: str | None) -> Classification:
+    """_one_reading of the call, and #1104: when a pipe in it is written by an `echo`, `printf` or `cat` that comes
+    after reserved words (`{ echo .. | bash; }`, a `then` or `do` body, after `!` or `time`: _pipe_lead), whose text
+    that reading does not read (_piped_text notes it), a second reading of the call beside it, in which each such
+    pipe's text is read as at the start of a line. The second reading has budgets and memos of its own, as
+    _printed_reading's has, and the text spends them: a text that uses up a cap (_WORD_PARTS, _BRACE_BUDGET) leaves
+    no part after it unread that main's reading read. The reading as before is main's, with its ``ordinary`` reading
+    (D-074) beside the second reading's, and decide keeps the strictest, so a line never decides lower than before.
+    A second reading that adds no part (_part_key) is left out, so a line it reads no more of keeps main's reading
+    alone. A reading inside the second reading reads such pipes with no third reading."""
+    met = [False]
+    token = _lead_met.set(met)
+    try:
+        c = _one_reading(action, cwd)
+    finally:
+        _lead_met.reset(token)
+    if not met[0] or _leading.get() or _config_off.get():
+        return c
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token2 = _leading.set(True)
+    try:
+        x = _brace_budget(_one_reading)(action, cwd)
+    finally:
+        _leading.reset(token2)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    keys = {_part_key(p) for r in readings(c) for p in _each_part(r)}
+    if all(_part_key(p) in keys for r in readings(x) for p in _each_part(r)):
+        return c
     o, xo = c.ordinary, x.ordinary
     c = _beside(c, x, lead=True)
     c.ordinary = xo if o is None else o if xo is None else _beside(o, xo, lead=True)

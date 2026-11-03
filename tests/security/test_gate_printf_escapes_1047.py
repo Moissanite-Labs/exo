@@ -234,8 +234,9 @@ def test_a_gh_body_from_an_escape_stays_unseen(line):
 # `function NAME {`, in a reading of the call of its own (_late_reading). That reading has its printed reading too,
 # as #853's opened reading has. A pipe from printf or `echo -e` into a shell inside such a compound decides as the
 # same line with the escape written out. Main's reading reads the parts of a compound it leaves unopened, so these
-# rows decided so without the late reading's printed reading too. Each pipe comes after a `:`, since main reads an
-# `echo` or `printf` pipe that starts a group, a `then` or a `do` as `opaque_exec`, written out or not.
+# rows decided so without the late reading's printed reading too. Each pipe comes after a `:`, since main read an
+# `echo` or `printf` pipe that starts a group, a `then` or a `do` as `opaque_exec`, written out or not, until #1104.
+# test_gate_pipe_first_in_group_1104.py has these shapes without the `:`.
 POST = ("github_post", "ask", "ask", "ask", "ask")
 LATE_SHAPES = ["! coproc { :; %s; }", "! coproc for i in 1; do :; %s; done", "if true; then coproc { :; %s; }; fi",
                "if false; then :; else coproc { :; %s; }; fi", "{ coproc { :; %s; }; }", "! time coproc { :; %s; }",

@@ -15,6 +15,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
+  prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
+  `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
+  body, or after `!` or `time` were only `opaque_exec`. So `{opaque_exec: allow, delete: deny}` allowed them where it
+  denied the plain line. Each now decides as the line with `true;` before the pipe. The text is read in a second
+  reading of the call beside main's, with budgets of its own, so a long text spends no cap a later command needs.
+  Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
 - A private or agent thread no longer carries a span of large tool results in full because its leaves measured too
   small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
   summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
