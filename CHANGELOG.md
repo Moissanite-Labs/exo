@@ -19,6 +19,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
   summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
   `overflow_settle` for those summaries. A plain session keeps the preview size.
+- Gate (#1116, D-038 amendment): the command after `xargs` is found where xargs starts it. Its options are read as
+  getopt reads them for GNU and BSD xargs, so a value in the next word is no longer read as the program. This covers
+  `--max-args 1`, `--arg-file list`, a prefix such as `--max-a 1`, `-rn 1`, `-tP 4` and BSD's `-J %`.
+
+  On main c05f0ca1 `xargs --max-args 1 git push --force origin main` was allowed under `force_push: deny` and
+  `opaque_exec: allow`. It is denied now, as `xargs -n 1 git push --force origin main` is. Where the two readings
+  differ, the call is read both ways, so no line decides lower (main's `scripts/gate_diff.py`: 0 lowered pairs in
+  four runs, 10,373,968 pairs on the built-in corpus with variants).
+  Tests: `tests/security/test_gate_xargs_options_1116.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
   `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
   in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the

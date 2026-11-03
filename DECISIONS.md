@@ -1426,6 +1426,46 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-11-03 (issue #1116):* the command after `xargs` is found where xargs starts it. On main c05f0ca1
+  the gate skipped xargs's options one word at a time, and two words only after eight short options written alone
+  (`-I`, `-n`, `-P`, `-L`, `-s`, `-d`, `-E`, `-a`). The value of any other option that takes the next word was read
+  as the program, and the command after it was not read.
+
+  So under `{force_push: deny, opaque_exec: allow}` with no rules, `xargs --max-args 1 git push --force origin main`
+  was allowed while xargs runs the push. The same held for GNU's other long options with a value in the next word,
+  also as a prefix (`--max-a 1`). It held for short options run together whose last letter takes the next word
+  (`-rn 1`, `-tP 4`), and for BSD's `-J`, `-R` and `-S`. The default policy asked for each, as xargs is `opaque_exec`.
+
+  Now `_xargs_start` reads the options as getopt does for GNU findutils and BSD xargs together. It reads up to the
+  first operand or `--`. A long option or an unambiguous prefix of one takes its value after `=` or in the next
+  word, but `--eof`, `--replace` and `--max-lines` take one after `=` only. Short options are read letter by letter.
+
+  A letter that takes a value (`a d E I L n P s`, and BSD's `J R S`) takes the rest of its word or the next word.
+  GNU's `-e`, `-i` and `-l` take the rest of their word only. No letter is a flag in one xargs and takes a value in
+  the other, so one reading serves both.
+
+  Where that start differs from main's, the call is read again with each xargs's command read from it
+  (`_xargs_reading`), as #853 and #864 read a line again. Main's reading stays beside it as it was, and `decide`
+  keeps the stricter, so no line decides lower. An unknown or ambiguous option, or a value missing at the end, makes
+  xargs fail and run nothing. Only main's reading is made there. The cost is a second reading of such a call.
+
+  A second reading, not more parts in one reading. As parts, the push after `--max-args rm` took the lead from the
+  delete main reads there (`rm` as the program), and under `force_push: log` the line logged where main asked. Main's
+  `scripts/gate_diff.py` found 80 such lowered pairs on the aimed corpus. With the second reading the line asks.
+
+  The command read from getopt's start has its own words as its own text (`_run_own`), as #458 gives main's start.
+  So a rule written for `xargs`, or one that names a here-string word or a here-doc body, does not lower the push
+  in `echo x | xargs --max-args 1 git push --force origin main`. The rule must name the push too.
+
+  Chosen over dropping main's reading: where xargs takes a word as a value that main read as the program, main's
+  reading can be the stricter (`xargs -J rm echo hi` stays a delete). Dropping it would lower such a line, where
+  BSD xargs runs only echo and GNU xargs refuses `-J`. Known limit, as on main: a word from an expansion in an
+  option's place (`xargs $FLAGS git push ...`) is read as the program, as for `nice`, `timeout` and `setsid`.
+
+  *Measured:* main's `scripts/gate_diff.py` against c05f0ca1 lowers 0 of 1,429,384 pairs on the built-in corpus
+  without variants and 0 of 10,373,968 with them. On an aimed corpus of 13,789 xargs lines under 197 policies it
+  lowers 0 of 2,716,433 pairs, and 0 of 997,608 on the compound forms of 288 of them. Tests:
+  `tests/security/test_gate_xargs_options_1116.py`.
 - *Amendment 2026-10-31 (issue #1047):* a pipe from `printf` or `echo -e` into a shell is also read as the command
   writes it. On main d995d667 the gate read that text only as written. It kept each escape as two characters and did
   not fill a printf format. So `printf 'cp /tmp/x ~/.exo/config.json\n' | bash`, the same line piped to `sudo -s`,
