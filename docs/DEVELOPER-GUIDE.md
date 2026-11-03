@@ -663,6 +663,19 @@ these tests so that only the defect they guard against can fail them:
   at 0.5 s, half what a search holding the loop would cost (#907). That bound is a compromise between catching the
   defect and allowing for a runner's stalls, not a bound well above them: one macOS CI run measured a 0.5625 s gap.
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
+- Check order with an event, not a clock. Where a test checks that a call returns before some work ends, hold the
+  work on a file or an event the test controls. `tests/core/test_jobs.py` holds its background job until the test
+  makes a file. Its start test then needs a time limit only to stop a hang. Its old 0.3 s bound failed 10 to 14 of
+  20 runs on one CPU beside a busy loop of higher priority.
+- Wait for the event the test reads, not an earlier sign of it. A job's row says done before its done event goes
+  out, so a test that waits for the row and then reads the events can still see the job running (#1098).
+- Where a test checks how much work a call does, time it in CPU time (`time.process_time()`). Time spent waiting
+  for a CPU then does not count. A full garbage collection still counts, in CPU time and wall time alike: it runs
+  inside the call that allocates the object that sets it off. In a process that had run thousands of tests, one
+  took 0.46 s of a 0.57 s call (#1098).
+- So time such a call again when it is over its bound, at most three times, as
+  `tests/security/test_gate_cd_stores.py` does. One pause then fails no test, and a slowdown that lasts still fails
+  every try.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - A failed Chrome startup says whether Chrome exited, with its exit code, or timed out. It reports only fixed
