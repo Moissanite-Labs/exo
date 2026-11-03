@@ -244,6 +244,20 @@ def test_chat_capture_and_the_review_digest_read_only_the_tail(engine, learner, 
     assert "NOT bullet" in _digest(learner, sid) and len(decoded) <= 6
 
 
+def test_last_messages_returns_at_most_limit_on_either_path(engine, learner, monkeypatch):
+    """Review 5732449717 of #1102: the store gives none for a limit of 0, but a store with no ``last_messages`` fell
+    back to the slice ``[-limit:]``, which gave the whole thread for 0 and dropped the first message for -1."""
+    from types import SimpleNamespace
+    sid, _ = new_session(engine, ("user", "one"), ("assistant", "two"), ("user", "three"))
+    full = learner.messages(sid)
+    assert len(full) == 3
+    plain = SimpleNamespace(messages=engine.store.messages)  # a store with no tail read
+    for store in (engine.store, plain):
+        monkeypatch.setattr(learner, "engine", SimpleNamespace(store=store))
+        assert learner.last_messages(sid, 2) == full[-2:] and learner.last_messages(sid, 5) == full
+        assert learner.last_messages(sid, 0) == [] and learner.last_messages(sid, -1) == []
+
+
 CAPTURED = ("ruling", "verdict", "question")
 
 

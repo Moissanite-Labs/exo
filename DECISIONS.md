@@ -205,6 +205,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the session to count its user turns for memory, then decoded them all again to keep the last 40 for the
   memory checkpoint. `SessionStore.user_turns` now counts in SQL with the same rule: a user message counts unless
   it carries a context note that Python reads as true, so a note of `""`, `0`, `false` or `null` still counts.
+  NaN is the one exception: SQLite reads a stored NaN as null, so a NaN note counts (amendment 2026-11-02).
   `SessionStore.last_messages` reads the newest rows through the `(session, seq)` index and returns them in
   order. `/handoff` counts user turns the same way. Learning's chat capture after each turn and its review digest
   read their last 12 and 6 messages through `Learner.last_messages`, which uses the same helper.
@@ -225,7 +226,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `since` the log cannot read still gets a typed reply there. A subscription whose first read fails takes its
   queue back out of the hub, so no queue is left to fill with later events. Tests:
   `tests/core/test_session_hot_paths_254.py`, `tests/core/test_fork_one_transaction_254.py`,
-  `tests/core/test_event_paging_254.py`.
+  `tests/core/test_event_paging_254.py`, `tests/learn/test_learn_signals.py`.
+- **Amendment 2026-11-02 (#254, follows #1102, review 5732419504):** a fork holds the write lock only to check
+  and insert. Under the amendment above, all of it ran in one write transaction, which also decoded and encoded
+  every message and counted the rows up to each summary's end. On a 20,000-message session with 4,995 summaries
+  that held the lock for 11 to 17 s, so another process on the same home failed with `database is locked` after its
+  5 s wait. The fork now reads the parent and builds its copies and search rows on a read snapshot (`_read`).
+  The write transaction reads the ids of the parent's visible rows up to the fork point. When they are the ones
+  the snapshot read, it inserts. When they are not, it builds the copies again under the lock. A summary is
+  kept when every row up to its end is there and visible, found in one pass over the rows, not by a count per
+  summary. The fork is still one transaction, and a failed fork still leaves nothing. A replay page the log
+  cannot read ends the stream. Since the amendment above, only the first page is read at subscribe, so a later
+  page failed inside the stdio feed, which ended with nothing sent. `Subscription.next` now raises that error
+  once and takes its queue out of the hub, and a later call raises `Closed`, so no caller skips the rest of
+  the backlog to live events. The stdio feed answers the error with an `internal` error `Response` for the
+  subscribe, as the one-shot read did before, and its EOF flush does the same. SQLite rolls a write back itself
+  when the disk is full, so `_tx` and `_read` roll back only while a transaction is open, and a fork on a full
+  disk raises `database or disk is full`, not `cannot rollback`. A stdio subscribe whose reply cannot be
+  written (the client is gone) closes its subscription, so no queue is left in the hub. `iter_events` raises
+  `ValueError` for a page below 1, as `last_messages` does for a negative limit. SQLite reads LIMIT -1 as no
+  limit, so a page of -1 read the whole log at once. `last_messages` returns at most `limit` messages, so 0 gives
+  none, where the slice it replaced gave all. `Learner.last_messages` had the slice's rule when its store has no
+  `last_messages`, and now gives none for a limit below 1 there too. `user_turns` counts a NaN note as a turn,
+  where the Python rule it replaced read NaN as true. `undo` reads it the same way, and no writer stores one,
+  so the docstring names it and the rule stays. Tests:
+  `tests/core/test_fork_one_transaction_254.py`, `tests/core/test_event_paging_254.py`,
+  `tests/core/test_session_hot_paths_254.py`, `tests/learn/test_learn_signals.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -6020,6 +6046,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
   `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
   Cancel and remove would never run there.
+- **Amendment 2026-10-29 (#863 follow-up, review 5692507751):** the confirm step takes focus, on Schedule's remove
+  and on Command's allow always. Opening it redraws the cards, so the focused button leaves the page. Focus moves
+  to Cancel, the safe default for a remove or a standing grant, so a second Enter cancels. Cancel, or Escape while
+  focus is in the step, closes it and puts focus back on the button that opened it. Command redraws on every core
+  event, so a redraw puts focus back on the approval button that had it. While a remove is in flight its step
+  stays, with Confirm remove and Cancel disabled, since Cancel can no longer stop it. Each job in flight keeps its
+  own step (review 5707362258). A failed remove puts focus on that card's remove, unless the person has put focus
+  on a control outside the job list since. Rejected: focus on Confirm, as on the Chat card, whose help says Enter
+  confirms. Here a second Enter would remove or grant. Rejected: closing the step before the POST, which is one
+  call. The card's pause, run now and remove then come back under the pointer. In headless Chromium, on a card
+  shorter than its grid row, the second click of a double click on Confirm remove then landed on pause and sent a
+  pause for the job being removed.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
@@ -6171,6 +6209,34 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges read the tree 31 times for its halves, and `/compact` read it once for each merge it made. Bounding the
   verbatim cache (#899) and batching deltas are separate work. Validation: `tests/core/test_context_reads_262.py`,
   `tests/core/test_turn_settle.py`.
+- *Amendment 2026-11-02 (#1013, leaf size):* an agent tree and a private thread's own tree size a leaf as the tail
+  carries it. The size floor (`min_compact_tokens`) and the shrink test sum `_cost` from `src/exo/turn_settle.py`
+  over the leaf's messages: text and tool results in full, plus the tool-call arguments past 400 characters (#524).
+
+  Before, a leaf measured `render_message`, which cuts each tool result at 2000 characters and each text part at
+  4000. Those trees end their view at the last summary, so a span skipped as too small after it rode the tail in
+  full. Merges of the previews moved the frontier past it only later.
+
+  In a private thread with a floor of 1500 and a fast summarizer, 30 rounds of 20k `read_file` results left all 13
+  leaves skipped. The next call carried 22 of the results, 441,149 characters. Now all 13 are summarized, and the
+  call carries the 4 rounds in no leaf yet, 80,764 characters.
+
+  With a slow summarizer the leaves now wait for it, so the private call cuts their spans (#244). Before, they were
+  skipped at once, and the last round's call carried all 30 results.
+
+  These leaves now go to the summarizer, where they were skipped at once. A tail of large results keeps the view
+  over `view_budget`, so a call waits up to `overflow_settle` for them, as this decision allows. With a fake
+  summarizer that takes 3 s a leaf, those 30 rounds took 39.54 s, where they took 3.35 s.
+
+  For an agent tree that call can be in any thread of the agent, a private one included. The agent tree's check
+  counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+  thread's results. That turn's call carries only a short note of those turns, so the wait does not shrink it. A
+  later change could measure each thread's overflow on its own call instead.
+
+  A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
+  merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
+  the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
+  `tests/core/test_context_leaf_size_1013.py`, `tests/core/test_agent_context.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title

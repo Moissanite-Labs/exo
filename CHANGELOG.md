@@ -23,6 +23,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reading of the call beside main's, with budgets of its own, so a long text spends no cap a later command needs.
   Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
   amendment), `docs/DOCS-MAP.md`.
+- A private or agent thread no longer carries a span of large tool results in full because its leaves measured too
+  small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
+  summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
+  `overflow_settle` for those summaries. A plain session keeps the preview size.
 - Each loop's second pass is named by its own folder (#867, a #479 follow-up). When a line held two loops that
   `cd` into different descriptor folders, the gate named the second loop's next pass by the first one's folder, so
   in `for i in 1; do cd /dev/fd; done; while cd /proc/self/fd < <(cp /tmp/evil 3); do break; done` the
@@ -105,6 +109,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the core holds one page (0.9 MB at the peak). Every event still arrives once, in order. Over stdio,
   `events.subscribe` also built the one-shot reply with every event and then dropped it. It now opens the
   stream at once (D-010 amendment).
+- A large fork no longer locks other processes out of the session store (#254, follows #1102). Since #1102 a
+  fork ran in one write transaction that also decoded every message and counted rows for each summary. On a
+  20,000-message session with 4,995 summaries it held the lock for 11 to 17 s, and another seat or CLI command on the
+  same home failed with `database is locked` after its 5 s wait. The fork now builds its copies before it takes
+  the lock and only checks and inserts under it. It takes 1.1 to 2.1 s, holds the lock for under 0.5 s, and the other
+  process opens and writes at once (D-010 amendment 2026-11-02).
+- A stdio client whose event replay hits an event the core cannot read gets a typed reply, not silence (#254,
+  follows #1102). Since #1102 the replay reads its backlog a page at a time after `events.subscribe` answers. A
+  page that failed after the first ended the feed with nothing sent: the client stayed subscribed, got no live
+  event, and the core raised the error again at EOF. The feed now ends with an `internal` error `Response` for
+  the subscribe, as the one-shot read before #1102 did, and the EOF flush is guarded the same way (D-010
+  amendment 2026-11-02).
 - Tests: the learning test for rule 6 (`test_rule6_medium_is_a_hint_and_stale_becomes_a_question`) no longer depends
   on the calendar date. It wrote its correction and proposal with the real clock and checked staleness at the fixed
   date 2027-01-01, so from 2026-12-18 the proposal would be under 14 days old and the test would fail on every
@@ -555,6 +571,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   desktop web view with no confirm handler answers `window.confirm` with Cancel. Tests:
   `plugins/exo-command/tests/test_schedule_web.py`. **Docs:** `docs/ui/WEB.md`, `docs/USER-GUIDE.md` §5,
   `plugins/exo-command/README.md`, D-061 amendment.
+
+- The web confirm step takes focus, and Escape cancels it (#863 follow-up, review 5692507751). Schedule's remove
+  and Command's allow always redraw the cards, so focus fell to the page and a keyboard user had to find the step.
+  Focus now moves to Cancel, not to Confirm, so a second Enter cancels. Cancel and Escape put focus back on the
+  button that opened the step. On Command, a redraw on a core event keeps focus on the same approval button.
+  While a Schedule remove is in flight, its step now stays with Confirm remove and Cancel disabled. Before, Cancel
+  stayed live then. Pressing it hid the step, and the job was removed anyway. Each job keeps its own step, so a
+  remove on a second job does not give the first card its buttons back (review 5707362258). A failed remove puts
+  focus on that card's remove, unless focus has moved outside the job list. Tests:
+  `plugins/exo-command/tests/test_schedule_web.py`,
+  `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
+  `docs/USER-GUIDE.md` §5, D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.

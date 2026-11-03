@@ -17,6 +17,10 @@ check measures pending spans as the view renders them, cut short, so that tree a
 leave a span out: a leaf this call scheduled gets its chance to run first, and a fast summarizer, or a span too
 small to summarize, leaves no cut. Either wait of that tree is for its own jobs only, leaves and merges, not the
 agent tree's.
+
+That tree and an agent tree size a leaf as the tail carries it (``leaf_tokens``, issue #1013). Their view ends at
+the last summary, so a span skipped as too small rides the tail in full, and a preview size would skip a span of
+large tool results that then rides in full.
 """
 from __future__ import annotations
 
@@ -34,6 +38,18 @@ def _cost(m: Any) -> int:
 
     return estimate_tokens(m) + sum(max(0, len(json.dumps(c.arguments, ensure_ascii=False)) - 400)
                                     for c in m.tool_calls) // 4
+
+
+def leaf_tokens(ctx: Any, key: str, msgs: list, source: str) -> int:
+    """A leaf's size for its floor and its shrink test (issue #1013). An agent tree, or a private thread's own tree,
+    counts ``msgs`` as ``_cost`` does: text, results and arguments in full, as its tail would carry them. A plain tree
+    shows a skipped leaf as its preview, so there the size is ``source``, which ``render_message`` cut short."""
+    from exo.core.context import estimate_tokens  # core imports this module
+
+    own = getattr(ctx, "_own", None)  # an AgentContext
+    if own is not None and (key.startswith("agent:") or own(key)):
+        return sum(_cost(m) for m in msgs)
+    return estimate_tokens(source)
 
 
 def _turn_start(ctx: Any, session: str, since: int, tail: list, turn_id: str) -> int:

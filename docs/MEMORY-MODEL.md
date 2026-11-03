@@ -32,6 +32,10 @@ Everything stays in `sessions.sqlite`.
   `agent:<id>`. Leaves cover `leaf_size` positions, parents merge pairs, as in D-013. Leaf text labels each
   entry with its thread. The compaction floor from the canary fix carries over: a span under
   `min_compact_tokens` stays verbatim, and a summary that is not smaller than its source is dropped.
+- **Leaf size.** Both tests size a leaf as a thread's tail would carry it: text, tool results and tool-call
+  arguments in full (#1013). The view ends at the last summary, so a span skipped as too small rides the tail
+  whole after it. A private thread's own tree sizes its leaves the same way. A plain session's tree keeps the
+  preview size, since its view shows a skipped leaf as that preview.
 
 ## Private threads
 
@@ -115,10 +119,10 @@ all after it, tool rounds and context notes included. The turn can start in such
 A span that is not pending stays whole too: one skipped for good, one waiting to retry, and the last
 `tail_messages`, which are in no leaf yet. A tool call and its results
 are kept or cut together. The cut moves only when it must grow, and then by a whole leaf, so the calls in between
-extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A span
-of large tool-call arguments can still be skipped as too small, since a leaf's size cuts each call's arguments at
-400 characters, and then it stays verbatim. The system message is the same as in the agent's other threads, so
-the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
+extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A leaf
+of this tree is sized the same way ("Leaf size" above), so a span of large tool results or arguments is summarized,
+not skipped as too small and carried whole (#1013). The system message is the same as in the agent's other
+threads, so the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
 `capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
 `from_seq` is the first stored message there. It finds the turn by the thread's last turn id, so during a turn it
 keeps the running turn whole, as the call does, steer messages included. Between turns it keeps the last turn
@@ -200,6 +204,15 @@ nothing to cut. Both waits of the private tree are for its own jobs only, leaves
 view the cut counts. The agent tree's jobs shrink neither the private view nor the cut, so they do not stretch
 either wait. So a private turn can now wait where it did not: while a cut would apply, each call waits up to
 `overflow_settle` for those jobs.
+
+An agent tree and a private thread's own tree send a leaf of large tool results to the summarizer, since #1013
+sizes it in full. A tail of such results keeps the view over `view_budget`, so a call can wait up to
+`overflow_settle` for those leaves.
+
+Any thread of the agent can wait for the agent tree's leaves, a private one included. The check for that tree
+counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+thread's results. That turn's call carries only a short note of those turns, so the wait does not shrink it. A
+later change could measure each thread's overflow on its own call instead.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
