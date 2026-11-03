@@ -124,18 +124,23 @@ def test_the_text_names_what_is_not_a_reader(name):
 # The reserved words after which bash takes a command as after `;`: the words of _OPENERS that close no compound.
 # #864's reading opens a `coproc` or `function` compound behind each (_parse_line, `late`).
 OPENERS = sorted(gate._OPENERS - set(gate._COMPOUND_CLOSERS))
-# Each opener in a line bash accepts: what goes before the `coproc` and after its compound.
+# Each opener in a line bash accepts: what goes before the `coproc` or `function NAME` and after its compound.
 SHAPES = {"!": ("! ", ""), "then": ("if true; then ", "; fi"), "else": ("if false; then :; else ", "; fi"),
           "elif": ("if false; then :; elif ", "; then :; fi"), "if": ("if ", "; then :; fi"),
           "while": ("while ", "; do break; done"), "until": ("until ", "; do :; done"),
           "do": ("for j in 1; do ", "; done"), "{": ("{ ", "; }")}
 # A loop whose second pass runs in the store (#479), and a heredoc after a group's closer that feeds the shell in it
-# (#161). Main's reading leaves each the coproc's argv. Behind `while`, `until` and `do` the outer loop reads the
-# store loop either way, so the heredoc row is the one that needs #864's reading there.
+# (#161). Main's reading leaves each unopened. Behind `while`, `until` and `do` the outer loop reads the store loop
+# either way, and behind `{` the outer group reads the heredoc either way, so there the other row is the one that
+# needs #864's reading.
 LOOP = "coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"
 HEREDOC = "coproc W { bash\n } <<EOF\nrm -rf /srv/data\nEOF"
+# The same two behind `function NAME`, and the word the escape spells in each.
+COMPOUNDS = {"coproc": (LOOP, HEREDOC, r"\x63oproc"),
+             "function": ("function f { for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done; }",
+                          "function f { bash\n } <<EOF\nrm -rf /srv/data\nEOF", r"\x66unction")}
 TIME_FORMS = ["time", "time -p", "time --", "time -p --"]
-AFTER = ["coproc NAME {", "function NAME {"]
+AFTER = ["function NAME", "coproc NAME {", "function NAME {"]
 
 
 def _printed(written: str, escaped: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -159,13 +164,15 @@ def test_the_text_names_every_time_prefix(name):
     assert not [f for f in TIME_FORMS if f"`{f}`" not in text]
 
 
+@pytest.mark.parametrize("word", sorted(COMPOUNDS))
 @pytest.mark.parametrize("opener", sorted(SHAPES))
-def test_the_output_opens_a_coproc_after_each_opener(opener):
+def test_the_output_opens_a_coproc_or_function_after_each_opener(opener, word):
     head, tail = SHAPES[opener]
-    loop = head + LOOP + tail
-    escaped, written = _printed(loop, loop.replace("coproc", r"\x63oproc", 1))
+    body, heredoc, escape = COMPOUNDS[word]
+    loop = head + body + tail
+    escaped, written = _printed(loop, loop.replace(word, escape, 1))
     assert escaped == written and written[2] == "deny"
-    hd = head + HEREDOC + "\n" + tail.removeprefix("; ")
+    hd = head + heredoc + "\n" + tail.removeprefix("; ")
     assert _printed(hd, hd.replace("\n", r"\n")) == (DELETE, DELETE)
 
 
