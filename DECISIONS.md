@@ -6085,8 +6085,8 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 
   For an agent tree that call can be in any thread of the agent, a private one included. The agent tree's check
   counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
-  thread's results. That turn's call carries those results only as a short note, so it is the same size after the
-  wait. A later change could measure each thread's overflow on its own call instead.
+  thread's results. That turn's call carries only a short note of those turns, so the wait does not shrink it. A
+  later change could measure each thread's overflow on its own call instead.
 
   A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
   merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
