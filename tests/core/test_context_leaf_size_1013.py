@@ -164,3 +164,40 @@ def test_a_plain_tree_keeps_the_preview_size():
     leaves, _, call = asyncio.run(read_rounds("plain", False))
     assert len(leaves) == 13 and {n.status for n in leaves} == {"skipped"}
     assert results(call) == 4 and "chars cut]" in call[0].text() and call[-1].text() == QUESTION
+
+
+@pytest.mark.parametrize("kind", ["thread", "private"])
+def test_a_short_turn_in_another_thread_of_the_agent_waits_for_these_leaves(kind):
+    """Any thread of the agent can wait for these leaves. Thread B reads ten 20k files while the summarizer is
+    held, so its leaves stay pending in the agent tree. Thread A then asks a short question. Its overflow check
+    counts the whole agent log after the frontier, B's results in full, so A waits for B's leaves (D-068), though
+    its call carries none of B's results. Before #1013 those leaves were skipped at once, so A had nothing to wait
+    for. The gate opens just before A's build, which suspends only to wait: B's leaves land only if A waits."""
+    async def go():
+        store, summ = SessionStore(), Summ()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=1500)
+        ctx.overflow_settle = 0  # B's own turns do not wait
+
+        async def read(call, c):
+            return ToolResult.of_text(call.id, f"FILE-{call.id} " + "f" * SIZE)
+        loop = Loop(store, Reader(), context=ctx, system_prompt="SYS", retry_delay=0,
+                    tool_specs=[ToolSpec(name="read_file", description="read a file")], run_tool=read)
+        a = await loop.create_session(agent="razi", kind=kind)
+        await loop.send(a.id, "hello")
+        b = await loop.create_session(agent="razi", kind="thread")
+        summ.gate = asyncio.Event()
+        for i in range(10):
+            await loop.send(b.id, f"read file {i}")
+        tree = AgentContext.key("razi")
+        held = {n.status for n in store.summaries(tree) if n.level == 0}
+        ctx.overflow_settle = 60  # longer than the test runs: A's build returns once B's leaves land
+        store.append_message(a.id, Message.user("how are you?"))
+        summ.gate.set()
+        call = await ctx.build(a.id, "SYS")
+        landed = {n.status for n in store.summaries(tree) if n.level == 0}
+        store.close()
+        return held, landed, call
+    held, landed, call = asyncio.run(go())
+    assert held == {"pending"} and landed == {"done"}
+    assert any(m.text() == "how are you?" for m in call)
+    assert results(call) == 0 and sum(len(m.text()) for m in call) < 2000  # B's turns come as a short note

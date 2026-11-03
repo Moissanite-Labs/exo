@@ -206,8 +206,13 @@ either wait. So a private turn can now wait where it did not: while a cut would 
 `overflow_settle` for those jobs.
 
 An agent tree and a private thread's own tree send a leaf of large tool results to the summarizer, since #1013
-sizes it in full. A tail of such results keeps the view over `view_budget`, so each call there can wait up to
+sizes it in full. A tail of such results keeps the view over `view_budget`, so a call can wait up to
 `overflow_settle` for those leaves.
+
+Any thread of the agent can wait for the agent tree's leaves, a private one included. The check for that tree
+counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+thread's results. That turn's call carries those results only as a short note, so it is the same size after the
+wait. A later change could measure each thread's overflow on its own call instead.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf

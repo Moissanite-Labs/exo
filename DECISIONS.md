@@ -6080,8 +6080,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   skipped at once, and the last round's call carried all 30 results.
 
   These leaves now go to the summarizer, where they were skipped at once. A tail of large results keeps the view
-  over `view_budget`, so a call there waits up to `overflow_settle` for them, as this decision allows. With a fake
+  over `view_budget`, so a call waits up to `overflow_settle` for them, as this decision allows. With a fake
   summarizer that takes 3 s a leaf, those 30 rounds took 39.54 s, where they took 3.35 s.
+
+  For an agent tree that call can be in any thread of the agent, a private one included. The agent tree's check
+  counts the whole agent log after its frontier, so a short turn in one thread waits for the leaves of another
+  thread's results. That turn's call carries those results only as a short note, so it is the same size after the
+  wait. A later change could measure each thread's overflow on its own call instead.
 
   A plain tree keeps the preview size. Its view shows a skipped leaf as that preview, so the leaf costs no more. A
   merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
