@@ -665,14 +665,17 @@ these tests so that only the defect they guard against can fail them:
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
 - Check order with an event, not a clock. Where a test checks that a call returns before some work ends, hold the
   work on a file or an event the test controls. `tests/core/test_jobs.py` holds its background job until the test
-  makes a file. Its start test then needs a time limit only to stop a hang. Its old 0.3 s bound failed 10 to 14 of
+  makes a file. Its start test then needs a time limit only to stop a hang. Its old 0.3 s bound failed 10 to 18 of
   20 runs on one CPU beside a busy loop of higher priority.
+- Give such a hold an end of its own. A failed test can exit before it lets the work go, and a job's wall limit is a
+  timer in the test process, so it ends with that process. The jobs start test's loop gives up by itself in under a
+  minute.
 - Wait for the event the test reads, not an earlier sign of it. A job's row says done before its done event goes
   out, so a test that waits for the row and then reads the events can still see the job running (#1098).
 - Where a test checks how much work a call does, time it in CPU time (`time.process_time()`). Time spent waiting
   for a CPU then does not count. A full garbage collection still counts, in CPU time and wall time alike: it runs
-  inside the call that allocates the object that sets it off. In a process that had run thousands of tests, one
-  took 0.46 s of a 0.57 s call (#1098).
+  inside the call that allocates the object that sets it off. A probe for #1098 that grew the heap between calls
+  measured one at 0.46 s of a 0.57 s call.
 - So time such a call again when it is over its bound, at most three times, as
   `tests/security/test_gate_cd_stores.py` does. One pause then fails no test, and a slowdown that lasts still fails
   every try.
