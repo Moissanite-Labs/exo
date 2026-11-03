@@ -10,6 +10,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why:** A asked for work that survives compaction and session switches.
 - **Rejected:** Keeping plans in agent memory or the Drive vault (lost on compaction; slow sync).
 
+- **Documentation amendment 2026-11-03:** Keep the existing docs map as the one index. Add an engineering
+  walkthrough and readable source/adaptation register beside implementation, without a second wiki.
+  `PROVENANCE.toml` remains the authority for Hermes module revisions. Each new source record names its
+  author, relationship, modifications, evidence and limits. Other Labs projects retain their own records.
+  This adds no runtime capability or deployment claim. User-guide impact: none. Developer-guide impact:
+  source and evidence records under the docs rule.
+
 ## D-002 (2026-10-11) Research and inventory run as parallel subagents writing to files
 - **Decision:** Five subagents: guardian-angel crawl, GitHub inventory, local ~/.hermes inventory,
   local documents and exports inventory, base evaluation. Each writes one file in `research/` or
@@ -1524,16 +1531,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   using the format again while arguments last. `echo -e` (and `-ne`, `-en`, `-Ee`) expands its escapes. A `\c` ends
   the output in `echo -e` and in a `%b` argument, not in a format.
 
-  A shell that runs its stdin also reads `out` (`_stdin_texts`): `bash` or `sh` with no script, the shell `sudo -s`
-  starts and `ssh host` with no command. Interpreters and SQL clients still read only the text as written, a known
-  limit, and a gh body with an escape stays unseen (#208).
+  A shell that runs its stdin also reads `out` (`_stdin_texts`, for the texts `_once` reads with `classify_shell`).
+  That is `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` (`_SHELLS`) with no `-c` and no script
+  (`/bin/sh`, `bash -s`).
+
+  The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command reads it too (`_sudo_shells`). So does
+  `ssh host` with no command, and an ssh whose command is such an ssh (`ssh host ssh h2`).
+
+  Each reads `out` behind a prefix or wrapper (`env bash`, `sudo bash`, `timeout 5 bash`, `nice bash`, `nohup bash`,
+  `setsid bash`, `command bash`, `exec bash`) and inside a compound the pipe feeds (`{ bash; }`, `( bash )`). A shell
+  ssh runs as its command (`ssh host bash`) does not. Interpreters and SQL clients still read only the text as
+  written, a known limit, and a gh body with an escape stays unseen (#208).
 
   The shell reads `out` in a second reading of the call (`_printed_reading`), with budgets and memos of its own, as
   #853's opened reading and #584's joined reading are read. It reads `out` there in place of the text as written.
   The first reading reads the text as written only and marks the call (`_printed_met`). It is main's reading.
 
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864,
-  `_late_reading`) each have a printed reading of their own too, so a compound only they open is read in the output.
+  The readings that open a compound each have a printed reading of their own too, so a compound only they open is
+  read in the output. #853's (`_opened_reading`) opens one behind `time`, `time -p`, `time --` or `time -p --`, with
+  or without `!`.
+
+  #864's (`_late_reading`) opens one behind a `coproc [NAME]` or `function NAME` after `!`, `then`, `else`, `elif`,
+  `if`, `while`, `until`, `do` or `{`, and one right after `coproc NAME {` or `function NAME {`.
+
+  Corrected 2026-11-03 (reviews 5726570654 and 5732421140 of #1089): this amendment named only `bash` or `sh`, the
+  `sudo -s` shell and `ssh host` as readers, and only `!`, `then` and `{` before a `coproc`, where the code reads
+  more. The two lists above now name what it reads, and `tests/docs/test_gate_printf_readers_doc.py` pins them.
 
   `decide` keeps the strictest of the two readings, so no decision is lower than main's. The call leads with the
   reading `_combine` would pick of the two (`_beside` with `lead`): credentials, then a store write, then the more
@@ -1661,6 +1684,62 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or ask for the `rm` example. These are existing mode-specific fallback behaviors, not new bypass or executor rules.
   A long integer exceeding Python's conversion limit still raises `ValueError` and takes the hook's error path (ask,
   or block when an executor is required).
+- *Amendment 2026-11-01 (issue #1083):* a command an ssh setting runs on this machine is an `opaque_exec` part beside
+  the line, as `bash -c` is. On main a2f6ec3d `ssh -o 'ProxyCommand=touch /tmp/x' host ls` and the same `LocalCommand`
+  line were reads, allowed under `deny: [local_write]`, while `bash -c 'touch /tmp/x'` asks there. `ssh -X -o
+  XAuthLocation=/tmp/evil host ls` was a read too.
+
+  The issue took the gate to scan these values for words only. It reads them as nested lines since #154, so a delete,
+  a post or a store path there counts. But `touch /tmp/x` alone is `shell`, and a known program in an option's value
+  stays `allow` (`rsync -e`, `PAGER=cat`).
+
+  ssh runs `ProxyCommand` and `LocalCommand` with the user's shell (`$SHELL -c`), which can read startup files of its
+  own, as `bash -c` runs its line. It runs `KnownHostsCommand` as a program, after it fills in tokens and `${VAR}` in
+  its arguments.
+
+  `_ssh_runs_here` gives an `opaque_exec` part for each of the three, beside the nested reading `_exec_options`
+  already made, in every form `_ssh_setting` takes and for scp and sftp. `XAuthLocation` names the program ssh runs
+  for X11 forwarding. A config file can turn that on, so any value is an `opaque_exec` part too.
+
+  `none` stays a read, and so do `ProxyJump` and `-J`, which name a host. `RemoteCommand` runs on the host and keeps
+  its reading.
+
+  ssh fills in %-tokens before it runs the command. `%%` is `%`, and `%d` is the home folder, which `LocalCommand` and
+  `KnownHostsCommand` take. A value that holds either is read once more with `%d` as `~`, beside the reading as
+  written, so `rm -rf %d/.exo` gets a store write part.
+
+  ssh stops on `%d` in `ProxyCommand`, which takes only `%%`, `%h`, `%n`, `%p` and `%r`, and the gate reads it as the
+  home folder there too. The other tokens name a host, a port or a user and stay as written.
+
+  `_exec_options` puts these parts in the line's context (`ssh_here`), and `_classify_shell` adds them beside the
+  combined line last, with their signals. So the line keeps its category, its lead's targets on an ssh hop's host, and
+  the store check of its words. The opaque part's indirection asks, and deny, reserved and rule entries meet each
+  part.
+
+  A first build let the parts lead, and lowered decisions. Main's `scripts/gate_diff.py` found `(read, a)` reserved
+  lost on `ssh a "ssh -o 'ProxyCommand=touch /tmp/x' b ls"`, as the part led the nested line in place of the read.
+
+  It also found the remote delete's `(delete, host)` lost on `ssh -o 'ProxyCommand=rm -rf %d/.exo' host 'rm -rf y'`
+  when the store write led. `tests/security/test_gate_hash_p.py` found a third: as a part of the simple command, the
+  opaque part made the store check scan the line's words, and `/dev/fd/3` in `ProxyCommand='hash -p /dev/fd/3 ls'`
+  outranked a post with a matrix deny.
+
+  *Cost:* a known program in these settings asks, as `ssh -o 'ProxyCommand=ssh -W %h:%p jump' host ls` now does. `ssh
+  -J jump host ls` stays `allow`. A store write read through `%d` does not lead, so `deny: [store_write]` meets it but
+  the store floor does not.
+
+  Main's `scripts/gate_diff.py` against main a2f6ec3d, after #458 and #1104 changed the gate, lowers 0 pairs in each of
+  four runs. The built-in corpus gives 1,432,816 pairs without variants (4,347 tightened) and 10,339,296 with them
+  (30,979 tightened).
+
+  An aimed corpus of 7,277 lines puts each setting in each form, with values that read, write, delete, post, touch a
+  store or hold %-tokens, in each position and wrapper. Under the 88 built-in policies and 64 deny, reserved and rule
+  policies on the categories it meets, it gives 1,106,104 pairs (141,900 tightened).
+
+  A second one of 2,060 lines adds other spellings, wrappers, compounds and nested lines, `find -exec`, `xargs` and `git
+  bisect run`, #1104's pipes into a shell that starts a group or a body, and lines bash rejects. Under 273 policies,
+  with `command` rules beside a category deny (#458), it gives 562,380 pairs (141,338 tightened). Tests:
+  `tests/security/test_gate_ssh_command_settings_1083.py`.
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
   file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,
@@ -4569,7 +4648,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `/dev/fd` one, name both folders, where main 69e33d50 named the first only. #864's reading (`_late_reading`) also
   reaches `_one_reading`, so the added reading is made inside it too. That matters when each loop is in its own
   `coproc`, which only that reading opens: `{ coproc for ..; done; }; { coproc for ..; done; }`, the pair after
-  `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only. On
+  `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only.
+  #1047's printed reading (`_printed_reading`) reaches `_one_reading` too, so the pair in a text that printf or
+  `echo -e` pipes into a shell, its `cp` spelt `c\x70`, names both folders, where main 2a9ba976 named the first only. On
   main d3cbd874 (#158) a call whose `${..}` words or `$((` bash may read otherwise than the reading before #143 is
   read both ways (`_classify_reading` around `_classify_read`, the second reading `flat`); each of the two reaches
   `_one_reading`, so each makes its own #867 reading with its own budget, and so does each one's opened reading (the
@@ -4603,8 +4684,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `${v:-$( )}` word cost about 1.2 to 2.2 times what they cost on main d3cbd874 (the last round: 0.24, 0.33,
   0.15 and 0.45 s against 0.17, 0.21, 0.13 and 0.25 s); 100 loops into `/dev/fd` alone cost about the same
   (0.13 to 0.20 against 0.14 to 0.18 s; no reading is added). Tests:
-  `tests/security/test_gate_loop_fd_per_loop_867.py`. 117 of its 130 tests fail on main 6ec085b6. The other 13,
-  the 11 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too.
+  `tests/security/test_gate_loop_fd_per_loop_867.py`. 125 of its 139 tests fail on main 2a9ba976. The other 14,
+  the 12 guard rows, two of them the known limit below, and the 2 plain-folder rows, pass there too.
   Known limit, as on main: a command that runs once, outside any loop's second pass, after a second descriptor
   `cd` is still named by the first descriptor folder of the line, since the line's first reading keeps one folder
   (`fd_cwd`) for the whole line. That holds on a straight line (`cd /dev/fd; cd /proc/self/fd; cp /tmp/evil 3`)
@@ -5610,6 +5691,27 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   from the existing timeout. A bounded stderr tail contributes only fixed diagnostic categories, never raw output;
   failed starts clean up their process and profile. This is diagnostic only and does not assert a cause or change the
   startup deadline or web security tests. See `docs/DEVELOPER-GUIDE.md` §7.
+- **Test-harness amendment 2026-11-01 (#907):** the first Chrome start in a test process gets a longer wait, and a
+  start that fails is tried once more. A Chrome that never starts costs a run 90 s more than before, not a second
+  wait in every test.
+  - The first start waits up to 90 s for `DevToolsActivePort`. Later starts keep the 20 s deadline. The two hosted
+    `DevToolsActivePort` timeouts on record, in the ubuntu jobs of #1036 (reported in #907) and #1092, were each the
+    job's first real start, in `test_csp_web.py`, out of many starts per job. A fresh hosted runner reads the
+    browser from a cold disk on that start.
+  - The 90 s ends once a start has reached DevTools, or once one 90 s wait has run out. Like the 90 s for the first
+    DevTools replies, it is a wait for Chrome to start, not a bound a test asserts.
+  - On hosted macOS, Chrome has twice started and then not answered one of its first DevTools calls within 90 s
+    (`Page.enable` in #894's job, `Page.addScriptToEvaluateOnNewDocument` in #887's), in a different test each time.
+  - A start that fails in any of these ways (an early exit, no `DevToolsActivePort`, or an unanswered first call) is
+    closed, and Chrome starts once more with a fresh profile. No test code has run at that point, so no test result
+    is retried. Any other error is raised at once.
+  - A second failed start fails the test, and its message names both. A different error on the second start keeps
+    the first failure as a note. A start that works after a failed one emits a `ChromeStartWarning` that names the
+    first failure, so pytest's warnings summary still shows the stall.
+  - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
+    Chrome that never writes `DevToolsActivePort` costs the first test 90 + 20 s and each later test 20 s. One that
+    writes it and never answers costs the first test two 90 s reply waits and each later test one. A later test
+    costs what one start cost before this amendment.
 - **Web status amendment (2026-10-28, #777):** instruments wrap within the conversation width in both layouts.
   Model names and values wrap instead of shrinking to padding or being clipped. Notices use their own wrapped row;
   the busy wire remains visible. When the status grows taller than the available space, the chat column scrolls

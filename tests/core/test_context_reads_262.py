@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
-from exo.core.context import AgentContext, TreeContext
+import pytest
+
+from exo.core.context import AgentContext, TreeContext, _one_read
 from exo.core.sessions import SessionStore
 from exo.core.types import Message
 from exo.turn_settle import verbatim_overflows
@@ -178,3 +181,36 @@ def test_compact_sizes_its_new_summaries_with_one_read():
         assert sum(sizing) <= 1, sizing  # one read for the whole report; it was one for each merge
 
     asyncio.run(go())
+
+
+def test_wrapping_a_step_that_can_await_fails_at_once():
+    """A shared read holds only while no other task runs, so an async step is refused where it is defined."""
+    async def step(self):
+        return self._nodes("s")
+
+    async def steps(self):
+        yield self._nodes("s")
+
+    for fn in (step, steps):
+        with pytest.raises(TypeError, match="is async"):
+            _one_read(fn)
+
+
+def test_a_step_that_returns_an_awaitable_fails_and_keeps_no_read():
+    """Async work handed back by a step would run after its read is gone, alone or inside another step."""
+    ctx = TreeContext(SessionStore(), Summ())
+    handed = []
+
+    def later(self):
+        handed.append(asyncio.sleep(0))
+        return handed[-1]
+
+    @_one_read
+    def outer(self):  # drops what the inner step hands back, so only the inner step's own check can see it
+        _one_read(later)(self)
+
+    for call in (_one_read(later), outer):
+        with pytest.raises(TypeError, match="returned an awaitable"):
+            call(ctx)
+        assert ctx._read_once is None
+    assert [inspect.getcoroutinestate(c) for c in handed] == [inspect.CORO_CLOSED] * 2  # no "never awaited" warning

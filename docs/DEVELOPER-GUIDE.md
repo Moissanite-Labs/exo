@@ -32,6 +32,16 @@ to this change), or `MISSING`. A cell stays `MISSING` only when the feature is n
 nothing real to say about it. Do not fill a cell with a vague link to make the gap vanish. The whitepaper is
 batched per wave: each batch is a new version (`vX.Y`), with its own header, changelog line and tag (section 8).
 
+### Source and evidence records
+
+Use the [engineering walkthrough](ENGINEERING-WALKTHROUGH.md) to follow one turn through the code.
+When incorporating a source or changing a credited mechanism, update the [source register](SOURCES.md)
+with the original author, inspected revision, relationship, adaptation, implementation, tests and limits.
+Keep Hermes module revisions in `PROVENANCE.toml`. Do not duplicate them in prose. The register's template
+also applies to other Labs projects in their own repositories. Link their records rather than copying contracts.
+A PR, main merge, downstream integration and live installation are separate states. Synthetic tests establish
+only the behavior they exercise. Benchmark or novelty claims need evidence beyond a component description.
+
 ## 1. Repo layout
 
 The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
@@ -663,11 +673,39 @@ these tests so that only the defect they guard against can fail them:
   at 0.5 s, half what a search holding the loop would cost (#907). That bound is a compromise between catching the
   defect and allowing for a runner's stalls, not a bound well above them: one macOS CI run measured a 0.5625 s gap.
   A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
+- Check order with an event, not a clock. Where a test checks that a call returns before some work ends, hold the
+  work on a file or an event the test controls. `tests/core/test_jobs.py` holds its background job until the test
+  makes a file. Its start test then needs a time limit only to stop a hang. Its old 0.3 s bound failed 10 to 18 of
+  20 runs on one CPU beside a busy loop of higher priority.
+- Give such a hold an end of its own. A failed test can exit before it lets the work go, and a job's wall limit is a
+  timer in the test process, so it ends with that process. The jobs start test's loop gives up by itself in under a
+  minute.
+- Wait for the event the test reads, not an earlier sign of it. A job's row says done before its done event goes
+  out, so a test that waits for the row and then reads the events can still see the job running (#1098).
+- Where a test checks how much work a call does, time it in CPU time (`time.process_time()`). Time spent waiting
+  for a CPU then does not count. A full garbage collection still counts, in CPU time and wall time alike: it runs
+  inside the call that allocates the object that sets it off. A probe for #1098 that grew the heap between calls
+  measured one at 0.46 s of a 0.57 s call.
+- So time such a call again when it is over its bound, at most three times, as
+  `tests/security/test_gate_cd_stores.py` does. One pause then fails no test, and a slowdown that lasts still fails
+  every try.
 - In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
   node you asked for. In `plugins/exo-command/tests/browser.py`:
   - A failed Chrome startup says whether Chrome exited, with its exit code, or timed out. It reports only fixed
     stderr categories and never prints the raw browser output. A category names a failure message, so the D-Bus
     errors and the sandbox warning that a healthy Linux start logs are not reported as a cause.
+  - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
+    hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
+    were each a job's first start (#907). The 90 s ends once a start reaches DevTools, or once one 90 s wait runs out.
+  - A Chrome start that fails (it exits, before or after it writes `DevToolsActivePort`, never writes it, or does not
+    answer one of its first DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile
+    before any test code runs. Any other error is raised at once. A second failed start fails the test and names
+    both. Hosted macOS has twice left a first call unanswered (#907).
+  - A start that works after a failed one emits a `ChromeStartWarning` that names the failure. Pytest lists it in its
+    warnings summary, so the stall still shows in a CI log.
+  - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
+    Chrome that never writes `DevToolsActivePort` costs the first test 90 + 20 s and each later test 20 s. One that
+    writes it and never answers costs the first test two 90 s waits and each later test one.
   - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
     changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
     `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
