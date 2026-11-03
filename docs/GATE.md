@@ -1428,11 +1428,6 @@ gate does not read:
   of the two. The call leads with the reading a line of both would lead with: credentials, then a
   store write, then the more severe.
 
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then`
-  or `{` (#864) each read what the command writes in a printed reading of their own too. So
-  `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
-  is read as the same line with `!`, and `deny: [store_write]` denies it.
-
   So the output spends no budget of the reading as before. A later command on the line is read in
   full there, also past 16 printed readings of a sudo word that may take a value or 24 printed
   parts that only bash's reading opens. The posts in the output take no room from the violations
@@ -1441,10 +1436,36 @@ gate does not read:
   And `printf '%b' 'echo hi\c; rm -rf /srv/data' | bash` is still a delete, though bash writes only
   `echo hi`.
 
-  Only a shell that runs its stdin reads what the command writes: `bash` or `sh` with no script,
-  the shell `sudo -s` starts and `ssh host` with no command. An interpreter and a SQL client read
-  the text as written only, a known limit: `printf 'import os\nos.remove("x")\n' | python3` is
-  still `opaque_exec`. A gh body with an escape stays unseen (#208).
+  The readings that open a compound each read what the command writes in a printed reading of
+  their own too. #853's reading opens one behind `time`, `time -p`, `time --` or `time -p --`,
+  with or without `!`. #864's reading opens one behind a `coproc [NAME]` or `function NAME` that
+  comes after `!`, `then`, `else`, `elif`, `if`, `while`, `until`, `do` or `{`, and one right
+  after `coproc NAME {` or `function NAME {`.
+
+  So `printf '\x21 coproc for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done' | bash`
+  is read as the same line with `!`, and `deny: [store_write]` denies it. It denies the same loop
+  after `else \x63oproc` too, and in `coproc W \x7b for ..; done; }`.
+
+  Only a shell that runs its stdin reads what the command writes. The gate reads it for these:
+
+  - `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` with no `-c` and no script, by
+    any path and with other options (`/bin/sh`, `bash -s`, `zsh -l`).
+  - The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command, also in long form or with
+    other options (`sudo --login`, `sudo -u bob -s`).
+  - The shell of `ssh host` with no remote command (`ssh -T host`), and of an ssh whose remote
+    command is an ssh with none (`ssh host ssh h2`).
+  - Any of these behind a prefix or wrapper the gate reads through (`env bash`, `sudo bash`,
+    `timeout 5 bash`, `nice bash`, `nohup bash`, `setsid bash`, `command bash`, `exec bash`).
+  - Any of these inside a compound the pipe feeds (`{ bash; }`, `( bash )`,
+    `if true; then bash; fi`).
+
+  So `printf 'r\x6d -rf /srv/data' | sudo -i` is a delete, and so is the same pipe into
+  `timeout 5 bash` or `{ bash; }`. `ssh host bash` is not one: the gate reads no pipe into a
+  shell that ssh runs as its remote command, escaped or written out.
+
+  An interpreter and a SQL client read the text as written only, a known limit:
+  `printf 'import os\nos.remove("x")\n' | python3` is still `opaque_exec`. A gh body with an
+  escape stays unseen (#208).
 
   The gate reads what the command writes only where it is sure of it. Every word must be literal:
   no expansion, glob, brace, leading `~` or `$".."`. printf may take `--` but no other option, and
@@ -1456,6 +1477,23 @@ gate does not read:
   `echo` without `-e` writes its words as they are in bash, so its text is read as written only.
   dash and zsh expand the escapes of a plain `echo`. A line one of them runs is still read as bash
   runs it, a known limit.
+- The command that writes to such a pipe is found past the reserved words before it (#1104). These
+  are the `{`, `then`, `else`, `elif`, `do`, `if`, `while` or `until` that opens a group, body or
+  condition, a `!`, a `time` with its `-p` and `--`, and a `coproc [NAME]` or `function NAME` before
+  an opener. bash keeps them out of the command. So `{ echo 'rm -rf /srv/data' | bash; }`, the same
+  pipe in a `then` or `do` body, a function or coproc body, and after `!` or `time` are a delete, as
+  the line with `true;` before the pipe is. Before, each was only `opaque_exec`, which a policy that
+  allows `opaque_exec` let run. An escape (#1047) is read there too. The gate reads such a text in a
+  second reading of the call, beside the reading as before, with budgets of its own, and `decide`
+  keeps the strictest. So a long text that uses up a cap, such as the 24 `${..}` parts one call
+  opens, leaves no later part on the line unread.
+
+  A quoted `{` is a command name, not a reserved word, and writes nothing. A quoted `time` and a
+  prefix command such as `command` or `nohup` run the command after them, but the gate reads such a
+  pipe as before, as `opaque_exec`, a known limit. A group piped into a shell
+  (`{ echo ..; } | bash`) is also read as before, a limit of the same kind. `coproc echo .. | bash`
+  is read as before as well, since its output goes to the coprocess. A post's body from the first
+  command of a group stays unseen (#208).
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the

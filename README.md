@@ -122,6 +122,8 @@ See [`CHANGELOG.md`](CHANGELOG.md) and [`docs/VERSIONING.md`](docs/VERSIONING.md
 | | |
 |---|---|
 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) | Using Exo day to day |
+| [`docs/ENGINEERING-WALKTHROUGH.md`](docs/ENGINEERING-WALKTHROUGH.md) | Follow a turn through the runtime, memory and authority boundaries |
+| [`docs/SOURCES.md`](docs/SOURCES.md) | Sources, credits, adaptations, evidence and limits |
 | [`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md) | Building on Exo: the protocol, plugins, tools, tests |
 | [`docs/REPOSITORY-WORKFLOW.md`](docs/REPOSITORY-WORKFLOW.md) | Where changes belong, reviewed desktop syncs and the transition from paired PRs |
 | [Whitepaper](https://exo.askaconsult.com/whitepaper/) | How each part works and why, with the trade-offs |
@@ -139,6 +141,10 @@ centre and orchestra, `research/` the groundwork, `site/` the project website.
 - **Replicate for anyone.** The core is generic. Everything about a person lives in their own
   principal store. See `DECISIONS.md` (D-004).
 
+The aim is greater capability without requiring more of a person's life to keep the system moving.
+Design choices should leave more room for their judgment, curiosity and imagination, and demand less
+effort coordinating the machinery. This is an aspiration to evaluate Exo against, not a measured outcome.
+
 ## Credits and inspirations
 
 - [dzhng/jevgrep](https://github.com/dzhng/jevgrep) (MIT): the `jg` code search behind the `code_find` tool and
@@ -146,7 +152,8 @@ centre and orchestra, `research/` the groundwork, `site/` the project website.
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research (MIT): Exo lifts parts of it,
   with credit and provenance (`PROVENANCE.toml`).
 - Victor Taelin and Higher Order Company, [OptChat and UniiChat](https://uniichat.com): the word-for-word log
-  and summary tree behind Exo's memory. Exo reimplements the ideas, not the code.
+  and summary tree behind Exo's memory. The core reimplements the ideas. The memory plugin also retains
+  separately credited code from `aska-digital/optchat-memory`; see the [source register](docs/SOURCES.md).
 - [opencode](https://opencode.ai), [Command Code](https://commandcode.ai), [Letta Code](https://github.com/letta-ai/letta-code),
   and Gwern Branwen's ["Guardian Angel"](https://gwern.net/guardian-angel): ideas for the surface, taste and memory.
 

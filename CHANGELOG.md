@@ -15,6 +15,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
+  prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
+  `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
+  body, or after `!` or `time` were only `opaque_exec`. So `{opaque_exec: allow, delete: deny}` allowed them where it
+  denied the plain line. Each now decides as the line with `true;` before the pipe. The text is read in a second
+  reading of the call beside main's, with budgets of its own, so a long text spends no cap a later command needs.
+  Tests: `tests/security/test_gate_pipe_first_in_group_1104.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038
+  amendment), `docs/DOCS-MAP.md`.
 - A private or agent thread no longer carries a span of large tool results in full because its leaves measured too
   small (#1013). A leaf there is now sized as the tail carries it. 30 rounds of 20k `read_file` results are
   summarized, and the next call carries 80,764 characters, where it carried 441,149. A call may wait up to
@@ -56,8 +64,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   The output is read in a second reading of the call, with budgets of its own, beside main's reading of the text as
   written, and `decide` keeps the strictest. So it cuts no later command on the line short (main's
   `scripts/gate_diff.py`: 0 lowered pairs in six runs, 8,108,232 pairs on the built-in corpus with variants).
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864) read
-  the output too.
+  The readings that open a compound read the output too: behind `time` (#853), and behind a `coproc` or
+  `function NAME` after `!`, `then`, `else`, `elif`, `if`, `while`, `until`, `do` or `{`, or right after
+  `coproc NAME {` or `function NAME {` (#864).
 
   A word bash may change, another printf conversion or option, and `echo` without `-e` are read as before.
   Interpreters and SQL clients still read the text as written only. Tests:
@@ -67,8 +76,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   plugins. Omitted selections and empty lists retain their existing meanings (#988).
 - Tests: two tests that failed on hosted CI for reasons outside the code they test. The join-budget timing test
   (`test_the_join_budget_is_shared_by_every_substitution`) timed each line once in CPU time, so one pause in a call,
-  such as a full collection of a long run's heap, failed it. It now times again when over the bound, as the file's
-  other timing tests do. The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
+  such as a full collection of a long run's heap, failed it. It no longer times its lines. It checks them on a smaller
+  budget (#1097). The jobs test `test_start_returns_at_once_and_output_streams_to_the_log` read the job events
   as soon as the job's row said done, but the done event is published after the job's notice. It now waits for the
   event.
 - Malformed YAML flow collections no longer loop, and YAML decoding, index and recursion errors now use the policy
@@ -605,6 +614,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `plugins/exo-command/tests/test_schedule_web.py`,
   `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)",
   `docs/USER-GUIDE.md` §5, D-061 amendment.
+- Web Command: an approval takes one answer (#1117). While its answer was in flight, the card stayed live. After
+  Confirm always, Cancel drew allow, deny and allow always again as if nothing was sent, and the grant still landed.
+  A second click on allow or deny sent a second answer for the same request. Now every button on the card is
+  disabled until the POST settles, and an allow always answer keeps its confirm step. A redraw on a core event
+  keeps it so, and each card waits for its own answer. A failed answer shows the error and gives the card its
+  buttons back, with focus on the button for that answer, unless focus is on another approval or outside the page
+  by then. Tests: `plugins/exo-command/tests/test_exo_command_approval_card.py`. **Docs:** `docs/ui/WEB.md`
+  "Sub-pages (D-061)", D-061 amendment.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
@@ -693,7 +710,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the provider probe raise ValueError, and a base URL that is a number or a list made it raise too. So the
   provider check failed. With no main role set, every start runs that check, so every command failed, retry or
   not. The probe now reads such a URL as nothing listening. Tests:
-  `tests/core/test_providers_setup.py`.
+  `tests/core/test_providers_setup.py`. **Docs:** `docs/PROVIDERS.md` "Roles".
 
 - `code_find` skips a local Laya server whose base URL it cannot read (found in the same review). A bad port, a
   broken host, or a base URL that is a number or a list made the tool fail, even when a Jev key was set. Tests:
