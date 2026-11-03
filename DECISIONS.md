@@ -1482,16 +1482,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   using the format again while arguments last. `echo -e` (and `-ne`, `-en`, `-Ee`) expands its escapes. A `\c` ends
   the output in `echo -e` and in a `%b` argument, not in a format.
 
-  A shell that runs its stdin also reads `out` (`_stdin_texts`): `bash` or `sh` with no script, the shell `sudo -s`
-  starts and `ssh host` with no command. Interpreters and SQL clients still read only the text as written, a known
-  limit, and a gh body with an escape stays unseen (#208).
+  A shell that runs its stdin also reads `out` (`_stdin_texts`, for the texts `_once` reads with `classify_shell`).
+  That is `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` (`_SHELLS`) with no `-c` and no script
+  (`/bin/sh`, `bash -s`).
+
+  The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command reads it too (`_sudo_shells`). So does
+  `ssh host` with no command, and an ssh whose command is such an ssh (`ssh host ssh h2`).
+
+  Each reads `out` behind a prefix or wrapper (`env bash`, `sudo bash`, `timeout 5 bash`, `nice bash`, `nohup bash`,
+  `setsid bash`, `command bash`, `exec bash`) and inside a compound the pipe feeds (`{ bash; }`, `( bash )`). A shell
+  ssh runs as its command (`ssh host bash`) does not. Interpreters and SQL clients still read only the text as
+  written, a known limit, and a gh body with an escape stays unseen (#208).
 
   The shell reads `out` in a second reading of the call (`_printed_reading`), with budgets and memos of its own, as
   #853's opened reading and #584's joined reading are read. It reads `out` there in place of the text as written.
   The first reading reads the text as written only and marks the call (`_printed_met`). It is main's reading.
 
-  The readings that open a compound behind `time` (#853) or behind a `coproc` after `!`, `then` or `{` (#864,
-  `_late_reading`) each have a printed reading of their own too, so a compound only they open is read in the output.
+  The readings that open a compound each have a printed reading of their own too, so a compound only they open is
+  read in the output. #853's (`_opened_reading`) opens one behind `time`, `time -p`, `time --` or `time -p --`, with
+  or without `!`.
+
+  #864's (`_late_reading`) opens one behind a `coproc [NAME]` or `function NAME` after `!`, `then`, `else`, `elif`,
+  `if`, `while`, `until`, `do` or `{`, and one right after `coproc NAME {` or `function NAME {`.
+
+  Corrected 2026-11-03 (reviews 5726570654 and 5732421140 of #1089): this amendment named only `bash` or `sh`, the
+  `sudo -s` shell and `ssh host` as readers, and only `!`, `then` and `{` before a `coproc`, where the code reads
+  more. The two lists above now name what it reads, and `tests/docs/test_gate_printf_readers_doc.py` pins them.
 
   `decide` keeps the strictest of the two readings, so no decision is lower than main's. The call leads with the
   reading `_combine` would pick of the two (`_beside` with `lead`): credentials, then a store write, then the more
