@@ -51,6 +51,17 @@ RUNS_HERE = [
     # an ssh line run by another program or on a host
     "rsync -e \"ssh -o 'ProxyCommand=touch /tmp/x'\" /tmp/a host:b",
     "ssh a \"ssh -o 'ProxyCommand=touch /tmp/x' b ls\"",
+    # -o in a bundle of options, and a later `none` (ssh keeps the first value)
+    "ssh -4vo'ProxyCommand=touch /tmp/x' host ls",
+    "ssh -o 'ProxyCommand=touch /tmp/x' -o ProxyCommand=none host ls",
+    # behind a wrapper or an assignment, and in a subshell, a substitution, a pipe or a body
+    "env ssh -o 'ProxyCommand=touch /tmp/x' host ls",
+    "timeout 5 ssh -o 'LocalCommand=touch /tmp/x' host ls",
+    "X=1 ssh -o 'KnownHostsCommand=touch /tmp/x' host ls",
+    "(ssh -o 'ProxyCommand=touch /tmp/x' host ls)",
+    "echo $(ssh -o 'ProxyCommand=touch /tmp/x' host ls)",
+    "ssh -o 'ProxyCommand=touch /tmp/x' host ls | cat",
+    "if true; then ssh -o 'ProxyCommand=touch /tmp/x' host ls; fi",
 ]
 
 # ssh fills in `%d` as the home folder before it runs LocalCommand or KnownHostsCommand. Main read `%d` as a folder
