@@ -348,6 +348,40 @@ def test_a_stdio_feed_whose_replay_fails_on_a_later_page_gets_a_typed_reply():
     assert not hub._subs
 
 
+def test_a_stdio_flush_at_eof_the_log_cannot_read_gets_a_typed_reply():
+    """At EOF the feed stops and the events it has not written yet are read from the log. Main raised the error of
+    a row it could not read out of serve_lines there, with no reply."""
+    from exo.server.app import Dispatcher, serve_lines
+    from exo.server.echo import EchoEngine
+
+    store = SessionStore()
+    hub = Hub(SqliteLog(store))
+    lines = [s.Command.of(s.EventsSubscribe(since=0, session="s1"), id="c1").to_json()]
+    out: list[dict] = []
+
+    async def read():
+        if lines:
+            return lines.pop(0)
+        hub.publish(notice(1), "s1")
+        for _ in range(300):  # until the feed writes seq 1, or 3 s
+            if any(o.get("seq") == 1 for o in out):
+                break
+            await asyncio.sleep(0.01)
+        hub.publish(notice(2), "s1")
+        store._db.execute("UPDATE events SET body='{}' WHERE seq=2")
+        return None  # EOF before the feed runs again, so the flush reads seq 2 from the log
+
+    try:
+        asyncio.run(asyncio.wait_for(serve_lines(Dispatcher(EchoEngine(), hub=hub), read,
+                                                 lambda text: out.append(json.loads(text))), 10))
+    finally:
+        store.close()
+    assert [o["seq"] for o in out if "seq" in o] == [1]
+    assert [(o["id"], o["ok"]) for o in out if "ok" in o] == [("c1", True), ("c1", False)]
+    assert out[-1]["error"]["code"] == "internal" and out[-1]["error"]["message"].startswith("ValueError: ")
+    assert not hub._subs
+
+
 def test_a_stdio_subscribe_whose_reply_cannot_be_written_leaves_no_queue():
     from exo.server.app import Dispatcher, serve_lines
     from exo.server.echo import EchoEngine
