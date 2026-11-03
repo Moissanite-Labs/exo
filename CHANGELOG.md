@@ -15,6 +15,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Schedule ignores the second click of a double click on pause, resume and run now, and disables each job's controls
+  while its edit is in flight (#1128).
 - Tests: headless Chrome startup on hosted runners (#907, D-046 amendment).
   - The first start in a test run waits up to 90 s for DevTools instead of 20 s. The two hosted startup timeouts on
     record were each a job's first start, in `test_csp_web.py`, where a fresh runner reads the browser from a cold
