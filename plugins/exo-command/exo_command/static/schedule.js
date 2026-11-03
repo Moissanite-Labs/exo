@@ -4,10 +4,9 @@ import { h, api, short, errorBox, pageHead, readout, pill, emptyState, stamp, un
 
 export function mount(root) {
   // removing: the job whose remove waits for a Confirm remove click. Remove has no undo (exo-desktop #55).
-  // sending: the jobs whose remove is in flight. Each keeps its step, with both buttons disabled: Cancel cannot stop
-  // it. One id per job, so a second job's remove does not give the first card its buttons back.
+  // sending: the edit in flight for each job. Each card stays disabled until its own request completes.
   let jobs = [], err = "", msg = "", loaded = false, removing = null;
-  const sending = new Set();
+  const sending = new Map();
   const list = h("div", { class: "xc-jobs" });
   const field = (label, el, hint) => h("label", { class: "xc-fl" }, h("span", { class: "xc-fl-k" }, label), el,
     hint ? h("span", { class: "xc-fl-hint" }, hint) : null);
@@ -55,13 +54,13 @@ export function mount(root) {
         // The confirm is drawn in the page: a desktop web view with no confirm handler answers window.confirm with
         // Cancel. e.detail > 1 is the second click of a double click on "remove", not a confirmation.
         h("div", { class: "xc-btnrow", onkeydown: (e) => { if (e.key === "Escape" && removing === jid(j)) ask(j, null); } },
-          removing === jid(j) || held ? [
+          removing === jid(j) || sending.get(jid(j)) === "remove" ? [
           h("span", { role: "status", "aria-live": "polite" }, "Remove " + name + "? It cannot be undone."),
           h("button", { class: "xc-btn xc-danger", disabled: held, onclick: (e) => { if (e.detail > 1 || removing !== jid(j)) return; edit("remove", j); } }, "Confirm remove"),
           mark(j, h("button", { class: "xc-btn", disabled: held, onclick: () => ask(j, null) }, "Cancel"))] : [
-          h("button", { class: "xc-btn", onclick: () => edit(paused ? "resume" : "pause", j) }, paused ? "resume" : "pause"),
-          h("button", { class: "xc-btn", onclick: () => edit("run_now", j) }, "run now"),
-          mark(j, h("button", { class: "xc-btn xc-danger", onclick: () => ask(j, jid(j)) }, "remove"))]));
+          h("button", { class: "xc-btn", disabled: held, onclick: (e) => { if (e.detail <= 1) edit(paused ? "resume" : "pause", j); } }, paused ? "resume" : "pause"),
+          h("button", { class: "xc-btn", disabled: held, onclick: (e) => { if (e.detail <= 1) edit("run_now", j); } }, "run now"),
+          mark(j, h("button", { class: "xc-btn xc-danger", disabled: held, onclick: () => { if (!held) ask(j, jid(j)); } }, "remove"))]));
     }) : [emptyState({ k: "No jobs yet", title: "Nothing runs on its own yet.",
       body: "A job is a prompt on a clock: a morning brief at 07:00, the tests every six hours, a weekly digest.",
       hint: "Add the first one with the form: a cron line such as 0 9 * * 1-5, or every 30m." })]));
@@ -93,7 +92,8 @@ export function mount(root) {
   // the pointer, and the second click of a double click on Confirm remove would land on one of them.
   async function edit(action, j) {
     const id = jid(j);
-    if (action === "remove") sending.add(id);
+    if (sending.has(id)) return;
+    sending.set(id, action);
     removing = null; draw();
     let took = false;
     try { took = await post({ action, job_id: id }, DONE[action] || action + " done."); }
@@ -102,10 +102,12 @@ export function mount(root) {
       // the card, so focus goes to its remove. Focus on a control outside the list, such as a form field, stays
       // there. Each draw replaces the list's buttons, so focus on another card's button is gone by now. The body,
       // and a region around the list, are not controls: a click on the page puts focus on its main region.
+      sending.delete(id);
       if (action === "remove") {
-        sending.delete(id);
         const at = document.activeElement, lost = !at || at.contains(list);
         draw(!took && lost ? jobs.find((x) => jid(x) === id) : null);
+      } else {
+        draw();
       }
     }
   }
