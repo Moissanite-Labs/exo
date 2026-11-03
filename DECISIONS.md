@@ -10,6 +10,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why:** A asked for work that survives compaction and session switches.
 - **Rejected:** Keeping plans in agent memory or the Drive vault (lost on compaction; slow sync).
 
+- **Documentation amendment 2026-11-03:** Keep the existing docs map as the one index. Add an engineering
+  walkthrough and readable source/adaptation register beside implementation, without a second wiki.
+  `PROVENANCE.toml` remains the authority for Hermes module revisions. Each new source record names its
+  author, relationship, modifications, evidence and limits. Other Labs projects retain their own records.
+  This adds no runtime capability or deployment claim. User-guide impact: none. Developer-guide impact:
+  source and evidence records under the docs rule.
+
 ## D-002 (2026-10-11) Research and inventory run as parallel subagents writing to files
 - **Decision:** Five subagents: guardian-angel crawl, GitHub inventory, local ~/.hermes inventory,
   local documents and exports inventory, base evaluation. Each writes one file in `research/` or

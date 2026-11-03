@@ -32,6 +32,16 @@ to this change), or `MISSING`. A cell stays `MISSING` only when the feature is n
 nothing real to say about it. Do not fill a cell with a vague link to make the gap vanish. The whitepaper is
 batched per wave: each batch is a new version (`vX.Y`), with its own header, changelog line and tag (section 8).
 
+### Source and evidence records
+
+Use the [engineering walkthrough](ENGINEERING-WALKTHROUGH.md) to follow one turn through the code.
+When incorporating a source or changing a credited mechanism, update the [source register](SOURCES.md)
+with the original author, inspected revision, relationship, adaptation, implementation, tests and limits.
+Keep Hermes module revisions in `PROVENANCE.toml`. Do not duplicate them in prose. The register's template
+also applies to other Labs projects in their own repositories. Link their records rather than copying contracts.
+A PR, main merge, downstream integration and live installation are separate states. Synthetic tests establish
+only the behavior they exercise. Benchmark or novelty claims need evidence beyond a component description.
+
 ## 1. Repo layout
 
 The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
