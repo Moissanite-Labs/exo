@@ -783,7 +783,7 @@ def test_a_spent_join_budget_asks(monkeypatch):
 
 _NEAR_CAP = ("cd ~/.exo/" + "/".join(f"d{j}" for j in range(62)) + "; cd " + "/".join([".."] * 64) + "; cat "
              + " ".join(f"n{i}" for i in range(200)))  # 63 store folders (the cap is 64) and 200 names 64 levels up
-SUB_SHAPES = {      # each line is past the join budget at its first reading: _NEAR_CAP alone is 7 to 9 times it
+SUB_SHAPES = {  # each line is past the join budget at its first reading: _NEAR_CAP alone is about 7 times it or more
     "nested-substitutions": lambda k: "".join(f"$(echo $(echo $(echo $({_NEAR_CAP})))) " for _ in range(k)),
     "substitutions": lambda k: "".join(f"$({_NEAR_CAP}) " for _ in range(k)),
     # few joins, each a deep glob: the budget counts path parts, not joins (5.8 s at 77 KB when it counted joins)
