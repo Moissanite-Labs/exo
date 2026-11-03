@@ -332,7 +332,7 @@ def test_a_word_in_a_loop_that_enters_the_store_beside_a_post_is_held_as_on_main
     assert g.permissions.held == 1 and g.permissions.floor_asks == 0 and g.permissions.auto_approved == 0
 
 
-# #1126: main dde4e0d8 read `busybox sh` as busybox running a script named sh, and `ash` and `hush` as programs it does
+# #1126: main 0f413c7f read `busybox sh` as busybox running a script named sh, and `ash` and `hush` as programs it does
 # not know. So a store write piped or heredoc'd into BusyBox's shell was only an opaque_exec, and bypass and observe
 # mode ran it. Now the shell reads its stdin as `sh` does, and the store write asks at the floor. `sh` is the twin.
 _BB_CP = "cp /tmp/x ~/.exo/config.json"

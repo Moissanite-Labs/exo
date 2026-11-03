@@ -40,7 +40,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
     never starts costs the first test two waits and each later test one, as with a single try.
 - Gate (#1126, D-038 amendment): BusyBox's shell and applets are read as the program each one names. On main
-  dde4e0d8 `busybox sh`, `ash` and `hush` read no `-c` text, stdin or heredoc, and `busybox rm -rf /srv/data` was
+  0f413c7f `busybox sh`, `ash` and `hush` read no `-c` text, stdin or heredoc, and `busybox rm -rf /srv/data` was
   only `opaque_exec`. So `deny: [delete]` asked for `printf 'rm -rf /srv/data' | busybox sh` where it denies the
   line with `sh`. A store write piped into `busybox sh` ran in bypass and observe mode.
 
