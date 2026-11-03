@@ -6058,6 +6058,18 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   call. The card's pause, run now and remove then come back under the pointer. In headless Chromium, on a card
   shorter than its grid row, the second click of a double click on Confirm remove then landed on pause and sent a
   pause for the job being removed.
+- **Amendment 2026-11-03 (#1117):** a Command approval whose answer is in flight draws every button on its card
+  disabled, as a Schedule remove in flight does. An allow always answer keeps its confirm step. Before, Confirm
+  always left the step with both buttons live, and Cancel drew allow, deny and allow always again while the grant
+  still landed. Allow and deny left the card live, so a second click sent a second answer for the same request.
+  The page maps each request in flight to the answer it sent, so each card waits for its own POST, and a redraw on
+  a core event keeps it disabled. The entry leaves the map in a finally after the POST. A failed answer gives the
+  card its buttons back with the error, and puts focus on the button for that answer, allow always for a grant.
+  Focus on another approval's button stays, since every redraw gives it back by key. Focus on a control outside the
+  page, such as the nav, stays too. Rejected: a set of ids, as Schedule keeps. Schedule holds only remove, while an
+  approval card must know whether to draw its step or its choices. Limit: the snapshot read after a successful POST
+  can still list the request until the core's `approval.resolved` event arrives, and the card is live again for
+  that moment, as before.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
