@@ -204,15 +204,17 @@ def test_the_summaries_a_fork_keeps_are_found_in_one_pass():
     assert steps(2000) <= 6 * small
 
 
-@pytest.mark.parametrize("agent", [None, "a"])
-def test_a_parent_that_changes_before_the_write_is_copied_as_it_is_then(monkeypatch, agent):
+@pytest.mark.parametrize(("agent", "replied"), [(None, True), ("a", True), (None, False)])
+def test_a_parent_that_changes_before_the_write_is_copied_as_it_is_then(monkeypatch, agent, replied):
     """The copies are built before the write transaction. A turn undone and asked again in between (a plain
-    session reuses the undone seqs) is found there, and the fork is built again under the lock."""
+    session reuses the undone seqs) is found there, and the fork is built again under the lock. A plain last
+    turn of one user message keeps the row count, so only the row ids show the change."""
     store = SessionStore()
     sid = store.create_session(title="p", agent=agent).id
     for i in range(6):
         store.append_message(sid, Message.user(f"ask {i}"), turn_id=f"t{i}")
-        store.append_message(sid, Message.assistant(f"reply {i}"), turn_id=f"t{i}")
+        if replied or i < 5:
+            store.append_message(sid, Message.assistant(f"reply {i}"), turn_id=f"t{i}")
     store.save_summary(SummaryNode(id=new_id("n"), session=sid, level=0, index=0, start=1, end=4, text="s",
                                    status="done"))
     tx = store._tx
@@ -228,6 +230,8 @@ def test_a_parent_that_changes_before_the_write_is_copied_as_it_is_then(monkeypa
     old = old_fork(store, sid)
     assert shape(store, new.id) == shape(store, old.id)
     assert [m.text() for m in store.messages(new.id)][-2:] == ["reply 4", "asked again"]
+    live = {m.id for m in store.messages(sid)}
+    assert all(m.meta["forked_from"] in live for m in store.messages(new.id))  # no copy of an undone row
     store.close()
 
 
