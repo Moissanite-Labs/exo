@@ -794,14 +794,17 @@ _READS = "cd ~/.exo/run/jobs && cat " + " ".join(f"n{i}" for i in range(20))    
 _GLOB = "/".join(f"x{j}*" for j in range(60))                                     # a name of 60 path parts
 
 
-def _reads(i: int) -> str:
-    """_READS with i + 1 spaces before its `&&`. Its text is its own, so the memo (_shell_seen) reads each such `$( )`.
-    Its folder and names are the same, so a line around it, which reads its body too, reads no more than _READS."""
-    return _READS.replace(" &&", " " * (i + 1) + "&&")
+def _reads(i: int, names: int = 20) -> str:
+    """The first ``names`` names of _READS, with i + 1 spaces before its `&&`. Its text is its own, so the memo
+    (_shell_seen) reads each such `$( )`. Its folder and names are the same, so a line around it, which reads its body
+    too, reads no more than one such body."""
+    return "cd ~/.exo/run/jobs" + " " * (i + 1) + "&& cat " + " ".join(f"n{j}" for j in range(names))
 
 
 SMALL_SHAPES = {    # with the budget cut to 1,000 path parts: (the line, its largest reading alone)
-    "nested-substitutions": ("".join(f"$($($($({_reads(i)})))) " for i in range(2)), _READS),
+    # 10 names: the line and the first level of its nests then spend less than the budget together (with a HOME up
+    # to about 15 folders deep), so the line fails closed only when the levels below them draw on it too
+    "nested-substitutions": ("".join(f"$($($($({_reads(i, 10)})))) " for i in range(2)), _reads(0, 10)),
     "substitutions": ("".join(f"$({_reads(i)}) " for i in range(8)), _READS),
     "deep-glob-names": ("cd ~/.exo/run/jobs; ls " + " ".join(f"{_GLOB}/f{i}" for i in range(40)),
                         f"cd ~/.exo/run/jobs; ls {_GLOB}/f0"),       # 40 joins, but about 2,800 path parts
