@@ -29,7 +29,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   apart (34,612 tightened, ask to deny) and 0 of 117,420 pairs on 1,140 such lines with `${..}` words (3,776
   tightened). The reading is also made in #853's opened reading, so it counts when each loop is behind its own
   `time` or `!` (`time for ..; done; time for ..; done`), in #864's reading (each loop in its own `coproc`), in
-  #1047's printed reading (the pair in a text printf or `echo -e` pipes into a shell), and in each of #158's two
+  #1047's printed reading (the pair in a text that printf or `echo -e` pipes into a shell), and in each of #158's two
   readings of a line with `${..}` words, so a write in `echo ${v:-$(cp /tmp/evil 3)}` in the second loop's body
   names `/proc/self/fd` too (main d3cbd874 named `/dev/fd` only). A line of 100 such loops costs about 1.2 to 2.2
   times main's CPU time. Known limits, as on main (#888): a command run once after a second descriptor `cd`,

@@ -4390,8 +4390,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   reaches `_one_reading`, so the added reading is made inside it too. That matters when each loop is in its own
   `coproc`, which only that reading opens: `{ coproc for ..; done; }; { coproc for ..; done; }`, the pair after
   `then` and `coproc W { ..; }; coproc V { ..; }` name both folders, where main 6ec085b6 named the first only.
-  #1047's printed reading (`_printed_reading`) reaches `_one_reading` too, so the pair in a text printf or `echo -e`
-  pipes into a shell, its `cp` spelt `c\x70`, names both folders, where main 2a9ba976 named the first only. On
+  #1047's printed reading (`_printed_reading`) reaches `_one_reading` too, so the pair in a text that printf or
+  `echo -e` pipes into a shell, its `cp` spelt `c\x70`, names both folders, where main 2a9ba976 named the first only. On
   main d3cbd874 (#158) a call whose `${..}` words or `$((` bash may read otherwise than the reading before #143 is
   read both ways (`_classify_reading` around `_classify_read`, the second reading `flat`); each of the two reaches
   `_one_reading`, so each makes its own #867 reading with its own budget, and so does each one's opened reading (the
