@@ -190,8 +190,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   command got that old error once more, and only the command after that started again. Now `start()` first drops
   a finished start task that raised or was cancelled, then starts again. A start that is still running stays, so a
   cancelled command still never causes a second start, and every command that waits on a failed start still gets
-  its error. Core: 15,940 counted lines, 5 fewer than main 080e87ba (the check replaces the 8-line try block).
-  Tests: `tests/integration/test_engine_start_retry.py`.
+  its error. Core: 15,942 counted lines, 3 fewer than main 080e87ba. The check replaces the 8-line try block (5
+  fewer), and the `code_find` fix in the same PR adds 2. Tests: `tests/integration/test_engine_start_retry.py`.
 - **Amendment 2026-10-31 (#263, the HTTP client half of W2-7):** an HTTP transport keeps one `httpx.AsyncClient`
   for each event loop that calls it, instead of making one for each call and closing it after. Calls on a loop
   reuse its connections, and the client is built once per loop. A client is bound to the loop that made it, so
