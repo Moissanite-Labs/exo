@@ -1501,6 +1501,76 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The last two corpora under the review's 12 lead policies give 17,640. They allow by category, command or target,
   and ask, deny or log `opaque_exec`. The runs tighten 1,356, 1,970, 1,158, 2,320, 310 and 0 pairs, nearly all from
   `opaque_exec` to a store write or a delete. Tests: `tests/security/test_gate_printf_escapes_1047.py`.
+- *Amendment 2026-10-30 (issue #566):* gh reads `GH_REPO` as `-R` when the line gives none, and `GH_CONFIG_DIR`
+  picks its config. The gate read neither. `GH_REPO=pub/repo gh pr comment 5` posts on `pub/repo#5`, but the gate
+  read the target as `#5`, a repo the line does not name: the line asked as public with a third party, yet a
+  `target:` deny or rule on `pub/*` never saw it. Now each value the line sets for `GH_REPO`, as a prefix assignment
+  (also through `env`) or earlier on the line (`ctx["literals"]`, #579), is another target (#399), read as `-R` is,
+  on each reading with no `-R` (`_gh_env_repos`, `_gh_env_repo`). An export or a bare assignment in a compound, or
+  before a nested line that inherits it, counts too: `{ export GH_REPO=pub/repo; gh ..; }`,
+  `if ..; then export ..; fi; gh ..`, `export GH_REPO=pub/repo; x=$(gh ..)` and `bash -c`. The call keeps the last
+  four values the line set so far (`_GH_REPO_SET`), the latest last, so a long line of values and gh commands stays
+  linear. A value past the four adds no reading, as a value the gate cannot read. Of the prefix assignments before
+  one command, the last four values are kept too, before the line's own values are added (review 5722148651). Each
+  value is read on every operand, so 6,000 prefix values before 400 URL operands took 20 s of CPU in classify.
+  bash, `env` and `sudo` pass gh the last one, but an option can take a later word as its value
+  (`GH_REPO=a/x sudo -E -p GH_REPO=b/y gh ..`, where `-p` takes the prompt), so the gate keeps four, not one. Four
+  such option values after the real one still push it out, and that line asks as on main (#1041). gh api's
+  `{owner}` and `{repo}` are filled from it, and `:owner` and `:repo` up to a word boundary, in one pass as gh's
+  `placeholderRE` fills them (`_GH_PLACEHOLDER`). The line's own reading stays, so no line decides lower:
+  `GH_REPO=myorg/app gh pr comment 5` still asks. A `$".."` word also reads the line as `opaque_exec` (#136), and
+  the stricter of the two readings stood, the first one on a tie. The copy on a `GH_REPO` value is public, so on each
+  other target it could raise the post's reading to the ask of a reserved `opaque_exec` reading, and that reading's
+  reserved hits then dropped out (`export GH_REPO=pub/repo; gh pr comment <URLs> -b $"ok"` under
+  `reserved: [opaque_exec]`, found by gate_diff's aimed corpus in #1042's fourth round). Now on a tie the reserved
+  hits of both readings stand, so each still keeps a standing grant from covering the call (D-075). That lists more
+  hits on some lines than main does, never fewer. `GH_CONFIG_DIR` joins `XDG_CONFIG_HOME` among the variables that
+  change which config files are used (`_EXEC_ENV_OPAQUE`): it picks gh's hosts and tokens, and its `pager` and
+  `editor` commands. So it asks, as `opaque_exec` named in the summary. That part leads the line, so a policy that
+  allows `opaque_exec` let a line through that main logged as a costly read or asked as a nested line
+  (`ssh host 'GH_CONFIG_DIR=./c sudo -E git status'`, review 5726571369). The call is now also read with
+  `GH_CONFIG_DIR` an ordinary variable, as before, as the last of its floors (`_gh_config_plain`, `_read_core`), as
+  the reading before #491 is, and decide keeps the strictest, so no line decides lower. Left open, each still
+  asking as on a repo the line does not name: `GH_HOST`, which picks gh's host. A prefix assignment on a command
+  that starts a nested shell (`GH_REPO=pub/repo bash -c '..'`) or calls a function (`GH_REPO=pub/repo f`). A value
+  a loop body sets after its gh command, which gh reads on the next pass
+  (`for i in 1 2; do gh ..; export GH_REPO=pub/repo; done`). A function whose gh runs where it is called, after the
+  value is set (`f() { gh ..; }; export GH_REPO=pub/repo; f`). An export or bare assignment that is the first command
+  of a `coproc` group or of a `function NAME` body (`coproc { export GH_REPO=pub/repo; gh ..; }`): `_gh_repo_sets` passes
+  over the words that open a compound but not `coproc`, `function` and the name. A shell fed the same text before and
+  after the value is set (`bash <<<'gh ..'; export GH_REPO=pub/repo; bash <<<'gh ..'`), as each such text is read
+  once per line (`_once`). Tests: `tests/security/test_gate_gh_repo_env_566.py`, the two
+  GH_REPO rows of `tests/security/test_gate_expansion_scan_linear.py`, and the three #566 rows of
+  `plugins/exo-gate/tests/test_gate_posting_acceptance_pending.py`, no longer expected failures.
+- *Amendment 2026-10-30 (issue #550):* a gh line with many URL operands is decided in linear work. Each URL operand on
+  another instance is another target (#399), with a copy of the action among the line's parts. `decide` read the line
+  on each target with every copy, so a line of 3,000 such URLs took minutes of CPU inside the hook. Past eight other
+  targets (`_ALTS_IN_FULL`), the line on each of them now keeps, among the copies of each action, only the first copy
+  of each reading the policy tells apart (`_one_copy_each`). The line on its own target keeps every copy. A copy's
+  reading is how the policy reads its target (`_alt_key`: its exposure and third party after the scopes, and which
+  target patterns of the rules and of the deny and reserved entries match it), with every other field `decide` reads
+  of it. Nothing else `decide` reads turns on a copy's target, so copies of one reading decide alike, and each step
+  that meets one meets the first: a deny or reserved entry, a cell or rule that denies it alone (#191), the own text
+  test (#394), the `$".."` reading (#136) and the rule that picks it. The posting rules list a copy's finding once,
+  under the first copy that finds it, and that is the first of its reading. So the line on each other target decides
+  as with every copy: the same outcome, reason, rule, exposure, third party, findings and hidden count. Only its
+  reserved hits differ, by those of the copies it leaves out, and the line on its own target lists every one of them.
+  So the merged decision is the one every part gives, reserved hits and their order included. The work grows with the
+  URL operands times the readings the policy tells apart, which its patterns bound. Up to eight other targets the
+  decision is as before, word for word, so no line gh accepts changes. A close's or reopen's comment and a merge's
+  subject are read once per line too, as #920 reads the body and the title. Rejected: a cap on URL operands that fails
+  closed past it. A deny on a target past the cap would then only ask, and #920's test keeps every target. Rejected
+  too: no copies on any other target. On a line whose targets differ in exposure it listed a finding once where main
+  listed it under a copy's name too. Rejected as well: one target of each exposure. With a deny rule on
+  `git.example/*` that the `$".."` reading meets, it dropped a copy's finding there, at an equal deny. And rejected:
+  the first other target of each reading of the line's own target keeps every copy and the rest keep none (the head
+  reviewed in 5722148651). Under a deny entry on one host, a reserved entry on another and `opaque_exec: deny`, the
+  copies' deny made the github_post reading tie the `$".."` reading on each target, and decide kept the github_post
+  one. Without them the `$".."` reading stood alone, so the lean decision listed `(opaque_exec, target)` reserved hits
+  that the full one does not. Stricter, never lower, but not the same. Tests:
+  `tests/security/test_gate_gh_field_work_550.py`,
+  `tests/security/test_gate_expansion_scan_linear.py`, and the decide growth row of
+  `tests/test_gate_diff_acceptance_pending.py`, no longer an expected failure.
 - *Amendment 2026-10-30 (#981):* The YAML subset reader stops on a mismatched flow closer or a non-progressing
   flow item, and turns JSON decoding, index and recursion errors into `PolicyError`. For a policy file containing
   `note: [}`, main could hang indefinitely; a bad quoted escape (`note: "\q"`), a flow map cut off at its colon
@@ -5223,31 +5293,33 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   lead is that one or a later one, no principal message holds the pin, and no summary row in the transcript carries it
   (the fold ties of #389). An undo cuts the tail, so it passes, also an `/undo N` that takes turns before the
   ruling's. A transcript cut short at its start fails at its first row when that row differs from the session's first
-  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens
-  with the same words as the lead
-  but goes on past it fails at its end. A pin a compaction folded stays while the transcript holds the summary row:
-  that row comes after the pin's lead or replaces part of it. A folded ruling the principal said again stays as well:
-  its lead moves to the later message, and an undo of that message alone leaves the summary row before the lead, which
-  carries it. The drop is an undo's: logged as counts, its digests kept out of every later carry (#592). The pins file
-  still holds no text but the pins. Rejected: dropping a pin because a fresh transcript lacks it, since a transcript
-  cut short lacks it too (the controls from #817). Rejected too: dropping a pin when the transcript only starts with
-  its lead. A transcript cut short at its start may open with the same words, and an undo that also takes the turn
-  before the pin's leaves only part of the lead. The check also settles an undo before the engine has seen a turn of
-  that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new engine. Not covered now, six
-  cases. An unreported undo of every turn leaves nothing before the turn's own message, so it keeps every pin, and a
-  pin said in the session's first message has no lead. A host may leave the turn's own message out of its transcript.
-  Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the last turn before an
-  undo has none and stays. If the next turn's message repeats the last user row an undo left, and no user or summary
-  row comes before that row, every pin stays too: the engine takes that row for the turn's own message. After
-  `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut short
-  at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops the
-  pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
-  ruling. An unreported undo waits for a new
-  engine: while the same engine runs the session, only a notice drops pins. If that engine runs a turn after the
-  undo, no later engine drops them either. The transcript then goes on past the noted lead, the same as a window
-  that only opens like it. A compaction after the last request that noted the leads keeps the pins: its summary row
-  is not in the noted transcript. A summary row and a handoff file written before the drop keep the ruling as
-  written until the next compaction.
+  row. One whose rows read word for word like the session's first rows is not covered (see below). One that opens with
+  the same words as the lead but goes on past it fails at its end. For a host that leaves the turn's message out, the
+  check stops before a last user row that the message repeats (see below). A pin a compaction folded stays while the
+  transcript holds the summary row: that row comes after the pin's lead or replaces part of it. A folded ruling the
+  principal said again stays as well: its lead moves to the later message, and an undo of that message alone leaves the
+  summary row before the lead, which carries it. The drop is an undo's: logged as counts, its digests kept out of every
+  later carry (#592). The pins file still holds no text but the pins. Rejected: dropping a pin because a fresh
+  transcript lacks it, since a transcript cut short lacks it too (the controls from #817). Rejected too: dropping a pin
+  when the transcript only starts with its lead. A transcript cut short at its start may open with the same words, and
+  an undo that also takes the turn before the pin's leaves only part of the lead. The check also settles an undo before
+  the engine has seen a turn of that session, and the CLI's `/undo` in the no-agent gap, at the next turn of a new
+  engine. Not covered now, six cases. An unreported undo of every turn leaves nothing before the turn's own message, so
+  it keeps every pin, and a pin said in the session's first message has no lead. A host may leave the turn's own message
+  out of its transcript. Only a transcript that holds a pin's message notes the pin's lead, so a pin first said in the
+  last turn before an undo has none and stays. If the next turn's message repeats the last user row an undo left, and no
+  user or summary row comes before that row, every pin stays too: the engine takes that row for the turn's own message.
+  After `continue`, the ruling and `x`, an `/undo 2` and a next turn of `continue` keep the ruling. A transcript cut
+  short at its start whose rows read word for word like the session's first rows looks the same as an undo, so it drops
+  the pins after them: after `continue`, the ruling and `continue`, a window of the last `continue` alone drops the
+  ruling. A host that leaves the turn's message out gets the same drop when the next turn's message repeats the window's
+  last user row and the rows before that row read that way. The engine takes that row for the turn's own message and
+  checks only the rows before it: after `continue`, the ruling, `continue` and `go on`, a window of the last two turns
+  and a next turn of `go on` drop the ruling. An unreported undo waits for a new engine: while the same engine runs the
+  session, only a notice drops pins. If that engine runs a turn after the undo, no later engine drops them either. The
+  transcript then goes on past the noted lead, the same as a window that only opens like it. A compaction after the last
+  request that noted the leads keeps the pins: its summary row is not in the noted transcript. A summary row and a
+  handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its

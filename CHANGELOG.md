@@ -10,7 +10,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
 - Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
 
-- Gate: invariant gh field parsing (#550, partial scope; remaining forms stay open).
+- Gate: invariant gh field parsing (#550, partial scope). The #550 entry under Fixed closes the rest.
 
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
@@ -43,6 +43,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   first folder, and a loop whose own commands `cd` into two descriptor folders is named by its first one.
   Tests: `tests/security/test_gate_loop_fd_per_loop_867.py`.
   **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-29),
+  `docs/DOCS-MAP.md`.
 - The public history audit refuses a repository whose remote has only `remote.<name>.partialCloneFilter` set
   (#49). Git treats that remote as a promisor and fetches missing objects from it. The partial check missed it and
   started the walk, where a Git that ignores `GIT_NO_LAZY_FETCH` could fetch. The audit now refuses such a
@@ -121,6 +122,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A failed initial conversation-list read preserves the native saved thread and reading position. A bounded list never proves deletion: only an exact session 404 clears that pointer; a later reconnect can complete restoration.
 - Installed desktop hosts can restore validated workspace display choices across reloads and loopback port changes through the shared web preference bridge. Conversation drafts and credentials remain outside native preference messages.
 - A desktop host with no saved conversation opens the latest one, as a browser does. That covers a first launch and a launch after a 404 cleared the saved thread. The page sends the host its reading position at most once every 250 ms while the reader scrolls, and at once when the page is hidden or closed.
+- Gate: a gh command reads `GH_REPO` as its repo, and `GH_CONFIG_DIR` asks (#566, D-038 amendment).
+  `GH_REPO=pub/repo gh pr comment 5`, or an `export GH_REPO=pub/repo` earlier on the line, posts on `pub/repo#5`,
+  but the gate read a repo the line does not name, so a `target:` deny or rule on `pub/*` never saw it. Each value
+  the line sets for `GH_REPO` is now another target, read as `-R` is, and the line's own reading stays. An
+  export in a `{ }` group or an `if`, or before a `$( )` or `bash -c`, counts too. gh api's `{owner}` and
+  `{repo}`, and its `:owner` and `:repo`, are filled from it. The gate keeps the last four values, so a line of
+  thousands of prefix values and URL operands stays linear. When a `$".."` word's `opaque_exec` reading ties the
+  line's own, the reserved hits of both now stand, so a `GH_REPO` copy cannot drop them.
+  `GH_CONFIG_DIR` picks gh's tokens and its pager and editor commands, so it now asks as `XDG_CONFIG_HOME` does.
+  The line read with it an ordinary variable stays a floor, so a policy that allows `opaque_exec` does not let
+  through a line that logged or asked before.
+- Gate: a gh line with many URL operands on another instance is decided in linear work (#550, D-038 amendment).
+  Each such URL is another target, and `decide` read the line on each one with a copy of the action on every other
+  one: a 100 KB line took 290 s of CPU inside the hook. Past eight other targets, the line on each of them now
+  keeps one copy of each reading the policy tells apart, and the line on its own target keeps them all. The
+  decision is the same, reserved hits included. A close's or reopen's comment and a merge's subject are read once
+  per line, not once per target.
 - The gate reads ssh's control socket (`-S`, `-o ControlPath`), its known-hosts file (`-o UserKnownHostsFile`)
   and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`, `-o RemoteForward`, `-o DynamicForward`) as files
   ssh makes here, whatever its remote command runs (#484, D-038 amendment). `ssh -S ~/.exo/state/ctl host ls` was
@@ -206,8 +224,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   of a new engine drops a pin when the host's transcript is the noted one with its tail cut at or before the
   pin's lead, no longer holds the pin, and has no summary row that carries it. So an `/undo N` that also takes
   earlier turns drops it too. A transcript cut short at its start (unless its rows read word for word like the
-  session's first rows), a folded pin (also one said again after the fold) and a ruling in the session's first
-  message stay. The same turn settles a CLI `/undo` in the no-agent gap.
+  session's first rows, or, for a host that leaves the turn's message out of the transcript, the rows before a last
+  user row that the message repeats do), a folded pin (also one said again after the fold) and a ruling in the
+  session's first message stay. The same turn settles a CLI `/undo` in the no-agent gap.
 - The Providers page says why the model list failed instead of showing only a bare exception name, and
   offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
   reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
