@@ -196,3 +196,35 @@ def test_a_keys_file_named_by_exo_keys_file(command, tmp_path, monkeypatch):
     assert_secret(command.format(kf=kf))
     c, _ = decide(command.format(kf=tmp_path / "vault" / "other"))
     assert c.category == "read", c
+
+
+# #1104 reads a pipe from `echo`, `printf` or `cat <<<` into a shell as the command it prints, also as the first
+# command of a group, a body or a condition. #458 lets a rule keyed on `command` lower a line only through the
+# command's own text, which leaves out a here-string or here-doc and gives the inner command of `xargs`, `find -exec`
+# and `git bisect run` its own words. Through each of them the forward's part decides as its `-S` twin does: an allow
+# rule beside a credentials category deny does not lift it.
+COMPOSED = [
+    "{ echo '%s' | bash; }",
+    "if true; then printf '%s\\n' | bash; fi",
+    "while cat <<< '%s' | bash; do :; done",
+    "! echo -e '%s' | sh",
+    "time echo '%s' | sudo -s",
+    "{ cat <<EOF | bash; }\n%s\nEOF",
+    "%s <<< hi",
+    "%s <<EOF\nhi\nEOF",
+    "echo hi | xargs %s",
+    "find . -exec %s \\;",
+    "git bisect run %s",
+]
+RULES = ["^ssh", "ssh -L", "keys.env", "hi", "^xargs", "^find", "^git", "^bash", ".*"]
+
+
+@pytest.mark.parametrize("shape", COMPOSED)
+def test_a_forward_read_through_a_pipe_or_a_runner_decides_as_its_s_twin(shape):
+    line = shape % "ssh -L ~/.exo/keys.env:localhost:5432 host ls"
+    twin = shape % "ssh -S ~/.exo/keys.env host ls"
+    assert decide(line)[1].outcome == "ask", line
+    for command in RULES:
+        policy = {"gates": {"rules": [{"match": {"command": command}, "decision": "allow", "reason": command}],
+                            "categories": {"credentials": "deny"}}}
+        assert decide(line, policy)[1].outcome == decide(twin, policy)[1].outcome == "deny", (line, command)
