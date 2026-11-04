@@ -419,24 +419,33 @@ def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
     return 1, out, step, inv
 
 
+def diagnose_policy_from_false_result(
+    primary_failing_seq: int | str,
+    false_step: int | None,
+    false_inv: str | None,
+) -> str:
+    """Map a Fixed=FALSE TLC result to diagnosed=; enforces JSONL seq guard."""
+    if not isinstance(primary_failing_seq, int):
+        return "none"
+    if false_inv not in DIAGNOSE_POLICY_INVARIANTS or false_step is None:
+        return "none"
+    diag_seq = jsonl_seq_for_violation(false_step, false_inv)
+    if not isinstance(diag_seq, int):
+        return "none"
+    if diag_seq > primary_failing_seq:
+        return "none"
+    return false_inv
+
+
 def diagnose_invariant(
     jar: Path,
     build: Path,
     primary_failing_seq: int | str,
 ) -> str:
     """Re-run with Fixed=FALSE; accept TLC policy violations at or before the primary failing JSONL seq."""
-    if not isinstance(primary_failing_seq, int):
-        return "none"
     write_cfg(build, False)
     _code, _out, step, inv = run_tlc(build, jar)
-    if inv not in DIAGNOSE_POLICY_INVARIANTS or step is None:
-        return "none"
-    diag_seq = jsonl_seq_for_violation(step, inv)
-    if not isinstance(diag_seq, int):
-        return "none"
-    if diag_seq > primary_failing_seq:
-        return "none"
-    return inv
+    return diagnose_policy_from_false_result(primary_failing_seq, step, inv)
 
 
 def format_violation(
