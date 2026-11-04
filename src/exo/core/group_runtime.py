@@ -1,8 +1,9 @@
 """Internal Swarm composition. The host authenticates users and authorizes adapters.
 
-Contexts bind routing identity, not an OS sandbox. Do not expose these Python
-objects directly to models. Adapters must explicitly acknowledge consumed input
-and reach checkpoints between units of work. No message triggers work by itself.
+Contexts route using their assigned member identity. These mutable Python objects
+are not a sandbox and must not be exposed directly to models. Adapters explicitly
+acknowledge consumed input and reach checkpoints between units of work.
+No message triggers work by itself.
 """
 from __future__ import annotations
 
@@ -23,13 +24,7 @@ class MemberContext:
         """Wait out a pause, then deliver pending input without acknowledging it."""
         runtime = self._runtime
         profile = self.member.profile
-        gate = runtime._gates[profile]
-        if not gate.is_set():
-            runtime._paused.add(profile)
-            try:
-                await gate.wait()
-            finally:
-                runtime._paused.discard(profile)
+        await runtime._wait_unpaused(profile)
         return runtime._messages.pending(runtime.group.id, owner=runtime.group.owner, member=profile)
 
     def consume(self, message_id: str) -> None:
@@ -56,7 +51,7 @@ class GroupRuntime:
 
     The host must prevent duplicate runtimes across clients/processes. Adapter
     construction and permission checks stay outside this class. A paused status
-    means the adapter is waiting at a checkpoint, not that detached work stopped.
+    means a checkpoint or pre-entry wait is parked, not that detached work stopped.
     """
 
     def __init__(self, messages: GroupMessages, group_id: str, *, owner: str,
@@ -72,22 +67,31 @@ class GroupRuntime:
         self._gates = {p: asyncio.Event() for p in profiles}
         for gate in self._gates.values():
             gate.set()
-        self._paused: set[str] = set()
+        self._paused: dict[str, int] = {}
         bound = dict(adapters)
 
         async def run(member):
             context = MemberContext(self, member)
             # Honor pause-before-start without invoking an adapter or delivering input.
-            gate = self._gates[member.profile]
-            if not gate.is_set():
-                self._paused.add(member.profile)
-                try:
-                    await gate.wait()
-                finally:
-                    self._paused.discard(member.profile)
+            await self._wait_unpaused(member.profile)
             await bound[member.profile](context)
 
         self._runner = GroupRunner(group, {p: run for p in profiles})
+
+    async def _wait_unpaused(self, profile: str) -> None:
+        gate = self._gates[profile]
+        if gate.is_set():
+            return
+        self._paused[profile] = self._paused.get(profile, 0) + 1
+        try:
+            while not gate.is_set():
+                await gate.wait()
+        finally:
+            remaining = self._paused[profile] - 1
+            if remaining:
+                self._paused[profile] = remaining
+            else:
+                del self._paused[profile]
 
     def start(self) -> None:
         self._runner.start()
