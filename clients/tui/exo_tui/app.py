@@ -500,6 +500,9 @@ class ExoApp(App):
             hello = await self.client.call(s.Hello(client=CLIENT_ID, capabilities=["markdown", "diff"],
                                                    screen_cols=self.size.width or None))
             self.boot_mark("core", "connected")
+            from exo.core.seat_binding_conformance import maybe_note_client_boot
+
+            maybe_note_client_boot(self.launch_seat)
             try:
                 for m in (await self.client.call(s.ModelsList())).get("models", []):
                     self.capacities[m.get("route", "")] = int(m.get("context") or 0)
@@ -956,6 +959,9 @@ class ExoApp(App):
         title = info.get("title") or ""
         what = "private thread" if info.get("kind") == "private" else "thread"
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
+        from exo.core.seat_binding_conformance import maybe_note_resume
+
+        maybe_note_resume(sid, session_seat=info.get("seat"))
         await self.restore_approvals()  # a request that waited before this window showed the thread (D-045)
         self.refresh_status()
 
@@ -972,29 +978,36 @@ class ExoApp(App):
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
         from exo.protocol.client import ClientError
+        from exo.core.seat_binding_conformance import client_new_trace, maybe_note_client_new
 
         # Send the seat this window was started with. self.seat is also a display label, and load_session
         # fills it from a resumed thread, including one that belongs to another seat in this home.
         joined: str | None = None
-        try:
-            got = await self.client.call(s.SessionCreate(
-                title=self.title_arg, seat=self.launch_seat, kind=kind, cwd=self.new_cwd))
-        except ClientError as exc:
-            if exc.code == "bad_request" and self.launch_seat and "cannot start a thread for seat" in exc.message:
-                # This window joined a core that runs a different seat (SEATS.md). Omit the name and use that core.
-                try:
-                    got = await self.client.call(s.SessionCreate(
-                        title=self.title_arg, seat=None, kind=kind, cwd=self.new_cwd))
-                except ClientError as again:
-                    self.note(f"error: {again.code}: {again.message}", "error")
-                    return
-                joined = (got.get("session") or {}).get("seat") or "this core"
-            else:
-                # A seat mismatch is the only refusal this window handles. Other failures still
-                # reach boot, which reports "cannot start" and keeps the event feed running.
-                raise
+        with client_new_trace():
+            try:
+                got = await self.client.call(s.SessionCreate(
+                    title=self.title_arg, seat=self.launch_seat, kind=kind, cwd=self.new_cwd))
+            except ClientError as exc:
+                if exc.code == "bad_request" and self.launch_seat and "cannot start a thread for seat" in exc.message:
+                    # This window joined a core that runs a different seat (SEATS.md). Omit the name and use that core.
+                    try:
+                        got = await self.client.call(s.SessionCreate(
+                            title=self.title_arg, seat=None, kind=kind, cwd=self.new_cwd))
+                    except ClientError as again:
+                        self.note(f"error: {again.code}: {again.message}", "error")
+                        return
+                    joined = (got.get("session") or {}).get("seat") or "this core"
+                else:
+                    # A seat mismatch is the only refusal this window handles. Other failures still
+                    # reach boot, which reports "cannot start" and keeps the event feed running.
+                    raise
         await self.leave_thread()
         self.session = got["session"]["id"]
+        maybe_note_client_new(
+            self.session,
+            session_seat=got["session"].get("seat"),
+            joined=joined,
+        )
         self.draw_delegated_approvals()
         self.set_session_cwd(got["session"].get("cwd"))
         self.model = got["session"].get("model") or self.model

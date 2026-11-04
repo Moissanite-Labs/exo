@@ -55,6 +55,8 @@ jobs:
             src/exo/server/app.py
             tests/clients/tui/test_seat_new_session.py
             tests/test_session_seat_binding.py
+            tests/test_seat_binding_conformance_traces.py
+            src/exo/core/seat_binding_conformance.py
             .github/workflows/spec-conformance.yml
           )
 
@@ -122,6 +124,27 @@ jobs:
         run: |
           echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  specs/seat-binding/tla2tools.jar" | sha256sum -c -
 
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run_replay == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies for trace emission
+        if: steps.scope.outputs.run_replay == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,tui]"
+
+      - name: Emit seat-binding conformance traces
+        if: steps.scope.outputs.run_replay == 'true'
+        env:
+          EXO_SEAT_BINDING_TRACE_DIR: ${{ runner.temp }}/seat-binding-emitted-traces
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXO_SEAT_BINDING_TRACE_DIR"
+          pytest tests/test_seat_binding_conformance_traces.py -v
+
       - name: Replay conforming seat-binding traces
         if: steps.scope.outputs.run_replay == 'true'
         env:
@@ -129,6 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           golden="${RUNNER_TEMP}/seat-binding-golden-traces"
+          emitted="${RUNNER_TEMP}/seat-binding-emitted-traces"
           mkdir -p "$golden"
           shopt -s nullglob
           good=(specs/seat-binding/conformance/traces/good_*.jsonl)
@@ -137,6 +161,13 @@ jobs:
             exit 2
           fi
           cp "${good[@]}" "$golden"/
+          if [ -d "$emitted" ]; then
+            emitted_traces=("$emitted"/*.jsonl)
+            if [ "${#emitted_traces[@]}" -gt 0 ]; then
+              cp "${emitted_traces[@]}" "$golden"/
+              echo "Including ${#emitted_traces[@]} emitted trace(s) from tests"
+            fi
+          fi
           start=$(date +%s.%N)
           python3 specs/seat-binding/conformance/replay.py --all "$golden"
           exit_code=$?
