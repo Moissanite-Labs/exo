@@ -1,5 +1,5 @@
 ---- MODULE TraceSeatBinding ----
-(* Replay a single JSONL trace: each step must be a SeatBinding action and match recorded post-state. *)
+(* Replay a single JSONL trace: each event is one SeatBinding step; post-states must equal the action result. *)
 
 EXTENDS SeatBinding, TraceInstance
 
@@ -29,7 +29,7 @@ MatchState(i) ==
   /\ foreignSessions = PostForeignSet(i)
   /\ sessionSeat = PostSessionSeatFn(i)
 
-SyncPost(j) ==
+PostCondition(j) ==
   /\ coreSeat' = PostCoreSeat[j + 1]
   /\ clientLaunch' = PostClientLaunch[j + 1]
   /\ clientDisplay' = PostClientDisplay[j + 1]
@@ -43,17 +43,20 @@ SyncPost(j) ==
   /\ foreignSessions' = PostForeignSet(j + 1)
   /\ sessionSeat' = PostSessionSeatFn(j + 1)
 
+TraceAction(j) ==
+  CASE EventKind[j] = "load_seat" -> LoadCoreSeat(EventSeat[j])
+    [] EventKind[j] = "client_boot" -> ClientBoot(EventLaunch[j])
+    [] EventKind[j] = "persist_session" -> PersistSession(EventSeat[j])
+    [] EventKind[j] = "session_create" -> SessionCreate(EventReqSeat[j])
+    [] EventKind[j] = "refusal" -> SessionCreate(EventReqSeat[j])
+    [] EventKind[j] = "resume" -> ResumeSession(EventSession[j])
+    [] EventKind[j] = "client_new" -> ClientNew
+    [] EventKind[j] = "reconnect" -> Reconnect
+    [] OTHER -> FALSE
+
 TraceDo(j) ==
-  /\ CASE EventKind[j] = "load_seat" -> LoadCoreSeat(EventSeat[j])
-      [] EventKind[j] = "client_boot" -> ClientBoot(EventLaunch[j])
-      [] EventKind[j] = "persist_session" -> PersistSession(EventSeat[j])
-      [] EventKind[j] = "session_create" -> SessionCreate(EventReqSeat[j])
-      [] EventKind[j] = "refusal" -> SessionCreate(EventReqSeat[j])
-      [] EventKind[j] = "resume" -> ResumeSession(EventSession[j])
-      [] EventKind[j] = "client_new" -> ClientNew
-      [] EventKind[j] = "reconnect" -> Reconnect
-      [] OTHER -> FALSE
-  /\ SyncPost(j)
+  /\ TraceAction(j)
+  /\ PostCondition(j)
 
 TraceInit ==
   /\ step = 0

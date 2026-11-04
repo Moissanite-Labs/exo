@@ -14,7 +14,7 @@ Batch (every `*.jsonl` in a directory; exits with the worst code — includes ne
 python3 specs/seat-binding/conformance/replay.py --all specs/seat-binding/conformance/traces
 ```
 
-The blocking CI gate should use the **good** trace command above (exit 0). Pytest covers `b1_silent_fail.jsonl` (exit 1) and `malformed.jsonl` (exit 2) separately.
+The blocking CI gate must invoke **`replay.py` directly** (not rely on pytest alone). Install Java 21+ and the pinned `tla2tools.jar` in the job; a missing toolchain is **exit 3** and must fail the job.
 
 Optional: `TLA2TOOLS_JAR=/path/to/tla2tools.jar` (otherwise `specs/seat-binding/tla2tools.jar`).
 
@@ -28,7 +28,7 @@ curl -fsSL -o specs/seat-binding/tla2tools.jar \
 
 ## Runtime
 
-On this VM, `--all` over the three sample traces finishes in about 1–2 seconds once Java and the jar are present. CI should allow roughly one minute for checkout, jar cache, and replay.
+On this VM, `--all` over the sample traces finishes in about 1–2 seconds once Java and the jar are present. CI should allow roughly one minute for checkout, jar cache, and replay.
 
 ## Exit codes
 
@@ -36,10 +36,12 @@ On this VM, `--all` over the three sample traces finishes in about 1–2 seconds
 |------|---------|
 | 0 | Trace conforms: every step is an allowed `SeatBinding` action and configured invariants hold. |
 | 1 | Violation: TLC reported a failed invariant or an unreplayable step. stderr includes `VIOLATION <path> seq=N invariant=Name`. |
-| 2 | Malformed trace: JSONL/schema validation failed before TLC. |
+| 2 | Malformed trace: JSONL/schema validation failed before TLC (includes header-only files and impossible event order such as `resume` before `client_boot`). |
 | 3 | Missing toolchain: Java not on `PATH`, jar missing, or jar SHA-256 mismatch. One-line message on stderr. |
 
-`replay.py` never skips checks. Local pytest may skip when Java is absent.
+`replay.py` never skips checks.
+
+**Pytest (`tests/specs/test_replay.py`) skips all replay tests when Java is absent**, so `pytest -q` can exit 0 with zero checks. That is intentional for local dev without Java. The wired CI gate must **not** use pytest as the sole check; run `replay.py` as above so missing Java/jar fails with exit 3.
 
 With `--all`, every `*.jsonl` in the directory is checked, all failures are printed, and the process exits with the worst code (`3` > `2` > `1` > `0`).
 
@@ -52,12 +54,14 @@ specs/seat-binding/**
 src/exo/core/engine.py
 src/exo/core/loop.py
 src/exo/core/sessions.py
+src/exo/core/seats.py
 src/exo/compose.py
 clients/tui/exo_tui/app.py
 clients/tui/exo_tui/conn.py
 src/exo/protocol/schema.py
 src/exo/server/app.py
 tests/clients/tui/test_seat_new_session.py
+tests/test_session_seat_binding.py
 ```
 
 ## Artifacts

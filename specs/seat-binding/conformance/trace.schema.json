@@ -30,7 +30,8 @@
         "client_new",
         "refusal",
         "reconnect"
-      ]
+      ],
+      "description": "A conforming trace file has seq 0 initial plus at least one further event; resume and client_new require an earlier client_boot."
     },
     "fixed": { "type": "boolean" },
     "params": {

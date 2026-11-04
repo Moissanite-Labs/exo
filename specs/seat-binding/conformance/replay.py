@@ -148,6 +148,29 @@ def validate_line(obj: object, line_no: int) -> dict:
     return obj
 
 
+CLIENT_EVENTS_NEED_BOOT = frozenset({"resume", "client_new"})
+
+
+def validate_trace_events(records: list[dict]) -> None:
+    if len(records) < 2:
+        raise ValueError("trace has no events after initial")
+    saw_client_boot = False
+    for r in records[1:]:
+        ev = r["event"]
+        actor = r["actor"]
+        if ev == "client_boot":
+            if actor != "client":
+                raise ValueError(f"seq {r['seq']}: client_boot must have actor client")
+            saw_client_boot = True
+        elif ev in CLIENT_EVENTS_NEED_BOOT:
+            if actor != "client":
+                raise ValueError(f"seq {r['seq']}: {ev} must have actor client")
+            if not saw_client_boot:
+                raise ValueError(
+                    f"seq {r['seq']}: {ev} before client_boot (client must boot before resume or /new)"
+                )
+
+
 def load_trace(path: Path) -> list[dict]:
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines:
@@ -173,6 +196,7 @@ def load_trace(path: Path) -> list[dict]:
     for r in records[1:]:
         if r["event"] == "initial":
             raise ValueError("only seq 0 may be initial")
+    validate_trace_events(records)
     return records
 
 
