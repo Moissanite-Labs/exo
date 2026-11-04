@@ -4,36 +4,48 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    # Serial full suite (no xdist) to catch order-dependent bugs; includes the aggregate plugin pass.
+    - cron: "0 6 * * *"
 
 permissions:
   contents: read
 
-# A newer push to a pull request replaces its older run, which then only holds runners (#907). Pushes to main
-# keep one run per commit.
+# pull_request: one active run per branch head; newer commits cancel the old run (#907).
+# merge_group and push use github.sha so entries never share a group or cancel each other.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: uv sync --frozen --all-extras --python 3.13
       - run: uv run --frozen --all-extras ruff check .
 
   types:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: uv sync --frozen --all-extras --python 3.11
       - run: uv run --frozen --all-extras python scripts/check_types.py
 
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -43,14 +55,18 @@ jobs:
       # Plugin suites reach for a bus; point them at a closed port so nothing leaves the runner.
       EXO_BUS_URL: http://127.0.0.1:9
       EXO_BUS_SEAT: builder
+      # Nightly schedule stays serial; pull_request, merge_group, and push to main use xdist.
+      PYTEST_PARALLEL: ${{ github.event_name == 'schedule' && '' || '-n auto' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - run: uv sync --frozen --all-extras --python ${{ matrix.python }}
       - name: Root suite
         run: |
           ulimit -n 4096
-          uv run pytest -q
+          uv run pytest -q $PYTEST_PARALLEL
       # Each plugin is its own suite with its own conftest, so each runs from its own folder.
       - name: Plugin suites
         shell: bash
@@ -61,10 +77,14 @@ jobs:
           for d in plugins/*/; do
             if [ -d "$d/tests" ]; then
               echo "::group::$d"
-              (cd "$d" && uv run --project ../.. pytest -q) || status=1
+              (cd "$d" && uv run --project ../.. pytest -q $PYTEST_PARALLEL) || status=1
               echo "::endgroup::"
             fi
           done
           exit $status
+      # Same 3765 tests as the loop; skipped on pull_request only. Serial on schedule, parallel otherwise.
       - name: Plugins collected together
-        run: uv run pytest plugins -q
+        if: github.event_name != 'pull_request'
+        run: |
+          ulimit -n 4096
+          uv run pytest plugins -q $PYTEST_PARALLEL

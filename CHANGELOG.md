@@ -21,6 +21,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The ChatGPT connection card is separate from the default-model section. An empty model list removes only that section (D-034).
 - ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Each call turns Keychain prompts off and restores the previous setting. Failed callbacks show a safe retry message and preserve the previous connection. A successful reconnect deletes the previous CLI item without putting the secret in argv. A rotated refresh token whose save fails is kept and saved on the next call. Python reads through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` stay on the credentials floor (D-034 amendment).
 - A ChatGPT route is a billing boundary on every role. Routes placed ahead of it still run. A missing, expired, or usage-limited attempt does not continue into an API-key route behind it (D-034 amendment).
+- A seated core stores its own seat on a new thread when the client omits the name, and refuses a different name before writing a session (D-028 amendment). The terminal's `/new` sends the seat the window was started with. After resuming another seat's thread, `/new` still opens a thread of this core's seat. A window started with a different `--seat` joins this core's seat and says so.
 - `exo web` shutdown waits until open HTTP handlers finish cleanup (#1018, D-036 amendment). On Python 3.11, `close()` returned while a connection was still cancelling. A connection accepted during shutdown is closed. `start()` raises while that drain is still running.
 - Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
   the principal. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line
@@ -103,6 +104,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in four runs, 10,339,296 pairs on the built-in
   corpus with variants). Tests: `tests/security/test_gate_ssh_command_settings_1083.py`. **Docs:** `docs/GATE.md`,
   `docs/USER-GUIDE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
+- Gate (#1134, D-038 amendment): setting `SSH_SK_PROVIDER` asks as `LD_PRELOAD` does. ssh loads the FIDO security
+  key library it names on this machine. On main 0f413c7f `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` was a read that
+  every policy allowed, also behind `env` or `export` and before `git fetch`, while `ssh -o
+  SecurityKeyProvider=/tmp/evil.so host ls` asked.
+
+  The variable now adds an `opaque_exec` part wherever the line sets it. The part sits beside the line, as #1083's
+  parts for ssh's command settings do, so the line keeps the category, targets and reserved hits main gave it.
+  `internal`, ssh's built-in support, stays a read, as it does in the `-o` setting.
+
+  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in three runs, 10,429,496 pairs on the
+  built-in corpus with variants). Tests: `tests/security/test_gate_ssh_sk_provider_1134.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
