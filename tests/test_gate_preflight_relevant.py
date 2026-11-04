@@ -1,9 +1,13 @@
 """scripts/gate_preflight_relevant.py: path filter for the never-looser workflow."""
 
+import subprocess
+
 from scripts import gate_preflight_relevant
 from scripts.gate_preflight_relevant import (
     GATE_RELEVANT_PATTERNS,
+    changed_paths_from_name_status,
     diff_touches_gate_paths,
+    git_changed_paths,
     path_matches_pattern,
 )
 
@@ -61,3 +65,51 @@ def test_base_detector_run_full_when_only_detector_path_changes(tmp_path, monkey
     monkeypatch.setattr(gate_preflight_relevant, "git_changed_paths", fake_git_changed_paths)
     assert gate_preflight_relevant.main(["--base", "deadbeef"]) == 0
     assert out.read_text(encoding="utf-8").strip() == "run_full=true"
+
+
+def test_rename_away_from_watched_path_is_gate_relevant():
+    status = "R100\tsrc/exo/gate.py\tsrc/exo/gate2.py\n"
+    paths = changed_paths_from_name_status(status)
+    assert "src/exo/gate.py" in paths
+    assert diff_touches_gate_paths(paths)
+
+
+def test_rename_into_watched_path_is_gate_relevant():
+    status = "R100\tsrc/exo/other.py\tsrc/exo/gate.py\n"
+    paths = changed_paths_from_name_status(status)
+    assert diff_touches_gate_paths(paths)
+
+
+def test_delete_of_watched_path_is_gate_relevant():
+    status = "D\tsrc/exo/gate.py\n"
+    paths = changed_paths_from_name_status(status)
+    assert diff_touches_gate_paths(paths)
+
+
+def test_git_diff_rename_away_lists_old_path(tmp_path, monkeypatch):
+    """End-to-end: git diff --name-only hides renames; our parser must not."""
+    monkeypatch.chdir(tmp_path)
+    for cmd in (
+        ["git", "init"],
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "t"],
+    ):
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    gate = tmp_path / "src" / "exo" / "gate.py"
+    gate.parent.mkdir(parents=True)
+    gate.write_text("# gate\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "base"], check=True, capture_output=True, text=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    gate.rename(tmp_path / "src" / "exo" / "gate2.py")
+    subprocess.run(["git", "add", "-A"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "rename"], check=True, capture_output=True, text=True)
+    paths, err = git_changed_paths(base_sha)
+    assert err is None
+    assert "src/exo/gate.py" in paths
+    assert diff_touches_gate_paths(paths)

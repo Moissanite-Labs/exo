@@ -44,11 +44,30 @@ def diff_touches_gate_paths(changed_paths: Iterable[str]) -> bool:
     return False
 
 
+def changed_paths_from_name_status(name_status: str) -> list[str]:
+    """Collect every path from ``git diff --name-status -M`` (renames, copies, deletes)."""
+    paths: set[str] = set()
+    for line in name_status.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0]
+        kind = status[0] if status else ""
+        if kind in ("R", "C") and len(parts) >= 3:
+            paths.add(parts[1])
+            paths.add(parts[2])
+        else:
+            paths.add(parts[1])
+    return sorted(paths)
+
+
 def git_changed_paths(base_sha: str) -> tuple[list[str] | None, str | None]:
     """Return changed paths, or (None, error_message) when git diff fails."""
     try:
         completed = subprocess.run(
-            ["git", "diff", "--name-only", base_sha, "HEAD"],
+            ["git", "diff", "--name-status", "-M", base_sha, "HEAD"],
             check=False,
             capture_output=True,
             text=True,
@@ -58,7 +77,7 @@ def git_changed_paths(base_sha: str) -> tuple[list[str] | None, str | None]:
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip() or f"exit {completed.returncode}"
         return None, err
-    paths = [line for line in completed.stdout.splitlines() if line.strip()]
+    paths = changed_paths_from_name_status(completed.stdout)
     return paths, None
 
 
