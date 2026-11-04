@@ -19,98 +19,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Detect seat-binding conformance scope
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: |
-          set -euo pipefail
-          run_replay=true
-          skip_reason=""
-
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base_sha="$PR_BASE_SHA"
-          elif [ "$EVENT_NAME" = "merge_group" ]; then
-            base_sha="$MERGE_GROUP_BASE_SHA"
-          else
-            base_sha=""
-          fi
-
-          pathspecs=(
-            specs/seat-binding/
-            src/exo/core/engine.py
-            src/exo/core/loop.py
-            src/exo/core/sessions.py
-            src/exo/core/seats.py
-            src/exo/compose.py
-            clients/tui/exo_tui/app.py
-            clients/tui/exo_tui/conn.py
-            src/exo/protocol/schema.py
-            src/exo/server/app.py
-            tests/clients/tui/test_seat_new_session.py
-            tests/test_session_seat_binding.py
-            tests/test_seat_binding_conformance_traces.py
-            src/exo/core/seat_binding_conformance.py
-            .github/workflows/spec-conformance.yml
-          )
-
-          if [ -z "$base_sha" ]; then
-            echo "No base SHA for event $EVENT_NAME; running full replay (fail closed)."
-          elif ! git rev-parse --verify "${base_sha}^{commit}" >/dev/null 2>&1; then
-            echo "Base SHA ${base_sha} not available; running full replay (fail closed)."
-          else
-            set +e
-            changed="$(git diff --name-only "$base_sha" HEAD -- "${pathspecs[@]}")"
-            diff_status=$?
-            set -e
-            if [ "$diff_status" -ne 0 ]; then
-              echo "git diff failed (exit $diff_status); running full replay (fail closed)."
-            elif [ -z "$changed" ]; then
-              run_replay=false
-              skip_reason="No files changed under the seat-binding conformance path filter (see specs/seat-binding/conformance/CI-INTERFACE.md)."
-            else
-              echo "Relevant changes detected:"
-              echo "$changed"
-            fi
-          fi
-
-          echo "run_replay=$run_replay" >> "$GITHUB_OUTPUT"
-          if [ -n "$skip_reason" ]; then
-            {
-              echo "skip_reason<<EOF"
-              echo "$skip_reason"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip replay (no relevant changes)
-        if: steps.scope.outputs.run_replay != 'true'
-        run: |
-          echo "${{ steps.scope.outputs.skip_reason }}"
-          echo "seat-binding-conformance: success (skipped replay)."
-
-      - uses: actions/setup-java@v4
-        if: steps.scope.outputs.run_replay == 'true'
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Cache tla2tools.jar
-        if: steps.scope.outputs.run_replay == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: tla-cache
         with:
           path: specs/seat-binding/tla2tools.jar
           key: tla2tools-v1.8.0-e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
 
       - name: Download tla2tools.jar
-        if: steps.scope.outputs.run_replay == 'true' && steps.tla-cache.outputs.cache-hit != 'true'
+        if: steps.tla-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           JAR=specs/seat-binding/tla2tools.jar
@@ -120,23 +44,20 @@ jobs:
           echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
 
       - name: Verify cached tla2tools.jar
-        if: steps.scope.outputs.run_replay == 'true' && steps.tla-cache.outputs.cache-hit == 'true'
+        if: steps.tla-cache.outputs.cache-hit == 'true'
         run: |
           echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  specs/seat-binding/tla2tools.jar" | sha256sum -c -
 
-      - uses: actions/setup-python@v5
-        if: steps.scope.outputs.run_replay == 'true'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Install test dependencies for trace emission
-        if: steps.scope.outputs.run_replay == 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,tui]"
 
       - name: Emit seat-binding conformance traces
-        if: steps.scope.outputs.run_replay == 'true'
         env:
           EXO_SEAT_BINDING_TRACE_DIR: ${{ runner.temp }}/seat-binding-emitted-traces
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui
@@ -160,7 +81,6 @@ jobs:
           done
 
       - name: Replay conforming seat-binding traces
-        if: steps.scope.outputs.run_replay == 'true'
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
         run: |
@@ -185,8 +105,10 @@ jobs:
           done
           echo "Including 2 emitted trace(s) from tests"
           start=$(date +%s.%N)
+          set +e
           python3 specs/seat-binding/conformance/replay.py --all "$golden"
           exit_code=$?
+          set -e
           end=$(date +%s.%N)
           wall=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')
           echo "replay_wall_time_seconds=$wall"
@@ -202,13 +124,11 @@ jobs:
           echo "replay.py exited 0: all conforming traces passed."
 
       - name: Check negative trace fixtures
-        if: steps.scope.outputs.run_replay == 'true'
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
         run: python3 specs/seat-binding/conformance/check_negative_fixtures.py
 
       - name: Check scratch production mutations (pinned VIOLATION lines)
-        if: steps.scope.outputs.run_replay == 'true'
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui

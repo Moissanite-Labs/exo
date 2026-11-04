@@ -78,7 +78,7 @@ With `--all`, every `*.jsonl` in the directory is checked, all failures are prin
 
 ## Path filter
 
-Must match the `pathspecs=(…)` list in `.github/workflows/spec-conformance.yml` (seat-binding-conformance job):
+The **spec conformance** workflow always runs on pull requests and merge groups (#1156). The list below is the historical scope filter (removed from the workflow); keep it aligned with seat-binding-related paths when documenting touch surfaces:
 
 ```
 specs/seat-binding/
