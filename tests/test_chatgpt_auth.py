@@ -493,9 +493,57 @@ def test_legacy_keychain_registration_requires_reauth_and_new_namespace_preserve
     service.start(profile); assert finish(service)
     new_account = service._account(profile)
     assert new_account != legacy_account and new_account.startswith('exo-chatgpt-native-v1-')
-    assert store.values[legacy_account] == old_bundle
+    assert legacy_account not in store.values
     assert service._meta()['profiles'][profile]['store_backend'] == 'keychain'
     assert service.headers()['Authorization'].startswith('Bearer ')
+
+
+def test_failed_refresh_save_keeps_the_new_grant_and_retries(tmp_path):
+    service, store, _calls, _ = setup(tmp_path)
+    service.start(); assert finish(service)
+    profile = service.status()['active']; name = service._account(profile)
+    store.values[name]['expires_at'] = 0
+    hits = []
+    def refresh(request):
+        hits.append(parse_qs(request.content.decode())['refresh_token'])
+        return httpx.Response(200, json={**grant(), 'access_token': 'new-access', 'refresh_token': 'new-rotating'})
+    service.client = httpx.Client(transport=httpx.MockTransport(refresh))
+    store.fail = True
+    assert service.headers()['Authorization'] == 'Bearer new-access'
+    assert store.values[name]['refresh_token'] == 'fake-refresh-token'
+    store.fail = False
+    assert service.headers()['Authorization'] == 'Bearer new-access'
+    assert store.values[name]['refresh_token'] == 'new-rotating'
+    assert hits == [['fake-refresh-token']]
+
+
+def test_legacy_disconnect_and_cli_delete_keep_the_secret_out_of_argv(tmp_path, monkeypatch):
+    service, store, _, _ = setup(tmp_path)
+    service.start(); assert finish(service)
+    profile = service.status()['active']
+    meta = service._meta()
+    meta['profiles'][profile].pop('storage', None)
+    meta['profiles'][profile]['store_backend'] = 'keychain'
+    service._save_meta(meta)
+    store.backend = 'keychain'
+    account = service._account(profile)
+    seen = []
+    store.get_cli = store.get
+    store.delete_cli = lambda name: seen.append(name) or store.delete(name)
+    service.client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(503)))
+    message = service.disconnect()['message']
+    assert 'disconnected' in message.lower() or 'not confirmed' in message
+    assert seen == [account]
+
+    from exo import providers_setup as ps
+    from exo.core.models import keys
+    argv = []
+    monkeypatch.setattr(ps, '_run', lambda args: argv.append(args) or SimpleNamespace(returncode=0))
+    native = auth.SecretStore()
+    monkeypatch.setattr(native, 'available', lambda: True)
+    monkeypatch.setattr(native, 'backend', 'keychain')
+    assert native.delete_cli('exo-chatgpt-old')
+    assert argv == [['security', 'delete-generic-password', '-s', keys.KEYCHAIN_SERVICE, '-a', 'exo-chatgpt-old']]
 
 
 def test_linux_namespace_and_backend_mismatch_are_explicit(tmp_path):

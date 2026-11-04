@@ -41,23 +41,31 @@ status and account labels, never those tokens. Tokens do not enter Exo messages,
 request URLs, diagnostics or the model context. Sign-in uses a temporary loopback callback and fresh
 state, nonce and a PKCE verifier. PKCE binds the returned authorization code to the sign-in attempt.
 
-On macOS, token bundles use the native Security framework for writes, reads and deletion with the same Python application identity. These operations refuse interactive authorization instead of opening a permission prompt. They do not pass through the `security -i`
+On macOS, token bundles use the native Security framework for writes, reads and deletion. Each call turns
+process-wide Keychain prompts off and restores the previous setting, so a locked Keychain fails the call
+instead of waiting. The calls do not pass through the `security -i`
 [interactive parser](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/security.c), whose line limit can split a large OAuth bundle. Tokens stay out of process arguments
 and temporary files. A failed save leaves the previous connection unchanged. The callback gives a safe
 failure message and directs you back to Providers to retry.
 
 New macOS grants use a versioned native account namespace. Reconnect an older registration to migrate it.
-The old item and registration remain unchanged if sign-in fails. Exo does not automatically read or delete
-legacy CLI-created orphan items, or weaken their access policy. Linux Secret Service accounts retain their
-existing namespace. A connection from another OS store requires sign-in on the current system.
+The old item stays if that sign-in fails. After the new item and the registration are both saved, Exo deletes
+the previous item with `security delete-generic-password`. The secret is not an argument. If that delete fails,
+the new connection stays and Providers says the previous item is still there. Disconnecting a registration that
+was never migrated uses the same command. Linux Secret Service accounts retain their existing namespace. A
+connection from another OS store requires sign-in on the current system.
+
+Code that reads these items through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` is credentials,
+as is `macos_keychain`. A grant does not cover it.
 
 Exo verifies the identity token's signature, issuer, audience, expiry and nonce before accepting it.
 Permission to use the ChatGPT plan comes from the granted scopes, not from identity alone. A sign-in
 without plan permission remains identifiable but cannot serve model requests.
 
 Refreshes for a connection are serialized across processes. Exo saves a rotated refresh token together
-with its replacement access token. Temporary network failures preserve the connection. A confirmed
-unusable refresh token requires sign-in again.
+with its replacement access token. If that save fails, the new grant stays in the process and the next
+call saves it. The consumed token is not sent again. Temporary network failures preserve the connection.
+A confirmed unusable refresh token requires sign-in again.
 
 Disconnect stops local use and attempts to revoke the renewable session. If remote revocation cannot
 be confirmed, Exo reports that result. You can also disconnect the registration in ChatGPT settings.

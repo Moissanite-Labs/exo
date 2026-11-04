@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+import threading
 
 
 class KeychainError(Exception):
@@ -51,6 +52,41 @@ def _callbacks(library, name):
     return ctypes.addressof(ctypes.c_byte.in_dll(library, name))
 
 
+_ui_lock = threading.Lock()
+
+
+def _silence_prompts(security):
+    """Turn process-wide keychain prompts off for one call and restore the previous setting.
+
+    ``kSecUseAuthenticationUI`` is not honored on the legacy login keychain. A locked
+    keychain then fails the call instead of waiting on a prompt.
+    """
+    get_ui = getattr(security, 'SecKeychainGetUserInteractionAllowed', None)
+    set_ui = getattr(security, 'SecKeychainSetUserInteractionAllowed', None)
+    if get_ui is None or set_ui is None:
+        return lambda: None
+    get_ui.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
+    get_ui.restype = ctypes.c_int32
+    set_ui.argtypes = [ctypes.c_uint8]
+    set_ui.restype = ctypes.c_int32
+    previous = ctypes.c_uint8(1)
+    _ui_lock.acquire()
+    try:
+        get_ui(ctypes.byref(previous))
+        set_ui(0)
+    except Exception:
+        _ui_lock.release()
+        raise
+
+    def restore():
+        try:
+            set_ui(previous.value)
+        finally:
+            _ui_lock.release()
+
+    return restore
+
+
 def set_generic_password(service: str, account: str, value: str) -> None:
     """Replace one item atomically, or create it. No password travels through argv or a file.
 
@@ -60,8 +96,10 @@ def set_generic_password(service: str, account: str, value: str) -> None:
     if sys.platform != 'darwin' or os.environ.get('EXO_NO_KEYCHAIN'):
         raise KeychainError('The macOS Keychain is unavailable.')
     owned = []
+    restore_prompts = lambda: None
     try:
         cf, security = _frameworks()
+        restore_prompts = _silence_prompts(security)
 
         def retain_created(ref):
             if not ref:
@@ -105,6 +143,7 @@ def set_generic_password(service: str, account: str, value: str) -> None:
     except Exception:
         raise KeychainError('The macOS Keychain could not save the credential. Try signing in again.') from None
     finally:
+        restore_prompts()
         # Dictionaries retain their entries. Release each reference created above exactly once.
         if owned:
             for ref in reversed(owned):
@@ -132,8 +171,10 @@ def get_generic_password(service: str, account: str) -> str | None:
     if sys.platform != 'darwin' or os.environ.get('EXO_NO_KEYCHAIN'):
         raise KeychainError('The macOS Keychain is unavailable.')
     owned = []
+    restore_prompts = lambda: None
     try:
         cf, security = _frameworks()
+        restore_prompts = _silence_prompts(security)
         query = _identity(cf, security, service, account, owned)
         cf.CFDictionarySetValue(query, _constant(security, 'kSecReturnData'), _constant(cf, 'kCFBooleanTrue'))
         cf.CFDictionarySetValue(query, _constant(security, 'kSecMatchLimit'), _constant(security, 'kSecMatchLimitOne'))
@@ -154,6 +195,7 @@ def get_generic_password(service: str, account: str) -> str | None:
     except Exception:
         raise KeychainError('The macOS Keychain could not read the credential. Unlock it or sign in again.') from None
     finally:
+        restore_prompts()
         if owned:
             for ref in reversed(owned):
                 cf.CFRelease(ref)
@@ -164,13 +206,16 @@ def delete_generic_password(service: str, account: str) -> bool:
     if sys.platform != 'darwin' or os.environ.get('EXO_NO_KEYCHAIN'):
         raise KeychainError('The macOS Keychain is unavailable.')
     owned = []
+    restore_prompts = lambda: None
     try:
         cf, security = _frameworks()
+        restore_prompts = _silence_prompts(security)
         query = _identity(cf, security, service, account, owned)
         return security.SecItemDelete(query) in (0, -25300)
     except Exception:
         raise KeychainError('The macOS Keychain could not delete the credential.') from None
     finally:
+        restore_prompts()
         if owned:
             for ref in reversed(owned):
                 cf.CFRelease(ref)

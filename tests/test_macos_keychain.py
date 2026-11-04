@@ -47,7 +47,21 @@ def frameworks(monkeypatch, *, update=0, add=0):
         assert result is None
         calls.append(('add', snapshot(query)))
         return add
-    sec = SimpleNamespace(SecItemUpdate=modify, SecItemAdd=create)
+    ui = {'flag': 1, 'seen': []}
+
+    def get_ui(out):
+        ctypes.cast(out, ctypes.POINTER(ctypes.c_uint8))[0] = ui['flag']
+        return 0
+
+    def set_ui(flag):
+        ui['seen'].append(flag)
+        ui['flag'] = flag
+        return 0
+
+    sec = SimpleNamespace(SecItemUpdate=modify, SecItemAdd=create,
+                          SecKeychainGetUserInteractionAllowed=get_ui,
+                          SecKeychainSetUserInteractionAllowed=set_ui)
+    cf.ui = ui
     monkeypatch.setattr(native.sys, 'platform', 'darwin')
     monkeypatch.delenv('EXO_NO_KEYCHAIN', raising=False)
     monkeypatch.setattr(native, '_frameworks', lambda: (cf, sec))
@@ -63,6 +77,7 @@ def test_native_update_preserves_full_bytes_and_releases_references(monkeypatch,
     native.set_generic_password('exo', 'fake-account', value)
     assert calls == [('update', {'kSecClass': 'kSecClassGenericPassword', 'kSecAttrService': 'exo',
         'kSecAttrAccount': 'fake-account', 'kSecUseAuthenticationUI': 'kSecUseAuthenticationUIFail'}, {'kSecValueData': value.encode()})]
+    assert cf.ui['seen'] == [0, 1] and cf.ui['flag'] == 1
     assert set(cf.released) == set(cf.objects) and len(cf.released) == len(cf.objects)
 
 
