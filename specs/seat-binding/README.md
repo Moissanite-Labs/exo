@@ -23,7 +23,7 @@ Turn execution, models, permissions, event sequencing, HTTP vs in-process transp
 | `PersistSession` | Session row already in DB from another core / unseated engine | `SessionStore.create_session` via another `CoreEngine` |
 | `SessionCreate` | `session.create` RPC | `CoreRuntime._session_create` → `loop.create_session` (`src/exo/core/engine.py`, `src/exo/core/loop.py`, `src/exo/core/sessions.py`) |
 | `ResumeSession` | `load_session` / `session.resume` | `ExoApp.load_session` (`clients/tui/exo_tui/app.py`), `CoreRuntime._session_resume` |
-| `ClientNew` | `/new` command | `ExoApp.new_session` (`clients/tui/exo_tui/app.py`); pre-fix uses `self.seat`, post-fix uses `launch_seat` and join fallback |
+| `ClientNew` | `/new` command | `ExoApp.new_session` (`clients/tui/exo_tui/app.py`); `Fixed = FALSE` uses `self.seat`, `Fixed = TRUE` uses `launch_seat` and join fallback |
 | `Reconnect` | Event stream reconnect (no seat change) | `LocalClient.events(..., reconnect=True)` in `clients/tui/exo_tui/conn.py` |
 
 Seat normalization and refusal on a seated core:
@@ -44,14 +44,20 @@ Seat normalization and refusal on a seated core:
 
 ## Constants
 
-- `PreFix = TRUE` — post `5ba3813` TUI (`SeatBinding.cfg`).
-- `PreFix = FALSE` — pre-fix TUI sends `self.seat` on `/new` (`SeatBinding_prefix.cfg`).
+- `Fixed = TRUE` — post `5ba3813` TUI behavior (`SeatBinding.cfg`).
+- `Fixed = FALSE` — pre-fix TUI sends the display label (`self.seat`) on `/new` (`SeatBinding_prefix.cfg`).
 
 ## Invariants
 
 1. **SeatMatchesCore** — every non-foreign live session’s seat equals `coreSeat` when the core is seated.
-2. **NoSilentRefusal** — `lastOutcome` is never `"SilentFail"` (pre-fix `/new` after a mismatched seat request).
-3. **NewAfterResumeBindsThisCore** — after resuming another seat’s thread, a successful `/new` binds the new session to this core’s seat (regression in `tests/clients/tui/test_seat_new_session.py::test_new_after_resuming_another_seat_uses_this_core`).
+2. **NoSilentRefusal** — `lastOutcome` is never `"SilentFail"` (pre-fix `/new` when the core rejects the requested seat leaves no visible outcome).
+3. **NewAfterResumeBindsThisCore** — when `resumedOtherSeat` is true and the last step was `/new` (`fromClientNew`), the step ends with either a **visible refusal** (`lastOutcome = "VisibleRefusal"`) or a **live session bound to `coreSeat`**. This matches exo #939 B1: after resuming another seat’s thread, `/new` must not silently fail; regression in `tests/clients/tui/test_seat_new_session.py::test_new_after_resuming_another_seat_uses_this_core`.
+
+## Pre-fix counterexample (`SeatBinding_prefix.cfg`)
+
+TLC reports **NoSilentRefusal** first on the shortest trace (worker core, client boot with `scout`, `/new` with no resume): `lastOutcome = "SilentFail"`.
+
+The **#939 B1** path appears in the second section of `results/prefix-counterexample.txt` (same model, checking only **NewAfterResumeBindsThisCore**): `PersistSession("scout")` → `ResumeSession` → `ClientNew` with `resumedOtherSeat = TRUE` and `fromClientNew = TRUE`. Pre-fix `/new` sets `"SilentFail"`, which is neither a visible refusal nor a new session on `coreSeat`, so **NewAfterResumeBindsThisCore** fails. That is the same failure mode as the regression test (no new worker thread, no user-visible error).
 
 ## Run TLC
 
@@ -73,7 +79,7 @@ apalache-mc check --init=Init --next=Next --inv=SeatMatchesCore SeatBinding.tla
 
 (Apalache needs its own config; TLC is the checked-in reference.)
 
-Recorded outputs: `results/fixed.txt` (post-fix, all invariants pass), `results/prefix-counterexample.txt` (pre-fix, violates **NoSilentRefusal**).
+Recorded outputs: `results/fixed.txt` (`Fixed = TRUE`, all invariants pass), `results/prefix-counterexample.txt` (`Fixed = FALSE`, see **Pre-fix counterexample** above).
 
 ## Conformance plan (trace replay — not implemented)
 
@@ -105,6 +111,6 @@ Goal: replay exo session lifecycle traces and check each step is an allowed TLA+
 
 1. Maintain model state variables mirroring the TLA+ module.
 2. For each trace row, assert the corresponding action is enabled and matches the row’s outcome.
-3. After each step, evaluate **SeatMatchesCore**, **NoSilentRefusal**, and **NewAfterResumeBindsThisCore** (with `PreFix` set from build/version).
+3. After each step, evaluate **SeatMatchesCore**, **NoSilentRefusal**, and **NewAfterResumeBindsThisCore** (with `Fixed` set from build/version).
 
 Property tests can later assert byte-identical approval text separately; this spec does not cover approvals.
