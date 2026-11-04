@@ -278,8 +278,8 @@ async def test_a_held_card_says_the_key_is_not_pinned(run_dir):
     """Nit: an unpinned sender's approval card says why it is held."""
     a = await Daemon(run_dir, "alpha").start()
     b = await Daemon(run_dir, "beta").start()
-    sa = (await a.eng.loop.create_session()).id
-    await b.eng.loop.create_session()
+    sa = (await a.eng.loop.create_session(agent=a.eng.agent)).id
+    await b.eng.loop.create_session(agent=b.eng.agent)
     try:
         out = await a.cmd(s.Peers(action="send", to="beta", text="hello", session=sa, via="agent"))
         assert out["state"] == "held"
