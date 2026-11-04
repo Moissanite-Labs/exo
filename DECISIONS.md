@@ -2987,7 +2987,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why:** Large skill collections can consume prompt space before a task needs their instructions.
   Local selection makes that cost controllable without another provider call or installation dependency.
 - **Boundaries:** Composition owns the optional selector. The runtime offers `skills_prompt` and typed
-  `Loop.turn_extra(session, query)` seams. Scheduled loops copy the callback. Delegated children retain
+  `Loop.turn_extra(session, query)` wired into per-turn context data when `AgentContext` is active.
+  Scheduled loops copy the callback. Delegated children retain
   their existing exclusion of skills. Seat allowlists and folder/plugin precedence remain authoritative.
   Metadata is reread under a 16 KiB per-file limit, with no query cache or shared selection state.
   Required-executor mode refuses enabled discovery until metadata reads can use that executor.
@@ -3006,3 +3007,51 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 are unavailable for that turn, and the block notes the cap when the character budget has room.
 Rejected a path+mtime+size metadata cache: rereading each turn is what makes same-stat edits take
 effect, and a shared cache would add mutable state behind concurrent session and scheduled turns.
+The ranked block is injected as per-turn user-side data through `AgentContext.build`, not appended
+to the stable system text, so provider prompt-cache breakpoints on the system block stay valid.
+
+## D-084 (2026-10-23) Retained tool-output views with exact bounded expansion
+- **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.
+- **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
+  transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
+  JSON pages through an ordinary registry tool, preserving gate and executor dispatch. Reuse session storage.
+  Do not create a second output archive. Check visible source/result identity before issuing references.
+  Classify the new `tool_output` name as `read`. Explicit read-deny policies still block expansion.
+- **Scope:** Single text-part, non-error results above the configured threshold. Preserve distinct diagnostic
+  and source-label lines or leave the result whole. Expansion pages and multipart/image results stay whole.
+  Delegated views use the optional `for_child(context, tools=names)` contract and require the expansion tool.
+- **Ownership:** Atomically bind new evidence to the configured principal, agent and session in existing metadata.
+  The first writer owns the binding. Initialization preserves unrelated metadata and snapshots its sequence in one transaction.
+  Pre-enable history and fork copies remain uncompressed. References identify a message and result index,
+  not only a reusable tool-call ID. Undo and a bounded recent-message window revoke access. Reads reapply
+  known-key redaction and refuse stale fingerprints. These checks do not change the rest of memory's access.
+- **Rejected:** Storing a duplicate transcript, private compressor overrides, transforming persisted results,
+  silently dropping errors, or promising recovery of bytes discarded before logging. Earlier capture is a
+  separate stage with its own disk and retention limits. Summary-model cost and task-quality gains are unproven.
+- **Validation:** Exact pagination including JSON escaping, restart, session/principal/private/fork isolation,
+  undo/expiry, source mutation, reused call IDs, real engine/child dispatch, executor refusal, cancellation,
+  disabled imports/state and bounded synthetic footprint measurements. No provider or network calls.
+- **Gate review:** Main's `scripts/gate_diff.py` compared `5a9dc394` with local integration `cdf54caf`
+  over 55,047 actions and 87 policies. It reported 3,320 lowered pairs across 62 actions, all using the new
+  `tool_output` or `work_notes` names. No existing tool name had a lowering in this corpus. The full script
+  reported lowerings and did not pass its zero-lowering gate.
+- **Gate repair:** The initial `tool_output` entry accounted for 1,144 lowered pairs across 27 actions,
+  including unsupported path arguments. Read classification now requires the supported keys and types,
+  a nonnegative offset and a page limit from 1 to 24,000. Other shapes use the existing generic classifier,
+  preserving secret/store floors and reserved categories.
+- **Focused comparison:** After that repair, main's script checked 62 `tool_output` actions against all
+  87 policies. Of 5,394 pairs, nine lower for three supported argument shapes, from `unknown` to `read`.
+  There are no malformed-call lowerings, lost reserved hits, lost violations or classifier errors.
+  Those nine changes are intentional. The script still exits 1, and the broad run was not repeated.
+  The [saved corpus and summary](docs/evidence/tool-output-gate-2026-10-23.json) include all cases,
+  the compared commits and commands to reproduce this result.
+- **Runtime boundary:** The tool schema requires `reference` and accepts only `reference`, `offset` and `limit`.
+  It rejects extra path arguments before execution. The caller's session supplies the lookup scope.
+  A real-gate regression verifies that an explicit read-deny policy blocks valid expansion requests.
+- **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. No core line-budget increase.
+
+- **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
+  combinations after D-083, D-085 and D-086 are present. The recorded local integration and
+  source fingerprints live in `docs/evidence/optional-features-smoke-2026-10-23.json`.
+  Tool-output CPU/startup samples were refreshed after the current-main and metadata changes.
+  These offline fixtures do not establish task quality or replace the principal canary.
