@@ -5214,6 +5214,49 @@ def _on_other_targets(c: Classification) -> Classification:
     return c
 
 
+# xargs's own options (#1116): GNU findutils' long options, 1 where one takes the next word unless written with `=`
+# (the others take a value after `=` only, or none), and the short ones of GNU and BSD xargs together.
+_XARGS_LONG = {"arg-file": 1, "delimiter": 1, "max-chars": 1, "max-args": 1, "max-procs": 1, "process-slot-var": 1,
+               "eof": 0, "replace": 0, "max-lines": 0, "null": 0, "open-tty": 0, "interactive": 0,
+               "no-run-if-empty": 0, "verbose": 0, "show-limits": 0, "exit": 0, "version": 0, "help": 0}
+_XARGS_VALUE = "adEILnPsJRS"     # takes the rest of its word, or the next word: GNU's, and BSD's -J, -R and -S
+_XARGS_FLAGS = "0oprtx"          # takes no value. GNU's -e, -i and -l take the rest of their word only.
+# #1116: set while classify reads a call (_classify_read): [met], which an xargs sets when getopt starts its command
+# at another word than main's reading does (_xargs_start). classify then reads the call again with _xargs_getopt on,
+# where each xargs reads its command from getopt's start (_xargs_reading). Main's reading stays beside.
+_xargs_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_xargs_met", default=None)
+_xargs_getopt: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_xargs_getopt", default=False)
+
+
+def _xargs_start(argv: list[str]) -> int | None:
+    """#1116: where in argv (argv[0] is xargs) the command xargs runs starts. Its options are read as getopt reads
+    them for GNU and BSD xargs: up to the first operand or `--`, a long option or an unambiguous prefix of one
+    (`--max-a 1`) with its value after `=` or in the next word, and short options run together, where a letter
+    that takes a value takes the rest of its word, or the next word when it is the last (`-rn 1`). No letter is a
+    flag in one xargs and takes a value in the other, so one reading serves both. An unknown or ambiguous option, or
+    a missing value, makes xargs fail and run nothing: None then."""
+    j = 1
+    while j < len(argv) and argv[j].startswith("-") and argv[j] != "-":
+        a, j = argv[j], j + 1
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name, eq, _ = a[2:].partition("=")
+            hits = [o for o in _XARGS_LONG if o == name] or [o for o in _XARGS_LONG if o.startswith(name)]
+            if len(hits) != 1:
+                return None
+            take = _XARGS_LONG[hits[0]] and not eq
+        else:
+            at = next((n for n in range(1, len(a)) if a[n] not in _XARGS_FLAGS), len(a))   # the first letter not a flag
+            if at < len(a) and a[at] not in _XARGS_VALUE + "eil":
+                return None
+            take = at == len(a) - 1 and a[at] in _XARGS_VALUE
+        if take and j == len(argv):
+            return None
+        j += take
+    return j
+
+
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                       piped: str | None) -> list[Classification]:
     p = words[0]
@@ -5297,6 +5340,11 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         i = 1
         while i < len(words) and words[i].text.startswith("-"):
             i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
+        if (j := _xargs_start(argv)) is not None and j != i:      # #1116: getopt starts it elsewhere
+            if _xargs_getopt.get():
+                i = j
+            elif (met := _xargs_met.get()) is not None:
+                met[0] = True
         return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + \
             _run_own(words[i:], lambda: inner_words(words[i:]))
     if prog == "find":
@@ -9858,8 +9906,24 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
     (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
     printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
-    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
-    from there too (_in_tool_folder sets it)."""
+    in each opened one. A line where an xargs's options leave its command at another word than main's reading of
+    them finds is also read with each xargs's command where getopt starts it (#1116, _xargs_reading), opened readings
+    and all. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there
+    too (_in_tool_folder sets it)."""
+    met = [False]
+    token = _xargs_met.set(met)
+    try:
+        c = _read_ways(action, cwd)
+    finally:
+        _xargs_met.reset(token)
+    if met[0] and not _xargs_getopt.get() and not _config_off.get():
+        c = _xargs_reading(c, action, cwd)
+    return c
+
+
+def _read_ways(action: Any, cwd: str | None) -> Classification:
+    """_classify_read's reading of the call in one reading of xargs's options (#1116): the call, with its printed
+    (#1047), opened (#853) and late (#864) readings."""
     timed, met = [False], [False]
     t_timed, t_met = _timed.set(timed), _late_met.set(met)
     try:
@@ -9987,6 +10051,29 @@ def _late_reading(c: Classification, action: Any, cwd: str | None) -> Classifica
     finally:
         _late_met.reset(met)
         _late_open.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _beside(o, xo)
+    return c
+
+
+def _xargs_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#1116: the call as read before (c), with a second reading of it beside it in which each xargs reads its
+    command where getopt starts it (_xargs_start), not past one word per option as main does, with the printed,
+    opened and late readings of that reading (_read_ways). The reading has budgets and memos of its own. The reading
+    as before stays as it is, with its ``ordinary`` reading (D-074) beside the second reading's: decide keeps the
+    strictest, and no_grant (and through it the hook's bypass floor) counts each reading, so a line never decides
+    lower than before. Parts of one reading would not do: a push read after `--max-args rm` would take the lead from
+    the delete main reads there, and a category line that logs pushes would lower the line."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _xargs_getopt.set(True), _xargs_met.set(None)
+    try:
+        x = _brace_budget(_read_ways)(action, cwd)
+    finally:
+        _xargs_met.reset(met)
+        _xargs_getopt.reset(token)
         _shell_seen.reset(memo)
         _brace_left.reset(left)
     o, xo = c.ordinary, x.ordinary

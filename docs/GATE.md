@@ -1411,6 +1411,33 @@ gate does not read:
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
   see "Known limits"). The result is the most severe part, and it keeps the `indirection`
   signal, so `decide` asks even when the inner part alone would only log.
+- The command after `xargs` is found where xargs starts it (#1116). The gate reads xargs's own
+  options as getopt reads them for GNU and BSD xargs. A long option that takes a value takes the
+  next word unless it is written with `=` (`--max-args 1`, `--max-procs 4`, `--max-chars 99`,
+  `--delimiter x`, `--arg-file list`, `--process-slot-var V`). An unambiguous prefix counts as the
+  option (`--max-a 1`). `--eof`, `--replace` and `--max-lines` take a value after `=` only.
+
+  Short options run together are read letter by letter. A letter that takes a value takes the rest
+  of its word, or the next word when it is the last (`-rn 1`, `-0n 1`, `-tP 4`). These letters are
+  GNU's and BSD's together: `a d E I L n P s` and `J R S`. GNU's `-e`, `-i` and `-l` take a value
+  in their own word only. `--` ends the options.
+
+  Before, the gate skipped one word per option, and two only after `-I`, `-n`, `-P`, `-L`, `-s`,
+  `-d`, `-E` or `-a` written alone. It read the value of any other option as the program, and the
+  command after it went unread. So under `force_push: deny` and `opaque_exec: allow`,
+  `xargs --max-args 1 git push --force origin main` was allowed. It is denied now, as
+  `xargs -n 1 git push --force origin main` is.
+
+  Where the two starts differ, the gate reads the call twice. Once as before, and once with the
+  command of each xargs read where getopt starts it. `decide` keeps the stricter reading. An unknown
+  or ambiguous option, or a value missing at the end, makes xargs fail without running anything.
+  Only the reading from before is made there (`xargs --max 1 ...`). A word from an expansion in an
+  option's place (`xargs $FLAGS git push ...`) is still read as the program, a known limit that
+  `nice`, `timeout` and `setsid` share.
+
+  The command read where getopt starts it has those words as its own text (#458). So a rule for
+  `xargs`, or one that names a here-string word or a here-doc body, does not lower the push in
+  `echo x | xargs --max-args 1 git push --force origin main`. The rule must name it too.
 - A pipe from `printf` or `echo -e` into a shell is read as written, as before, and also as the
   command writes it (#1047). Bash's printf expands the escapes of its format (`\n`, `\x0a`, `\012`)
   and fills `%s`, `%b` and `%%` from its arguments, using the format again while they last.
