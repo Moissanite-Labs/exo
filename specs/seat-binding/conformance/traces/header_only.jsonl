@@ -1,0 +1,1 @@
+{"schema_version":1,"run_id":"header_only","seq":0,"timestamp":"2026-11-04T06:00:00Z","actor":"system","event":"initial","fixed":true,"state":{"core_seat":null,"client_launch_seat":null,"client_display_seat":null,"client_session":null,"sessions":[],"last_outcome":"NoOutcome","user_visible_outcome":"none","resumed_other_seat":false,"from_client_new":false,"next_sid":"s1"}}
