@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Moissanite-Labs/exo/specs/seat-binding/conformance/trace.schema.json",
+  "title": "Seat binding conformance trace line",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "seq",
+    "timestamp",
+    "actor",
+    "event",
+    "fixed",
+    "state"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string" },
+    "actor": { "enum": ["core", "client", "system"] },
+    "event": {
+      "enum": [
+        "initial",
+        "load_seat",
+        "persist_session",
+        "session_create",
+        "resume",
+        "client_boot",
+        "client_new",
+        "refusal",
+        "reconnect"
+      ]
+    },
+    "fixed": { "type": "boolean" },
+    "params": {
+      "type": "object",
+      "properties": {
+        "seat": { "type": ["string", "null"] },
+        "launch_seat": { "type": ["string", "null"] },
+        "request_seat": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "state": {
+      "type": "object",
+      "required": [
+        "core_seat",
+        "client_launch_seat",
+        "client_display_seat",
+        "client_session",
+        "sessions",
+        "last_outcome",
+        "user_visible_outcome",
+        "resumed_other_seat",
+        "from_client_new",
+        "next_sid"
+      ],
+      "properties": {
+        "core_seat": { "type": ["string", "null"] },
+        "client_launch_seat": { "type": ["string", "null"] },
+        "client_display_seat": { "type": ["string", "null"] },
+        "client_session": { "type": ["string", "null"] },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "seat"],
+            "properties": {
+              "id": { "type": "string" },
+              "seat": { "type": "string" },
+              "foreign": { "type": "boolean" }
+            }
+          }
+        },
+        "last_outcome": { "type": "string" },
+        "user_visible_outcome": { "type": "string" },
+        "resumed_other_seat": { "type": "boolean" },
+        "from_client_new": { "type": "boolean" },
+        "next_sid": { "type": "string" }
+      }
+    }
+  },
+  "additionalProperties": false
+}
