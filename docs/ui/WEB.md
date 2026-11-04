@@ -79,6 +79,12 @@ replays from the last event it applied, so no reply or approval card is lost. Th
 events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
 start, so an approval asked before them does not show.
 
+Stopping the page waits for open HTTP handlers to finish their cleanup before `close()` returns (#1018).
+A handler that starts the shutdown is not cancelled, and it is not asked to wait for itself. A connection
+accepted while that drain is running is closed and is not served. `start()` raises while the drain is still
+running, so a second launch cannot replace a server that has not finished stopping. On Python 3.11 this wait
+is what keeps a caller that then stops the event loop from leaving a connection task unfinished.
+
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with

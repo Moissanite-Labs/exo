@@ -192,6 +192,88 @@ def test_handler_cleanup_can_reenter_close_during_external_drain():
     asyncio.run(asyncio.wait_for(check(), 5))
 
 
+def test_accept_during_shutdown_closes_the_socket_and_registers_nothing():
+    """The refusal in `_accept_client` is what keeps close() from waiting on a late connection."""
+
+    async def check():
+        web = WebServer(None)
+        seen = {"shutdown": 0}
+
+        def wrapped(reader, writer):
+            if web._close_task is not None:
+                seen["shutdown"] += 1
+            return WebServer._accept_client(web, reader, writer)
+
+        web._accept_client = wrapped
+        port = await web.start()
+
+        async def hang():
+            await asyncio.Event().wait()
+
+        web._close_task = asyncio.create_task(hang())
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            for _ in range(8):
+                if seen["shutdown"]:
+                    break
+                await asyncio.sleep(0)
+            assert seen["shutdown"] >= 1
+            assert await asyncio.wait_for(reader.read(), 1) == b""
+            assert not web._conns
+        finally:
+            web._close_task.cancel()
+            await asyncio.gather(web._close_task, return_exceptions=True)
+            web._close_task = None
+            await web.close()
+            writer.close()
+            await writer.wait_closed()
+
+    asyncio.run(asyncio.wait_for(check(), 5))
+
+
+def test_handler_close_joins_the_other_handler():
+    async def check():
+        web = WebServer(None)
+        holder_started, cleaned = asyncio.Event(), asyncio.Event()
+
+        async def request(reader, writer):
+            if not holder_started.is_set():
+                holder_started.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    cleaned.set()
+                return
+            await holder_started.wait()
+            while len(web._conns) < 2:
+                await asyncio.sleep(0)
+            await web.close()
+            assert cleaned.is_set()
+
+        web._request = request
+        port = await web.start()
+        first_reader, first_writer = await asyncio.open_connection("127.0.0.1", port)
+        second_reader, second_writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            await holder_started.wait()
+            while len(web._conns) < 2:
+                await asyncio.sleep(0)
+            await asyncio.wait_for(asyncio.gather(
+                *(task for task in list(web._conns)), return_exceptions=True), 5)
+            assert cleaned.is_set()
+            assert not web._conns
+            assert await first_reader.read() == b""
+            assert await second_reader.read() == b""
+        finally:
+            await web.close()
+            first_writer.close()
+            second_writer.close()
+            await first_writer.wait_closed()
+            await second_writer.wait_closed()
+
+    asyncio.run(asyncio.wait_for(check(), 5))
+
+
 def test_accept_registers_handler_before_its_first_turn():
     async def check():
         web = WebServer(None)
