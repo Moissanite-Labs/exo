@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 TRACE_POOL = ("s1", "s2", "s3")
 SCHEMA_VERSION = 1

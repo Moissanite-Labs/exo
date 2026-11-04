@@ -50,7 +50,7 @@ Seq 1 post-state has `foreign: true` while `core_seat` is null — exactly the s
 
 ### Restore + green gate
 
-This PR branch restores correct code. Local gate simulation (emit + replay good + emitted + negative fixtures): ~**5–8 s** added wall time beyond the existing replay-only step (dominated by `pip install -e ".[dev,tui]"` and TLC on three conforming traces). CI run URL will be posted on the PR checks after push.
+This PR branch restores correct code. Local gate simulation (emit + replay good + emitted + negative fixtures): ~**5–8 s** added wall time beyond the existing replay-only step (dominated by `pip install -e ".[dev,tui]"` and TLC on three conforming traces). Green gate: https://github.com/Moissanite-Labs/exo/actions/runs/41897687531/job/126811486817
 
 ## Format gaps
 
