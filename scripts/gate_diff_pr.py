@@ -119,7 +119,6 @@ def merge_aware_scan(
         ch, th, _, uh, ph, _ = row_h[:6]
         _, _, _, um, pm, _ = row_m[:6]
         nb = row_b[6] if len(row_b) > 6 else []
-        nmb = row_mb[6] if len(row_mb) > 6 else []
         nh = row_h[6] if len(row_h) > 6 else []
         nm = row_m[6] if len(row_m) > 6 else []
         for j, name in enumerate(names_b):
