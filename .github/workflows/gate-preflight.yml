@@ -46,6 +46,7 @@ jobs:
             --git-dir "$GITHUB_WORKSPACE" \
             --pr-base-ref "$BASE_SHA" \
             --head-ref "$GITHUB_SHA" \
+            --jobs 2 \
             --json gate-diff.json
       - name: Preserve differential evidence
         if: always()

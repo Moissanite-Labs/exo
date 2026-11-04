@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Merge-aware gate preflight for pull requests (#1147).
 
-Evaluates four gate checkouts on one corpus: PR base, ``merge-base(PR base, origin/main)``, ``origin/main``, and
-head. Fails on any pair lowered vs main. A pair lowered vs the PR base is allowed only when head matches main,
+Evaluates four gate checkouts on one corpus: PR base, ``merge-base(PR base, origin/main)``, the newest ``origin/main`` commit
+ancestor of head (the main revision the PR carries), and head. Fails on any pair lowered vs main. A pair lowered vs the PR base is allowed only when head matches main,
 the PR base matches merge-base on that pair (the bridge never touched it), and main differs from merge-base
 (main changed it after divergence). Otherwise the lowering is forbidden; bridge-stricter vs main-loosened
 conflicts are counted separately.
@@ -43,10 +43,11 @@ def merge_base_with_main(repo: Path, pr_base_sha: str) -> str:
     return r.stdout.strip()
 
 
-def main_tip(repo: Path) -> str:
-    r = _git(repo, "rev-parse", "origin/main")
+def main_tip_for_head(repo: Path, head_sha: str) -> str:
+    """Newest ``origin/main`` commit that is an ancestor of ``head`` (the main revision the PR carries)."""
+    r = _git(repo, "merge-base", head_sha, "origin/main")
     if r.returncode != 0:
-        raise gd.Failed(f"could not resolve origin/main: {r.stderr.strip()}")
+        raise gd.Failed(f"merge-base({head_sha}, origin/main): {r.stderr.strip()}")
     return r.stdout.strip()
 
 
@@ -320,7 +321,7 @@ def run(a: argparse.Namespace) -> int:
     if not pr_base_sha or not head_sha:
         raise gd.Failed("could not resolve PR base or head sha; pass --pr-base-ref and --head-ref")
     mb_sha = a.merge_base_ref or merge_base_with_main(git_dir, pr_base_sha)
-    main_sha = a.main_ref or main_tip(git_dir)
+    main_sha = a.main_ref or main_tip_for_head(git_dir, head_sha)
     mb_work = mb_tree = a.merge_base
     main_work = main_tree = a.main
     work: Path | None = None
@@ -359,6 +360,7 @@ def run(a: argparse.Namespace) -> int:
             "head": f"{a.head} {gd._commit(a.head)}".strip(),
             "merge_base_sha": mb_sha,
             "main_tip_sha": main_sha,
+            "origin_main_tip": _git(git_dir, "rev-parse", "origin/main").stdout.strip(),
             "pr_base_sha": pr_base_sha,
             "corpus_counts": meta["corpus_counts"],
             "wall_secs": meta["wall_secs"],
