@@ -75,3 +75,4 @@ Upstream landing, desktop integration and live installation are separate states.
 ## Communication
 
 Use the linked decision discussion for the shared transition record, and the Bus for private assignments and handoffs. Feature requests have one discussion each in the Feature requests category. Bugs remain issues in the implementation's home repository, with links from dependent desktop work.
+
