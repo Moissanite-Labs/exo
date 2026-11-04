@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 
 from exo.core.groups import GroupMember, SavedGroup
 
@@ -29,6 +30,8 @@ class GroupRunner:
 
     def __init__(self, group: SavedGroup, runners: Mapping[str, Runner]):
         profiles = {m.profile for m in group.members}
+        if len(profiles) != len(group.members):
+            raise ValueError("member profiles must be unique")
         if set(runners) != profiles or any(not callable(r) for r in runners.values()):
             raise ValueError("one authorized runner is required for each member")
         self.group = group
@@ -49,7 +52,7 @@ class GroupRunner:
             self._states[member.profile] = "queued"
             task = loop.create_task(self._run(member))
             self._tasks[member.profile] = task
-            task.add_done_callback(lambda t, p=member.profile: self._finished(p, t))
+            task.add_done_callback(partial(self._finished, member.profile))
 
     async def _run(self, member: GroupMember) -> None:
         self._states[member.profile] = "running"
@@ -58,7 +61,7 @@ class GroupRunner:
     def _finished(self, profile: str, task: asyncio.Task) -> None:
         # Do not retain or publish arbitrary exception text from provider adapters.
         if task.cancelled():
-            self._states[profile] = "stopped"
+            self._states[profile] = "stopped" if self._states[profile] in ("stopping", "stopped") else "failed"
         elif task.exception() is not None:
             self._states[profile] = "failed"
         else:
