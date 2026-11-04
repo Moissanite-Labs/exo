@@ -22,7 +22,7 @@ concurrency:
 env:
   # Bootstrap hashes when PR base predates merge-aware preflight (#1147). Update when those files change.
   GATE_DIFF_BOOTSTRAP_SHA256: c9d05b36860829f7bc454e80c6a9dcbf1556a237f59f7943fa346e36161f4e21
-  GATE_DIFF_PR_BOOTSTRAP_SHA256: 0192fa92069b4ca2409616ced94a4f24c1d050ab2c19c90095eb53e48f824958
+  GATE_DIFF_PR_BOOTSTRAP_SHA256: d16fff1f8be728e4b5cdcc56d12fb9592366e724b0a46d585215f3dadcc94604
 
 jobs:
   never-looser:
@@ -95,6 +95,7 @@ jobs:
             --pr-base-ref "$BASE_SHA" \
             --head-ref "$GITHUB_SHA" \
             --jobs 2 \
+            --fetch-origin-main \
             --json gate-diff.json
       - name: Preserve differential evidence
         if: always()

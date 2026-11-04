@@ -228,8 +228,15 @@ def run_four_trees(
         corpus_path.write_text(json.dumps(actions), encoding="utf-8")
         pol_path.write_text(json.dumps(policies), encoding="utf-8")
         labels = ("pr_base", "merge_base", "main", "head")
+        trees = (pr_base, merge_base, main, head)
         outs = {label: work / f"{label}.jsonl.gz" for label in labels}
-        for label, tree in zip(labels, (pr_base, merge_base, main, head)):
+        started: dict[Path, str] = {}
+        for label, tree in zip(labels, trees):
+            key = tree.resolve()
+            if key in started:
+                outs[label] = outs[started[key]]
+                continue
+            started[key] = label
             procs[label] = gd.start_tree(label, tree, corpus_path, pol_path, outs[label], max(1, a.jobs), home)
         _, why = gd.wait_trees(procs, a.timeout)
         if why:
@@ -270,6 +277,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--timeout", type=float, default=3600)
     p.add_argument("--home", type=Path)
     p.add_argument("--accept-unread", default="")
+    p.add_argument("--fetch-origin-main", action="store_true",
+                   help="git fetch origin main before resolving merge-base and main tip (CI only)")
     return p.parse_args(argv)
 
 
@@ -309,8 +318,18 @@ def summary_text(rep: dict, max_examples: int = 3) -> str:
         lines.append("conflict_bridge_stricter (forbidden):")
         for tag, n in list(rep["merge_aware"]["forbidden_vs_base_by_transition"].items())[:max_examples]:
             lines.append(f"  {n:7d}  {tag}")
-    lines.append("result: FORBIDDEN LOWERING (exit 1)" if c["lowered_vs_main"] or c["forbidden_vs_base"]
-                   else "result: ok (exit 0)")
+    if c["forbidden_vs_base"]:
+        lines.append("forbidden vs pr_base by transition:")
+        for tag, n in list(rep["merge_aware"]["forbidden_vs_base_by_transition"].items())[:max_examples]:
+            lines.append(f"  {n:7d}  {tag}")
+    if rep.get("incomplete"):
+        lines.append(
+            f"INCOMPLETE (exit 2): unread gate tables {', '.join(rep['incomplete'])} "
+            "(keep each a literal, or name it in --accept-unread once you have read the change)")
+    elif c["lowered_vs_main"] or c["forbidden_vs_base"]:
+        lines.append("result: FORBIDDEN LOWERING (exit 1)")
+    else:
+        lines.append("result: ok (exit 0)")
     return "\n".join(lines)
 
 
@@ -329,7 +348,8 @@ def _git_dir(explicit: Path | None, head: Path) -> Path:
 
 def run(a: argparse.Namespace) -> int:
     git_dir = _git_dir(a.git_dir, a.head)
-    _git(git_dir, "fetch", "origin", "main")
+    if a.fetch_origin_main:
+        _git(git_dir, "fetch", "origin", "main")
     pr_base_sha = a.pr_base_ref or _sha(a.pr_base)
     head_sha = a.head_ref or _sha(a.head)
     if not pr_base_sha or not head_sha:
@@ -387,7 +407,15 @@ def run(a: argparse.Namespace) -> int:
         json_path = gd._out_path(a.json, "--json")
         if json_path:
             json_path.write_text(json.dumps(rep, indent=1) + "\n", encoding="utf-8")
+        for side, tabs in unread.items():
+            if not tabs:
+                continue
+            print(f"Tables the {side} tree holds in a form the script does not read:", file=sys.stderr)
+            for table, why in tabs.items():
+                print(f"  {table}: {why}", file=sys.stderr)
         print(summary_text(rep, a.max_examples))
+        if rep["incomplete"]:
+            print(f"gate_diff_pr: incomplete unread tables: {', '.join(rep['incomplete'])}", file=sys.stderr)
         if rep["merge_aware"]["counts"]["lowered_vs_main"] or rep["merge_aware"]["counts"]["forbidden_vs_base"]:
             return 1
         return 2 if rep["incomplete"] else 0

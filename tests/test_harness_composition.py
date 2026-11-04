@@ -19,7 +19,7 @@ def configured(tmp_path, monkeypatch, profile="lean", **extra):
     home = tmp_path / "home"
     monkeypatch.setenv("EXO_HOME", str(home))
     store = tmp_path / "principal"
-    store.mkdir()
+    store.mkdir(exist_ok=True)
     data = {"models": {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
             "plugin_config": {"exo-gate": {"principal_store": str(store),
                             "key_path": str(tmp_path / "gate.key"), "decision_model": False}},
@@ -109,19 +109,37 @@ def test_coding_can_read_workspace_and_keep_existing_coding_features(tmp_path, m
 
 
 def test_legacy_keeps_discovery_and_existing_runtime_defaults(tmp_path, monkeypatch):
-    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False},
-               work_checkpoint={"enabled": False})
+    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False})
     engine = compose.create()
     try:
         assert not isinstance(engine.jobs, DisabledJobs) and not isinstance(engine.agents, DisabledDelegator)
         assert engine.scheduler is not None and engine.peers is not None
-        assert engine.loop.workspace_extra is None
+        assert engine.workspace_instructions is None
+        assert engine.work_checkpoint is not None
         assert "skill" in engine.registry.names()
     finally:
         asyncio.run(engine.close())
 
 
-def test_disabled_tool_calls_fail_even_if_not_advertised(tmp_path, monkeypatch):
+def test_tasks_list_works_without_delegation(tmp_path, monkeypatch):
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+
+    configured(tmp_path, monkeypatch, profile="lean")
+    engine = compose.create()
+
+    async def run():
+        disp = Dispatcher(engine)
+        for body in ({}, {"active": True}):
+            resp = await disp.run(s.Command.of(s.TasksList(**body)))
+            assert resp.ok, resp.error
+            assert resp.result["tasks"] == []
+
+    try:
+        asyncio.run(run())
+    finally:
+        asyncio.run(engine.close())
+
     configured(tmp_path, monkeypatch)
     engine = compose.create()
     try:

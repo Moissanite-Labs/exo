@@ -3455,6 +3455,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   At the same outcome below deny it is also lower when it loses a reserved hit or category, or a posting violation
   main lists. At an equal deny neither counts, since the call is blocked. Reviewers run main's copy of the script
   against the PR head and read any change a gate PR makes to it, so a PR cannot weaken the check that judges it.
+  **Amendment 2026-11-04 (#1147):** pull requests into `feat/core-plugin-bridge` (and similar long-lived integration
+  branches) may run `scripts/gate_diff_pr.py` from a **trusted worktree at the PR base SHA**, with pinned bootstrap
+  hashes when the base predates merge-aware comparator code. The script compares four gate trees (PR base,
+  merge-base with `origin/main`, `merge-base(head, origin/main)`, and head). Lowering vs `origin/main` carried by
+  the head is forbidden; lowering vs the PR base is allowed only when head matches main on that pair, PR base
+  matches merge-base, and main differs from merge-base (full decision tuples). Comparator Python never loads from
+  the head workspace; gate data trees may.
   Left out, so a change there needs its own tests: session folders beyond the corpus's own and the folder rows, a
   name, key or program the script does not read from those tables (it runs only where a test names it), a regex
   alternative or helper pattern beyond the four sampled ones (seen only where a test or a seed names it), files and
@@ -7058,7 +7065,7 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   call to the CLI, and read-only tool calls at 0.0 s.
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
 
-## D-085 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
+## D-088 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
 - **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
   letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
 - **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
@@ -7167,7 +7174,7 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
   User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
 
-## D-088 (2026-10-23) Retained tool-output views with exact bounded expansion
+## D-085 (2026-10-23) Retained tool-output views with exact bounded expansion
 - **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.
 - **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
   transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
@@ -7308,6 +7315,10 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
     exemption is the reader's own names, not its class body only, which is what the helper measures.
   - Both numbers ratchet down like `CORE_FLOOR`: a reduction sets the constant to its new, lower count. Neither may be
     raised to make a false positive pass; fix the reader instead.
+- **Amendment 2026-11-04 (#1147, feat/core-plugin-bridge sync):** on the bridge branch only,
+  `INWARD_IMPORTS_MAX = 42` records three product imports that remain outside `exo.core` pending extraction of
+  `exo.plugin_lifecycle` and `exo.runtime_shutdown` per #498. Main integration keeps **39** until those modules
+  move under `exo.core`.
 - **Rejected:**
   - Keeping the headroom at 1,000 and cutting before the next fix. Rule 4 forbids blocking a security or robustness
     fix on the count, and the count was already at one line free.

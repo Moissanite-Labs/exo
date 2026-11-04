@@ -124,7 +124,7 @@ def test_failure_after_writer_claim_releases_lock_and_all_resources(tmp_path, mo
 
 
 def test_startup_abort_refuses_a_started_engine(tmp_path, monkeypatch):
-    _, marker = setup(tmp_path, monkeypatch, peers={"enabled": False})
+    _, marker = setup(tmp_path, monkeypatch)
 
     async def run():
         engine = compose.create()

@@ -8,11 +8,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Added
 - Optional retained tool-output excerpts with exact paginated expansion, scoped to the session and
   configured principal. Originals stay in the transcript. Earlier tool caps are not recoverable
-  (`docs/TOOL-OUTPUT.md`, D-084, #501 stage 1; in progress).
+  (`docs/TOOL-OUTPUT.md`, D-085, #501 stage 1; in progress).
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations
-  without a profile retain legacy behavior (`docs/HARNESS.md`, D-082).
+  without a profile retain legacy behavior (`docs/HARNESS.md`, D-088).
 - Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
   final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
 - Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
@@ -21,17 +21,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
-  explicit runtime collaborators and compatibility shims. Counted core size falls by 67 lines and the
-  headroom allowance returns to 1,000. Approval behavior is unchanged (D-077/D-082, #498).
+  explicit runtime collaborators and compatibility shims. Counted core size falls by 67 lines on the bridge
+  extraction path (D-088, #498). Approval behavior is unchanged.
 - Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
   supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
 - Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
 
 - Gate: invariant gh field parsing (#550, partial scope). The #550 entry under Fixed closes the rest.
 
-- Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
+- Merge-aware gate preflight for long-lived integration branches: trusted comparator at the PR base, four gate trees,
+  pinned bootstrap when the base predates `gate_diff_pr.py` (#1147, D-038 amendment). Hosted execution and required-check
+  configuration remain pending.
 
-### Fixed
 - A seated core stores its own seat on a new thread when the client omits the name, and refuses a different name before writing a session (D-028 amendment). The terminal's `/new` sends the seat the window was started with. After resuming another seat's thread, `/new` still opens a thread of this core's seat. A window started with a different `--seat` joins this core's seat and says so.
 - `exo web` shutdown waits until open HTTP handlers finish cleanup (#1018, D-036 amendment). On Python 3.11, `close()` returned while a connection was still cancelling. A connection accepted during shutdown is closed. `start()` raises while that drain is still running.
 - Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks

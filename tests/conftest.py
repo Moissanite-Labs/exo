@@ -55,7 +55,7 @@ def hermetic_env(tmp_path, monkeypatch):
     for k in list(os.environ):
         if k.startswith(("EXO_BUS_", "DIVAN_", "EXO_PEERS")) or k in ("EXO_SEAT", "XDG_RUNTIME_DIR"):
             monkeypatch.delenv(k)
-    monkeypatch.setenv("EXO_PEERS_DIR", str(tmp_path / "peers"))
+    monkeypatch.setenv("EXO_PEERS_DIR", str(tmp_path / "p"))
     # D-034: no test reads or writes the real Keychain, Secret Service or keys file.
     monkeypatch.setenv("EXO_NO_KEYCHAIN", "1")
     monkeypatch.setenv("EXO_NO_SECRET_SERVICE", "1")

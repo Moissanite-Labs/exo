@@ -91,7 +91,7 @@ class DisabledDelegator:
         from exo.core.agents.delegate import Delegator
         return Delegator.route(self, tier)  # type: ignore[arg-type]  # route only reads self.engine
 
-    def list(self, session: str | None = None) -> list[dict[str, Any]]:
+    def list(self, session: str | None = None, *, active: bool = False) -> list[dict[str, Any]]:
         return []
 
     def interrupt(self, session: str) -> bool:

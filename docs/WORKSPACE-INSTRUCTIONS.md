@@ -1,6 +1,6 @@
 # Workspace instructions
 
-**Status:** In progress (D-082, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
+**Status:** In progress (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
 
 Exo can read a project's `AGENTS.md` files into the model's system text. The
 instructions capability is included in the `coding` and `full` harness profiles.

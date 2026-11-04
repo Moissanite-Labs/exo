@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -230,3 +231,10 @@ def test_allow_compares_full_decision_tuple_not_outcome_only(tmp_path):
     ma = rep["merge_aware"]["counts"]
     assert ma["allowed_because_main"] == 0
     assert ma["forbidden_vs_base"] >= 1
+
+
+def test_main_tip_for_head_matches_git_merge_base_with_head():
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(ROOT), text=True).strip()
+    want = subprocess.check_output(["git", "merge-base", head, "origin/main"], cwd=str(ROOT), text=True).strip()
+    gdp = __import__("scripts.gate_diff_pr", fromlist=["gate_diff_pr"])
+    assert gdp.main_tip_for_head(ROOT, head) == want

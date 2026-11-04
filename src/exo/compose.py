@@ -179,5 +179,8 @@ def create(seat: str | None = None) -> CoreEngine:
     except BaseException:
         if eng is not None:
             eng.abort_startup()
-        pm.close()
+        try:
+            pm.close()
+        except AttributeError:
+            pass
         raise

@@ -103,7 +103,7 @@ its own cap (section 2).
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
 
-**Harness composition (D-082).** `exo.harness.resolve` builds a side-effect-free capability plan.
+**Harness composition (D-088).** `exo.harness.resolve` builds a side-effect-free capability plan.
 `exo.compose` selects services and plugins before constructing the runtime. `exo harness show --json`
 explains the configuration without importing plugins. New optional services belong behind composition
 seams, as jobs/delegation factories do. Disabling a feature must remove its tools and resource startup,
@@ -111,7 +111,7 @@ and reject direct execution attempts. Test seat overrides and alternate executor
 Profiles are runtime selection, not an OS sandbox or separate installation distributions.
 See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
 
-**Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+**Plugin runtime binding (D-088).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
 private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
 `exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
 Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
@@ -119,7 +119,7 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
-**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+**Retained tool output (D-085).** `exo.tool_evidence` decorates `TurnContext.build` when
 `tool_output.enabled` is true. It renders copies and expands retained sanitized text through
 the normal registry/executor path. `for_child(context, tools=names)` is an optional context
 method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
@@ -337,7 +337,7 @@ To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. T
 a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
 did not parse").
 
-**Dependencies and cleanup (D-082).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
+**Dependencies and cleanup (D-088).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
 The loader orders selected dependencies first and blocks missing, failed or cyclic dependencies before
 importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
 available only after import and is checked before registration. Pair resources created in `register`
@@ -519,9 +519,12 @@ Check your prose before you commit docs:
 
 ### Checking a gate change against main
 
-Gate-related pull requests also run `gate-preflight.yml`: the gate plugin suite and the base revision's
-comparator against the composed PR tree, with the JSON differential retained as an artifact. A nonzero
-comparator result fails that job. Hosted execution and branch-protection enforcement remain separate:
+Gate-related pull requests into `main` run `gate-preflight.yml`: the gate plugin suite and **main's
+copy** of `scripts/gate_diff.py` against the composed PR tree (trusted at the PR base revision), with
+the JSON differential retained as an artifact. Pull requests into long-lived integration branches
+such as `feat/core-plugin-bridge` may run the merge-aware `scripts/gate_diff_pr.py` from a trusted
+PR-base worktree instead (four gate trees, pinned bootstrap when the base predates that script; see
+D-038 amendment 2026-11-04). A nonzero comparator result fails that job. Hosted execution and branch-protection enforcement remain separate:
 maintainers must make `never-looser` a required check to enforce it at merge. Reviewers still inspect docs and
 explain every intentional lowering; this workflow does not waive the docs rule.
 

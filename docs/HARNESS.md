@@ -1,6 +1,6 @@
 # Modular harness profiles
 
-**Status:** In progress (D-082, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
+**Status:** In progress (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
 
 Exo can run with a small set of capabilities or with its full set of integrations.
 Profiles select runtime components. They do not change models, approval policy,
@@ -28,6 +28,10 @@ reasons. It does not probe installed plugin availability or an already running d
 | `lean` | Coding tools, durable sessions/context tree, tracing and `exo-gate` |
 | `coding` | Lean plus principal memory, plugin context compression, skills, workspace instructions, configured MCP servers, background jobs and delegation |
 | `full` | Coding plus peers, scheduler, learning, bus/channels, browser plugin and orchestration skills |
+
+Work checkpoints and session working notes attach in every profile when enabled in config (they are not profile
+capabilities). The `lean` row lists coding-session tools only; checkpoint/note behavior follows main's default-on
+settings unless explicitly disabled.
 
 The durable agent log/context tree is part of the core in every profile. Turning off
 `memory` removes the principal-memory plugin. It does not delete conversation history.
@@ -167,8 +171,8 @@ and reused by child loops. Plugin graph/resource ownership lives in
 translates lifecycle verdicts through the existing registry and approval desk. Its explicit
 collaborators keep plugin compatibility independent of the engine's private state. Direct
 `CoreRuntime` construction retains plugin support and the former helper methods remain shims.
-Registration interfaces remain in `exo.core.plugins`. The extraction restores the standard
-1,000-line core headroom allowance without changing approval policy or excluding modules.
+Registration interfaces remain in `exo.core.plugins`. The extraction counted 67 fewer core lines
+without changing approval policy or excluding modules.
 No wire command or event was added.
 
 [HARNESS-LANDSCAPE.md](HARNESS-LANDSCAPE.md) records the dated comparison, sources,
