@@ -15,6 +15,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
+  missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
+  no longer imply a plan usage limit; provider response text remains private.
 - The ChatGPT connection card is separate from the default-model section. An empty model list removes only that section (D-034).
 - ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Each call turns Keychain prompts off and restores the previous setting. Failed callbacks show a safe retry message and preserve the previous connection. A successful reconnect deletes the previous CLI item without putting the secret in argv. A rotated refresh token whose save fails is kept and saved on the next call. Python reads through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` stay on the credentials floor (D-034 amendment).
 - A ChatGPT route is a billing boundary on every role. Routes placed ahead of it still run. A missing, expired, or usage-limited attempt does not continue into an API-key route behind it (D-034 amendment).
