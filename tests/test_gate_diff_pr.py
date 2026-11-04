@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.test_gate_diff import DELETE_LINE, ROOT, _tree
 
 PR_SCRIPT = ROOT / "scripts" / "gate_diff_pr.py"
@@ -235,6 +237,19 @@ def test_allow_compares_full_decision_tuple_not_outcome_only(tmp_path):
 
 def test_main_tip_for_head_matches_git_merge_base_with_head():
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(ROOT), text=True).strip()
-    want = subprocess.check_output(["git", "merge-base", head, "origin/main"], cwd=str(ROOT), text=True).strip()
+    main_ref = "origin/main"
+    if subprocess.run(
+        ["git", "rev-parse", "--verify", main_ref],
+        cwd=str(ROOT),
+        capture_output=True,
+    ).returncode != 0:
+        main_ref = "main"
+    if subprocess.run(
+        ["git", "rev-parse", "--verify", main_ref],
+        cwd=str(ROOT),
+        capture_output=True,
+    ).returncode != 0:
+        pytest.skip("no main ref in this checkout (CI shallow clone without main)")
+    want = subprocess.check_output(["git", "merge-base", head, main_ref], cwd=str(ROOT), text=True).strip()
     gdp = __import__("scripts.gate_diff_pr", fromlist=["gate_diff_pr"])
     assert gdp.main_tip_for_head(ROOT, head) == want
