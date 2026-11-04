@@ -1484,7 +1484,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `tests/security/test_gate_ssh_forward_keys_1096.py`.
 - *Amendment 2026-11-03 (issue #1126):* BusyBox's shell and applets are read as the program each one names.
   BusyBox is one binary that runs the applet its first operand names, and on Alpine images `/bin/sh` and `/bin/ash`
-  are that binary. On main 0f413c7f `busybox` was in `_SHELLS`, but that branch takes the first word
+  are that binary. On main 035e8a97 `busybox` was in `_SHELLS`, but that branch takes the first word
   that is not an option for a script, so `busybox sh` read as busybox running a script named `sh`.
 
   Neither its `-c` text, its stdin, a heredoc nor #1047's printed text was read, and `_cd_walk` stopped at the same
@@ -1528,7 +1528,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   So `cd ~/.exo && busybox cat config` leads with its store write, where `cd ~/.exo && cat config` leads with the
   secret. A #479 loop with `busybox cp` leads with `opaque_exec`.
 
-  Main's `scripts/gate_diff.py` lowers no pair against main 0f413c7f. The PR lists each run's numbers.
+  Main's `scripts/gate_diff.py` lowers no pair against main 035e8a97. The PR lists each run's numbers.
   Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,
   `tests/docs/test_gate_printf_readers_doc.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
