@@ -16,6 +16,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Failed callbacks show a safe retry message and preserve the previous connection.
+- A ChatGPT route is a billing boundary on every role. Routes placed ahead of it still run. A missing, expired, or usage-limited attempt does not continue into an API-key route behind it (D-034 amendment).
 - Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
   the principal. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line
   with `-o StreamLocalBindUnlink=yes` were reads that the default policy allowed. ssh makes that socket, and with that
