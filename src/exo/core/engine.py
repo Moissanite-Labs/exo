@@ -561,8 +561,9 @@ class CoreRuntime:
         """Unattributed persisted events cannot be safely assigned to a loaded profile."""
         if self.seat is None:
             return True
-        info = self.store.get_session(event.session) if event.session else None
-        return info is not None and info.agent == self.agent
+        if not event.session:
+            return False
+        return self.store.thread(event.session)[0] == self.agent
 
     def _info(self, sid: str) -> s.SessionInfo:
         info = self.store.get_session(sid)
