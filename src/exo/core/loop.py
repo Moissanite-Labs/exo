@@ -23,7 +23,6 @@ the turn's sum) and an ``on_event`` attribute.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
