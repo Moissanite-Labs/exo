@@ -35,9 +35,19 @@ jobs:
       - name: Gate plugin acceptance
         working-directory: plugins/exo-gate
         run: uv run --project ../.. pytest -q
-      - name: Compare base with the composed PR tree using the base comparator
+      - name: Compare with the composed PR tree using the base comparator
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git worktree add --detach "$RUNNER_TEMP/gate-base" "$BASE_SHA"
+          # Sync PRs that merge main into feat/core-plugin-bridge compare against main: head carries
+          # main's gate plus bridge-only tool_output rules; the stale bridge base gate would false-fail.
+          if [ "$PR_BASE_REF" = "feat/core-plugin-bridge" ]; then
+            git fetch origin main
+            REF=$(git rev-parse origin/main)
+          else
+            REF="$BASE_SHA"
+          fi
+          git worktree add --detach "$RUNNER_TEMP/gate-base" "$REF"
           uv run python "$RUNNER_TEMP/gate-base/scripts/gate_diff.py" --base "$RUNNER_TEMP/gate-base" --head "$GITHUB_WORKSPACE" --json gate-diff.json
       - name: Preserve differential evidence
         if: always()

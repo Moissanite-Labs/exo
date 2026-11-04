@@ -193,7 +193,7 @@ BIG_FILE = 1000  # the report flags counted files above this many lines. Informa
 
 # Step 4 of the engine split is asserted, not only printed. Both numbers come from ``_scorecard`` below and only
 # go down, like CORE_FLOOR (D-083, docs/ENGINE-SPLIT.md "Budget policy"). They cover src/exo/core.
-INWARD_IMPORTS_MAX = 42  # plugin bridge (#498): plugin_lifecycle and runtime_shutdown hooks in core
+INWARD_IMPORTS_MAX = 42  # main 39 + bridge #498: engine→plugin_lifecycle, plugins→plugin_lifecycle, engine→runtime_shutdown (6710b19a)
 PRIVATE_STATE_MAX = 8  # reads of another module's private state: no call, not the reader's own state
 
 
