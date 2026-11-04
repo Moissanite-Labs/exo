@@ -392,6 +392,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
   while streaming preserves the reader's position. Startup opens directly without a timed overlay.
 
+- Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
+  registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
+  do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport
+  for streamed replies, reasoning and local tool calls. Both require live provider acceptance after
+  user sign-in or key entry (`docs/CHATGPT-PROVIDER.md`, discussions #802 and #804).
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
