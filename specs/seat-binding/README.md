@@ -23,20 +23,20 @@ From that trace alone:
 
 Only **SeatMatchesCore** is flagged as relying on code/docs justification in addition to the failing trace; the other two are direct formalizations of what B1 violated.
 
-**Foreign-row timing (model refinement, not trace tuning):** The B1 story is persist scout **before** worker `LoadCoreSeat`, then resume scout on a worker core. Real homes do not label that scout row “foreign” until this core instance has loaded its seat (`LoadCoreSeat` unions existing live rows into `foreignSessions`). An earlier model version marked every `PersistSession` row foreign immediately, which does not match that startup order and broke exhaustive TLC. The guarded `foreignSessions'` update on `PersistSession` keeps pre-load persists non-foreign (observed) while still treating mismatched seats as foreign once `coreSeat` is set (policy in **SeatMatchesCore**).
+**Foreign-row timing (model refinement):** In the regression test, an unseated engine writes the scout row into shared `sessions.sqlite` before the worker engine loads its seat (`tests/clients/tui/test_seat_new_session.py` ~28–36; `CoreEngine` opens the same store at `engine.py` ~149). Rows are not “foreign” until this core instance has loaded: **`LoadCoreSeat`** unions existing live rows into `foreignSessions`. The guarded `foreignSessions'` on **`PersistSession`** drops ~204 TLC states where a row is marked foreign while `coreSeat` is still `NoSeat` — states **`NoForeignBeforeCoreLoad`** rules out and that exo does not produce (no foreign bit in `sessions.py` before a seated core exists; foreign is a model annotation at load time). **`SeatBinding.cfg` now checks `NoForeignBeforeCoreLoad`.** Reverting to `foreignSessions' = foreignSessions \union {nextSid}` on every persist still passes the other invariants but **violates `NoForeignBeforeCoreLoad`** (e.g. `PersistSession("worker")` with `coreSeat = NoSeat` and `foreignSessions = {"s1"}`). The TLC B1 counterexample in `results/prefix-counterexample.txt` explores **`LoadCoreSeat(worker)` → `PersistSession(scout)` → resume → `/new`**; that order is one reachable pre-fix path, not the only real-world order (the test persists scout before the worker core starts).
 
 ## What is modeled
 
 - **Core loaded seat** (`coreSeat`): the `Seat` passed to `CoreEngine` / `exo serve --seat` (`src/exo/compose.py`, `CoreEngine.__init__` in `src/exo/core/engine.py`).
 - **Sessions** (`liveSessions`, `sessionSeat`): rows in the shared home store; `foreignSessions` marks threads created before this core instance loaded its seat (another core or an unseated engine), matching shared `sessions.sqlite` in `docs/SEATS.md`.
-- **`PersistSession` / foreign rows:** When no core seat is loaded yet, a row replicated from `sessions.sqlite` is **not** foreign—the home simply holds another process’s thread until this core loads. **`LoadCoreSeat`** then marks every already-live row foreign (observed B1 setup: scout row exists, then worker core starts). If this core is **already seated** and a **new** row appears with a **different** seat name, that row is foreign immediately (another writer or a late replicate)—not because replay traces need it, but because **SeatMatchesCore** must allow mismatched seats only on foreign rows. Marking every `PersistSession` row foreign unconditionally was too strong and made TLC invent impossible states (foreign before any core load).
+- **`PersistSession` / foreign rows:** When `coreSeat = NoSeat`, persisted rows stay non-foreign until **`LoadCoreSeat`**. After the core is seated, a newly persisted row with a different seat is foreign immediately.
 - **Client launch vs display seat** (`clientLaunch`, `clientDisplay`): `ExoApp.launch_seat` and `self.seat` (`clients/tui/exo_tui/app.py`).
 - **Outcomes** (`lastOutcome`): whether a create/resume/`/new` produced a visible result, a core refusal, a join notice, or (pre-fix) a silent failure.
 - **`fromClientNew`**: true on the state immediately after a `ClientNew` step (used by **NewAfterResumeBindsThisCore**).
 
 ## What is abstracted away
 
-Turn execution, models, permissions, event sequencing, HTTP vs in-process transport, writer locks, and multiple simultaneous clients. **Reconnect** is a stutter step (`clients/tui/exo_tui/conn.py` `events(reconnect=True)`): it does not change seats or sessions in this model.
+Turn execution, models, permissions, event sequencing, HTTP vs in-process transport, writer locks, and multiple simultaneous clients. **Reconnect** is a stutter step (`clients/tui/exo_tui/conn.py` `events(reconnect=True)`): it does not change seats or sessions in this model, but **`conn.py` `_failover`** (lines ~133–139, ~165–193) can switch which core serves the window. The **`SessionList` seat filter** used on boot auto-resume (`app.py` ~529–532, `engine.py` ~586–588) is not modeled. Only **one client** is modeled, so multi-window behavior is out of scope. A **core restart with a different seat** is covered only through `foreignSessions`, not explicit restart actions. **`exo tui --seat scout` attached to a worker core** appears as an allowed trace (join/refusal paths), not as a separate invariant; the startup “cannot start” path is not modeled.
 
 ## Action map (TLA+ → code)
 
@@ -74,8 +74,9 @@ Seat normalization and refusal on a seated core:
 ## Invariants
 
 1. **SeatMatchesCore** — every non-foreign live session’s seat equals `coreSeat` when the core is seated.
-2. **NoSilentRefusal** — `lastOutcome` is never `"SilentFail"` (pre-fix `/new` when the core rejects the requested seat leaves no visible outcome).
-3. **NewAfterResumeBindsThisCore** — when `resumedOtherSeat` is true and the last step was `/new` (`fromClientNew`), the step ends with either a **visible refusal** (`lastOutcome = "VisibleRefusal"`) or a **live session bound to `coreSeat`**. This matches exo #939 B1: after resuming another seat’s thread, `/new` must not silently fail; regression in `tests/clients/tui/test_seat_new_session.py::test_new_after_resuming_another_seat_uses_this_core`.
+2. **NoForeignBeforeCoreLoad** — while `coreSeat = NoSeat`, `foreignSessions` is empty (matches exo: foreign is assigned at core seat load, not at sqlite replicate).
+3. **NoSilentRefusal** — `lastOutcome` is never `"SilentFail"`, and when `refusedThisNew` is set (core refused the last create/`/new` request), `lastOutcome` must be `"VisibleRefusal"` or `"VisibleJoin"` (so a join fallback that records `"OkCreated"` without a visible join fails TLC).
+4. **NewAfterResumeBindsThisCore** — when `resumedOtherSeat` is true and the last step was `/new` (`fromClientNew`), the step ends with either a **visible refusal** (`lastOutcome = "VisibleRefusal"`) or a **live session bound to `coreSeat`**. This matches exo #939 B1: after resuming another seat’s thread, `/new` must not silently fail; regression in `tests/clients/tui/test_seat_new_session.py::test_new_after_resuming_another_seat_uses_this_core`.
 
 ## Pre-fix counterexample (`SeatBinding_prefix.cfg`)
 

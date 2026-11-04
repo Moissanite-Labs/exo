@@ -35,6 +35,7 @@ VARIABLES
   resumedOtherSeat,
   lastOutcome,
   fromClientNew,
+  refusedThisNew,
   nextSid
 
 TypeOK ==
@@ -52,6 +53,7 @@ TypeOK ==
   /\ resumedOtherSeat \in BOOLEAN
   /\ lastOutcome \in Outcome
   /\ fromClientNew \in BOOLEAN
+  /\ refusedThisNew \in BOOLEAN
   /\ nextSid \in SessionPool \ liveSessions
 
 Init ==
@@ -65,6 +67,7 @@ Init ==
   /\ resumedOtherSeat = FALSE
   /\ lastOutcome = "NoOutcome"
   /\ fromClientNew = FALSE
+  /\ refusedThisNew = FALSE
   /\ nextSid \in SessionPool
 
 Unused(s) == sessionSeat[s] = NoSeat
@@ -75,14 +78,14 @@ LoadCoreSeat(seat) ==
   /\ coreSeat' = seat
   /\ foreignSessions' = foreignSessions \union liveSessions
   /\ UNCHANGED <<liveSessions, sessionSeat, clientLaunch, clientDisplay,
-                  clientSession, resumedOtherSeat, lastOutcome, fromClientNew, nextSid>>
+                  clientSession, resumedOtherSeat, lastOutcome, fromClientNew, refusedThisNew, nextSid>>
 
 ClientBoot(launch) ==
   /\ launch \in Seats \union {NoSeat}
   /\ clientLaunch' = launch
   /\ clientDisplay' = IF launch = NoSeat THEN clientDisplay ELSE launch
   /\ UNCHANGED <<coreSeat, liveSessions, foreignSessions, sessionSeat, clientSession,
-                  resumedOtherSeat, lastOutcome, fromClientNew, nextSid>>
+                  resumedOtherSeat, lastOutcome, fromClientNew, refusedThisNew, nextSid>>
 
 NormalizeSeat(req) ==
   IF coreSeat = NoSeat
@@ -94,7 +97,7 @@ CoreRefuses(req) ==
   /\ req # NoSeat
   /\ req # coreSeat
 
-AllocSession(seatValue, outcome, newClientSession, markClientNew) ==
+AllocSession(seatValue, outcome, newClientSession, markClientNew, markRefused) ==
   /\ nextSid \notin liveSessions
   /\ Unused(nextSid)
   /\ seatValue \in Seats
@@ -104,6 +107,7 @@ AllocSession(seatValue, outcome, newClientSession, markClientNew) ==
   /\ lastOutcome' = outcome
   /\ nextSid' \in SessionPool \ (liveSessions \union {nextSid})
   /\ fromClientNew' = markClientNew
+  /\ refusedThisNew' = markRefused
   /\ UNCHANGED <<coreSeat, clientLaunch, clientDisplay, resumedOtherSeat, foreignSessions>>
 
 (* Another core (or an earlier unseated core) already wrote this row in sessions.sqlite. *)
@@ -122,18 +126,19 @@ PersistSession(seat) ==
             ELSE foreignSessions \union {nextSid}
   /\ nextSid' \in SessionPool \ (liveSessions \union {nextSid})
   /\ UNCHANGED <<coreSeat, clientLaunch, clientDisplay, clientSession,
-                  resumedOtherSeat, lastOutcome, fromClientNew>>
+                  resumedOtherSeat, lastOutcome, fromClientNew, refusedThisNew>>
 
 SessionCreate(reqSeat) ==
   /\ Cardinality(liveSessions) < MaxSessions
   /\ IF CoreRefuses(reqSeat)
      THEN /\ lastOutcome' = "VisibleRefusal"
           /\ fromClientNew' = FALSE
+          /\ refusedThisNew' = TRUE
           /\ UNCHANGED <<coreSeat, liveSessions, foreignSessions, sessionSeat, clientLaunch,
                           clientDisplay, clientSession, resumedOtherSeat, nextSid>>
      ELSE LET seatValue == NormalizeSeat(reqSeat)
           IN /\ seatValue \in Seats
-             /\ AllocSession(seatValue, "OkCreated", nextSid, FALSE)
+             /\ AllocSession(seatValue, "OkCreated", nextSid, FALSE, FALSE)
 
 ResumeSession(sid) ==
   /\ sid \in liveSessions
@@ -144,6 +149,7 @@ ResumeSession(sid) ==
        (resumedOtherSeat \/ (coreSeat # NoSeat /\ sessionSeat[sid] # coreSeat))
   /\ lastOutcome' = "OkResumed"
   /\ fromClientNew' = FALSE
+  /\ refusedThisNew' = FALSE
   /\ UNCHANGED <<coreSeat, liveSessions, foreignSessions, sessionSeat, clientLaunch, nextSid>>
 
 ClientNew ==
@@ -153,17 +159,18 @@ ClientNew ==
         THEN IF CoreRefuses(req)
              THEN /\ coreSeat # NoSeat
                   /\ clientLaunch # NoSeat
-                  /\ AllocSession(coreSeat, "VisibleJoin", nextSid, TRUE)
-             ELSE AllocSession(NormalizeSeat(req), "OkCreated", nextSid, TRUE)
+                  /\ AllocSession(coreSeat, "VisibleJoin", nextSid, TRUE, TRUE)
+             ELSE AllocSession(NormalizeSeat(req), "OkCreated", nextSid, TRUE, FALSE)
         ELSE IF CoreRefuses(req)
              THEN /\ lastOutcome' = "SilentFail"
                   /\ fromClientNew' = TRUE
+                  /\ refusedThisNew' = TRUE
                   /\ UNCHANGED <<coreSeat, liveSessions, foreignSessions, sessionSeat, clientLaunch,
                                   clientDisplay, clientSession, resumedOtherSeat, nextSid>>
-             ELSE AllocSession(NormalizeSeat(req), "OkCreated", nextSid, TRUE)
+             ELSE AllocSession(NormalizeSeat(req), "OkCreated", nextSid, TRUE, FALSE)
 
 vars == <<coreSeat, liveSessions, foreignSessions, sessionSeat, clientLaunch, clientDisplay,
-           clientSession, resumedOtherSeat, lastOutcome, fromClientNew, nextSid>>
+           clientSession, resumedOtherSeat, lastOutcome, fromClientNew, refusedThisNew, nextSid>>
 
 Reconnect ==
   /\ UNCHANGED vars
@@ -187,7 +194,11 @@ SeatMatchesCore ==
     \/ (sessionSeat[sid] = coreSeat)
 
 NoSilentRefusal ==
-  lastOutcome # "SilentFail"
+  /\ lastOutcome # "SilentFail"
+  /\ (~refusedThisNew \/ lastOutcome \in {"VisibleRefusal", "VisibleJoin"})
+
+NoForeignBeforeCoreLoad ==
+  (coreSeat = NoSeat) => (foreignSessions = {})
 
 NewAfterResumeBindsThisCore ==
   ~(resumedOtherSeat /\ fromClientNew)
