@@ -61,13 +61,13 @@ On this VM, `--all` over the sample traces finishes in about 1–2 seconds once 
 
 Optional flag for local debugging and CI log triage. **Not part of the blocking gate** — do not pass it in the wired CI job from exo #1152.
 
-When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. If the primary failure is `TraceReplay` (TLC could not match the trace step under the trace’s `fixed` mode), `replay.py` re-runs the same trace with `Fixed=FALSE` and, if TLC still deadlocks, infers the first policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) from the trace. If a named policy invariant already failed on the first run, `diagnosed=` repeats that name. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
+When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. `replay.py` re-runs the same trace with `Fixed=FALSE` and sets `diagnosed=` to a policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) **only when TLC reports that invariant on the re-run at or before the TLC `step` where the primary (trace `fixed`) replay stopped**. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
 
 Example:
 
 ```bash
 python3 specs/seat-binding/conformance/replay.py --diagnose specs/seat-binding/conformance/traces/dropped_persist.jsonl
-# VIOLATION ... seq=1 invariant=TraceReplay diagnosed=NoForeignBeforeCoreLoad
+# VIOLATION ... seq=1 invariant=TraceReplay diagnosed=none
 ```
 
 `replay.py` never skips checks.

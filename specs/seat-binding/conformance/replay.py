@@ -419,67 +419,21 @@ def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
     return 1, out, step, inv
 
 
-def trace_refused_from_state(st: dict) -> bool:
-    lo = st["last_outcome"]
-    if lo in ("VisibleRefusal", "VisibleJoin"):
-        return True
-    return lo == "SilentFail" and st["from_client_new"]
-
-
-def policy_violation_in_state(st: dict) -> str | None:
-    """Return the first configured policy invariant violated by a trace post-state."""
-    core = st["core_seat"]
-    _seat_of, _live, foreign = session_maps(st)
-    if core is None and foreign:
-        return "NoForeignBeforeCoreLoad"
-    if st["resumed_other_seat"] and st["from_client_new"]:
-        if st["last_outcome"] != "VisibleRefusal":
-            cs = st["client_session"]
-            seat_of, _, _ = session_maps(st)
-            if cs is None or seat_of.get(cs) != core:
-                return "NewAfterResumeBindsThisCore"
-    refused = trace_refused_from_state(st)
-    if st["last_outcome"] == "SilentFail" or (
-        refused and st["last_outcome"] not in ("VisibleRefusal", "VisibleJoin")
-    ):
-        return "NoSilentRefusal"
-    return None
-
-
-def diagnose_from_trace_states(records: list[dict]) -> str:
-    """When TLC replay deadlocks, infer the first policy invariant from trace states."""
-    if records[0]["fixed"]:
-        persisted: set[str] = set()
-        for rec in records[1:]:
-            params = rec.get("params") or {}
-            if rec["event"] == "persist_session":
-                sid = params.get("session_id")
-                if isinstance(sid, str):
-                    persisted.add(sid)
-            for row in rec["state"]["sessions"]:
-                sid = row["id"]
-                if sid in persisted:
-                    continue
-                if row.get("foreign") and rec["event"] != "persist_session":
-                    return "NoForeignBeforeCoreLoad"
-    for rec in records:
-        hit = policy_violation_in_state(rec["state"])
-        if hit:
-            return hit
-    return "none"
-
-
 def diagnose_invariant(
-    records: list[dict],
     jar: Path,
     build: Path,
+    primary_step: int | None,
 ) -> str:
-    """Re-run trace with Fixed=FALSE; return first policy invariant TLC or trace scan finds."""
+    """Re-run with Fixed=FALSE; return a policy invariant only if TLC reports it at or before primary_step."""
+    if primary_step is None:
+        return "none"
     write_cfg(build, False)
-    _code, _out, _step, inv = run_tlc(build, jar)
-    if inv and inv in DIAGNOSE_POLICY_INVARIANTS:
-        return inv
-    return diagnose_from_trace_states(records)
+    _code, _out, step, inv = run_tlc(build, jar)
+    if inv not in DIAGNOSE_POLICY_INVARIANTS or step is None:
+        return "none"
+    if step > primary_step:
+        return "none"
+    return inv
 
 
 def format_violation(
@@ -527,12 +481,7 @@ def check_trace(
         inv_name = inv or "Unknown"
         diagnosed: str | None = None
         if diagnose:
-            if inv_name == "TraceReplay":
-                diagnosed = diagnose_invariant(records, jar, build)
-            elif inv_name in DIAGNOSE_POLICY_INVARIANTS:
-                diagnosed = inv_name
-            else:
-                diagnosed = "none"
+            diagnosed = diagnose_invariant(jar, build, step)
         return 1, format_violation(display, seq, inv_name, diagnosed)
 
 

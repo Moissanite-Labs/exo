@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REPLAY = ROOT / "specs/seat-binding/conformance/replay.py"
 TRACES = ROOT / "specs/seat-binding/conformance/traces"
+BUILD = TRACES.parent / "build"
 
 
 def _replay_module():
@@ -42,6 +43,31 @@ def _require_toolchain():
     reason = _replay_module().toolchain_skip_reason()
     if reason:
         pytest.skip(reason)
+
+
+def _write_trace(path: Path, lines: list[str]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _b1_without_persist() -> Path:
+    lines = (TRACES / "b1_silent_fail.jsonl").read_text(encoding="utf-8").splitlines()
+    kept: list[str] = []
+    seq = 0
+    for line in lines:
+        obj = json.loads(line)
+        if obj["event"] == "persist_session":
+            continue
+        obj["seq"] = seq
+        kept.append(json.dumps(obj, separators=(",", ":")))
+        seq += 1
+    return _write_trace(BUILD / "b1_without_persist.jsonl", kept)
+
+
+def _truncated_good_prefix() -> Path:
+    lines = (TRACES / "good_new_after_resume.jsonl").read_text(encoding="utf-8").splitlines()
+    return _write_trace(BUILD / "truncated_good_prefix.jsonl", lines[:4])
 
 
 def test_replay_good_exits_zero():
@@ -96,16 +122,14 @@ def test_replay_dropped_mid_event_mutation_exits_one():
         obj["seq"] = seq
         kept.append(json.dumps(obj, separators=(",", ":")))
         seq += 1
-    tmp = TRACES.parent / "build" / "mutation_no_load_seat.jsonl"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    tmp = _write_trace(BUILD / "mutation_no_load_seat.jsonl", kept)
     code, err = _run(tmp)
     assert code == 1
     assert "seq=2 invariant=TraceReplay" in err
     assert "diagnosed=" not in err
 
 
-def test_replay_diagnose_b1_names_invariant():
+def test_replay_diagnose_b1_names_invariant_via_tlc():
     _require_toolchain()
     code, err = _run_diagnose(TRACES / "b1_silent_fail.jsonl")
     assert code == 1
@@ -113,30 +137,29 @@ def test_replay_diagnose_b1_names_invariant():
     assert "diagnosed=NewAfterResumeBindsThisCore" in err
 
 
-def test_replay_diagnose_dropped_persist_names_invariant():
+def test_replay_diagnose_dropped_persist_grk_proof():
     _require_toolchain()
     code, err = _run_diagnose(TRACES / "dropped_persist.jsonl")
     assert code == 1
     assert "invariant=TraceReplay" in err
-    assert "diagnosed=NoForeignBeforeCoreLoad" in err
+    assert "diagnosed=none" in err
+    assert "diagnosed=NoForeignBeforeCoreLoad" not in err
 
 
-def test_replay_diagnose_fixed_true_trace_replay_names_invariant():
-    """Fixed=TRUE post-state SilentFail on /new is unreplayable; diagnose names policy break."""
+def test_replay_diagnose_b1_persist_dropped_grk_proof():
     _require_toolchain()
-    lines = (TRACES / "good_new_after_resume.jsonl").read_text(encoding="utf-8").splitlines()
-    objs = [json.loads(line) for line in lines[:5]]
-    client_new = json.loads(lines[-1])
-    client_new["state"]["last_outcome"] = "SilentFail"
-    client_new["state"]["user_visible_outcome"] = "none"
-    client_new["state"]["client_session"] = "s1"
-    client_new["state"]["sessions"] = [{"id": "s1", "seat": "scout", "foreign": True}]
-    client_new["state"]["client_display_seat"] = "scout"
-    objs.append(client_new)
-    tmp = TRACES.parent / "build" / "fixture_fixed_true_silent.jsonl"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_text("\n".join(json.dumps(o, separators=(",", ":")) for o in objs) + "\n", encoding="utf-8")
-    code, err = _run_diagnose(tmp)
+    trace = _b1_without_persist()
+    code, err = _run_diagnose(trace)
     assert code == 1
-    assert "invariant=TraceReplay" in err
-    assert "diagnosed=NewAfterResumeBindsThisCore" in err
+    assert "diagnosed=none" in err
+    assert "diagnosed=NoForeignBeforeCoreLoad" not in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" not in err
+
+
+def test_replay_diagnose_truncated_good_grk_proof():
+    _require_toolchain()
+    trace = _truncated_good_prefix()
+    code, err = _run_diagnose(trace)
+    assert code == 0
+    assert "diagnosed=" not in err
+    assert "VIOLATION" not in err
