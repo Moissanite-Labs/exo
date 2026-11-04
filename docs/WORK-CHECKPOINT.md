@@ -8,7 +8,8 @@ separate from the agent's optional [working notes](WORK-NOTEBOOK.md).
 ## Use and settings
 
 Checkpoints are enabled by default when the core is created through `exo.compose`.
-Restarting the same conversation reconstructs the index from its durable
+Harness profiles do not change this: the setting below decides in every profile
+([HARNESS.md](HARNESS.md)). Restarting the same conversation reconstructs the index from its durable
 transcript, even if the previous process exited without a shutdown hook. There
 is no automatic continuation, tool replay, or extra model call.
 
@@ -34,6 +35,8 @@ capture and injection; it does not delete the previously saved index.
 The default can add up to 3000 characters to each model request once tool or job
 records exist. Private threads, child/fork threads, scheduled sessions, and other
 agents' sessions receive no checkpoint. There is no cross-session inheritance.
+For those sessions the checkpoint reads the session record first and opens no
+write transaction.
 
 ## What a record means
 

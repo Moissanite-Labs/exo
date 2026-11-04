@@ -228,9 +228,7 @@ def test_disabled_has_no_storage_registration_or_prompt_work(tmp_path, monkeypat
             assert eng.loop.workspace_extra is None
             assert not eng.store._q("SELECT 1 FROM sqlite_master WHERE name='work_revisions'")
             assert "work" not in [c["name"] for c in (await eng._commands_list(s.CommandsList()))["commands"]]
-            # Registry.workers arrives with the unmerged harness work; on main the
-            # attribute does not exist, which also means no workers registered.
-            assert not getattr(eng.registry, "workers", [])
+            assert not eng.registry.workers
         finally:
             await eng.close()
     run(scenario())
@@ -396,7 +394,6 @@ def test_malformed_notebook_call_keeps_generic_protected_path_handling(tmp_path,
     assert decide(malformed, policy).outcome == decide(generic, policy).outcome == "ask"
 
 
-@pytest.mark.skip(reason="needs workspace instructions from the unmerged harness profiles work; re-enable when that lands")
 def test_prompt_callback_preserves_workspace_instructions(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "AGENTS.md").write_text("PROJECT_GUIDANCE")

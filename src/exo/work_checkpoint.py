@@ -52,14 +52,22 @@ class WorkCheckpoint:
         self.engine, self.store, self.config, self.principal = engine, engine.store, config, principal
         self.store._q(TABLE)
 
+    def _recorded(self, info: Any) -> bool:
+        # Private threads and all children are excluded, including children of private threads.
+        return (info is not None and info["agent"] == self.engine.agent and info["kind"] == "thread"
+                and not info["parent"])
+
     def capture(self, session: str | None, reason: str = "request") -> dict[str, Any] | None:
         if not session:
             return None
+        about = "SELECT agent, kind, parent FROM sessions WHERE id=?"
+        # A plain read first. Delegated and scheduled loops share the workspace prompt, and their sessions take no
+        # checkpoint, so their prompts open no write transaction. The transaction checks again.
+        if not self._recorded(next(iter(self.store._q(about, (session,))), None)):
+            return None
 
         def write(db: Any) -> dict[str, Any] | None:
-            info = db.execute("SELECT agent, kind, parent FROM sessions WHERE id=?", (session,)).fetchone()
-            # Private threads and all children are excluded, including children of private threads.
-            if info is None or info["agent"] != self.engine.agent or info["kind"] != "thread" or info["parent"]:
+            if not self._recorded(db.execute(about, (session,)).fetchone()):
                 return None
             previous = db.execute("SELECT * FROM work_checkpoints WHERE session=?", (session,)).fetchone()
             if previous and previous["principal"] != self.principal:
