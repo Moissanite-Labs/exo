@@ -314,7 +314,7 @@ def missing_directives(summary: str, principal: list[Message]) -> list[str]:
 
 
 class TurnContext(Protocol):
-    """Minimal context view used by a turn; recall/cache/turn callbacks are optional."""
+    """Minimal turn view; optional for_child(tree, tools=names) decorates delegated context."""
 
     on_event: Callable[[Any, str], Awaitable[Any]] | None
 
@@ -884,7 +884,7 @@ class AgentContext(TreeContext):
         last, text = self._unseen(session, agent, frontier, meta)
         if last is None:
             return None
-        self.store.set_meta(session, {**meta, "seen_pos": last})
+        self.store.update_meta(session, lambda current: current.update(seen_pos=last))
         if not text:
             return None
         msg = Message.user(text)
@@ -968,8 +968,8 @@ class AgentContext(TreeContext):
         new = [n for n in self.store.summaries(key) if n.id not in known]
         _, frontier, _ = self._view(key)
         if frontier:  # let this thread's tail drop what the new summaries now cover
-            meta = self.store.get_meta(session)
-            self.store.set_meta(session, {**meta, "compact_seq": self.store.last_logged_seq(session, frontier)})
+            self.store.update_meta(session, lambda meta: meta.update(
+                compact_seq=self.store.last_logged_seq(session, frontier)))
         after = self.report(session, system)
         folded = [{"level": n.level, "start": n.start, "end": n.end, "before_tokens": self._source_tokens(n),
                    "after_tokens": estimate_tokens(n.text)} for n in new if n.status == "done"]
@@ -979,10 +979,21 @@ class AgentContext(TreeContext):
 
     # ---- one model call
 
+    def _insert_per_turn_block(self, tail: list[Message], turn_id: str, text: str) -> None:
+        block = Message.user(text)
+        block.meta["author"] = "system"  # D-040: per-turn data, not the principal's words
+        at = next((i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id
+                   and m.role == "user" and not m.meta.get("note")), None)
+        if at is None:
+            at = max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail))
+        tail.insert(at, block)
+
     async def build(self, session: str, system: str, settle: bool = True, recall: str = "",
-                    turn_id: str = "") -> list[Message]:
+                    turn_id: str = "", turn_extra: str = "") -> list[Message]:
         key = self._agent_key(session)
         if key is None:
+            if turn_extra:
+                system = (system + "\n\n" if system else "") + turn_extra
             if recall:
                 system = (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
             return await super().build(session, system, settle)
@@ -994,6 +1005,8 @@ class AgentContext(TreeContext):
         top, frontier, parts = self._view(key)
         self.sync_thread(session, frontier)
         tail = self._thread_tail(session, frontier)
+        if turn_extra:
+            self._insert_per_turn_block(tail, turn_id, turn_extra)
         if recall:
             block = Message.user("# Recalled memory (for this turn)\n" + recall)
             block.meta["author"] = "system"  # D-040: recalled memory is data, never the principal's words

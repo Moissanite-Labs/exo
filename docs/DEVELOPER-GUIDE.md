@@ -90,6 +90,17 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
+**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+`tool_output.enabled` is true. It renders copies and expands retained sanitized text through
+the normal registry/executor path. `for_child(context, tools=names)` is an optional context
+method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
+Use `SessionStore`'s public scoped reads. Shared metadata edits use
+`SessionStore.update_meta(session, callback)` so concurrent writers preserve other keys.
+The callback edits the current dictionary inside one transaction and may read the store.
+`set_meta` replaces the complete object and must not be used for concurrent runtime edits.
+See [TOOL-OUTPUT.md](TOOL-OUTPUT.md) for ownership, limits and tests.
+This adds no output archive and does not recover previously truncated bytes.
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 
@@ -390,10 +401,11 @@ query cache; reads are bounded per file and per turn (`max_files`, sorted name o
 instructions still use `skill`, including explicit names outside the shortlist.
 The character budget includes headings and separators. See [SKILL-DISCOVERY.md](SKILL-DISCOVERY.md).
 
-Composition sets `skills_prompt=False` and supplies the typed `Loop.turn_extra(session, query)`
-callback. It runs after stable system text at the start of each turn's tool loop. The scheduler
-copies the callback, while delegated children retain their existing exclusion of skills.
-Callbacks must stay bounded and cannot alter approval or spend decisions.
+Composition sets `skills_prompt=False` and wires `Loop.turn_extra(session, query)` into
+`AgentContext.build` as per-turn user-side data (the same seam as recalled memory), so the stable
+system text stays byte-identical across turns. The scheduler copies the callback, while delegated
+children retain their existing exclusion of skills. Callbacks must stay bounded and cannot alter
+approval or spend decisions.
 
 ## 7. Tests
 

@@ -304,21 +304,31 @@ class Loop:
         parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, workspace, extra)
         return "\n\n".join(p for p in parts if p)
 
-    async def _system(self, session: str, query: str) -> tuple[str, str]:
-        """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
+    async def _system(self, session: str, query: str) -> tuple[str, str, str]:
+        """(system text, recall, per-turn skill block).
+
+        Recall and the optional skill-discovery block stay out of the system text when the context
+        engine accepts them as per-turn tail data (D-083, same seam as recall).
+        """
         base = await self.base_system(session)
-        parts = [base, self.turn_extra(session, query) if self.turn_extra else ""]
+        block = self.turn_extra(session, query) if self.turn_extra else ""
+        tail = self._takes_recall()
+        parts = [base, block if block and not tail else ""]
         # recalled memory is data (D-040): it may quote a peer, so its pinned-block tags are escaped (#279)
         recall = provenance.defuse_pins(await self._memory("prefetch", query, session_id=session) or "")
-        if recall and not self._takes_recall():
+        if recall and not tail:
             parts.append("# Recalled memory\n" + recall)
             recall = ""
-        return "\n\n".join(p for p in parts if p), recall
+        return "\n\n".join(p for p in parts if p), recall, block if tail else ""
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
                       result: TurnResult) -> None:
-        system, recall = await self._system(session, user.text())
-        extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
+        system, recall, skills = await self._system(session, user.text())
+        extra: dict[str, Any] = {}
+        if self._takes_recall():
+            extra = {"recall": recall, "turn_id": turn_id}
+            if skills:
+                extra["turn_extra"] = skills
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))

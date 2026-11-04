@@ -28,7 +28,8 @@ Restart the shared core after changing these settings.
 `max_chars` is a hard character ceiling, not an exact token limit. It covers discovery text,
 not tool schemas, loaded skill bodies or the rest of the conversation. A zero budget, or one
 too small for the heading, contributes no discovery text. `top_k: 0` omits skill rows but can
-retain the short instruction explaining how to load a skill by name.
+retain the short instruction explaining how to load a skill by name. When the index is non-empty
+but no metadata could be read, the same short instruction is still shown.
 
 To restore the existing catalog, set `skill_discovery.enabled` to `false` and restart.
 Removing the `skill_discovery` object does the same. Missing settings retain existing behavior.
@@ -51,9 +52,9 @@ no usable description, but the existing name can still match.
 
 A per-turn cap reads at most `max_files` files, in sorted name order. Names past the cap are not
 read that turn: they are reported with the unavailable names, and the block carries a
-`[read cap: N of M indexed files this turn]` note when the character budget has room left. A zero
-cap reads nothing and contributes no discovery text. Selection for a catalog under the cap is
-unchanged, and repeats of a truncated turn truncate the same way.
+`[read cap: N of M indexed files this turn]` note when the character budget has room left. An
+explicit skill name in the request can still appear even when its file was not read this turn.
+A zero cap reads no files; the short load instruction remains when skills are indexed.
 
 Descriptions are reread for every selection, so same-size edits with unchanged timestamps still
 take effect. The read cap is not a cache; it only limits how many files are read per turn. No query
@@ -72,7 +73,8 @@ or its unique plugin suffix, even when it was not selected. Normal skill lookup 
 rules still apply. A disabled skill cannot be loaded through this mechanism.
 
 The full stable catalog is removed only for this opt-in mode. Other stable system instructions
-stay before the shortlist. Updating a seat's `SOUL.md` does not restore the full catalog.
+are unchanged; the shortlist is injected as per-turn user-side data so provider prompt-cache
+breakpoints on the system block stay valid across turns in one session.
 Metadata is local guidance and cannot become principal approval or a pinned ruling.
 
 Required-executor mode rejects enabled discovery before plugin loading. Metadata refresh uses
@@ -83,7 +85,7 @@ Turning discovery off creates no selector, file-refresh work, worker or network 
 
 `exo.skill_discovery` owns settings validation, bounded metadata reads and ranking. Composition
 passes `skills_prompt=False` to the runtime, preserving its enabled index and loader. The typed
-`Loop.turn_extra(session, query)` callback supplies the block after stable system text.
+`Loop.turn_extra(session, query)` callback supplies ranked text through `AgentContext.build`.
 The scheduler copies that callback to its own loop. It is synchronous and must stay bounded.
 
 `SkillDiscovery.select(query)` returns text, selected names, considered-file count and unavailable

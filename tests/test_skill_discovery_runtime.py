@@ -13,6 +13,10 @@ from exo.core.tools.executor import ExecutorConfigurationError
 REPO = Path(__file__).resolve().parents[1]
 
 
+def prompt_text(messages):
+    return "\n".join(m.text() for m in messages)
+
+
 def setup(tmp_path, monkeypatch, discovery=None, enabled=True, extra=()):
     monkeypatch.delenv("EXO_PROFILE", raising=False)
     monkeypatch.setenv("EXO_PLUGIN_DIRS", str(REPO / "plugins"))
@@ -45,10 +49,10 @@ def test_composed_turn_selects_then_loads_unlisted_explicit_name(tmp_path, monke
             session = await engine.loop.create_session(cwd=str(tmp_path))
             base = await engine.loop.base_system(session.id)
             await engine.loop.send(session.id, "Fix the Postgres migration")
-            prompt = provider.calls[0]["messages"][0].text()
-            assert prompt.startswith(base)
-            assert 0 < len(prompt) - len(base) <= 240
-            assert "- sql:" in prompt and "- art:" not in prompt and "# Skills\n" not in prompt
+            msgs = provider.calls[0]["messages"]
+            assert msgs[0].text().startswith(base)
+            assert 0 < len(prompt_text(msgs)) - len(base) <= 240
+            assert "- sql:" in prompt_text(msgs) and "- art:" not in prompt_text(msgs) and "# Skills\n" not in prompt_text(msgs)
             assert any("BODY FOR art" in r.text() for m in provider.calls[1]["messages"] for r in m.tool_results)
             assert "Postgres migration" not in engine.loop.system_prompt
         finally:
@@ -133,7 +137,7 @@ def test_soul_and_metadata_refresh_preserve_bounded_turn_selection(tmp_path, mon
             path = cfg.home / "skills" / "sql" / "SKILL.md"
             path.write_text(path.read_text().replace("Postgres migration", "SQLite maintenance"))
             await engine.loop.send(session.id, "SQLite maintenance")
-            prompt = provider.calls[-1]["messages"][0].text()
+            prompt = prompt_text(provider.calls[-1]["messages"])
             assert "REVISED SOUL GUIDANCE" in prompt and "OLD SOUL" not in prompt
             assert "- sql: SQLite maintenance" in prompt and "# Skills\n" not in prompt
         finally:
@@ -181,12 +185,12 @@ def test_concurrent_turns_and_scheduled_query_have_own_selection(tmp_path, monke
                                  engine.loop.send(second.id, "Image illustration"))
             for call in provider.calls:
                 query = next(m.text() for m in reversed(call["messages"]) if m.role == "user")
-                prompt = call["messages"][0].text()
+                prompt = prompt_text(call["messages"])
                 assert ("- sql:" in prompt) == ("Postgres" in query)
                 assert ("- art:" in prompt) == ("Image" in query)
             job = engine.scheduler.add("every 1h", "Image illustration", title="draw")
             assert await engine.scheduler.run(job, "skill-selection-test") == "done"
-            prompt = provider.calls[-1]["messages"][0].text()
+            prompt = prompt_text(provider.calls[-1]["messages"])
             assert "- art:" in prompt and "- sql:" not in prompt
         finally:
             await engine.close()
@@ -200,13 +204,35 @@ def test_delegated_child_keeps_skills_out_of_its_prompt_and_tools(tmp_path, monk
         engine = compose.create()
         engine.loop.provider = provider = FakeProvider([
             tool_turn("delegate", {"goal": "Image illustration", "role": "scout"}), "child done", "parent done"])
+        engine.agents.route = lambda tier: (provider, "fake:x")
         try:
             session = await engine.loop.create_session(cwd=str(tmp_path))
             await engine.loop.send(session.id, "Postgres migration")
             assert len(provider.calls) == 3
-            assert "- sql:" in provider.calls[0]["messages"][0].text()
+            assert "- sql:" in prompt_text(provider.calls[0]["messages"])
             assert "# Relevant skills" not in provider.calls[1]["messages"][0].text()
             assert "skill" not in {tool.name for tool in provider.calls[1]["tools"]}
+        finally:
+            await engine.close()
+    asyncio.run(run())
+
+
+def test_discovery_keeps_system_text_identical_across_turns(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch, {"enabled": True})
+
+    async def run():
+        engine = compose.create()
+        engine.loop.provider = provider = FakeProvider(["done"], repeat=True)
+        try:
+            session = await engine.loop.create_session(cwd=str(tmp_path))
+            await engine.loop.send(session.id, "Fix the Postgres migration")
+            first = provider.calls[0]["messages"][0].text()
+            await engine.loop.send(session.id, "Draw an image illustration")
+            second = provider.calls[1]["messages"][0].text()
+            assert first == second
+            assert "- sql:" not in first and "- art:" not in first
+            joined = prompt_text(provider.calls[1]["messages"])
+            assert "- art:" in joined and "- sql:" not in joined
         finally:
             await engine.close()
     asyncio.run(run())
