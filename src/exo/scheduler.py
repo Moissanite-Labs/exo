@@ -225,6 +225,7 @@ class Scheduler:
 
             loop.before_turn, loop.system_extra = refresh_prompt, e.loop.system_extra
             loop.workspace_extra = e.loop.workspace_extra
+            loop.turn_extra = e.loop.turn_extra
             info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id

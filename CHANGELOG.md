@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Optional local skill discovery with a hard prompt character budget, deterministic ranking,
+  bounded per-turn metadata reads, metadata refresh and explicit access to enabled skills outside
+  the shortlist. Default catalogs remain unchanged (`docs/SKILL-DISCOVERY.md`, D-083, #504, #599).
 - Optional retained tool-output excerpts with exact paginated expansion, scoped to the session and
   configured principal. Originals stay in the transcript. Earlier tool caps are not recoverable
   (`docs/TOOL-OUTPUT.md`, D-084, #501 stage 1; in progress).

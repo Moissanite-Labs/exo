@@ -23,6 +23,7 @@ class CoreEngine(CoreRuntime):
 
     harness_plan: Any = None  # fixed composition selected at startup
     workspace_instructions: Any = None  # optional composition-layer prompt provider
+    skill_discovery: Any = None  # optional local selector over the enabled skill index
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         plugins = kwargs["plugins"] = kwargs.get("plugins") or PluginManager()
