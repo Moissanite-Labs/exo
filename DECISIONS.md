@@ -6183,6 +6183,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard
+- **Amendment 2026-11-03 (#1128):** Schedule ignores the second click of a double click on pause, resume and run
+  now, and disables a job's controls while its edit is in flight. A completed fast pause used to redraw resume under
+  the pointer, so the second click reversed the requested state; a fast run could be started twice. The in-flight
+  guard is per job, preserves the remove confirmation and restores controls after a refusal. Keyboard clicks (detail
+  zero) still run. Tests cover held and refused edits, independent jobs and a real-browser fast pause.
 - **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers
   still looked like a debug console: small mono panel titles, cramped lanes, colour-only status, plain one-line empty
   states, no 400px layout for the nav, and a DOM quirk that printed `null` above the lists.

@@ -28,6 +28,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   lowered pairs in five runs against main a2f6ec3d, 10,369,128 pairs on the built-in corpus with variants). Tests:
   `tests/security/test_gate_ssh_forward_keys_1096.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
   `docs/DOCS-MAP.md`.
+- Schedule ignores the second click of a double click on pause, resume and run now, and disables each job's controls
+  while its edit is in flight (#1128).
 - Tests: headless Chrome startup on hosted runners (#907, D-046 amendment).
   - The first start in a test run waits up to 90 s for DevTools instead of 20 s. The two hosted startup timeouts on
     record were each a job's first start, in `test_csp_web.py`, where a fresh runner reads the browser from a cold
