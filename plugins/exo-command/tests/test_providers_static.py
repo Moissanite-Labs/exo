@@ -151,5 +151,21 @@ def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps
 def test_chatgpt_sign_in_disabled_when_os_secret_store_unavailable():
     js = text("providers.js")
     assert 'const NEED_SECRET_STORE = "ChatGPT connection needs an available OS secret store."' in js
-    assert "store_available === false" in js and "disabled: authBusy || !storeOk" in js
-    assert "keys.env (mode 600)" in js
+    draw = js[js.index("function drawChatGPT"):js.index("async function refreshChatGPT")]
+    assert re.search(r"const storeOk = !\(d && d\.store_available === false\);", draw)
+    assert "storeOk = true" not in draw
+    assert "disabled: authBusy || !storeOk" in draw
+    assert "secret-tool (Linux Secret Service)" in js
+    assert "API-key providers" in js and "ChatGPT tokens are not stored in ~/.config/exo/keys.env" in js
+
+
+def test_chatgpt_store_ok_guard_rejects_a_constant_true_prefix():
+    """A regression that short-circuits storeOk with ``true ||`` would re-enable sign-in while store_available is false."""
+    good = "const storeOk = !(d && d.store_available === false);"
+    bad = "const storeOk = true || !(d && d.store_available === false);"
+
+    def accepted(line):
+        return bool(re.search(r"const storeOk = !\(d && d\.store_available === false\);", line)) and "storeOk = true" not in line
+
+    assert accepted(good)
+    assert not accepted(bad)

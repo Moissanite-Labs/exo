@@ -36,7 +36,7 @@ export function mount(root) {
     if (!alive) return;
     const d = authState;
     const storeOk = !(d && d.store_available === false);
-    const storeNote = storeOk ? "" : (NEED_SECRET_STORE + " On Linux without secret-tool, create ~/.config/exo/keys.env (mode 600) or install secret-tool; see docs/PROVIDERS.md.");
+    const storeNote = storeOk ? "" : (NEED_SECRET_STORE + " Install secret-tool (Linux Secret Service) or use the macOS Keychain. ChatGPT tokens are not stored in ~/.config/exo/keys.env; use that file for API-key providers instead (see docs/PROVIDERS.md).");
     const note = message || storeNote || (d && d.dependency_available === false ? "Install Exo’s chatgpt extra in the core runtime before signing in." : "") || (d && d.message) || (d && d.available ? "Using ChatGPT plan when a chatgpt model is selected." : "Connect your ChatGPT subscription separately from API keys and CLI logins.");
     const button = (label, action, profile) => h("button", { class: "xc-btn", type: "button", disabled: authBusy || !storeOk,
       onclick: () => chatGPT(action, profile) }, label);

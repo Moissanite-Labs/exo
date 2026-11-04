@@ -85,6 +85,24 @@ def test_chatgpt_start_without_os_secret_store_returns_actionable_error(tmp_path
     assert status == 503 and data['error'] == NEED_SECRET_STORE
 
 
+def test_keys_env_at_0600_does_not_make_chatgpt_store_available(tmp_path, monkeypatch):
+    """SecretStore.available() only checks Keychain/secret-tool, not keys.env (#1158 review)."""
+    from exo import chatgpt_auth
+
+    monkeypatch.setenv('EXO_NO_KEYCHAIN', '1')
+    monkeypatch.setenv('EXO_NO_SECRET_SERVICE', '1')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    config = tmp_path / '.config' / 'exo'
+    config.mkdir(parents=True)
+    keys_file = config / 'keys.env'
+    keys_file.write_text('OPENAI_API_KEY=sk-proof-only\n', encoding='utf-8')
+    keys_file.chmod(0o600)
+    service = chatgpt_auth.service(tmp_path / 'exo-home', 'seat')
+    status = service.status()
+    assert status['store_available'] is False
+    assert status['supported'] is True
+
+
 @pytest.mark.skipif(not find_chrome(), reason='headless Chrome required')
 def test_mounted_continue_cancel_and_usage_controls_do_not_change_default():
     src = ConnectionSource()

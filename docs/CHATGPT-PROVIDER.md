@@ -37,10 +37,10 @@ An OpenAI API key remains a separate provider with separate billing.
 
 ## Credential handling
 
-Sign-in needs an available OS secret store (macOS Keychain or Linux Secret Service when `secret-tool` is
-installed). Without one, Providers disables **Continue with ChatGPT** and explains how to set up
-`~/.config/exo/keys.env` or install `secret-tool` (see `docs/PROVIDERS.md`). `EXO_NO_SECRET_SERVICE=1`
-turns the system keyring off (tests and sandboxes).
+Sign-in needs the macOS Keychain or Linux Secret Service (`secret-tool`). ChatGPT OAuth tokens are not
+read from `~/.config/exo/keys.env`; that file is for API-key providers (see `docs/PROVIDERS.md`). Without
+Keychain or Secret Service, Providers disables **Continue with ChatGPT** and explains the distinction.
+`EXO_NO_SECRET_SERVICE=1` turns the system keyring off (tests and sandboxes).
 
 Access, refresh and identity tokens stay in protected local storage. The browser receives connection
 status and account labels, never those tokens. Tokens do not enter Exo messages, configuration, events,
