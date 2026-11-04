@@ -147,7 +147,7 @@ def _label_events(events: list[dict]) -> tuple[str, dict[str, str]]:
 
 def _digest(lr: Learner, session: str) -> str:
     out = []
-    for m in lr.messages(session)[-6:]:
+    for m in lr.last_messages(session, 6):
         if m.role in ("user", "assistant") and m.text().strip():
             out.append(f"{m.role}: {clip(m.text(), 300)}")
     return "\n".join(out) or "(no transcript)"

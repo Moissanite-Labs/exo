@@ -733,12 +733,13 @@ def test_the_view_cut_keeps_a_question_in_the_oldest_pending_leaf():
     assert "## Messages 1-8 (verbatim, summary pending)" in view and estimate_tokens(view) > ctx.view_budget
 
 
-@pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "skipped")])
+@pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "done")])
 def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
     """Issue #244: the overflow check measures a pending span as the view renders it, cut short, and cut_pending
     measures it in full. So the turn also waits when the cut would apply: the leaf this call scheduled runs first.
-    A fast summarizer lands it (three 12k tool results), or it is skipped as too small (three calls with 20k
-    arguments, which a leaf counts at 400 characters). Either way nothing is cut and no marker shows."""
+    A fast summarizer lands it, three 12k tool results or three calls with 20k arguments. A private leaf counts
+    both in full (#1013), where it once counted arguments at 400 characters and skipped that span as too small.
+    Nothing is cut and no marker shows."""
     store, ctx, prov, loop, _ = setup(min_compact_tokens=1000)
 
     async def go():

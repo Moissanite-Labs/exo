@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the pull request replaces its older run (#907).
+concurrency:
+  group: gate-preflight-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   never-looser:
     runs-on: ubuntu-latest

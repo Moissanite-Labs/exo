@@ -62,6 +62,15 @@ def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | No
 CACHE_TTL = 6 * 3600.0
 
 
+def _custom_cache_identity(spec: dict[str, Any]) -> str | None:
+    """Bind managed custom discovery to non-secret routing metadata, never a key value."""
+    if spec.get('setup_managed') is not True:
+        return None
+    import hashlib, json
+    fields = [spec.get('transport', 'openai'), spec.get('base_url'), spec.get('setup_auth'), spec.get('key_env')]
+    return hashlib.sha256(json.dumps(fields, ensure_ascii=True).encode()).hexdigest()
+
+
 def available_models(router: Router, home: Path, *, get: Callable[..., Any] | None = None,
                      now: float | None = None) -> list[dict[str, Any]]:
     """Every model the user can pick: each keyed provider's /models list, cached for six hours in
@@ -73,6 +82,10 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     cache_dir = Path(home) / 'cache' / 'models'
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
+        manual = spec.get('setup_model') if spec.get('setup_managed') is True else None
+        if isinstance(manual, str) and manual and router._allows(name, 'main') and \
+                (not spec.get('key_env') or st.get('key') == 'yes'):
+            out.append({'route': f'{name}:{manual}', 'provider': name})
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
@@ -81,22 +94,29 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
         f = cache_dir / f'{name}.json'
+        identity = _custom_cache_identity(spec)
         ids: list[str] | None = None
         try:
             cached = json.loads(f.read_text())
-            if now - cached['at'] < CACHE_TTL:
+            if identity is not None and cached.get('configuration') != identity:
+                cached = None  # Old, differently configured, and pre-identity caches cannot be fallback data.
+            if cached is not None and now - cached['at'] < CACHE_TTL:
                 ids = cached['ids']
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             cached = None
         if ids is None:
             try:
                 ids = remote_models(router, name, get=get)
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({'at': now, 'ids': ids}))
+                record: dict[str, Any] = {'at': now, 'ids': ids}
+                if identity is not None:
+                    record['configuration'] = identity
+                f.write_text(json.dumps(record))
             except ValueError:
                 ids = cached['ids'] if cached else []
         hide = [h.lower() for h in spec.get('hide_models') or []]
-        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids if not any(h in i.lower() for h in hide)]
+        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                if i != manual and not any(h in i.lower() for h in hide)]
     return out
 
 

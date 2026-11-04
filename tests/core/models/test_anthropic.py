@@ -128,6 +128,23 @@ def test_build_body_reasoning_and_model_normalization():
     assert normalize_model("gpt-5.4") == "gpt-5.4"
 
 
+def test_legacy_thinking_budget_stays_below_max_tokens():
+    """The API wants 1,024 <= budget_tokens < max_tokens. A cap of 1,024 or less left a 1,024 budget at or above
+    max_tokens, a 400 that no fallback route can fix (exo-desktop #52). Thinking stays off when it cannot fit."""
+    for effort in ("minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
+        for max_tokens in (1, 100, 1023, 1024):
+            assert thinking_params("claude-sonnet-4-5", effort, max_tokens) == {}, (effort, max_tokens)
+        for max_tokens in (1025, 1500, 2048, 2049, 5000, 17000, 32000, 64000):
+            budget = thinking_params("claude-sonnet-4-5", effort, max_tokens)["thinking"]["budget_tokens"]
+            assert 1024 <= budget < max_tokens, (effort, max_tokens, budget)
+    body = AnthropicProvider(api_key="k").build_body([Message.user("x")], [], model="claude-sonnet-4-5",
+                                                     reasoning="high", max_tokens=600, temperature=0.2)
+    assert "thinking" not in body and body["max_tokens"] == 600 and body["temperature"] == 0.2
+    adaptive = AnthropicProvider(api_key="k").build_body([Message.user("x")], [], model="claude-opus-5-5",
+                                                         reasoning="high", max_tokens=600)
+    assert adaptive["thinking"]["type"] == "adaptive"  # no budget there: unchanged
+
+
 def test_build_body_tool_choice_none_keeps_the_tools():
     prov, spec = AnthropicProvider(api_key="k"), ToolSpec(name="read_file", description="read")
     on = prov.build_body([Message.user("x")], [spec], model="claude-opus-5-5")

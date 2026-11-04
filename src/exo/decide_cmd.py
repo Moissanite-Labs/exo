@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from .core.models.decision import DecisionError, ask_choice_result
+from .core.models.decision import ChoiceResult, DecisionError, ask_choice_result
 from .core.models.router import Router
 
 
@@ -35,11 +35,20 @@ def cmd_decide(a, router: Router | None = None) -> int:
     if len(options) < 2:
         print('exo decide: --options needs at least two comma-separated options', file=sys.stderr)
         return 2
+    built = router is None
     if router is None:
         from .models_cmd import build_router
         router = build_router()
+
+    async def ask() -> ChoiceResult:
+        try:
+            return await ask_choice_result(router, a.state, a.question, options, role=a.role)
+        finally:
+            if built:  # this loop ends with the command, and a client cannot be closed after its loop (#263)
+                await router.aclose()
+
     try:
-        res = asyncio.run(ask_choice_result(router, a.state, a.question, options, role=a.role))
+        res = asyncio.run(ask())
     except (DecisionError, ValueError) as e:
         print(f'exo decide: {e}', file=sys.stderr)
         return 1

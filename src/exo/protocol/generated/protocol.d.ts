@@ -344,6 +344,7 @@ export interface TaskUpdated {
 
 export interface TasksList {
   session?: string | null;
+  active?: boolean;
 }
 
 export interface TasteEdit {
