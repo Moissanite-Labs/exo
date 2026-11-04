@@ -422,16 +422,19 @@ def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
 def diagnose_invariant(
     jar: Path,
     build: Path,
-    primary_step: int | None,
+    primary_failing_seq: int | str,
 ) -> str:
-    """Re-run with Fixed=FALSE; return a policy invariant only if TLC reports it at or before primary_step."""
-    if primary_step is None:
+    """Re-run with Fixed=FALSE; accept TLC policy violations at or before the primary failing JSONL seq."""
+    if not isinstance(primary_failing_seq, int):
         return "none"
     write_cfg(build, False)
     _code, _out, step, inv = run_tlc(build, jar)
     if inv not in DIAGNOSE_POLICY_INVARIANTS or step is None:
         return "none"
-    if step > primary_step:
+    diag_seq = jsonl_seq_for_violation(step, inv)
+    if not isinstance(diag_seq, int):
+        return "none"
+    if diag_seq > primary_failing_seq:
         return "none"
     return inv
 
@@ -481,7 +484,7 @@ def check_trace(
         inv_name = inv or "Unknown"
         diagnosed: str | None = None
         if diagnose:
-            diagnosed = diagnose_invariant(jar, build, step)
+            diagnosed = diagnose_invariant(jar, build, seq)
         return 1, format_violation(display, seq, inv_name, diagnosed)
 
 

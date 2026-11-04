@@ -70,6 +70,36 @@ def _truncated_good_prefix() -> Path:
     return _write_trace(BUILD / "truncated_good_prefix.jsonl", lines[:4])
 
 
+def _b1_fixed_true() -> Path:
+    objs: list[dict] = []
+    for line in (TRACES / "b1_silent_fail.jsonl").read_text(encoding="utf-8").splitlines():
+        obj = json.loads(line)
+        obj["fixed"] = True
+        objs.append(obj)
+    return _write_trace(BUILD / "b1_fixed_true.jsonl", [json.dumps(o, separators=(",", ":")) for o in objs])
+
+
+def test_replay_diagnose_step_guard_rejects_late_violation():
+    """Regression: FALSE run may violate policy after primary TraceReplay; must stay diagnosed=none."""
+    _require_toolchain()
+    trace = _b1_without_persist()
+    code, err = _run_diagnose(trace)
+    assert code == 1
+    assert "seq=1 invariant=TraceReplay" in err
+    assert "diagnosed=none" in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" not in err
+
+
+def test_replay_diagnose_fixed_true_trace_replay_at_seq5():
+    """#1153 pre-fix shape: Fixed=TRUE TraceReplay at seq 5; FALSE run names NewAfter at same seq."""
+    _require_toolchain()
+    trace = _b1_fixed_true()
+    code, err = _run_diagnose(trace)
+    assert code == 1
+    assert "seq=5 invariant=TraceReplay" in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" in err
+
+
 def test_replay_good_exits_zero():
     _require_toolchain()
     code, _ = _run(TRACES / "good_new_after_resume.jsonl")
@@ -151,6 +181,7 @@ def test_replay_diagnose_b1_persist_dropped_grk_proof():
     trace = _b1_without_persist()
     code, err = _run_diagnose(trace)
     assert code == 1
+    assert "seq=1 invariant=TraceReplay" in err
     assert "diagnosed=none" in err
     assert "diagnosed=NoForeignBeforeCoreLoad" not in err
     assert "diagnosed=NewAfterResumeBindsThisCore" not in err

@@ -61,7 +61,7 @@ On this VM, `--all` over the sample traces finishes in about 1–2 seconds once 
 
 Optional flag for local debugging and CI log triage. **Not part of the blocking gate** — do not pass it in the wired CI job from exo #1152.
 
-When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. `replay.py` re-runs the same trace with `Fixed=FALSE` and sets `diagnosed=` to a policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) **only when TLC reports that invariant on the re-run at or before the TLC `step` where the primary (trace `fixed`) replay stopped**. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
+When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. `replay.py` re-runs the same trace with `Fixed=FALSE` and sets `diagnosed=` to a policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) **only when TLC reports that invariant on the re-run at or before the primary failure’s JSONL `seq`** (the `seq=` on the `VIOLATION` line, including `TraceReplay` deadlocks where TLC `step` is one less). Violations on later events are ignored. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
 
 Example:
 
