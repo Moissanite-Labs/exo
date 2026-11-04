@@ -26,9 +26,37 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # merge_group.base_sha..HEAD is the queued merge tree (over-inclusive is fine).
       - name: Detect gate-relevant changes
         id: detect
-        run: python3 scripts/gate_preflight_relevant.py --base "$BASE_SHA"
+        run: |
+          set -euo pipefail
+          DETECTOR="$RUNNER_TEMP/gate_preflight_relevant.py"
+          if ! git cat-file -e "$BASE_SHA:scripts/gate_preflight_relevant.py" 2>/dev/null; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base has no gate_preflight_relevant.py; running full never-looser check (bootstrap)."
+            exit 0
+          fi
+          git show "$BASE_SHA:scripts/gate_preflight_relevant.py" > "$DETECTOR"
+          DETECTOR_OUTPUT="$RUNNER_TEMP/gate-preflight-detect.out"
+          : > "$DETECTOR_OUTPUT"
+          set +e
+          GITHUB_OUTPUT="$DETECTOR_OUTPUT" python3 "$DETECTOR" --base "$BASE_SHA"
+          DETECTOR_RC=$?
+          set -e
+          cat "$DETECTOR_OUTPUT" || true
+          if [ "$DETECTOR_RC" -ne 0 ]; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base detector exited $DETECTOR_RC; running full never-looser check (fail closed)."
+            exit 0
+          fi
+          RUN_FULL=$(grep -E '^run_full=(true|false)$' "$DETECTOR_OUTPUT" | tail -1 | cut -d= -f2 || true)
+          if [ "$RUN_FULL" != "true" ] && [ "$RUN_FULL" != "false" ]; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base detector did not emit run_full=true/false; running full never-looser check (fail closed)."
+            exit 0
+          fi
+          echo "run_full=$RUN_FULL" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v5
         if: steps.detect.outputs.run_full == 'true'
       - run: uv sync --frozen --all-extras --python 3.11
