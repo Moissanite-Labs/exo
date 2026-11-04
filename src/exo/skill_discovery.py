@@ -98,23 +98,45 @@ class SkillDiscovery:
             return Selection("", (), 0, ())
         query = query[:MAX_QUERY_CHARS]
         terms = sorted(set(_words(query)))
-        rows, unavailable = [], []
         indexed = sorted(tuple(self.index.skills.items()))
+        index_names = [name for name, _ in indexed]
+        tails = Counter(name.rsplit(":", 1)[-1].casefold() for name in index_names)
+
+        def explicit(name: str) -> bool:
+            names = [name]
+            tail = name.rsplit(":", 1)[-1]
+            if tails[tail.casefold()] == 1:
+                names.append(tail)
+            return any(re.search(r"(?<![\w:-])" + re.escape(n) + r"(?![\w:-])", query, re.I) for n in names)
+
+        explicit_hits = {name for name in index_names if explicit(name)}
+        rows, unavailable = [], []
         reads = 0
         for name, skill in indexed:
             if reads >= cfg.max_files:  # past the cap the name is only marked, never read
                 unavailable.append(name)
+                if name in explicit_hits:
+                    rows.append((name, "", Counter(), 0))
                 continue
             reads += 1
             description = _description(skill)
             if description is None:
                 unavailable.append(name)
+                if name in explicit_hits:
+                    rows.append((name, "", Counter(), 0))
                 continue
             description = " ".join(self.overrides.get(name, description).split())[:MAX_DESC]
             words = _words(name) + _words(description)
             rows.append((name, description, Counter(words), len(words)))
         if not rows:
-            return Selection("", (), 0, tuple(unavailable))
+            if not indexed:
+                return Selection("", (), 0, tuple(unavailable))
+            text = HEADER
+            if len(indexed) > cfg.max_files:
+                note = f"[read cap: {reads} of {len(indexed)} indexed files this turn]"
+                if len(text) + 1 + len(note) <= limit:
+                    text += "\n" + note
+            return Selection(text, (), 0, tuple(unavailable))
         frequency = Counter(word for _, _, counts, _ in rows for word in counts)
         average = sum(size for _, _, _, size in rows) / len(rows) or 1.0
         aliases = Counter(name.rsplit(":", 1)[-1].casefold() for name, *_ in rows)

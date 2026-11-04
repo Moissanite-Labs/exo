@@ -129,7 +129,8 @@ def test_metadata_reads_are_bounded_and_special_files_not_read(tmp_path):
     target.write_text("---\ndescription: charts\n---\n")
     path.symlink_to(target)
     if hasattr(os, "O_NOFOLLOW"):
-        assert discovery.select("charts").unavailable == ("huge",)
+        result = discovery.select("charts")
+        assert result.unavailable == ("huge",) and result.text == HEADER
 
 
 def test_per_turn_read_cap_stops_reading_and_names_the_sorted_remainder(tmp_path, monkeypatch):
@@ -149,7 +150,7 @@ def test_per_turn_read_cap_stops_reading_and_names_the_sorted_remainder(tmp_path
     assert result == discovery.select("charts")
     reads.clear()
     zero = selector(tmp_path, max_files=0).select("charts")
-    assert reads == [] and zero.text == "" and zero.names == ()
+    assert reads == [] and zero.text == HEADER and zero.names == ()
     assert zero.unavailable == tuple(f"s-{i:02}" for i in range(30))
 
 
@@ -163,6 +164,30 @@ def test_catalog_under_the_cap_reads_every_file_and_selects_the_same(tmp_path, m
     result = selector(tmp_path).select("Postgres schema migration")
     assert len(reads) == 200 and result.unavailable == ()
     assert result == selector(tmp_path, max_files=4096).select("Postgres schema migration")
+
+
+def test_explicit_name_past_read_cap_still_selects(tmp_path):
+    for i in range(300):
+        skill(tmp_path, f"s-{i:03}", "generic filler")
+    skill(tmp_path, "zeta-deploy", "Kubernetes rollout")
+    discovery = selector(tmp_path, max_files=256, top_k=3)
+    assert discovery.select("please use zeta-deploy for this").names == ("zeta-deploy",)
+
+
+def test_unreadable_first_files_still_show_access_header(tmp_path):
+    for name in ("a1", "a2", "a3"):
+        path = skill(tmp_path, name, "charts")
+        target = tmp_path / f"{name}-target.md"
+        target.write_text(f"---\nname: {name}\ndescription: charts\n---\n")
+        path.unlink()
+        path.symlink_to(target)
+    skill(tmp_path, "b1", "charts")
+    skill(tmp_path, "b2", "charts")
+    if not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("O_NOFOLLOW required")
+    result = selector(tmp_path, max_files=3).select("charts")
+    assert result.text.startswith(HEADER)
+    assert "- b1:" in result.text and "- b2:" in result.text
 
 
 def test_authority_tags_are_escaped_before_budget_accounting(tmp_path):
