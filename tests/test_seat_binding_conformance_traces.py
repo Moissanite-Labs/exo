@@ -7,8 +7,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-import pytest
-
 from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.seats import Seat
@@ -35,7 +33,11 @@ def _replay_module():
 
 def _engine(home, cwd, name):
     return CoreEngine(
-        home, MODELS, plugins=PluginManager(), cwd=str(cwd), env={},
+        home,
+        MODELS,
+        plugins=PluginManager(),
+        cwd=str(cwd),
+        env={},
         seat=Seat(name=name) if name else None,
     )
 
@@ -97,7 +99,9 @@ def test_emit_seated_refusal(trace_dir):
         try:
             eng = _engine(trace_dir / "home", trace_dir, "worker")
             try:
-                response = await Dispatcher(eng).run(s.Command.of(s.SessionCreate(seat="scout")))
+                response = await Dispatcher(eng).run(
+                    s.Command.of(s.SessionCreate(seat="scout"))
+                )
                 assert not response.ok
             finally:
                 await eng.close()

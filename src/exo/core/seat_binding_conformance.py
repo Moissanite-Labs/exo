@@ -24,7 +24,12 @@ def set_recorder(recorder: SeatBindingRecorder | None) -> None:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 @dataclass
@@ -56,7 +61,9 @@ class SeatBindingRecorder:
         self._write_line(self._line("initial", "system", {}, self._snapshot()))
 
     @classmethod
-    def start(cls, run_id: str, path: Path, *, fixed: bool = True) -> SeatBindingRecorder:
+    def start(
+        cls, run_id: str, path: Path, *, fixed: bool = True
+    ) -> SeatBindingRecorder:
         rec = cls(run_id=run_id, path=path, fixed=fixed)
         set_recorder(rec)
         return rec
@@ -71,7 +78,9 @@ class SeatBindingRecorder:
             if slot not in self.live_ids and slot not in self.id_map.values():
                 self.id_map[real_id] = slot
                 return slot
-        raise RuntimeError(f"seat-binding trace session pool exhausted mapping {real_id!r}")
+        raise RuntimeError(
+            f"seat-binding trace session pool exhausted mapping {real_id!r}"
+        )
 
     def note_load_core_seat(self, seat: str) -> None:
         self.core_seat = seat
@@ -85,11 +94,15 @@ class SeatBindingRecorder:
     def session_create_exit(self) -> None:
         self._session_create_depth -= 1
 
-    def note_session_row(self, *, seat: str | None, session_id: str) -> None:
+    def note_session_row(
+        self, *, seat: str | None, session_id: str, foreign: bool = False
+    ) -> None:
         tid = self.trace_id(session_id)
         seat_name = seat or ""
         self.live_ids.add(tid)
         self.session_seats[tid] = seat_name
+        if foreign:
+            self.foreign_ids.add(tid)
         if self._client_new_depth > 0:
             return
         if self._session_create_depth > 0 and self.core_loaded:
@@ -104,8 +117,6 @@ class SeatBindingRecorder:
             self._emit("persist_session", "core", params)
             return
         params = {"seat": seat_name, "session_id": tid}
-        if self.core_seat and seat_name != self.core_seat:
-            self.foreign_ids.add(tid)
         self._emit("persist_session", "core", params)
 
     def note_refusal(self, request_seat: str | None) -> None:
@@ -188,7 +199,9 @@ class SeatBindingRecorder:
             "next_sid": self._next_sid(),
         }
 
-    def _line(self, event: str, actor: str, params: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    def _line(
+        self, event: str, actor: str, params: dict[str, Any], state: dict[str, Any]
+    ) -> dict[str, Any]:
         line: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -217,9 +230,11 @@ def maybe_note_load_core_seat(seat: str | None) -> None:
         _active.note_load_core_seat(seat)
 
 
-def maybe_note_session_row(*, seat: str | None, session_id: str) -> None:
+def maybe_note_session_row(
+    *, seat: str | None, session_id: str, foreign: bool = False
+) -> None:
     if _active is not None:
-        _active.note_session_row(seat=seat, session_id=session_id)
+        _active.note_session_row(seat=seat, session_id=session_id, foreign=foreign)
 
 
 def maybe_note_refusal(request_seat: str | None) -> None:
@@ -237,7 +252,9 @@ def maybe_note_resume(session_id: str, *, session_seat: str | None) -> None:
         _active.note_resume(session_id, session_seat=session_seat)
 
 
-def maybe_note_client_new(session_id: str, *, session_seat: str | None, joined: str | None = None) -> None:
+def maybe_note_client_new(
+    session_id: str, *, session_seat: str | None, joined: str | None = None
+) -> None:
     if _active is not None:
         _active.note_client_new(session_id, session_seat=session_seat, joined=joined)
 
