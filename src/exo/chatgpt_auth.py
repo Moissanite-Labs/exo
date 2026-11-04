@@ -438,7 +438,7 @@ class Service:
             return self.status()
 
 
-_services = {}
+_services: dict[tuple[str, str], Service] = {}
 _services_lock = threading.Lock()
 
 

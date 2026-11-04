@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from typing import Any, Callable
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def _matching(arg: str, flags: tuple[str, ...]) -> list[str]:
     return [flag for flag in flags if key.startswith("--") and flag.startswith(key)]
 
 
-def _launch_command(env: dict[str, str], argv: list[str] | None) -> list[str]:
+def _launch_command(env: Mapping[str, str], argv: list[str] | None) -> list[str]:
     base = shlex.split(env.get("EXO_RESTART_CMD", ""))
     if base:
         return base
@@ -53,7 +54,7 @@ def _without_options(base: list[str], valued: tuple[str, ...], switches: tuple[s
     return out
 
 
-def dropped_permission_flags(env: dict[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
+def dropped_permission_flags(env: Mapping[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
     """Permission flags in the command ``new_command`` starts from, so these are the ones it strips.
 
     The source is ``_launch_command``, the same one ``new_command`` uses: with ``EXO_RESTART_CMD`` set the
@@ -68,18 +69,18 @@ def dropped_permission_flags(env: dict[str, str] | None = None, argv: list[str] 
     return dropped
 
 
-def restart_command(session: str | None, env: dict[str, str] | None = None,
+def restart_command(session: str | None, env: Mapping[str, str] | None = None,
                     argv: list[str] | None = None) -> list[str]:
     """The command line that resumes ``session``: EXO_RESTART_CMD, else re-exec of argv."""
-    env = os.environ if env is None else env
-    base = _without_options(_launch_command(env, argv), ("--session",), ("--resume",))
+    effective_env = os.environ if env is None else env
+    base = _without_options(_launch_command(effective_env, argv), ("--session",), ("--resume",))
     return [*base, "--session", session] if session else [*base, "--resume"]
 
 
-def new_command(cwd: str, env: dict[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
+def new_command(cwd: str, env: Mapping[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
     """Open a fresh session without inheriting a title, resume or permission flag."""
-    env = os.environ if env is None else env
-    base = _without_options(_launch_command(env, argv), ("--session", "--cwd", "--title"),
+    effective_env = os.environ if env is None else env
+    base = _without_options(_launch_command(effective_env, argv), ("--session", "--cwd", "--title"),
                             ("--resume", "--skip-permissions", "--dangerously-skip-permissions"))
     # The machine launchers and ``exo resume`` also accept a positional resume subcommand.
     for i, arg in enumerate(base[:-1]):
@@ -93,19 +94,19 @@ def _applescript_quote(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def has_opener(env: dict[str, str] | None = None, platform: str | None = None,
+def has_opener(env: Mapping[str, str] | None = None, platform: str | None = None,
                which: Callable[[str], str | None] = shutil.which) -> bool:
-    env = os.environ if env is None else env
+    effective_env = os.environ if env is None else env
     if (platform or sys.platform) == "darwin":
         return True
-    return bool((which("kitty") and env.get("KITTY_WINDOW_ID")) or (which("wezterm") and env.get("WEZTERM_PANE"))
+    return bool((which("kitty") and effective_env.get("KITTY_WINDOW_ID")) or (which("wezterm") and effective_env.get("WEZTERM_PANE"))
                 or which("gnome-terminal"))
 
 
-def open_tab(cmd: list[str], env: dict[str, str] | None = None, platform: str | None = None,
+def open_tab(cmd: list[str], env: Mapping[str, str] | None = None, platform: str | None = None,
              runner: Runner | None = None, which: Callable[[str], str | None] = shutil.which) -> str:
     """Open ``cmd`` in a new terminal tab. Returns "opened" or the exact command to run by hand."""
-    env = os.environ if env is None else env
+    effective_env = os.environ if env is None else env
     platform = platform or sys.platform
     run = runner or (lambda a: subprocess.run(a, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15))
     line = shlex.join(cmd)
@@ -116,17 +117,17 @@ def open_tab(cmd: list[str], env: dict[str, str] | None = None, platform: str | 
             q = _applescript_quote(shell_line)
             # Never target an existing tab and never send keystrokes: both can type into another program.
             # Each script makes a NEW window that runs the command itself.
-            if env.get("TERM_PROGRAM") == "iTerm.app":
+            if effective_env.get("TERM_PROGRAM") == "iTerm.app":
                 script = ('tell application "iTerm2"\nactivate\n'
                           f'create window with default profile command "{q}"\nend tell')
             else:
                 script = f'tell application "Terminal"\nactivate\ndo script "{q}"\nend tell'
             run(["osascript", "-e", script])
             return "opened"
-        if which("kitty") and env.get("KITTY_WINDOW_ID"):
+        if which("kitty") and effective_env.get("KITTY_WINDOW_ID"):
             run(["kitty", "@", "launch", "--type=tab", "--cwd=current", *cmd])
             return "opened"
-        if which("wezterm") and env.get("WEZTERM_PANE"):
+        if which("wezterm") and effective_env.get("WEZTERM_PANE"):
             run(["wezterm", "cli", "spawn", "--cwd", os.getcwd(), "--", *cmd])
             return "opened"
         if which("gnome-terminal"):

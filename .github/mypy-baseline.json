@@ -134,24 +134,6 @@
       "count": 1
     },
     {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[str, str]\", variable has type \"dict[str, str] | None\")",
-      "code": "assignment",
-      "count": 3
-    },
-    {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"get\"",
-      "code": "union-attr",
-      "count": 5
-    },
-    {
-      "path": "clients/tui/exo_tui/restart.py",
-      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"items\"",
-      "code": "union-attr",
-      "count": 1
-    },
-    {
       "path": "clients/tui/exo_tui/widgets.py",
       "message": "\"App[Any]\" has no attribute \"action_ctrl_c\"",
       "code": "attr-defined",
@@ -965,12 +947,6 @@
       "path": "src/exo/server/app.py",
       "message": "\"Engine\" has no attribute \"start_channels\"",
       "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/server/engine.py",
-      "message": "Argument 1 to \"wait_for\" has incompatible type \"Coroutine[Any, Any, Event | None]\"; expected \"Future[Event] | Generator[Any, None, Event] | Awaitable[Event]\"",
-      "code": "arg-type",
       "count": 1
     },
     {

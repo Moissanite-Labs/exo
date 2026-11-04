@@ -246,8 +246,12 @@ def sign(line: str, signer: Any) -> dict[str, str]:
 def verify(line: str, sig: dict[str, str], trusted_pub: str | None = None) -> bool:
     from exo import crypto
 
-    pub = trusted_pub or sig.get("pub", "")
-    return bool(pub) and crypto.verify(line.encode("utf-8"), sig.get("sig", ""), pub)
+    # Never authenticate against the public key embedded in the (attacker-controlled)
+    # signature envelope. The caller must supply the pinned trusted key; otherwise the
+    # verification is meaningless and we refuse.
+    if not trusted_pub:
+        return False
+    return crypto.verify(line.encode("utf-8"), sig.get("sig", ""), trusted_pub)
 
 
 # ---------------------------------------------------------------- English

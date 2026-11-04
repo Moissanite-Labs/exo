@@ -5,6 +5,7 @@
     exo findings fix ID --in SHA                  mark fixed; later turns re-measure it
     exo findings add TITLE [--severity bug|papercut] [--signature S] [--detail TEXT]  file one by hand
     exo findings export --md                      a digest for the developer session
+    exo findings backlog [--limit 20] [--json]     unresolved counts by severity and age, oldest rows
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ def register(sp, common) -> None:
     p.add_argument('--calls', action='store_true', help='list every model call with its cost (default: last turn)')
     p.add_argument('--json', action='store_true')
     p = sp.add_parser('findings', help='what the harness found wrong with itself')
-    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add'])
+    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add', 'backlog'])
     p.add_argument('id', nargs='?', help='finding id (for fix) or title (for add)')
     p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened', 'all'],
                    help='default: all states (verified ones too)')
@@ -56,6 +57,7 @@ def register(sp, common) -> None:
     p.add_argument('--severity', choices=['bug', 'papercut'], default='papercut', help='for add')
     p.add_argument('--signature', help='for add: dedup key (default: made from the title)')
     p.add_argument('--detail', default='', help='for add: what happened, how to see it')
+    p.add_argument('--limit', type=int, default=20, help='for backlog: oldest unresolved rows, 0..100 (default 20)')
     p.add_argument('--json', action='store_true')
 
 
@@ -90,6 +92,14 @@ def cmd_findings(a) -> int:
     from .core.findings import Findings
 
     fnd = Findings(_store(), _thresholds())
+    if a.action == 'backlog':
+        if a.status:
+            sys.exit('exo findings backlog includes open, reopened and fixed; --status applies to list/export')
+        try:
+            print(json.dumps(fnd.backlog(a.limit), indent=2) if a.json else fnd.backlog_text(a.limit))
+        except ValueError as exc:
+            sys.exit(str(exc))
+        return 0
     if a.action == 'fix':
         if not a.id or not a.sha:
             sys.exit('usage: exo findings fix ID --in SHA')

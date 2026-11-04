@@ -179,7 +179,7 @@ Result: 3 callers: src/exo/cli.py:52, src/exo/onboard.py:118, src/exo/core/engin
 | No schema shared with the program | Typed `Brief` and `Receipt` dataclasses in `exo.wire.packets`; statuses equal the protocol's `task.updated` values. |
 | Validator only | Strict `decode` (rejects anything non-canonical) plus `repair`, which fixes only meaning-preserving damage: surrounding text, code fences, leading zeros, body spacing. It never repairs a bad checksum, an unknown code or a missing field; those are refused, because guessing would change meaning. |
 | One version literal, no negotiation | The `(100 N)` vocabulary marker, and `negotiate(mine, theirs)` over advertised formats (`sym2p/2+exo1`, `json`), falling back to JSON when nothing matches. |
-| Checksum only; signing open (O-1) | Detached Ed25519 signatures over the exact line bytes with Exo's existing keys (`exo.crypto.Signer`), stored with each receipt. Bus envelopes are already signed and hash-chained, so the checksum is only needed on unsigned paths. |
+| Checksum only; signing open (O-1) | Detached Ed25519 signatures over the exact line bytes with Exo's existing keys (`exo.crypto.Signer`), stored with each receipt. Bus envelopes are already signed and hash-chained, so the checksum is only needed on unsigned paths. A caller pins the key: `verify(line, sig, trusted_pub)` checks the signature against `trusted_pub` only, and returns False when none is given. The `pub` a signature carries is never trusted on its own, because whoever made the packet chose it (exo-desktop #17). |
 | Renderer wording is "informative" | A deterministic renderer: same packet, same English, every time. Tests cover every status and every opcode. |
 | A model that cannot write a line has no path | No model writes lines in Exo. For peers that cannot speak the line, the same packet has a strict canonical JSON form; `decode_any` reads line, repaired line or JSON and reports which, so repairs and fallbacks can be counted. |
 
@@ -315,7 +315,9 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
   loop and the eval can score delegations (which roles and limits worked).
 - **Done in wave 3:** child usage rolls into the parent session total and the parent emits `usage.updated`
   for it; finished child sessions are locked (`SessionStore.lock`, `assert_open`), so a new turn fails with
-  a clear error.
+  a clear error. The lock is a key in the session's meta. Every meta write (`SessionStore.update_meta`) sets its
+  own keys and keeps the rest in one write transaction, so a context note or `/compact` that writes at the same
+  time cannot drop it (exo-desktop #52).
 - **Background delegation** (Hermes's async mode): return at once and deliver receipts later as messages.
 - **Worktree isolation** for parallel builders that edit the same repo (Hermes `subagent_worktree.py`).
 - **Decision role** (D-015): pick the child role and toolset with a decision model instead of the parent.

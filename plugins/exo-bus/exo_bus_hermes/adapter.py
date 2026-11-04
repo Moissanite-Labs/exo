@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from exo.bus import BusError
+from exo.bus.client import UNOPENED
 from exo.core.private import atomic_write
 from exo.protocol import schema as s
 
@@ -190,11 +191,11 @@ class BusChannel:
         n = 0
         for env in envs:
             if env["from"] != seat and env["id"] not in self._seen:
-                await self._dispatch(env)
+                receipt = await self._dispatch(env)
                 self._seen[env["id"]] = None
                 if len(self._seen) > 2000:
                     self._seen.pop(next(iter(self._seen)))
-                n += 1
+                n += receipt.get("state") != "ignored"
             self._cursor.set(env["seq"])
         return n
 
@@ -208,7 +209,12 @@ class BusChannel:
 
     async def _dispatch(self, env: dict) -> dict:
         """Hand one envelope to the core's ingress path. Returns its receipt (delivered, held or denied)."""
+        enc = env.get("enc")
+        if enc and enc.get("to") != self._client.seat:
+            return {"state": "ignored", "detail": "encrypted to another seat"}
         text = await asyncio.to_thread(self._client.text, env)  # decrypts a body sealed to this seat
+        if enc and text in (UNOPENED, "<unverifiable encrypted body>"):
+            return {"state": "ignored", "detail": "encrypted body could not be opened"}
         chat_id, _ = route(env, self._client.seat)
         self._thread[chat_id] = env["thread"] or env["id"]
         sid = await self._session_for(chat_id)

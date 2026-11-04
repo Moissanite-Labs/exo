@@ -105,7 +105,12 @@ class Findings:
     # ---------------------------------------------------------------- read
 
     def get(self, fid: str) -> dict[str, Any] | None:
-        rows = self.store._q("SELECT * FROM findings WHERE id=? OR id LIKE ?", (fid, fid + "%"))
+        """The finding with this id, or the one whose id starts with it. ``%`` and ``_`` match only themselves, and an
+        empty id names none (exo-desktop #52)."""
+        if not fid:
+            return None
+        prefix = fid.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = self.store._q("SELECT * FROM findings WHERE id=? OR id LIKE ? ESCAPE '\\'", (fid, prefix))
         return self._row(rows[0]) if len(rows) == 1 else None
 
     def list(self, status: str | None = None) -> list[dict[str, Any]]:
@@ -127,6 +132,53 @@ class Findings:
         c = self.counts()
         return (f"findings {c['total']}: {c['open']} open, {c['fixed']} fixed (awaiting re-verification), "
                 f"{c['verified']} verified, {c['reopened']} reopened")
+
+    def backlog(self, limit: int = 20, *, now: str | None = None) -> dict[str, Any]:
+        """One consistent read of counts and oldest unresolved rows; output size is bounded."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 100:
+            raise ValueError("backlog limit must be an integer from 0 to 100")
+        at = now or now_ts()
+
+        def read(db: Any) -> dict[str, Any]:
+            if db.execute("SELECT julianday(?)", (at,)).fetchone()[0] is None:
+                raise ValueError("backlog time must be a valid timestamp")
+            counts = {status: 0 for status in STATUSES}
+            severity = {name: 0 for name in SEVERITIES}
+            pending = 0
+            for status, sev, count in db.execute("SELECT status,severity,COUNT(*) FROM findings GROUP BY status,severity"):
+                counts[status] = counts.get(status, 0) + count
+                if status in ("open", "reopened", "fixed"):
+                    pending += count
+                    severity[sev] = severity.get(sev, 0) + count
+            ages = {name: 0 for name in ("under_1_day", "1_to_7_days", "7_to_30_days", "30_days_or_more", "unknown")}
+            for bucket, count in db.execute(
+                "SELECT CASE WHEN julianday(first_seen) IS NULL THEN 'unknown' "
+                "WHEN julianday(?) - julianday(first_seen) < 1 THEN 'under_1_day' "
+                "WHEN julianday(?) - julianday(first_seen) < 7 THEN '1_to_7_days' "
+                "WHEN julianday(?) - julianday(first_seen) < 30 THEN '7_to_30_days' "
+                "ELSE '30_days_or_more' END AS age, COUNT(*) FROM findings "
+                "WHERE status IN ('open','reopened','fixed') GROUP BY age", (at, at, at)):
+                ages[bucket] = count
+            rows = [dict(row) for row in db.execute(
+                "SELECT id,status,severity,title,first_seen,last_seen,fixed_in, "
+                "CASE WHEN julianday(first_seen) IS NULL THEN NULL "
+                "ELSE MAX(0, julianday(?) - julianday(first_seen)) END AS age_days FROM findings "
+                "WHERE status IN ('open','reopened','fixed') "
+                "ORDER BY julianday(first_seen) IS NULL, julianday(first_seen), id LIMIT ?", (at, limit))]
+            return {"at": at, "counts": {**counts, "total": sum(counts.values())}, "pending": pending,
+                    "by_severity": severity, "by_age": ages, "oldest": rows, "shown": len(rows)}
+
+        return self.store._read(read)
+
+    def backlog_text(self, limit: int = 20) -> str:
+        report = self.backlog(limit)
+        lines = [f"findings backlog: {report['pending']} unresolved, showing {report['shown']} oldest",
+                 "severity: " + ", ".join(f"{key} {value}" for key, value in report["by_severity"].items()),
+                 "age since first seen: " + ", ".join(f"{key} {value}" for key, value in report["by_age"].items())]
+        for row in report["oldest"]:
+            age = "unknown age" if row["age_days"] is None else f"{row['age_days']:.1f}d"
+            lines.append(f"{row['id']}  {row['status']:<8} {row['severity']:<8} {age:>11}  {row['title']}")
+        return "\n".join(lines)
 
     def changes(self, viewer: str, save: bool = False) -> list[str]:
         """New findings and state changes since ``viewer`` last looked ([] on the first view); ``save`` sets the baseline."""

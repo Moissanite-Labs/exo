@@ -22,10 +22,33 @@ the cap on the violations decide lists, `and N more on other posts` counts N in 
 total is lower has lost one too. The texts behind that line are compared by count only, so a head that lists more
 and hides another text there in place of one main hid shows nothing. At an equal deny, lost reserved hits and
 violations are not counted: the hook blocks the call, and both only matter for an ask (a reserved hit keeps a
-standing grant from covering it, a violation is named in its message). A classify or
-decide exception counts as the outcome the hook gives on an error: ask, for every tool, reads included (D-084).
-Tightenings are counted only. Actions whose category or target changed while every decision stayed
-the same are counted with a few examples.
+standing grant from covering it, a violation is named in its message).
+
+At the same outcome below deny a pair is also lowered when the head loses one of the exo-gate hook's checks past
+decide that are pure functions of the call's classification and decision (FLAGS, #551), each run with the tree's own
+gate: no_grant (the once rule, D-033: a NO_GRANT category in any part or reading, so no standing grant and an answer
+each time), body_unseen (a post whose body the gate did not read, #208: once-only too, and a required executor
+refuses it below deny), binds_exact (an approval or grant bound to the exact call), and reserved_elsewhere (a
+reserved hit on a part other than the line's own category and target, or than the part a sudo write displaced, so
+the hook gives no standing grant, D-075). So a reserved hit that moves onto the line's own category and target is
+lowered even with the same count and categories: a standing grant for the line would then cover the reserved act. A
+check a tree's gate does not have is not held. The hook runs decide and these checks in one try, so a check that
+raises is counted as a decide error, and the pair is the hook's error card (below) in place of the decision. That
+card is once-only, so a head whose pair is one loses none of the checks and no reserved hit (each only keeps a
+standing grant from covering the call). A pair is the card only by the mark this script puts in its flags
+(error_card), never by its rule, so a decision a gate returns with the rule "error" is compared like any other.
+
+An outcome that is not allow, log, ask or deny (not in gate.OUTCOMES, such as "Ask" or "block") is one the hook
+neither asks for nor blocks, so it runs the call (when the decision model gives a verdict, tighten_only raises on it
+and the hook gives its error card instead; allow is the loosest reading, so it is the one ranked). In the head it
+ranks as allow:
+it is lowered against a base log,
+ask or deny, and is not tighter than a base allow. In the base it ranks as ask, as before, so a head that fixes it to
+ask is not lowered by it. The same outcome on both sides ranks the same. The summary counts such pairs on each side.
+
+A classify or decide exception counts as the outcome the hook gives on an error: ask, for every tool, reads
+included (D-084), with no_grant held as the error path reads it (who may answer). Tightenings are counted only.
+Actions whose category or target changed while every decision stayed the same are counted with a few examples.
 
 An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
 action runs as written. A plain command line is the terminal call {"tool": "terminal", "args": {"command": line}}.
@@ -34,7 +57,12 @@ The built-in corpus is harvested from the gate tests of both trees (tests/securi
 plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line. The
 tables of both gates (GATE_TABLES, gate_tables) are read the same way, a pattern as its text. A table a tree holds in
 another form, or as another kind of value than the other tree and one the forms do not read, is named on stderr and
-in the summary (unread_tables). To that come the generated forms:
+in the summary (unread_tables). The budget lines (BUDGET_LINES, #551) come with the harvest, also under
+--no-variants (not under --only-corpus): six long lines that spend the shared fail-closed budgets of one classify
+call, which no test line reaches: past the 64 store folders of _exo_relative, past its join budget _EXO_PARTS (many
+names, the stress tests' _NEAR_CAP line, and two nested lines each under it alone), and past _BRACE_BUDGET for a read
+and a write. Each asks on main only because its budget is spent, so a head that fails open there is lowered. They
+are not wrapped in the compound forms. To that come the generated forms:
 - a line or call for each entry of the tables (table_forms): each PROGRAMS key, SUBCOMMANDS pair, prefix, wrapper,
   tmux command, shell and interpreter flag, each program and subcommand of the allowlists and each module of
   _SAFE_PY_MODULES, each value option of a prefix, wrapper, tmux command, interpreter and run wrapper, each exec
@@ -60,9 +88,16 @@ form otherwise with the entry taken out, and that each step of decide lowers a b
 Left out: the environment of a real seat (EXO_HOME, EXO_PRINCIPAL_STORE, EXO_KEYS_FILE and EXO_BUS_* move the
 stores, and both trees run without them), session folders other than the corpus's own "cwd" values and cwd_rows,
 argument keys, tool names, programs, patterns and helper sets the gate reads outside GATE_TABLES (only where a test
-or a seed names them), file contents and links in HOME other than HOME_FILES and HOME_LINKS, and every hook step
-after decide: standing grants and NO_GRANT, binds_exact, the registry risk floor, the required executor, a policy
-changed mid-session and the decision model.
+or a seed names them), file contents and links in HOME other than HOME_FILES and HOME_LINKS, the gate's other
+limits (the per-word brace cap, the inspection depth, the `$( )` nesting and ssh hop caps, the listing cap of
+violations and the like) except where a test or seed line reaches them, the brace budget's share for a repeated
+store spelling (past it a repeat counts as the hit it already had, so failing open there changes no outcome) and
+its Exo-store share alone (no line found spends it without the secret-store share), and every hook step after
+decide but the FLAGS: which standing grants exist and match (only the checks that refuse a grant are compared), the
+body files the hook reads into a post (body_unseen is compared as classify returns the call, before the hook reads a
+file), who may answer (call_approvers, which reads the pinned and changed policies), the registry risk floor, the
+required executor, observe mode, bypass, a policy changed mid-session or a policy error (the hook's merge of two
+decisions) and the decision model.
 
 Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run, the script
 itself failed (a bad flag or path, a --corpus item that is not a command or a {tool, args} action, a policy file
@@ -860,6 +895,30 @@ SEED_COMMANDS = (
     "printf x > ~/.exo/state/gate-grants.json", "rm -rf ~/.exo/state", "cat ~/.ssh/id_rsa", "cat ~/.kube/config",
     "gh auth token", "printenv", "ssh host ls", "kubectl delete pod x", "crontab -l", 'eval "$X"', "$CMD",
 )
+
+# Lines that spend the shared fail-closed budgets of one classify call (#551), so a head that fails open once a budget
+# is spent shows: no gate suite line reaches them (the stress tests build theirs in lambdas the harvest does not read).
+# Shaped on the stress tests' _NEAR_CAP (tests/security/test_gate_cd_stores.py). Each asks under the default policy
+# on main only because its budget is spent: with the budget lifted it is a plain read or write that main allows, so a
+# head that fails open there is lowered. Each classifies in well under a second. The names say which budget:
+# _exo_relative's 64 store folders (70 `cd`s into the store, then a name), its join budget _EXO_PARTS with one store
+# folder (a folder 62 deep and 1,600 names), the _NEAR_CAP line itself (that folder, 64 levels up and 200 names),
+# _EXO_PARTS shared by the nested lines of one call (two `<( )` of 400 names, each under it alone; a line around a
+# `$( )` of one asks by itself, so it shows nothing), and _BRACE_BUDGET (four words of 1,000 forms each and a fifth,
+# which counts as a secret then) for a read and for a write, whose store checks draw on the Exo-store share too.
+# tests/test_gate_diff.py checks that main reaches each budget and asks only because of it.
+_DEEP = "/".join(f"d{j}" for j in range(62))
+_BRACES = " ".join(f"{c}{{0..999}}" for c in "abcd")
+_HALF = f"cd ~/.exo/{_DEEP} && cat " + " ".join(f"n{i}" for i in range(400))
+BUDGET_LINES = {
+    "store folders": "".join(f"cd ~/.exo/d{j}; " for j in range(70)) + "cat seat.db",
+    "join budget": f"cd ~/.exo/{_DEEP} && cat " + " ".join(f"n{i}" for i in range(1600)),
+    "join budget, levels up": f"cd ~/.exo/{_DEEP}; cd " + "/".join([".."] * 64) + "; cat "
+                              + " ".join(f"n{i}" for i in range(200)),
+    "join budget, shared by nested lines": f"wc -l <({_HALF}) <({_HALF})",
+    "brace budget, read": f"cat {_BRACES} e{{0..999}}",
+    "brace budget, write": f"touch {_BRACES} e{{0..999}}",
+}
 
 # Each simple command is also run inside these lines. {c} is the command, {q} the command as one quoted word.
 VARIANTS = (
@@ -1834,12 +1893,12 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
 
     ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
     cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
-    The tables of both gates are read the same way (gate_tables). The files always run. ``builtin`` adds the harvest,
-    and with ``generate`` the seeds, the table, allowlist and option lines (table_forms), the posts (post_texts of
-    the tables and of ``policies``, the policies run, BUILTIN_POLICIES when None), the folder rows and the calls of
-    the other tools. ``generate`` adds the compound forms of the simple lines and the other shell tool names and
-    keys. With ``builtin`` off they are the forms of the files' lines alone. With ``generate`` off only the files and
-    the harvest run.
+    The tables of both gates are read the same way (gate_tables). The files always run. ``builtin`` adds the harvest
+    and the budget lines (BUDGET_LINES, #551), and with ``generate`` the seeds, the table, allowlist and option lines
+    (table_forms), the posts (post_texts of the tables and of ``policies``, the policies run, BUILTIN_POLICIES when
+    None), the folder rows and the calls of the other tools. ``generate`` adds the compound forms of the simple
+    lines and the other shell tool names and keys. With ``builtin`` off they are the forms of the files' lines alone.
+    With ``generate`` off only the files, the harvest and the budget lines run.
     """
     trees = list(dict.fromkeys(trees))
     out: dict[str, dict] = {}
@@ -1873,6 +1932,8 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
                 put(cmd, source)
             for a in h.actions.values():
                 put(a, source)
+        for cmd in BUDGET_LINES.values():   # a few long lines: with the harvest, also under --no-variants (#551)
+            put(cmd, "budgets")
     if not generate:
         return list(out.values()), dict(counts)
     seeds = list(SEED_COMMANDS) if builtin else []
@@ -1952,6 +2013,9 @@ def _load_tree(tree: str, corpus: str, policies: str) -> None:
 
 # The hook's outcome when classify or decide raises: ask, for every tool, reads included (D-084).
 _ON_ERROR = "ask"
+# What marks a pair as the hook's error card: it sits in the flags slot, which only this script fills (from FLAGS),
+# so no decision a gate returns carries it, whatever its rule says.
+_ERROR_CARD = "error_card"
 
 
 def _post_names(gate: Any, c: Any) -> list[str]:
@@ -1975,6 +2039,42 @@ def _post_names(gate: Any, c: Any) -> list[str]:
     return sorted(out - {""}, key=lambda n: (-len(n), n))
 
 
+# The exo-gate hook's checks past decide that are pure functions of the call's classification and decision (#551),
+# each held as a flag of the decision when it is true. The hook reads each one to keep an ask stricter: no_grant (the
+# once rule, D-033) and body_unseen (#208) make it a once-only ask with no standing grant, and a required executor
+# refuses an unseen body below deny too; binds_exact binds an approval and a grant to the exact call; and a reserved
+# hit on another part than the line's own (category, target) keeps a standing grant from covering the call (D-075,
+# the hook's _grant_for). A head that loses one at the same outcome below deny is lower.
+FLAGS = ("no_grant", "body_unseen", "binds_exact", "reserved_elsewhere")
+
+
+def _reserved_elsewhere(c: Any, d: Any) -> bool:
+    """The hook's check (_grant_for, D-075, #454) on the line's own reading: a reserved hit that is not the line's own
+    (category, target), or not that of the part a sudo write displaced, keeps a standing grant from covering the
+    call. _grant_for's #471 branch, which also checks the line read as before (c.before), is not modelled here;
+    binds_exact still covers such a line in practice."""
+    return any(hit != (x.category, x.target) for x in (c, getattr(c, "displaced", None)) if x is not None
+               for hit in d.reserved)
+
+
+def _call_flags(gate: Any, c: Any) -> list[str]:
+    """The flags of the classification alone (no_grant, body_unseen), as the tree's gate computes them. A check the
+    gate does not have is not held. One that raises raises here: the hook's error path then decides the call."""
+    return [name for name in ("no_grant", "body_unseen") if callable(getattr(gate, name, None))
+            and getattr(gate, name)(c)]
+
+
+def _flags(gate: Any, c: Any, d: Any, held: list[str]) -> tuple[str, ...]:
+    """The FLAGS of the call under decision ``d``: ``held`` (_call_flags), binds_exact and reserved_elsewhere. A
+    check the tree's gate does not have is not held. One that raises raises here (see _row)."""
+    out = list(held)
+    if callable(getattr(gate, "binds_exact", None)) and gate.binds_exact(c, d):
+        out.append("binds_exact")
+    if _reserved_elsewhere(c, d):
+        out.append("reserved_elsewhere")
+    return tuple(out)
+
+
 def _row(i: int) -> list:
     gate, a = _W["gate"], _W["actions"][i]
     tool, args, cwd = a.get("tool", ""), a.get("args", {}), a.get("cwd")
@@ -1984,20 +2084,35 @@ def _row(i: int) -> list:
         cat, target = str(c.category), str(c.target)
     except Exception as exc:
         why = f"classify raised {type(exc).__name__}: {exc}"[:200]
-        return [None, None, why, [[_ON_ERROR, "error", why, [], []]], [0] * npol, 0, []]
+        return [None, None, why, [[_ON_ERROR, "error", why, [], [], [_ERROR_CARD]]], [0] * npol, 0, []]
     uniq: dict[tuple, int] = {}
     idx, nerr = [], 0
+    try:                            # once per action: they read the classification only
+        held: list[str] | Exception = _call_flags(gate, c)
+    except Exception as exc:
+        held = exc
+    try:                            # the hook's error path reads no_grant for who answers (D-033, D-084)
+        on_error = ("no_grant",) if callable(getattr(gate, "no_grant", None)) and gate.no_grant(c) else ()
+    except Exception:
+        on_error = ()
+    on_error += (_ERROR_CARD,)
     for pol, ctx in _W["pols"]:
+        step = "decide"
         try:
             d = gate.decide(c, pol, ctx)
             key = (str(d.outcome), str(d.rule), str(d.reason)[:300],
                    tuple(sorted({(str(x[0]), str(x[1])) for x in d.reserved})), tuple(sorted(map(str, d.violations))))
+            step = "a hook check past decide"
+            if isinstance(held, Exception):
+                raise held
+            key += (_flags(gate, c, d, held),)
         except Exception as exc:
+            # The hook runs decide and these checks in one try: either raising sends the call to its error path.
             nerr += 1
-            key = (_ON_ERROR, "error", f"decide raised {type(exc).__name__}: {exc}"[:300], (), ())
+            key = (_ON_ERROR, "error", f"{step} raised {type(exc).__name__}: {exc}"[:300], (), (), on_error)
         idx.append(uniq.setdefault(key, len(uniq)))
-    return [cat, target, None, [[o, r, why, [list(x) for x in res], list(v)] for o, r, why, res, v in uniq], idx, nerr,
-            _post_names(gate, c)]
+    return [cat, target, None, [[o, r, why, [list(x) for x in res], list(v), list(f)] for o, r, why, res, v, f in uniq],
+            idx, nerr, _post_names(gate, c)]
 
 
 def _chunk(span: tuple[int, int]) -> str:
@@ -2185,11 +2300,17 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
     a violation after its part (`<post>: v`, as a line of several posts lists them; ``nb`` and ``nh`` are the names
     each tree's parts go by). When the head holds each base text v as often as the base does, under whatever name,
     nothing is lost: "reworded" says so, and the caller does not count it as lowered. One post's violation that
-    moves onto another post that already had it is still lost, and so is one fewer past the listing cap."""
+    moves onto another post that already had it is still lost, and so is one fewer past the listing cap. Each of the
+    base's FLAGS the head lacks is lost too (#551). A head pair that is the hook's error card (marked _ERROR_CARD)
+    loses neither reserved hits nor FLAGS: that card is once-only, so it refuses every grant they refuse."""
     kinds = []
+    fb, fh = (set(d[5]) if len(d) > 5 else set() for d in (db, dh))
+    card = _ERROR_CARD in fh
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
-    if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
+    if rb and not card and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
+    # A hook check past decide that the head no longer makes (#551).
+    kinds += [] if card else [f for f in FLAGS if f in fb - fh]
     vb, vh = ([v for v in d[4] if not _MORE_LINE.fullmatch(v)] for d in (db, dh))
     fewer = _total(dh[4]) < _total(db[4])
     if Counter(vb) - Counter(vh) or fewer:
@@ -2199,9 +2320,21 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
 
 
 COUNT_KEYS = ("actions", "pairs_same", "lowered_pairs", "lowered_actions", "lowered_outcome", "lowered_reserved",
-              "lowered_violations", "violations_reworded", "tightened_pairs", "tightened_actions",
-              "pairs_detail_changed", "classification_only_actions", "base_classify_errors", "base_decide_errors",
-              "head_classify_errors", "head_decide_errors")
+              "lowered_violations", *(f"lowered_{f}" for f in FLAGS), "violations_reworded", "tightened_pairs",
+              "tightened_actions", "pairs_detail_changed", "classification_only_actions", "base_classify_errors",
+              "base_decide_errors", "head_classify_errors", "head_decide_errors", "base_unknown_outcomes",
+              "head_unknown_outcomes")
+
+
+def _ranks(base: str, head: str) -> tuple[int, int]:
+    """The ranks of a base and a head outcome (allow < log < ask < deny). An outcome not in RANK (not one of
+    gate.OUTCOMES, such as "Ask" or "block") is one the exo-gate hook neither asks for nor blocks, so it runs the call:
+    on the head side it ranks as allow, and a head that gives one where main asks or logs is lowered (#551). On the
+    base side it ranks as ask, as before, so a head that fixes such a base outcome to ask is not lowered by it. The
+    same outcome on both sides ranks the same, so a head that keeps the base's is compared at that outcome."""
+    if base == head:
+        return (RANK.get(base, RANK["allow"]),) * 2
+    return RANK.get(base, RANK["ask"]), RANK.get(head, RANK["allow"])
 
 
 def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: int = 3, json_limit: int = 5000
@@ -2238,6 +2371,10 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
         nb, nh = (rb[6] if len(rb) > 6 else []), (rh[6] if len(rh) > 6 else [])
         cls_changed = (cb, tb) != (ch, th)
         lb, lh = cb or "error", ch or "error"     # a classify that raised has no category
+        for side, u, p in (("base", ub, pb), ("head", uh, ph)):
+            odd = {k for k, d in enumerate(u) if d[0] not in RANK}
+            if odd:                                # an outcome the hook neither asks for nor blocks: it runs (#551)
+                counts[f"{side}_unknown_outcomes"] += sum(j in odd for j in p)
         if ub == uh and pb == ph:
             counts["pairs_same"] += len(names)
             if cls_changed:
@@ -2252,7 +2389,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
             if db == dh:
                 counts["pairs_same"] += 1
                 continue
-            rkb, rkh = RANK.get(db[0], RANK["ask"]), RANK.get(dh[0], RANK["ask"])
+            rkb, rkh = _ranks(db[0], dh[0])
             kinds = ["outcome"] if rkh < rkb else (_lost(db, dh, nb, nh) if rkh == rkb and db[0] != "deny" else [])
             was_reworded = "reworded" in kinds
             if was_reworded:
@@ -2272,9 +2409,9 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 by_transition[tag] += 1
                 item = {"action": actions[i], "policy": name, "kinds": kinds,
                         "base": {"category": cb, "target": tb, "outcome": db[0], "rule": db[1], "reason": db[2],
-                                 "reserved": db[3], "violations": db[4]},
+                                 "reserved": db[3], "violations": db[4], "flags": db[5] if len(db) > 5 else []},
                         "head": {"category": ch, "target": th, "outcome": dh[0], "rule": dh[1], "reason": dh[2],
-                                 "reserved": dh[3], "violations": dh[4]}}
+                                 "reserved": dh[3], "violations": dh[4], "flags": dh[5] if len(dh) > 5 else []}}
                 for key, store in ((name, ex_policy), (tag, ex_transition)):
                     lst = store.setdefault(key, [])
                     if len(lst) < max_examples and all(x["action"] is not item["action"] for x in lst):
@@ -2318,6 +2455,8 @@ def _decision(d: dict) -> str:
         extra += f", reserved {len(d['reserved'])}"
     if d["violations"]:
         extra += f", violations {_total(d['violations'])}"     # with what `and N more on other posts` counts
+    if d.get("flags"):
+        extra += f", {'+'.join(d['flags'])}"
     return f"{d['category'] or 'error'} {d['outcome']} ({d['rule']}{extra})"
 
 
@@ -2331,7 +2470,8 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
            f"  corpus: {', '.join(f'{k} {v}' for k, v in rep['corpus_counts'].items()) or 'empty'}",
            f"  lowered: {c.get('lowered_pairs', 0)} pairs on {c.get('lowered_actions', 0)} actions "
            f"(outcome {c.get('lowered_outcome', 0)}, reserved lost {c.get('lowered_reserved', 0)}, "
-           f"violations lost {c.get('lowered_violations', 0)})",
+           f"violations lost {c.get('lowered_violations', 0)}, "
+           + ", ".join(f"{f} lost {c.get(f'lowered_{f}', 0)}" for f in FLAGS) + ")",
            f"  violations reworded (each lost one named after its post or the post's new name, not lowered): "
            f"{c.get('violations_reworded', 0)} pairs",
            f"  tightened: {c.get('tightened_pairs', 0)} pairs on {c.get('tightened_actions', 0)} actions",
@@ -2339,7 +2479,9 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
            f"  classification only (category or target changed, same decisions): "
            f"{c.get('classification_only_actions', 0)} actions",
            f"  errors: base classify {c.get('base_classify_errors', 0)} decide {c.get('base_decide_errors', 0)}, "
-           f"head classify {c.get('head_classify_errors', 0)} decide {c.get('head_decide_errors', 0)}"]
+           f"head classify {c.get('head_classify_errors', 0)} decide {c.get('head_decide_errors', 0)}",
+           f"  outcomes not in {'/'.join(RANK)} (run by the hook, so ranked as allow in the head): "
+           f"base {c.get('base_unknown_outcomes', 0)} pairs, head {c.get('head_unknown_outcomes', 0)} pairs"]
     for side, errs in rep["policy_errors"].items():
         for name, msg in errs.items():
             out.append(f"  policy error in {side} ({name}, defaults used): {msg}")
@@ -2420,13 +2562,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="more actions: a JSON list of commands or {tool, args, cwd} actions (cwd optional), or a "
                         ".txt file, one command per line")
     p.add_argument("--only-corpus", action="store_true",
-                   help="skip the built-in corpus (the harvest of the test files, the seeds, the table and allowlist "
-                        "lines, the folder rows and the calls of the other tools): run the --corpus items, the "
-                        "compound forms of their simple lines, and each line under one other shell tool name and key")
+                   help="skip the built-in corpus (the harvest of the test files, the budget lines, the seeds, the "
+                        "table and allowlist lines, the folder rows and the calls of the other tools): run the "
+                        "--corpus items, the compound forms of their simple lines, and each line under one other "
+                        "shell tool name and key")
     p.add_argument("--no-variants", action="store_true",
-                   help="run only the --corpus items and the harvest of the test files: skip the seeds, the table and "
-                        "allowlist lines, the compound forms, the other shell tool names and keys, the folder rows "
-                        "and the calls of the other tools")
+                   help="run only the --corpus items, the harvest of the test files and the budget lines: skip the "
+                        "seeds, the table and allowlist lines, the compound forms, the other shell tool names and "
+                        "keys, the folder rows and the calls of the other tools")
     p.add_argument("--policies", nargs="+", action="extend", default=[], type=Path,
                    help="more policies: a .py file with POLICIES (and CONTEXTS) or a .json mapping")
     p.add_argument("--only-policies", action="store_true", help="skip the built-in policies")

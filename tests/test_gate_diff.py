@@ -26,6 +26,17 @@ ROOM = "    room, seen, listed = max(_LISTED_VIOLATIONS - len(violations), 0), [
 ONCE = "    named, held = [list(t) for t in zip(*dict.fromkeys(zip(named, held)))] or [[], []]\n"
 
 
+def _function_entry_patch(name: str, statement: str) -> tuple[str, str]:
+    """Mutate the public function entry, not a nested helper's implementation."""
+    text = (ROOT / "src" / "exo" / "gate.py").read_text(encoding="utf-8")
+    function = next(node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name == name)
+    first = function.body[1 if ast.get_docstring(function) is not None else 0]
+    lines = text.splitlines(keepends=True)
+    anchor = "".join(lines[function.lineno - 1:first.lineno - 1])
+    assert anchor and text.count(anchor) == 1
+    return anchor, anchor + " " * first.col_offset + statement + "\n"
+
+
 def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None,
           more: tuple[tuple[str, str], ...] = ()) -> Path:
     tree = tmp_path / name
@@ -61,11 +72,14 @@ def test_a_loosened_category_exits_1_and_names_the_action(tmp_path):
     proc, rep = _run(base, head, tmp_path)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "rm notes.txt" in proc.stdout and "delete ask -> delete allow" in proc.stdout
-    lowered = {(x["action"]["args"]["command"], x["policy"]) for x in rep["lowered"]}
-    assert lowered == {("rm notes.txt", "default")}      # deny_delete still denies, matrix_all_ask still asks
-    assert rep["counts"]["lowered_pairs"] == 1 and rep["counts"]["actions"] == 4
+    lowered = {(x["action"]["args"]["command"], x["policy"], tuple(x["kinds"])) for x in rep["lowered"]}
+    # deny_delete still denies. matrix_all_ask still asks, but an approval of the now reversible delete no longer binds
+    # to the exact call (binds_exact, #551).
+    assert lowered == {("rm notes.txt", "default", ("outcome",)), ("rm notes.txt", "matrix_all_ask", ("binds_exact",))}
+    assert rep["counts"]["lowered_pairs"] == 2 and rep["counts"]["actions"] == 4
+    assert rep["counts"]["lowered_binds_exact"] == 1
     assert [(x["action"]["args"]["command"], x["policies"]) for x in rep["lowered_actions"]] == [
-        ("rm notes.txt", ["default"])]
+        ("rm notes.txt", ["default", "matrix_all_ask"])]
     assert rep["gate_files"]["head"].startswith(str(head))
 
 
@@ -88,7 +102,7 @@ def test_a_test_row_the_head_deletes_still_runs(tmp_path):
         (tree / "tests" / "security" / "test_gate_rows.py").write_text(ROWS_SUITE.format(rows=rows), encoding="utf-8")
     proc, rep = _gate_diff(base, head, tmp_path, "--no-variants", "--pick", "default", "--jobs", "1")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert rep["corpus_counts"] == {"harvested": 1, "harvested_base_only": 1}
+    assert rep["corpus_counts"] == {"harvested": 1, "harvested_base_only": 1, "budgets": len(gate_diff.BUDGET_LINES)}
     assert [x["action"]["args"]["command"] for x in rep["lowered_actions"]] == ["rm notes.txt"]
 
 
@@ -878,6 +892,119 @@ def test_a_read_tool_the_gate_cannot_classify_is_an_ask(tmp_path):
     assert list(rep["lowered_by_transition"]) == ["error ask -> read allow"], rep["lowered_by_transition"]
 
 
+# #551. The budget each BUDGET_LINES entry spends, as the constant that lifts it (None: _exo_relative's 64 store
+# folders, a literal in the gate).
+BUDGET_LIFTS = {"store folders": None, "join budget": "_EXO_PARTS", "join budget, levels up": "_EXO_PARTS",
+                "join budget, shared by nested lines": "_EXO_PARTS", "brace budget, read": "_BRACE_BUDGET",
+                "brace budget, write": "_BRACE_BUDGET"}
+
+
+def test_each_budget_line_asks_on_main_only_because_its_budget_is_spent(monkeypatch, tmp_path):
+    # So the seed stays meaningful if a budget moves: each line reaches its budget on main and asks, and with that
+    # budget lifted main allows it. A head that fails open past the budget is then lowered on it.
+    from exo import gate
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(BUDGET_LIFTS) == set(gate_diff.BUDGET_LINES)
+    pol = gate.normalize_policies({})
+
+    def run(line: str) -> tuple[str, bool]:
+        c = gate.classify({"tool": "terminal", "args": {"command": line}})
+        spent = any(gate._TOO_MANY in p.summary + p.target for r in gate.readings(c) for p in gate._each_part(r))
+        return gate.decide(c, pol).outcome, spent
+
+    for name, line in gate_diff.BUDGET_LINES.items():
+        assert run(line) == ("ask", "brace" not in name), name
+    # The folder cap: past 64 store folders the line asks even with the join budget lifted, and under it main allows.
+    folders = gate_diff.BUDGET_LINES["store folders"]
+    assert folders.count("cd ~/.exo/") > 64
+    assert run("".join(f"cd ~/.exo/d{j}; " for j in range(60)) + "cat seat.db") == ("allow", False)
+    # Each `<( )` of the shared line stays under the join budget alone: only together do they spend it.
+    assert run(f"wc -l <({gate_diff._HALF})") == ("allow", False)
+    for const in ("_EXO_PARTS", "_BRACE_BUDGET"):
+        with monkeypatch.context() as m:
+            m.setattr(gate, const, 10 ** 9)
+            for name, line in gate_diff.BUDGET_LINES.items():
+                if BUDGET_LIFTS[name] == const:
+                    assert run(line) == ("allow", False), name
+            if const == "_EXO_PARTS":
+                assert run(folders) == ("ask", True)
+
+
+def test_the_budget_lines_run_with_the_harvest_also_without_variants(tmp_path):
+    actions, counts = gate_diff.build_corpus([tmp_path], generate=False)
+    assert counts == {"budgets": len(gate_diff.BUDGET_LINES)}
+    assert [a["args"]["command"] for a in actions] == list(gate_diff.BUDGET_LINES.values())
+    assert gate_diff.build_corpus([tmp_path], builtin=False, generate=False) == ([], {})
+
+
+# #551: changes main's gate_diff reported 0 lowered for. Each is (the patches, the corpus lines or None for the built-in
+# corpus under --no-variants, the lowered (line, kinds) pairs under the default policy, which must be among them).
+FAIL_OPEN = (("    if left[0] < 0:\n        return _TOO_MANY\n", '    if left[0] < 0:\n        return ""\n'),
+             ("    except _Spent:\n        return _TOO_MANY\n", '    except _Spent:\n        return ""\n'))
+DECIDE_DEF = ("def decide(c: Classification, policies: Mapping | None = None, context: Mapping | None = None) "
+              "-> Decision:\n")
+
+
+def _odd_outcome(word: str) -> tuple:
+    # decide gives `word` for an asked call. A line read several ways then raises in the head (the strictest of the
+    # readings cannot rank it), which the witness line is not.
+    return ((DECIDE_DEF, "def decide(c, policies=None, context=None):\n    d = _decide_all(c, policies, context)\n"
+                         f"    if d.outcome == 'ask':\n        d.outcome = {word!r}\n    return d\n\n\n"
+                         + DECIDE_DEF.replace("def decide(", "def _decide_all(")),)
+
+
+HOOK_LOOSENINGS = {
+    # The lines are BUDGET_LINES entries, named here (BUDGET_LINES[name] when the test runs).
+    "store budget fails open": (FAIL_OPEN, None, {(k, ("outcome",)) for k in (
+        "store folders", "join budget", "join budget, levels up", "join budget, shared by nested lines")}),
+    "decide says Ask": (_odd_outcome("Ask"), ["rm -rf build"], {("rm -rf build", ("outcome",))}),
+    "decide says block": (_odd_outcome("block"), ["rm -rf build"], {("rm -rf build", ("outcome",))}),
+    "NO_GRANT empty": ((('NO_GRANT = ("credentials", "store_write")', "NO_GRANT = ()"),), ["cat ~/.ssh/id_rsa"],
+                       {("cat ~/.ssh/id_rsa", ("no_grant", "binds_exact"))}),    # binds_exact reads no_grant
+    "binds_exact false": ((_function_entry_patch("binds_exact", "return False"),),
+                          ["gh pr comment 3 --body hi"], {("gh pr comment 3 --body hi", ("binds_exact",))}),
+    # The hook's check dropped, decide's own reading kept (its unseen-body violation still shows on main).
+    "body_unseen dropped": ((("    unseen = body_unseen(eff)\n", "    unseen = _unseen(eff)\n"),
+                             ("def body_unseen(c: Classification) -> bool:\n",
+                              "def body_unseen(c: Classification) -> bool:\n    return False\n\n\n"
+                              "def _unseen(c: Classification) -> bool:\n")),
+                            ['gh pr comment 3 --body "$X"'], {('gh pr comment 3 --body "$X"', ("body_unseen",))}),
+}
+
+
+@pytest.mark.parametrize("name", list(HOOK_LOOSENINGS))
+def test_a_head_that_loses_a_budget_an_outcome_or_a_hook_check_is_lowered(tmp_path, name):
+    patches, lines, want = HOOK_LOOSENINGS[name]
+    if lines is None:
+        want = {(gate_diff.BUDGET_LINES[k], kinds) for k, kinds in want}
+    base, head = _tree(tmp_path, "base"), _tree(tmp_path, "head", more=patches)
+    args = ["--no-variants", "--pick", "default", "--jobs", "1"]
+    if lines is not None:
+        corpus = tmp_path / "lines.json"
+        corpus.write_text(json.dumps(lines), encoding="utf-8")
+        args += ["--only-corpus", "--corpus", str(corpus)]
+    proc, rep = _gate_diff(base, head, tmp_path, *args, timeout=300)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    got = {(x["action"]["args"]["command"], tuple(x["kinds"])) for x in rep["lowered"]}
+    assert want <= got, (got, rep["counts"])
+    if name.startswith("decide says"):
+        assert rep["counts"]["head_unknown_outcomes"] == 1 and rep["counts"]["base_unknown_outcomes"] == 0
+        assert "outcomes not in allow/log/ask/deny" in proc.stdout
+
+
+def test_a_hook_check_that_raises_is_the_hooks_error_card(tmp_path):
+    # The hook calls binds_exact in the same try as decide: a raise sends the call to its error path, a once-only
+    # ask. So it is a decide error, not a lost check, and it is not lowered against main's ask.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", _function_entry_patch("binds_exact", "raise RuntimeError('zz')"))
+    corpus = tmp_path / "lines.json"
+    corpus.write_text(json.dumps(["gh pr comment 3 --body hi"]), encoding="utf-8")
+    proc, rep = _gate_diff(base, head, tmp_path, "--only-corpus", "--no-variants", "--corpus", str(corpus),
+                           "--pick", "default", "--jobs", "1")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert rep["counts"]["head_decide_errors"] == 1 and rep["counts"]["lowered_pairs"] == 0, rep["counts"]
+
+
 def _stream(path: Path, rows: list, names: list[str]) -> None:
     with gzip.open(path, "wt", encoding="utf-8") as f:
         f.write(json.dumps({"header": {"policies": names, "actions": len(rows), "gate": str(path),
@@ -917,6 +1044,57 @@ def test_compare_ranks_pairs_as_the_hook_would(tmp_path, base, head, kind):
     got = "lowered" if c.get("lowered_pairs") else "tightened" if c.get("tightened_pairs") else "same"
     assert got == kind, c
     assert kind != "same" or c["pairs_detail_changed"] + c["pairs_same"] == 1
+
+
+def _f(outcome, flags=(), reserved=(), rule="rule"):
+    return [outcome, rule, "why", [list(x) for x in reserved], [], list(flags)]
+
+
+@pytest.mark.parametrize("base, head, kind", [
+    # #551: a hook check past decide the head no longer makes, at the same outcome below deny.
+    (_f("ask", ["no_grant", "binds_exact"]), _f("ask", ["binds_exact"]), "no_grant"),
+    (_f("ask", ["body_unseen"]), _f("ask"), "body_unseen"),
+    (_f("log", ["body_unseen"]), _f("log"), "body_unseen"),       # a required executor refuses it below ask too
+    (_f("ask", ["binds_exact"]), _f("ask"), "binds_exact"),
+    # A reserved hit that moves onto the line's own (category, target): same count and categories, but a standing
+    # grant for the line now covers the reserved act.
+    (_f("ask", ["reserved_elsewhere"], [("delete", "y")]), _f("ask", [], [("delete", "x")]), "reserved_elsewhere"),
+    (_f("deny", ["no_grant"]), _f("deny"), "same"),                      # a deny blocks: nothing to grant
+    (_f("ask"), _f("ask", ["no_grant", "binds_exact"]), "same"),        # a check gained is not lower
+    (_d("ask"), _f("ask", ["no_grant"]), "same"),                       # a row of a stream without flags
+    # The hook's error card is once-only, so a head that errs loses none of the checks, and no reserved hit either:
+    # the card refuses every grant they refuse.
+    (_f("ask", ["binds_exact", "no_grant"]), _f("ask", ["no_grant", "error_card"], rule="error"), "same"),
+    (_f("ask", [], [("delete", "y")]), _f("ask", ["error_card"], rule="error"), "same"),
+    (_f("ask", ["no_grant"]), _f("ask", ["error_card"], rule="error"), "same"),
+    # A decision whose rule is "error" but that a gate returned is not the card: what it drops is lost.
+    (_f("ask", ["binds_exact"]), _f("ask", [], rule="error"), "binds_exact"),
+    (_f("ask", [], [("delete", "y")]), _f("ask", [], rule="error"), "reserved"),
+    # An outcome not in gate.OUTCOMES runs the call: allow in the head, ask in the base (#551).
+    (_d("ask"), _d("Ask"), "outcome"), (_d("log"), _d("block"), "outcome"), (_d("allow"), _d("block"), "same"),
+    (_d("deny"), _d("Deny"), "outcome"), (_d("Ask"), _d("ask"), "same"), (_d("Ask"), _d("allow"), "outcome"),
+    (_f("block", ["binds_exact"]), _f("block"), "binds_exact"),         # the same odd outcome on both sides
+])
+def test_compare_counts_lost_hook_checks_and_odd_outcomes(tmp_path, base, head, kind):
+    _stream(tmp_path / "b.gz", [["delete", "x", None, [base], [0], 0]], ["p"])
+    _stream(tmp_path / "h.gz", [["delete", "x", None, [head], [0], 0]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    c = rep["counts"]
+    assert c["tightened_pairs"] == 0, c
+    if kind == "same":
+        assert c["lowered_pairs"] == 0 and c["pairs_detail_changed"] + c["pairs_same"] == 1, c
+    else:
+        assert c["lowered_pairs"] == 1 and rep["lowered"][0]["kinds"] == [kind], rep["lowered"]
+        assert c[f"lowered_{kind}"] == 1
+    odd = [x[0] not in gate_diff.RANK for x in (base, head)]
+    # Read with get, and the summary only for the rows #551 changes, so a row main already gets right (a "same" row
+    # with known outcomes) is a guard that passes on main too.
+    assert (c.get("base_unknown_outcomes", 0), c.get("head_unknown_outcomes", 0)) == tuple(map(int, odd)), c
+    if kind == "same" and not any(odd):
+        return
+    rep.update(base="b", head="h", wall_secs=0, corpus_counts={})
+    text = gate_diff.summary_text(rep)
+    assert "no_grant lost" in text and "outcomes not in allow/log/ask/deny" in text
 
 
 @pytest.mark.parametrize("base, head, lowered", [
@@ -1065,7 +1243,8 @@ def test_corpus_files_come_first_and_the_work_folder_is_out_of_tmp(tmp_path):
     lines.write_text("echo mine\n", encoding="utf-8")
     actions, counts = gate_diff.build_corpus((tmp_path,), [lines])
     assert actions[0] == {"tool": "terminal", "args": {"command": "echo mine"}}
-    assert list(counts)[:2] == ["files", "generated"] and "harvested" not in counts      # no gate, no tests here
+    # no gate, no tests here: the budget lines (#551) come with the harvest, before the generated forms
+    assert list(counts)[:3] == ["files", "budgets", "generated"] and "harvested" not in counts
     assert "sudo echo mine" in [gate_diff.show_action(a) for a in actions]      # the line's own variants
     work = gate_diff.work_dir()
     try:

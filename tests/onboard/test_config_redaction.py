@@ -7,7 +7,7 @@ import types
 import pytest
 
 from exo import config as xc
-from exo.config import Config, ConfigError, main, redact
+from exo.config import Config, ConfigError, check_not_secret, main, redact
 from exo.core.engine import CoreRuntime
 from exo.protocol.schema import ConfigGet
 
@@ -79,3 +79,18 @@ def test_a_write_refuses_a_container_under_a_secret_name(home):
 def test_a_plain_container_keeps_the_leaf_rule(home):
     assert redact({"n": {"token": "t"}, "visible": "x"}) == {"n": {"token": "***"}, "visible": "x"}
     assert redact({"n": {"name": "x"}}, ["plugin_config"]) == {"n": {"name": "x"}}
+
+
+def test_redact_masks_exactly_what_a_write_refuses():
+    """A key-shaped value beside a `${VAR}` was refused on write but printed by redact (PR #674)."""
+    key = "sk-" + "A" * 24
+    paths = [["theme"], ["token"], ["token", "a"], ["mcp", "s", "env", "A"], ["plugin_config", "x", "headers", "X-A"],
+             ["models", "providers", "p", "key_env"]]
+    for path in paths:
+        for v in ("plain", "${TOK}", key, "${TOK}" + key, "Bearer ${TOK} " + key):
+            try:
+                check_not_secret(".".join(path), v)
+                refused = False
+            except ConfigError:
+                refused = True
+            assert (redact(v, path) == "***") is refused, (path, v)

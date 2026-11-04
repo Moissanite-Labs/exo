@@ -23,8 +23,8 @@ def merge_output_item(previous: dict, current: dict) -> dict:
     return {**current, **previous, **{key: value for key, value in current.items() if value not in (None, '', [])}}
 
 
-def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict]:
-    out = []
+def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for message in messages:
         if message.role == 'tool':
             out.extend({'type': 'function_call_output', 'call_id': r.call_id,
@@ -32,10 +32,12 @@ def convert_input(messages: list[Message], origin: str, *, subscription: bool = 
                        for r in message.tool_results)
             continue
         replay = message.meta.get('responses_output')
-        replaying = bool(origin and message.role == 'assistant' and message.meta.get('responses_origin') == origin and isinstance(replay, list))
-        present = {}
-        if replaying:
-            for item in replay:
+        saved: list[Any] | None = replay if isinstance(replay, list) else None
+        replaying = bool(origin and message.role == 'assistant' and message.meta.get('responses_origin') == origin and saved is not None)
+        present: dict[Any, dict[str, Any]] = {}
+        has_saved_message = False
+        if saved is not None and replaying:
+            for item in saved:
                 if isinstance(item, dict) and item.get('type') == 'function_call':
                     cid = item.get('call_id')
                     if cid in present:
@@ -46,12 +48,13 @@ def convert_input(messages: list[Message], origin: str, *, subscription: bool = 
                     item = present[call.id]
                     if item.get('name') != call.name or json.loads(item.get('arguments') or '{}') != call.arguments:
                         raise ValueError('Inconsistent Responses tool history')
-            out.extend(copy.deepcopy(item) for item in replay if isinstance(item, dict) and
+            out.extend(copy.deepcopy(item) for item in saved if isinstance(item, dict) and
                        item.get('type') in ('reasoning', 'message', 'function_call'))
+            has_saved_message = any(isinstance(item, dict) and item.get('type') == 'message' for item in saved)
         missing_calls = [call for call in message.tool_calls if call.id not in present]
         role = 'developer' if subscription and message.role == 'system' else message.role
-        content = []
-        for part in ([] if replaying and any(isinstance(item, dict) and item.get('type') == 'message' for item in replay) else message.content):
+        content: list[dict[str, Any]] = []
+        for part in ([] if has_saved_message else message.content):
             if part.type == 'text' and part.text:
                 content.append({'type': 'output_text' if role == 'assistant' else 'input_text', 'text': part.text})
             elif part.type == 'image' and role != 'assistant':
@@ -166,7 +169,7 @@ class OpenAIResponsesProvider(HttpTransport):
             body['reasoning'] = dict(opts['reasoning']) if isinstance(opts['reasoning'], dict) else {'effort': opts['reasoning']}
         return body
 
-    def _usage(self, raw: dict, st: StreamState) -> Iterator[ProviderEvent]:
+    def _usage(self, raw: object, st: StreamState) -> Iterator[ProviderEvent]:
         if not isinstance(raw, dict) or not raw:
             return
         prompt, output = raw.get('input_tokens'), raw.get('output_tokens')
@@ -176,12 +179,14 @@ class OpenAIResponsesProvider(HttpTransport):
             return
         cached = details.get('cached_tokens', 0)
         reasoning = output_details.get('reasoning_tokens', 0)
-        valid = all(type(n) is int and n >= 0 for n in (prompt, output, cached, reasoning)) and cached <= prompt
-        st.meta['_usage_complete'] = valid
-        if valid:
-            st.usage = Usage(input_tokens=prompt - cached, cache_read_tokens=cached, output_tokens=output,
-                             reasoning_tokens=reasoning)
-            yield ProviderEvent(kind='usage', usage=Usage(**vars(st.usage)))
+        if (type(prompt) is not int or type(output) is not int or type(cached) is not int or type(reasoning) is not int
+                or prompt < 0 or output < 0 or cached < 0 or reasoning < 0 or cached > prompt):
+            st.meta['_usage_complete'] = False
+            return
+        st.meta['_usage_complete'] = True
+        st.usage = Usage(input_tokens=prompt - cached, cache_read_tokens=cached, output_tokens=output,
+                         reasoning_tokens=reasoning)
+        yield ProviderEvent(kind='usage', usage=Usage(**vars(st.usage)))
 
     def _item(self, item: dict, st: StreamState) -> Iterator[ProviderEvent]:
         if not isinstance(item, dict):
