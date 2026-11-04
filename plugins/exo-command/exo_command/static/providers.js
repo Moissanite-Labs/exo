@@ -9,6 +9,7 @@ const STORE_TEXT = {
   "secret-service": "the system keyring (Secret Service)",
   file: "a private keys file in your Exo home (mode 600)",
 };
+const NEED_SECRET_STORE = "ChatGPT connection needs an available OS secret store.";
 
 function chip(r) {
   const st = r.status || "";
@@ -34,8 +35,10 @@ export function mount(root) {
   function drawChatGPT(message = "") {
     if (!alive) return;
     const d = authState;
-    const note = message || (d && d.dependency_available === false ? "Install Exo’s chatgpt extra in the core runtime before signing in." : "") || (d && d.message) || (d && d.available ? "Using ChatGPT plan when a chatgpt model is selected." : "Connect your ChatGPT subscription separately from API keys and CLI logins.");
-    const button = (label, action, profile) => h("button", { class: "xc-btn", type: "button", disabled: authBusy,
+    const storeOk = !(d && d.store_available === false);
+    const storeNote = storeOk ? "" : (NEED_SECRET_STORE + " On Linux without secret-tool, create ~/.config/exo/keys.env (mode 600) or install secret-tool; see docs/PROVIDERS.md.");
+    const note = message || storeNote || (d && d.dependency_available === false ? "Install Exo’s chatgpt extra in the core runtime before signing in." : "") || (d && d.message) || (d && d.available ? "Using ChatGPT plan when a chatgpt model is selected." : "Connect your ChatGPT subscription separately from API keys and CLI logins.");
+    const button = (label, action, profile) => h("button", { class: "xc-btn", type: "button", disabled: authBusy || !storeOk,
       onclick: () => chatGPT(action, profile) }, label);
     connection.replaceChildren(h("div", null, h("h2", null, "ChatGPT subscription"),
       h("p", { role: "status" }, note),

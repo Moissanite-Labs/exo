@@ -146,3 +146,10 @@ def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps
     assert "console." not in js
     # the old silent swallow is gone: a failure used to become an empty list, which reads as "no models"
     assert 'catch(() => ({ models: [], available: [] }))' not in js
+
+
+def test_chatgpt_sign_in_disabled_when_os_secret_store_unavailable():
+    js = text("providers.js")
+    assert 'const NEED_SECRET_STORE = "ChatGPT connection needs an available OS secret store."' in js
+    assert "store_available === false" in js and "disabled: authBusy || !storeOk" in js
+    assert "keys.env (mode 600)" in js

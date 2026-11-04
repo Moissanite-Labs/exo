@@ -244,6 +244,10 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
             if action == "disconnect":
                 return await asyncio.to_thread(auth.disconnect, request.get("profile"))
             raise ValueError()
+        except chatgpt_auth.AuthError as exc:
+            if str(exc) == chatgpt_auth.NEED_SECRET_STORE:
+                raise CommandFailed("unavailable", str(exc)) from None
+            raise CommandFailed("bad_request", "ChatGPT connection action failed. Check the connection or try again.") from None
         except Exception:
             raise CommandFailed("bad_request", "ChatGPT connection action failed. Check the connection or try again.") from None
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.

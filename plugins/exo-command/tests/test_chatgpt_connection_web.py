@@ -68,6 +68,23 @@ def test_old_or_nonprincipal_core_refuses_without_local_storage(failure, expecte
     assert len(src.calls) == 1
 
 
+def test_chatgpt_start_without_os_secret_store_returns_actionable_error(tmp_path, monkeypatch):
+    from exo.core.engine import CoreEngine
+    from exo.server.app import Dispatcher
+    from exo.chatgpt_auth import NEED_SECRET_STORE
+    from exo_command.source import DispatcherSource
+
+    monkeypatch.setenv('EXO_NO_KEYCHAIN', '1')
+    monkeypatch.setenv('EXO_NO_SECRET_SERVICE', '1')
+    eng = CoreEngine(tmp_path / 'home', {'roles': {'main': ['fake:x']}}, cwd=str(tmp_path), env={})
+    centre = SimpleNamespace(source=DispatcherSource(Dispatcher(eng)))
+    try:
+        status, data = asyncio.run(providers.handle(centre, 'POST', '/api/providers/chatgpt', {'action': 'start'}))
+    finally:
+        asyncio.run(eng.close())
+    assert status == 503 and data['error'] == NEED_SECRET_STORE
+
+
 @pytest.mark.skipif(not find_chrome(), reason='headless Chrome required')
 def test_mounted_continue_cancel_and_usage_controls_do_not_change_default():
     src = ConnectionSource()
