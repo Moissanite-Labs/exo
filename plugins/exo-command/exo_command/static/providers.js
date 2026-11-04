@@ -25,7 +25,7 @@ function chip(r) {
 
 export function mount(root) {
   const body = h("div", { class: "xc-prov" });
-  const connection = h("section", { class: "xc-prov-def", "aria-label": "ChatGPT subscription connection" });
+  const connection = h("section", { class: "xc-prov-connect", "aria-label": "ChatGPT subscription connection" });
   const counts = h("div", { class: "xc-phead-read" });
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
     lede: "Where model keys live, which providers answer, and the model the main role uses.", aside: counts }), connection, body));
