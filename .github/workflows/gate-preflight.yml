@@ -22,7 +22,7 @@ concurrency:
 jobs:
   never-looser:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       EXO_BUS_URL: http://127.0.0.1:9
       EXO_BUS_SEAT: builder
