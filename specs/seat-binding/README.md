@@ -2,6 +2,27 @@
 
 Formal model of how a **seated core** binds `session.create` to its loaded seat, how the TUI **resume** path copies a thread’s seat into the display label, and how **`/new`** must keep using the window’s launch seat (exo #939 bug B1, fix in commit `5ba3813` on `feat/bot-profile-foundation`).
 
+## Derivation from the failing trace
+
+**Observable #939 B1 trace (what the user did and saw):**
+
+1. A **worker** core is running (seat **X** = `worker`) in a home that already has a **scout** thread from an earlier unseated core or another process.
+2. The user opens the TUI attached to that worker core (no `--seat`, or a launch seat that is not scout).
+3. They **resume** the scout thread. The UI label shows **Y** = `scout` (copied from the resumed session).
+4. They run **`/new`**. **Nothing useful happens**: no new worker thread, no error line in the transcript (`bad_request` absent in the regression test), the session id unchanged — a silent failure.
+
+**User-facing expectation after step 4:** `/new` starts a **fresh thread of this core’s seat** (worker), same memory, with a visible outcome (new thread notice or an explicit refusal/join message), not a no-op.
+
+From that trace alone:
+
+| Invariant | Derived from observation | Code mapping (after derivation) |
+|-----------|-------------------------|----------------------------------|
+| **NewAfterResumeBindsThisCore** | After step 3, the client has resumed another seat’s thread (`resumedOtherSeat`). Step 4 must not leave the user on the old scout focus with no explanation; `/new` must end in a **visible refusal** or a **session bound to the core seat** (worker). | `ExoApp.new_session` + `CoreRuntime._session_create`; regression `test_new_after_resuming_another_seat_uses_this_core`. |
+| **NoSilentRefusal** | Step 4 produced **no user-visible outcome** while the core rejected the create (wrong seat name sent) — that is exactly “nothing happens”. Any refused create must surface as refusal/join/error, not `SilentFail`. | Pre-fix `new_session` did not handle `ClientError`; post-fix notes or retries. |
+| **SeatMatchesCore** | ⚠ **Justified primarily from product/docs**, not from the B1 user trace alone: the user did not report corrupt DB rows, but exo policy says sessions created on a seated core must carry that core’s seat unless they are pre-existing foreign rows. | `engine._session_create` seat normalization; `foreignSessions` in the model. |
+
+Only **SeatMatchesCore** is flagged as relying on code/docs justification in addition to the failing trace; the other two are direct formalizations of what B1 violated.
+
 ## What is modeled
 
 - **Core loaded seat** (`coreSeat`): the `Seat` passed to `CoreEngine` / `exo serve --seat` (`src/exo/compose.py`, `CoreEngine.__init__` in `src/exo/core/engine.py`).
