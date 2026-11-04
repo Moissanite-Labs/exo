@@ -1,10 +1,14 @@
 """Saved group definitions do not share history or start participants."""
+import asyncio
 import sqlite3
 
 import pytest
 
 from exo.core.groups import GroupStore
 from exo.core.sessions import SessionStore
+from exo.protocol import schema as s
+from exo.server.app import Dispatcher
+from test_session_seat_binding import _engine
 
 
 def create(groups, **kw):
@@ -45,6 +49,11 @@ def test_restart_owner_scope_and_private_sessions(tmp_path):
     {"members": ["alpha", 1]}, {"known_profiles": ["alpha"]},
     {"conductor": "alpha"}, {"mode": "conductor"},
     {"mode": "conductor", "conductor": "outsider"},
+    pytest.param({"members": ["a", "lph"], "known_profiles": "alpha"}, id="string-catalog-substrings"),
+    pytest.param({"members": ["a", "lph"], "known_profiles": b"alpha"}, id="bytes-catalog"),
+    pytest.param({"members": ["alpha", "../beta"], "known_profiles": ["alpha", "../beta"]},
+                 id="invalid-id-present-in-catalog"),
+    pytest.param({"members": "ab", "known_profiles": ["a", "b"]}, id="string-members-character-catalog"),
 ])
 def test_invalid_definition_writes_nothing(kw):
     store = SessionStore()
@@ -84,3 +93,26 @@ def test_groups_never_reuse_session_history():
         assert first.id != second.id
     finally:
         store.close()
+
+
+def test_member_sessions_keep_the_profile_owner_boundary(tmp_path):
+    async def run():
+        eng = _engine(tmp_path, "worker")
+        try:
+            group = GroupStore(eng.store).create(owner="host", mode="socratic", members=["worker", "other"],
+                                                 known_profiles=["worker", "other"])
+            sessions = {m.profile: m.session for m in group.members}
+            dispatcher = Dispatcher(eng)
+            response = await dispatcher.run(s.Command.of(s.SessionList()))
+            assert response.ok, response.error
+            assert {i["id"] for i in response.result["sessions"]} == {sessions["worker"]}
+            own = await dispatcher.run(s.Command.of(s.SessionGet(session=sessions["worker"])))
+            assert own.ok, own.error
+            assert eng.store.get_session(sessions["worker"]).kind == "private"
+            for command in (s.SessionGet, s.SessionFork):
+                foreign = await dispatcher.run(s.Command.of(command(session=sessions["other"])))
+                assert not foreign.ok and foreign.error.code == "not_found"
+            assert len(eng.store.list_sessions()) == 2  # refused fork created no copy
+        finally:
+            await eng.close()
+    asyncio.run(run())
