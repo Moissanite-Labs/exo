@@ -153,3 +153,9 @@ jobs:
             exit "$exit_code"
           fi
           echo "replay.py exited 0: all conforming traces passed."
+
+      - name: Check negative trace fixtures
+        if: steps.scope.outputs.run_replay == 'true'
+        env:
+          TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
+        run: python3 specs/seat-binding/conformance/check_negative_fixtures.py
