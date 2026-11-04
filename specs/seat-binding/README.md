@@ -23,10 +23,13 @@ From that trace alone:
 
 Only **SeatMatchesCore** is flagged as relying on code/docs justification in addition to the failing trace; the other two are direct formalizations of what B1 violated.
 
+**Foreign-row timing (model refinement, not trace tuning):** The B1 story is persist scout **before** worker `LoadCoreSeat`, then resume scout on a worker core. Real homes do not label that scout row “foreign” until this core instance has loaded its seat (`LoadCoreSeat` unions existing live rows into `foreignSessions`). An earlier model version marked every `PersistSession` row foreign immediately, which does not match that startup order and broke exhaustive TLC. The guarded `foreignSessions'` update on `PersistSession` keeps pre-load persists non-foreign (observed) while still treating mismatched seats as foreign once `coreSeat` is set (policy in **SeatMatchesCore**).
+
 ## What is modeled
 
 - **Core loaded seat** (`coreSeat`): the `Seat` passed to `CoreEngine` / `exo serve --seat` (`src/exo/compose.py`, `CoreEngine.__init__` in `src/exo/core/engine.py`).
 - **Sessions** (`liveSessions`, `sessionSeat`): rows in the shared home store; `foreignSessions` marks threads created before this core instance loaded its seat (another core or an unseated engine), matching shared `sessions.sqlite` in `docs/SEATS.md`.
+- **`PersistSession` / foreign rows:** When no core seat is loaded yet, a row replicated from `sessions.sqlite` is **not** foreign—the home simply holds another process’s thread until this core loads. **`LoadCoreSeat`** then marks every already-live row foreign (observed B1 setup: scout row exists, then worker core starts). If this core is **already seated** and a **new** row appears with a **different** seat name, that row is foreign immediately (another writer or a late replicate)—not because replay traces need it, but because **SeatMatchesCore** must allow mismatched seats only on foreign rows. Marking every `PersistSession` row foreign unconditionally was too strong and made TLC invent impossible states (foreign before any core load).
 - **Client launch vs display seat** (`clientLaunch`, `clientDisplay`): `ExoApp.launch_seat` and `self.seat` (`clients/tui/exo_tui/app.py`).
 - **Outcomes** (`lastOutcome`): whether a create/resume/`/new` produced a visible result, a core refusal, a join notice, or (pre-fix) a silent failure.
 - **`fromClientNew`**: true on the state immediately after a `ClientNew` step (used by **NewAfterResumeBindsThisCore**).

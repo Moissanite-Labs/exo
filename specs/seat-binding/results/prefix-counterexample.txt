@@ -1,14 +1,14 @@
 # TLC: SeatBinding_prefix.cfg (Fixed = FALSE, pre-5ba3813)
 TLC2 Version 2026.11.03.180953 (rev: 309e489)
-Running breadth-first search Model-Checking with fp 53 and seed -614983219487253357 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 3549] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Running breadth-first search Model-Checking with fp 16 and seed 380880020554878243 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 6852] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
 Parsing file /agent/repos/exo/specs/seat-binding/SeatBinding.tla
-Parsing file /tmp/tlc-16334213936507685954/Naturals.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /tmp/tlc-16334213936507685954/FiniteSets.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /tmp/tlc-16334213936507685954/_TLCTrace.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
-Parsing file /tmp/tlc-16334213936507685954/Sequences.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
-Parsing file /tmp/tlc-16334213936507685954/TLC.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /tmp/tlc-16334213936507685954/TLCExt.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
-Parsing file /tmp/tlc-16334213936507685954/Integers.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /tmp/tlc-11482768214092937830/Naturals.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-11482768214092937830/FiniteSets.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-11482768214092937830/_TLCTrace.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-11482768214092937830/Sequences.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-11482768214092937830/TLC.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-11482768214092937830/TLCExt.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-11482768214092937830/Integers.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
 Semantic processing of module Naturals
 Semantic processing of module Sequences
 Semantic processing of module FiniteSets
@@ -20,10 +20,10 @@ Semantic processing of module SeatBinding
 Linting of module TLCExt
 Linting of module _TLCTrace
 Linting of module SeatBinding
-Starting... (2026-11-04 06:40:30)
+Starting... (2026-11-04 07:00:40)
 Computing initial states...
 Computed 2 initial states...
-Finished computing initial states: 3 distinct states generated at 2026-11-04 06:40:30.
+Finished computing initial states: 3 distinct states generated at 2026-11-04 07:00:40.
 Error: Invariant NoSilentRefusal is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -65,7 +65,7 @@ State 3: <ClientBoot("scout") line 81, col 3 to line 85, col 73 of module SeatBi
 /\ foreignSessions = {}
 /\ resumedOtherSeat = FALSE
 
-State 4: <ClientNew line 146, col 6 to line 158, col 78 of module SeatBinding>
+State 4: <ClientNew line 151, col 6 to line 163, col 78 of module SeatBinding>
 /\ sessionSeat = [s1 |-> "NoSeat", s2 |-> "NoSeat", s3 |-> "NoSeat"]
 /\ coreSeat = "worker"
 /\ liveSessions = {}
@@ -78,12 +78,37 @@ State 4: <ClientNew line 146, col 6 to line 158, col 78 of module SeatBinding>
 /\ foreignSessions = {}
 /\ resumedOtherSeat = FALSE
 
-523 states generated, 298 distinct states found, 256 states left on queue.
+523 states generated, 274 distinct states found, 232 states left on queue.
 The depth of the complete state graph search is 4.
-Finished in 00s at (2026-11-04 06:40:30)
-Trace exploration spec path: ./SeatBinding_TTrace_1793774430.tla
+Finished in 00s at (2026-11-04 07:00:40)
+Trace exploration spec path: ./SeatBinding_TTrace_1793775640.tla
 
 # B1 regression trace (same model; only NewAfterResumeBindsThisCore checked)
+TLC2 Version 2026.11.03.180953 (rev: 309e489)
+Running breadth-first search Model-Checking with fp 96 and seed -1851224730994560144 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 6874] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /agent/repos/exo/specs/seat-binding/SeatBinding.tla
+Parsing file /tmp/tlc-9761434030527221403/Naturals.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-9761434030527221403/FiniteSets.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-9761434030527221403/_TLCTrace.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-9761434030527221403/Sequences.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-9761434030527221403/TLC.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-9761434030527221403/TLCExt.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-9761434030527221403/Integers.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Integers
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module SeatBinding
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module SeatBinding
+Starting... (2026-11-04 07:00:40)
+Computing initial states...
+Computed 2 initial states...
+Finished computing initial states: 3 distinct states generated at 2026-11-04 07:00:40.
 Error: Invariant NewAfterResumeBindsThisCore is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -112,7 +137,7 @@ State 2: <LoadCoreSeat("worker") line 73, col 3 to line 78, col 88 of module Sea
 /\ foreignSessions = {}
 /\ resumedOtherSeat = FALSE
 
-State 3: <PersistSession("scout") line 111, col 3 to line 120, col 64 of module SeatBinding>
+State 3: <PersistSession("scout") line 111, col 3 to line 125, col 64 of module SeatBinding>
 /\ sessionSeat = [s1 |-> "scout", s2 |-> "NoSeat", s3 |-> "NoSeat"]
 /\ coreSeat = "worker"
 /\ liveSessions = {"s1"}
@@ -125,7 +150,7 @@ State 3: <PersistSession("scout") line 111, col 3 to line 120, col 64 of module 
 /\ foreignSessions = {"s1"}
 /\ resumedOtherSeat = FALSE
 
-State 4: <ResumeSession("s1") line 134, col 3 to line 142, col 94 of module SeatBinding>
+State 4: <ResumeSession("s1") line 139, col 3 to line 147, col 94 of module SeatBinding>
 /\ sessionSeat = [s1 |-> "scout", s2 |-> "NoSeat", s3 |-> "NoSeat"]
 /\ coreSeat = "worker"
 /\ liveSessions = {"s1"}
@@ -138,7 +163,7 @@ State 4: <ResumeSession("s1") line 134, col 3 to line 142, col 94 of module Seat
 /\ foreignSessions = {"s1"}
 /\ resumedOtherSeat = TRUE
 
-State 5: <ClientNew line 146, col 6 to line 158, col 78 of module SeatBinding>
+State 5: <ClientNew line 151, col 6 to line 163, col 78 of module SeatBinding>
 /\ sessionSeat = [s1 |-> "scout", s2 |-> "NoSeat", s3 |-> "NoSeat"]
 /\ coreSeat = "worker"
 /\ liveSessions = {"s1"}
@@ -151,7 +176,7 @@ State 5: <ClientNew line 146, col 6 to line 158, col 78 of module SeatBinding>
 /\ foreignSessions = {"s1"}
 /\ resumedOtherSeat = TRUE
 
-3503 states generated, 1317 distinct states found, 1001 states left on queue.
+3299 states generated, 1163 distinct states found, 871 states left on queue.
 The depth of the complete state graph search is 5.
-Finished in 00s at (2026-11-04 06:40:48)
-Trace exploration spec path: /agent/repos/exo/specs/seat-binding/SeatBinding_TTrace_1793774448.tla
+Finished in 00s at (2026-11-04 07:00:41)
+Trace exploration spec path: ./SeatBinding_TTrace_1793775640.tla
