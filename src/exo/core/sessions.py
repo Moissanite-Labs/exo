@@ -485,7 +485,9 @@ class SessionStore:
     def search(self, query: str, limit: int = 20, session: str | None = None,
                agent: str | None = None, *, owner: str | None = None) -> list[dict[str, Any]]:
         """FTS5 search over message text. Plain words are quoted, so any input is safe. ``agent`` searches that
-        agent's log (a private thread and everything under it left out, D-028 #632) and adds each hit's ``pos``."""
+        agent's log (a private thread and everything under it left out, D-028 #632) and adds each hit's ``pos``.
+        ``owner`` keeps hits whose session's stored agent matches, applied in SQL before LIMIT. Ranking still
+        uses shared FTS corpus statistics; restricting returned rows does not isolate their ordering."""
         terms = " ".join('"' + w.replace('"', '""') + '"' for w in query.split())
         if not terms:
             return []

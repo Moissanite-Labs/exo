@@ -212,3 +212,10 @@ searchable through this direct history command.
 
 This owner filter is separate from agent-log recall, which continues to exclude
 private threads and their descendants. Unseated search keeps its existing behavior.
+
+Ranking still uses BM25 statistics from the shared `messages_fts` index. Adding or
+removing foreign messages can change the order of owned hits without returning a
+foreign row or snippet. This exposes corpus-level information and is a remaining
+search-isolation limit, including for owner-constrained agent-log recall. The current
+ranking semantics are preserved here; [#1150](https://github.com/Moissanite-Labs/exo/issues/1150)
+tracks owner-isolated ranking as separate work.
