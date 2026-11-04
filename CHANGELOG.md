@@ -15,6 +15,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- A seated core stores its own seat on a new thread when the client omits the name, and refuses a different name before writing a session (D-028 amendment). The terminal's `/new` sends the seat the window was started with. After resuming another seat's thread, `/new` still opens a thread of this core's seat. A window started with a different `--seat` joins this core's seat and says so.
 - Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
   the principal. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line
   with `-o StreamLocalBindUnlink=yes` were reads that the default policy allowed. ssh makes that socket, and with that

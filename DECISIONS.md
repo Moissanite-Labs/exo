@@ -674,6 +674,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
 ## D-028 (2026-10-12) One agent, one continuous memory
+- *Amendment 2026-11-03 (truthful seat attribution):* on a seated core, `session.create` stores that seat when the client omits the name, and refuses a different name before any session is written. The message names both seats. The terminal's `/new` sends the seat the window was started with, not a label copied from a resumed thread. A window whose `--seat` is not this core's seat joins this core's seat and says so.
 - *Amendment 2026-10-28 (#450):* fork copies retain a derived indexed original position. Context lookups no longer parse each copy JSON; the one-time backfill leaves signed data and log hashes untouched.
 - **Why (A, verbatim):** "well if the harness is built according to my vision for the implemenation of the optchat
   memory system all sessions should technically be the same agent with continuous memory". Exo had taken the turn
