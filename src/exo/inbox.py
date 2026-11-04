@@ -135,14 +135,25 @@ def _findings(db: Snapshot, agent: str, limit: int) -> dict[str, Any]:
                    "Unverified findings whose latest recorded session belongs to this agent; global findings omitted.")
 
 
+def _sort_time(value: Any) -> tuple[int, str | float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (0, f"{float(value):020.6f}")
+    if isinstance(value, str):
+        return (1, value)
+    return (2, "")
+
+
 def _approvals(db: Snapshot, agent: str, limit: int) -> dict[str, Any]:
-    rows = db.select("SELECT seq,session,type,ts,substr(body,1,16384) AS body FROM events WHERE session IN "
+    rows = db.select("SELECT seq,session,type,ts,body FROM events WHERE session IN "
                      "(SELECT id FROM sessions WHERE agent=?) AND type IN "
                      "('approval.requested','approval.resolved') ORDER BY seq DESC LIMIT ?",
                      (agent, APPROVAL_EVENTS + 1))
     pending = {}
     for r in reversed(rows[:APPROVAL_EVENTS]):
-        body = json.loads(r["body"])
+        try:
+            body = json.loads(r["body"])
+        except json.JSONDecodeError:
+            continue
         rid = body["request_id"]
         if r["type"] == "approval.requested":
             pending[rid] = item("approval", rid, body.get("summary"), "requested",
@@ -203,7 +214,7 @@ def _questions(root: Path, limit: int, deadline: float) -> dict[str, Any]:
     questions = QueueSnapshot(root, policy={}).state().values()
     rows = [item("question", q.id, q.text, q.status, terminal=True, updated=q.proposed_at)
             for q in questions if q.status in ("proposed", "asked")]
-    rows.sort(key=lambda r: (r["recorded_state"] != "asked", r["updated_at"] or "", r["id"]))
+    rows.sort(key=lambda r: (r["recorded_state"] != "asked", _sort_time(r["updated_at"]), r["id"]))
     return section(rows, limit, "Open questions from this store only; no ledger, ranking refresh or asked marker writes.")
 
 

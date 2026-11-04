@@ -96,6 +96,17 @@ managers. It never makes protocol calls: current engine query dispatch starts ru
 scope, unknown live states and per-source failures explicit. Test missing/older sources and read budgets.
 Do not treat the configured principal as proof of historical ownership. See [INBOX.md](INBOX.md).
 
+**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+`tool_output.enabled` is true. It renders copies and expands retained sanitized text through
+the normal registry/executor path. `for_child(context, tools=names)` is an optional context
+method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
+Use `SessionStore`'s public scoped reads. Shared metadata edits use
+`SessionStore.update_meta(session, callback)` so concurrent writers preserve other keys.
+The callback edits the current dictionary inside one transaction and may read the store.
+`set_meta` replaces the complete object and must not be used for concurrent runtime edits.
+See [TOOL-OUTPUT.md](TOOL-OUTPUT.md) for ownership, limits and tests.
+This adds no output archive and does not recover previously truncated bytes.
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 

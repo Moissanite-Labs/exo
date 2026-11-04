@@ -163,6 +163,23 @@ def test_live_wal_is_visible_without_using_immutable_mode(home):
         writer.close()
 
 
+def test_large_and_invalid_approval_events_do_not_drop_valid_pending(home):
+    writer = SessionStore(home / "sessions.sqlite")
+    writer.append_event(s.ApprovalRequested(request_id="large", summary="x" * 40_000), "mine")
+    writer._q("INSERT INTO events(session,seq,type,ts,body) VALUES (?,?,?,?,?)",
+                ("mine", 99_999, "approval.requested", 1, '{"request_id":"broken"'))
+    writer.close()
+    ids = [r["id"] for r in observe(home)["sections"]["approvals"]["items"]]
+    assert ids == ["pending", "large"]
+
+
+def test_question_sort_accepts_mixed_timestamp_shapes():
+    rows = [inbox.item("question", "b", "B", "proposed", updated="2026-10-23T00:00:00+00:00"),
+            inbox.item("question", "a", "A", "proposed", updated=1.0)]
+    rows.sort(key=lambda r: (r["recorded_state"] != "asked", inbox._sort_time(r["updated_at"]), r["id"]))
+    assert [r["id"] for r in rows] == ["a", "b"]
+
+
 def test_question_answers_are_folded_and_nonregular_file_cannot_block(home):
     import os
 
