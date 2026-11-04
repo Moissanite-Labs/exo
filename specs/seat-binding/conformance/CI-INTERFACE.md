@@ -14,11 +14,29 @@ Batch (every `*.jsonl` in a directory; exits with the worst code — includes ne
 python3 specs/seat-binding/conformance/replay.py --all specs/seat-binding/conformance/traces
 ```
 
-The blocking CI gate must invoke **`replay.py` directly** (not rely on pytest alone). Install Java 21+ and the pinned `tla2tools.jar` in the job; a missing toolchain is **exit 3** and must fail the job.
+The blocking CI gate must invoke **`replay.py` directly** (not rely on pytest alone). Install Java 21+ on `PATH`, fetch and verify the pinned jar, then run replay. A missing toolchain is **exit 3** and must fail the job.
 
-Optional: `TLA2TOOLS_JAR=/path/to/tla2tools.jar` (otherwise `specs/seat-binding/tla2tools.jar`).
+### CI gate setup (required before `replay.py`)
 
-Download pin (SHA-256):
+Pinned release: **tla2tools v1.8.0**
+
+- URL: `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar`
+- SHA-256: `e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf`
+
+Example (from repository root):
+
+```bash
+JAR=specs/seat-binding/tla2tools.jar
+curl -fsSL -o "$JAR" \
+  https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
+export TLA2TOOLS_JAR="$PWD/$JAR"
+python3 specs/seat-binding/conformance/replay.py specs/seat-binding/conformance/traces/good_new_after_resume.jsonl
+```
+
+If `TLA2TOOLS_JAR` is unset, `replay.py` defaults to `specs/seat-binding/tla2tools.jar` (same pin and checksum as in `replay.py`).
+
+Local optional install (same pin):
 
 ```bash
 curl -fsSL -o specs/seat-binding/tla2tools.jar \
@@ -41,7 +59,7 @@ On this VM, `--all` over the sample traces finishes in about 1–2 seconds once 
 
 `replay.py` never skips checks.
 
-**Pytest (`tests/specs/test_replay.py`) skips all replay tests when Java is absent**, so `pytest -q` can exit 0 with zero checks. That is intentional for local dev without Java. The wired CI gate must **not** use pytest as the sole check; run `replay.py` as above so missing Java/jar fails with exit 3.
+**Pytest (`tests/specs/test_replay.py`) skips when Java or the pinned jar is unavailable** (missing file or checksum mismatch), so default CI jobs without the jar stay green. That is intentional: pytest is not the conformance gate. The wired CI gate must fetch/verify the jar, set `TLA2TOOLS_JAR`, and run **`replay.py` directly** so missing Java/jar fails with exit **3**.
 
 With `--all`, every `*.jsonl` in the directory is checked, all failures are printed, and the process exits with the worst code (`3` > `2` > `1` > `0`).
 

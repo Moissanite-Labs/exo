@@ -24,6 +24,33 @@ TLA2TOOLS_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla
 TLA2TOOLS_SHA256 = "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf"
 DEFAULT_JAR = SPECS / "tla2tools.jar"
 
+
+def resolve_jar_path(explicit: Path | None = None) -> Path:
+    if os.environ.get("TLA2TOOLS_JAR"):
+        return Path(os.environ["TLA2TOOLS_JAR"]).resolve()
+    if explicit is not None:
+        return Path(explicit).resolve()
+    return DEFAULT_JAR.resolve()
+
+
+def toolchain_skip_reason(jar_path: Path | None = None) -> str | None:
+    """Return a pytest skip reason, or None when Java and a pinned jar are available."""
+    if shutil.which("java") is None:
+        return "java not on PATH"
+    path = resolve_jar_path(jar_path)
+    if not path.is_file():
+        return (
+            f"tla2tools.jar not found at {path} "
+            f"(download {TLA2TOOLS_URL} or set TLA2TOOLS_JAR)"
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != TLA2TOOLS_SHA256:
+        return (
+            f"tla2tools.jar checksum mismatch at {path} "
+            f"(expected {TLA2TOOLS_SHA256}, got {digest})"
+        )
+    return None
+
 SESSION_POOL = ("s1", "s2", "s3")
 SEATS = ("worker", "scout")
 OUTCOMES = {
@@ -58,18 +85,11 @@ def toolchain_exit(message: str) -> None:
 
 
 def ensure_toolchain(jar_path: Path) -> Path:
-    if shutil.which("java") is None:
-        toolchain_exit("missing toolchain: java not on PATH")
-    if os.environ.get("TLA2TOOLS_JAR"):
-        jar_path = Path(os.environ["TLA2TOOLS_JAR"]).resolve()
-    if not jar_path.is_file():
-        toolchain_exit(f"missing toolchain: tla2tools.jar not found at {jar_path}")
-    digest = hashlib.sha256(jar_path.read_bytes()).hexdigest()
-    if digest != TLA2TOOLS_SHA256:
-        toolchain_exit(
-            f"missing toolchain: tla2tools.jar checksum mismatch (expected {TLA2TOOLS_SHA256}, got {digest})"
-        )
-    return jar_path
+    path = resolve_jar_path(jar_path)
+    reason = toolchain_skip_reason(jar_path)
+    if reason:
+        toolchain_exit(f"missing toolchain: {reason}")
+    return path
 
 
 def tla_str(value: str | None) -> str:
