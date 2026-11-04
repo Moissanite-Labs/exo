@@ -300,20 +300,26 @@ class SessionStore:
         """Replace all metadata; concurrent runtime edits must use update_meta instead."""
         self._q("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
 
-    def update_meta(self, sid: str, changes: dict[str, Any]) -> None:
-        """Set these keys and keep the others, in one write transaction, so a key another writer sets meanwhile is
-        not lost (exo-desktop #52)."""
-        def write(db: sqlite3.Connection) -> None:
+    def update_meta(self, sid: str, changes: dict[str, Any] | Callable[[dict[str, Any]], Any]) -> Any:
+        """Merge ``changes`` into metadata, or run an atomic callback that may read this store but must not write."""
+        def write(db: sqlite3.Connection) -> Any:
             row = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
-            if row is not None:
-                meta = {**json.loads(row["meta"]), **changes}
-                db.execute("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+            if row is None:
+                raise KeyError(sid)
+            meta = json.loads(row["meta"])
+            if callable(changes):
+                result = changes(meta)
+            else:
+                meta = {**meta, **changes}
+                result = None
+            db.execute("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+            return result
 
-        self._tx(write)
+        return self._tx(write)
 
     def lock(self, sid: str, reason: str = "done") -> None:
         """Close a session to new turns (a finished child). Reading and forking stay allowed."""
-        self.update_meta(sid, {"locked": reason or "done"})
+        self.update_meta(sid, lambda meta: meta.update(locked=reason or "done"))
 
     def status(self, sid: str) -> str:
         """``locked:<reason>`` for a finished child session, else ``open``."""

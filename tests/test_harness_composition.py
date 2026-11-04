@@ -109,7 +109,8 @@ def test_coding_can_read_workspace_and_keep_existing_coding_features(tmp_path, m
 
 
 def test_legacy_keeps_discovery_and_existing_runtime_defaults(tmp_path, monkeypatch):
-    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False})
+    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False},
+               work_checkpoint={"enabled": False})
     engine = compose.create()
     try:
         assert not isinstance(engine.jobs, DisabledJobs) and not isinstance(engine.agents, DisabledDelegator)

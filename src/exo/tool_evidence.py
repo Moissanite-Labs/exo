@@ -99,8 +99,12 @@ class Evidence:
             return
         if META in self.store.get_meta(session):
             return
-        self.store.update_meta(session, {META: {"principal": self.principal, "agent": self.agent,
-                                                "since": self.store.last_seq(session)}})
+
+        def initialize(meta: dict[str, Any]) -> None:
+            if META not in meta:
+                meta[META] = {"principal": self.principal, "agent": self.agent, "since": self.store.last_seq(session)}
+
+        self.store.update_meta(session, initialize)
 
     def _boundary(self, session: str) -> int | None:
         info = self.store.get_session(session)
