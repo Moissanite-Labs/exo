@@ -2435,6 +2435,8 @@ _EXEC_ENV_OPAQUE = {
     **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
         DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
         OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
+    # ssh's SecurityKeyProvider by default: the FIDO library ssh-sk-helper loads here when a key is used (#1134)
+    "SSH_SK_PROVIDER": "changes which libraries are loaded",
     # GH_CONFIG_DIR picks gh's hosts, tokens and settings, its pager and editor commands too (#566)
     **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME GH_CONFIG_DIR BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
@@ -2458,6 +2460,8 @@ _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 # since it supplies every program the earlier ones lack, and a folder written with `..`, which the system resolves
 # through links (`/tmp/s/../../usr/bin`). `$PATH` is the current value only where bash expands it: in single quotes,
 # `$'..'` or after a backslash it is a folder named `$PATH` (`literal`: the assignment holds such text).
+# SSH_SK_PROVIDER set to `internal`, in any case, is ssh's built-in FIDO support and loads no file, as for
+# `-o SecurityKeyProvider=internal` (#1134).
 _EMPTY_IS_UNSET = frozenset("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
     DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH CDPATH""".split())
 
@@ -2469,6 +2473,8 @@ def _harmless_value(name: str, value: str | None, literal: bool = False) -> bool
         return value == ""
     if name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
         return value == "/dev/null"
+    if name == "SSH_SK_PROVIDER":
+        return value.lower() == "internal"
     return name == "PATH" and all(not literal and d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d)
                                   and ".." not in d.split("/") and (
         os.path.normpath(_expand_text(d)) in _SYSTEM_BIN or bool(_ENV_BIN.search(d.rstrip("/") + "/x")))
@@ -5050,7 +5056,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         words = words[1:]
     loop: list[Classification] = []
     if words and not words[0].quoted and words[0].text == "for":
-        loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
+        loop = _indirect_sets("for", words, cmd, ctx)    # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
     # #471: the old reading below scans the folder as it was before a `cd` the new reading reads, and signs the
@@ -5971,12 +5977,12 @@ def _filled_words(prog: str, args: list) -> list:
     return []
 
 
-def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+def _indirect_sets(prog: str, words: list, cmd: str, ctx: dict | None = None) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
     comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
     name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
-    _classify_simple with prog "for"."""
+    _classify_simple with prog "for". The part for a variable in _ENV_BESIDE goes in ``ctx`` (_env_part)."""
     args, targets, parts = words[1:], [], []
     if prog == "for":
         targets = args[:1]
@@ -6004,10 +6010,24 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
         if _unreadable_name(w):
             parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
         elif why := _env_hazard(name):
-            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd, rebinds=name in _REBIND_VARS))
-        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd, rebinds=n in _REBIND_VARS)  # `read 'a[PATH=1]'`
-                  for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
+            _env_part(parts, ctx, name, f"{name} {why} (set by {prog})", cmd)
+        for n in _subscript_sets(w.text):                                      # `read 'a[PATH=1]'`
+            if why := _env_hazard(n):
+                _env_part(parts, ctx, n, f"{n} {why} (set in a subscript)", cmd)
     return parts
+
+
+# #1134: SSH_SK_PROVIDER names the library ssh-sk-helper loads here, so setting it is an opaque_exec part, as for
+# LD_PRELOAD. That part goes beside the line, as the part for an ssh setting that runs a command here does (#1083,
+# ssh_here), so the line keeps main's reading: a category rule on opaque_exec does not lift such a setting's part,
+# and a reserved hit on a part stays one on another part than the line's own.
+_ENV_BESIDE = frozenset({"SSH_SK_PROVIDER"})
+
+
+def _env_part(parts: list, ctx: dict | None, name: str, summary: str, cmd: str) -> None:
+    """Add the opaque part for setting ``name``: to ``parts``, or beside the line (ctx ssh_here) for _ENV_BESIDE."""
+    part = _opaque(summary, cmd, rebinds=name in _REBIND_VARS)
+    (ctx.setdefault("ssh_here", []) if ctx is not None and name in _ENV_BESIDE else parts).append(part)
 
 
 def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -6131,8 +6151,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
-            parts.append(_opaque(f"{name} {why}", cmd, rebinds=name in _REBIND_VARS))
-    parts += _indirect_sets(prog, words, cmd)
+            _env_part(parts, ctx, name, f"{name} {why}", cmd)
+    parts += _indirect_sets(prog, words, cmd, ctx)
     for (kind, num), value in git_env.items():
         if kind == "KEY":
             git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")

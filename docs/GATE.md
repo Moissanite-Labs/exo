@@ -1834,14 +1834,16 @@ gate does not read:
   (`tar --info-script`, `sqlite3 -init` or `--init`, `.read`, `.load`), `.once`/`.output FILE`,
   `.read '|cmd'` (what the command prints is run), `less +!` with no command or `+!!`, `psql ...
   PROGRAM`, `TAR_OPTIONS`, and a library `ssh` loads (`-I`, `-o PKCS11Provider`, `-o
-  SecurityKeyProvider`). `sed` scripts with `e` or
+  SecurityKeyProvider` and its default, `SSH_SK_PROVIDER`, below). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
   not commands. A variable that loads code or decides where programs, modules and config files
   are found is `opaque_exec`, named in the summary: `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`,
   `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
   `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
-  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
+  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `SSH_SK_PROVIDER` (the FIDO security key library that
+  ssh-sk-helper loads on this machine when a key is used, #1134), `PATH`, `HOME` (it picks
+  `~/.gitconfig`, `~/.ssh/config`
   and `~/.exo`), `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` (gh's hosts, tokens and settings, its pager
   and editor commands among them, #566: the call is also read with it an ordinary variable, as
   the last of its floors, so a policy that allows `opaque_exec` does not lower a line main
@@ -1852,8 +1854,16 @@ gate does not read:
   `ZIPOPT` and `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre`
   already count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty
   `CDPATH`, which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays
-  `allow`). A value that changes nothing the gate relies on keeps the line's class: an empty
-  loader variable (`LD_PRELOAD= ls`; the loader skips it), `GIT_CONFIG_GLOBAL` or
+  `allow`). The part for `SSH_SK_PROVIDER` sits beside the line, as the parts for ssh's command
+  settings above do, so the line keeps the category main gave it, its targets and its reserved
+  hits: `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` stays a `read` that asks, and `opaque_exec: allow`
+  allows it. As on those settings' lines, a rule that allows or logs `opaque_exec` asks there, and
+  `opaque_exec: log` gives `allow`, as before. `LD_PRELOAD`'s part leads its line, so on
+  `LD_PRELOAD=/tmp/evil.so ssh host ls` that rule allows or logs and that category line logs. A
+  value that changes nothing the gate relies on keeps the line's class: an empty loader variable
+  (`LD_PRELOAD= ls`; the loader skips it), `SSH_SK_PROVIDER` set to `internal` in any case
+  (ssh's built-in FIDO support, which loads no file, as `-o SecurityKeyProvider=internal` stays
+  `allow`), `GIT_CONFIG_GLOBAL` or
   `GIT_CONFIG_SYSTEM` set to `/dev/null`, a `PATH` made only of the current one (`$PATH`) and
   folders the gate already trusts a program from by path, a system bin folder, a virtualenv's
   `bin` or `node_modules/.bin` (`PATH=$PATH:./node_modules/.bin eslint .`,
@@ -1866,7 +1876,9 @@ gate does not read:
   `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
   the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
   other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
-  exported, and `GIT_CONFIG_GLOBAL` set to a file. `unset PATH` and `unset -v PATH` ask as
+  exported, `GIT_CONFIG_GLOBAL` set to a file, and `SSH_SK_PROVIDER` set to any other value,
+  `none` and an empty value too. The gate takes `none` as off only in the `-o` setting (#232).
+  `unset PATH` and `unset -v PATH` ask as
   `PATH=` does, since with no `PATH` bash looks a command up in the current folder (#329).
   `unset -f PATH` stays `allow`: `-f` names a function, and with `-v` it is an error. The gate
   takes `-f` only from an option word it can read, before any word it cannot. A `+x` word, `--`
