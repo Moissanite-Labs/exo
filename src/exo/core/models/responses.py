@@ -14,8 +14,8 @@ from exo.core.models.base import HttpTransport, StreamState, error_event
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 
-def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict]:
-    out = []
+def convert_input(messages: list[Message], origin: str, *, subscription: bool = False) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for message in messages:
         if message.role == 'tool':
             out.extend({'type': 'function_call_output', 'call_id': r.call_id,
@@ -129,7 +129,7 @@ class OpenAIResponsesProvider(HttpTransport):
             body['reasoning'] = dict(opts['reasoning']) if isinstance(opts['reasoning'], dict) else {'effort': opts['reasoning']}
         return body
 
-    def _usage(self, raw: dict, st: StreamState) -> Iterator[ProviderEvent]:
+    def _usage(self, raw: object, st: StreamState) -> Iterator[ProviderEvent]:
         if not isinstance(raw, dict) or not raw:
             return
         prompt, output = raw.get('input_tokens'), raw.get('output_tokens')
@@ -139,12 +139,14 @@ class OpenAIResponsesProvider(HttpTransport):
             return
         cached = details.get('cached_tokens', 0)
         reasoning = output_details.get('reasoning_tokens', 0)
-        valid = all(type(n) is int and n >= 0 for n in (prompt, output, cached, reasoning)) and cached <= prompt
-        st.meta['_usage_complete'] = valid
-        if valid:
-            st.usage = Usage(input_tokens=prompt - cached, cache_read_tokens=cached, output_tokens=output,
-                             reasoning_tokens=reasoning)
-            yield ProviderEvent(kind='usage', usage=Usage(**vars(st.usage)))
+        if (type(prompt) is not int or type(output) is not int or type(cached) is not int or type(reasoning) is not int
+                or prompt < 0 or output < 0 or cached < 0 or reasoning < 0 or cached > prompt):
+            st.meta['_usage_complete'] = False
+            return
+        st.meta['_usage_complete'] = True
+        st.usage = Usage(input_tokens=prompt - cached, cache_read_tokens=cached, output_tokens=output,
+                         reasoning_tokens=reasoning)
+        yield ProviderEvent(kind='usage', usage=Usage(**vars(st.usage)))
 
     def _item(self, item: dict, st: StreamState) -> Iterator[ProviderEvent]:
         if not isinstance(item, dict):

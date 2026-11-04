@@ -43,9 +43,9 @@ def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
     if spec.get('transport', 'openai') not in ('openai', 'responses'):
         raise ValueError(f'provider {provider!r} has no OpenAI-style /models endpoint')
     subscription = spec.get('auth') == 'chatgpt'
-    scope_callback = router.provider_auth.get(provider, (None, None, lambda: ''))
-    scope_callback = scope_callback[2] if len(scope_callback) > 2 else lambda: ''
-    scope = scope_callback() if subscription else ''
+    auth = router.provider_auth.get(provider)
+    scope_fn = auth[2] if auth is not None and len(auth) > 2 else None
+    scope = scope_fn() if subscription and callable(scope_fn) else ''
     if subscription:
         if spec.get('base_url') != 'https://api.openai.com/v1' or not router.auth_available(provider):
             raise ValueError('ChatGPT plan usage is not connected')
@@ -66,7 +66,7 @@ def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
         resp.raise_for_status()
         data = resp.json()
         if subscription:
-            if scope != scope_callback():
+            if scope != (scope_fn() if callable(scope_fn) else ''):
                 raise ValueError('Selected account changed')
             items = data['models']
             if not isinstance(items, list):
