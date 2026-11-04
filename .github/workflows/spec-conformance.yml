@@ -143,7 +143,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$EXO_SEAT_BINDING_TRACE_DIR"
-          pytest tests/test_seat_binding_conformance_traces.py -v
+          pytest tests/test_seat_binding_conformance_traces.py -v \
+            --seat-binding-trace-dir "$EXO_SEAT_BINDING_TRACE_DIR"
+          ls -la "$EXO_SEAT_BINDING_TRACE_DIR"
 
       - name: Replay conforming seat-binding traces
         if: steps.scope.outputs.run_replay == 'true'

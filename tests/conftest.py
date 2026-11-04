@@ -1,8 +1,19 @@
+import os
+
 import pytest
 from pathlib import Path
 
 from exo import crypto
 from exo.store import PrincipalStore
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--seat-binding-trace-dir",
+        action="store",
+        default=None,
+        help="Directory for emitted seat-binding JSONL traces (CI replay step reads this).",
+    )
 
 
 def pytest_configure(config):
@@ -60,3 +71,15 @@ def hermetic_env(tmp_path, monkeypatch):
     monkeypatch.setenv("EXO_NO_KEYCHAIN", "1")
     monkeypatch.setenv("EXO_NO_SECRET_SERVICE", "1")
     monkeypatch.setenv("EXO_KEYS_FILE", str(tmp_path / "keys" / "keys.env"))
+
+
+@pytest.fixture
+def trace_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
+    raw = request.config.getoption("--seat-binding-trace-dir") or os.environ.get(
+        "EXO_SEAT_BINDING_TRACE_DIR"
+    )
+    if raw:
+        path = Path(raw)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    return tmp_path / "traces"

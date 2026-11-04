@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -67,16 +66,6 @@ def _replay(path: Path) -> tuple[int, str]:
         text=True,
     )
     return proc.returncode, (proc.stderr or "") + (proc.stdout or "")
-
-
-@pytest.fixture
-def trace_dir(tmp_path):
-    env = os.environ.get("EXO_SEAT_BINDING_TRACE_DIR")
-    if env:
-        path = Path(env)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-    return tmp_path / "traces"
 
 
 def test_emit_new_after_resuming_another_seat_replays(trace_dir):
