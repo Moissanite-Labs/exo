@@ -150,6 +150,9 @@ class CoreRuntime:
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
+        from exo.core.seat_binding_conformance import maybe_note_load_core_seat
+
+        maybe_note_load_core_seat(seat.name if seat else None)
         self.env_allow = tuple(seat.env_allow) if seat else ()  # [tools] env_allow, see tool_env
         self.env_deny = tuple(seat.env_deny) if seat else ()  # [tools] env_deny (D-039)
         self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
@@ -561,17 +564,21 @@ class CoreRuntime:
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
+        from exo.core.seat_binding_conformance import maybe_note_refusal, session_create_trace
+
         if b.kind not in ("", "thread", "private"):
             raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
         seat = b.seat  # an unseated core keeps whatever the client asked for (""/None included)
         if self.seat is not None:
             seat = b.seat or self.seat.name
             if seat != self.seat.name:
+                maybe_note_refusal(b.seat or seat)
                 raise CommandFailed(
                     "bad_request", f"this core runs the {self.seat.name!r} seat; it cannot start a thread for seat {seat!r}"
                 )
-        info = await self.loop.create_session(title=b.title, seat=seat, model=b.model or self._main_ref(),
-                                              cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
+        with session_create_trace():
+            info = await self.loop.create_session(title=b.title, seat=seat, model=b.model or self._main_ref(),
+                                                  cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
         why = self.cwd_note if not b.cwd else ""
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
             self._cwd_seen.setdefault(info.id, set()).add(str(Path(info.cwd or self.cwd).resolve()))

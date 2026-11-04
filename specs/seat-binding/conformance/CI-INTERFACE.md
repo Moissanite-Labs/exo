@@ -78,10 +78,10 @@ With `--all`, every `*.jsonl` in the directory is checked, all failures are prin
 
 ## Path filter
 
-Paste into a workflow `paths:` block or `dorny/paths-filter` `paths` list:
+The **spec conformance** workflow always runs on pull requests and merge groups (#1156). The list below is the historical scope filter (removed from the workflow); keep it aligned with seat-binding-related paths when documenting touch surfaces:
 
 ```
-specs/seat-binding/**
+specs/seat-binding/
 src/exo/core/engine.py
 src/exo/core/loop.py
 src/exo/core/sessions.py
@@ -93,12 +93,14 @@ src/exo/protocol/schema.py
 src/exo/server/app.py
 tests/clients/tui/test_seat_new_session.py
 tests/test_session_seat_binding.py
+tests/test_seat_binding_conformance_traces.py
+src/exo/core/seat_binding_conformance.py
+.github/workflows/spec-conformance.yml
 ```
 
 ## Artifacts
 
 - `TraceSeatBinding.tla` — trace replay spec (extends `SeatBinding` + generated `TraceInstance`).
 - `replay.py` — validates JSONL, generates `TraceInstance.tla`, runs TLC.
+- `check_scratch_mutations.py` — temp-copy production mutation harness (pinned `VIOLATION` seq+invariant; wired in spec-conformance workflow).
 - Sample traces under `conformance/traces/`.
-
-Do not edit `.github/workflows` from this PR; wire the gate in a follow-up.

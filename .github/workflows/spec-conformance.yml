@@ -48,12 +48,45 @@ jobs:
         run: |
           echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  specs/seat-binding/tla2tools.jar" | sha256sum -c -
 
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies for trace emission
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,tui]"
+
+      - name: Emit seat-binding conformance traces
+        env:
+          EXO_SEAT_BINDING_TRACE_DIR: ${{ runner.temp }}/seat-binding-emitted-traces
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXO_SEAT_BINDING_TRACE_DIR"
+          pytest_log="${RUNNER_TEMP}/seat-binding-emission-pytest.log"
+          pytest tests/test_seat_binding_conformance_traces.py -v --strict-markers --strict-config \
+            --seat-binding-trace-dir "$EXO_SEAT_BINDING_TRACE_DIR" -rs \
+            2>&1 | tee "$pytest_log"
+          if grep -E '=== .* skipped .* ===|SKIPPED \[|deselected' "$pytest_log"; then
+            echo "seat-binding emission: skipped or deselected tests are not allowed"
+            exit 1
+          fi
+          for name in new_after_resume.jsonl refusal.jsonl; do
+            file="$EXO_SEAT_BINDING_TRACE_DIR/$name"
+            if [ ! -s "$file" ]; then
+              echo "seat-binding emission: missing or empty trace $file"
+              exit 1
+            fi
+          done
+
       - name: Replay conforming seat-binding traces
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
         run: |
           set -euo pipefail
           golden="${RUNNER_TEMP}/seat-binding-golden-traces"
+          emitted="${RUNNER_TEMP}/seat-binding-emitted-traces"
           mkdir -p "$golden"
           shopt -s nullglob
           good=(specs/seat-binding/conformance/traces/good_*.jsonl)
@@ -62,6 +95,15 @@ jobs:
             exit 2
           fi
           cp "${good[@]}" "$golden"/
+          for name in new_after_resume.jsonl refusal.jsonl; do
+            file="$emitted/$name"
+            if [ ! -s "$file" ]; then
+              echo "seat-binding replay: missing or empty emitted trace $file"
+              exit 1
+            fi
+            cp "$file" "$golden"/
+          done
+          echo "Including 2 emitted trace(s) from tests"
           start=$(date +%s.%N)
           set +e
           python3 specs/seat-binding/conformance/replay.py --all "$golden"
@@ -85,3 +127,9 @@ jobs:
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
         run: python3 specs/seat-binding/conformance/check_negative_fixtures.py
+
+      - name: Check scratch production mutations (pinned VIOLATION lines)
+        env:
+          TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui
+        run: python3 specs/seat-binding/conformance/check_scratch_mutations.py
