@@ -49,7 +49,7 @@ class Reauthorize(AuthError):
 
 
 class SecretStore:
-    """OS-backed only. Base64 encodes token JSON for the existing stdin-only Keychain setter."""
+    """OS-backed only. Base64 token JSON stays in the native Keychain or Secret Service."""
     def __init__(self):
         self.backend = 'keychain' if sys.platform == 'darwin' else 'secret-service'
 
@@ -64,7 +64,14 @@ class SecretStore:
 
     def get(self, name):
         self._check()
-        value = keys.keychain_get(name) if self.backend == 'keychain' else keys.secret_service_get(name)
+        if self.backend == 'keychain':
+            from exo.macos_keychain import get_generic_password
+            try:
+                value = get_generic_password(keys.KEYCHAIN_SERVICE, name)
+            except Exception:
+                raise AuthError('ChatGPT credentials could not be read. Unlock the OS secret store or sign in again.') from None
+        else:
+            value = keys.secret_service_get(name)
         if not value:
             raise AuthError('ChatGPT credentials are unavailable; sign in again or unlock the secret store.')
         try:
@@ -81,18 +88,51 @@ class SecretStore:
         self._check()
         encoded = base64.b64encode(json.dumps(value).encode()).decode()
         try:
-            (ps._keychain_set if self.backend == 'keychain' else ps._secret_tool_set)(name, encoded)
+            if self.backend == 'keychain':
+                from exo.macos_keychain import set_generic_password
+                set_generic_password(keys.KEYCHAIN_SERVICE, name, encoded)
+            else:
+                ps._secret_tool_set(name, encoded)
         except Exception:
-            raise AuthError('ChatGPT credentials could not be saved in the OS secret store.') from None
+            raise AuthError('ChatGPT credentials could not be saved. Unlock the OS secret store and sign in again. The previous connection is unchanged.') from None
 
     def delete(self, name):
         from exo import providers_setup as ps
         self._check()
         try:
             if self.backend == 'keychain':
-                out = ps._run(['security', 'delete-generic-password', '-s', keys.KEYCHAIN_SERVICE, '-a', name])
-                return out.returncode in (0, 44)
+                from exo.macos_keychain import delete_generic_password
+                return delete_generic_password(keys.KEYCHAIN_SERVICE, name)
             return ps._secret_tool_delete(name)
+        except Exception:
+            return False
+
+    def get_cli(self, name):
+        """Read an item created by the security tool. Native reads do not trust that item."""
+        self._check()
+        if self.backend != 'keychain':
+            return self.get(name)
+        value = keys.keychain_get(name)
+        if not value:
+            raise AuthError('ChatGPT credentials are unavailable; sign in again or unlock the secret store.')
+        try:
+            bundle = json.loads(base64.b64decode(value, validate=True))
+            for field in ("access_token", "refresh_token", "id_token"):
+                if bundle.get(field):
+                    keys.remember_secret(bundle[field])
+            return bundle
+        except Exception:
+            raise AuthError('ChatGPT credentials could not be read.') from None
+
+    def delete_cli(self, name):
+        """Delete a security-tool item. The secret stays out of argv."""
+        from exo import providers_setup as ps
+        self._check()
+        if self.backend != 'keychain':
+            return self.delete(name)
+        try:
+            out = ps._run(['security', 'delete-generic-password', '-s', keys.KEYCHAIN_SERVICE, '-a', name])
+            return out.returncode in (0, 44)
         except Exception:
             return False
 
@@ -145,6 +185,7 @@ class Service:
         self.browser = browser or webbrowser.open
         self.mutex = threading.RLock()
         self.pending = None
+        self.unsaved_bundle = None
         self.message = ''
 
     def _meta(self):
@@ -158,8 +199,11 @@ class Service:
     def _save_meta(self, meta):
         atomic_write(self.path, json.dumps(meta) + '\n')
 
-    def _account(self, profile):
-        return 'exo-chatgpt-' + self.scope + '-' + profile
+    def _account(self, profile, *, native=None):
+        record = self._meta()['profiles'].get(profile, {})
+        use_native = record.get('storage') == 'native-v1' if native is None else native
+        prefix = 'exo-chatgpt-native-v1-' if use_native else 'exo-chatgpt-'
+        return prefix + self.scope + '-' + profile
 
     def _locked(self):
         # Held with the in-process mutex; flock also serializes rotating refreshes across cores/processes.
@@ -175,10 +219,13 @@ class Service:
         # Atomic metadata reads never wait on a refresh or unlock/read the secret store.
         meta = self._meta()
         active = meta.get('active')
+        record = meta['profiles'].get(active, {})
+        legacy = bool(active and self.store.backend == 'keychain' and record.get('storage') != 'native-v1')
+        backend_mismatch = bool(active and record.get('store_backend', self.store.backend) != self.store.backend)
         profiles = [dict({field: v.get(field) for field in ('client_id', 'subject', 'email', 'plan_enabled')},
                          profile=k, active=(k == active)) for k, v in meta['profiles'].items()]
-        return {'supported': True, 'available': bool(_dependencies_available() and active and meta['profiles'].get(active, {}).get('plan_enabled')),
-                'active': active, 'profiles': profiles, 'pending': self.pending is not None, 'message': self.message,
+        return {'supported': True, 'available': bool(not legacy and not backend_mismatch and _dependencies_available() and active and record.get('plan_enabled')),
+                'active': active, 'profiles': profiles, 'pending': self.pending is not None, 'message': ('This ChatGPT connection uses another OS secret store. Sign in again here.' if backend_mismatch else '') or ('Reconnect this ChatGPT registration for native Keychain storage. Previous credentials are unchanged.' if legacy and self.message in ('', 'ChatGPT connected.') else '') or self.message,
                 'store_available': bool(self.store.available()), 'dependency_available': _dependencies_available(), 'usage_url': USAGE}
 
     def _host(self):
@@ -221,7 +268,8 @@ class Service:
                         self.send_error(404)
                         return
                     ok = service.complete(parse_qs(parsed.query, max_num_fields=16), pending)
-                    page = b'ChatGPT sign-in completed. Return to Exo.' if ok else b'ChatGPT sign-in was not completed. Return to Exo.'
+                    page = (('ChatGPT sign-in completed. Return to Exo.' if ok else
+                             pending.get('failure', 'This sign-in link is invalid or expired. Start a new sign-in.') + ' Return to Exo Providers for connection status.')).encode('utf-8')
                     self.send_response(200 if ok else 400)
                     self.send_header('Content-Type', 'text/plain; charset=utf-8')
                     self.send_header('Cache-Control', 'no-store')
@@ -347,6 +395,7 @@ class Service:
                     'code': codes[0], 'code_verifier': pending['verifier'], 'redirect_uri': pending['redirect'],
                     'resource': RESOURCE}), client_id, pending['nonce'], pending['previous'])
                 if self.pending is not pending:
+                    pending['failure'] = 'ChatGPT sign-in was cancelled. Start a new sign-in when ready.'
                     return False  # cancellation during exchange cannot activate a grant
                 meta = self._meta()
                 profile = pending['profile'] or hashlib.sha256((client_id + '\0' + bundle['subject']).encode()).hexdigest()[:24]
@@ -354,21 +403,29 @@ class Service:
                 if meta.get('active') == profile and not plan_enabled:
                     self.message = 'New sign-in did not enable ChatGPT plan usage. The previous connection is unchanged.'
                     return True
-                self.store.set(self._account(profile), bundle)
+                new_account = self._account(profile, native=self.store.backend == 'keychain')
+                self.store.set(new_account, bundle)
                 if meta.get('incomplete', {}).get('client_id') == client_id:
                     meta.pop('incomplete', None)
                 meta['profiles'][profile] = {k: bundle[k] for k in ('client_id', 'subject', 'email')}
                 meta['profiles'][profile]['plan_enabled'] = plan_enabled
                 meta['profiles'][profile]['generation'] = uuid.uuid4().hex
+                meta['profiles'][profile]['storage'] = 'native-v1' if self.store.backend == 'keychain' else 'secret-service-v1'
+                meta['profiles'][profile]['store_backend'] = self.store.backend
                 # Valid identity without plan consent remains saved, but does not replace a usable active account.
                 if meta['profiles'][profile]['plan_enabled']:
                     meta['active'] = profile
                 self._save_meta(meta)
                 self.message = 'ChatGPT connected.' if meta['profiles'][profile]['plan_enabled'] else 'Signed in; ChatGPT plan usage is not enabled.'
+                if self.store.backend == 'keychain':
+                    old_account = 'exo-chatgpt-' + self.scope + '-' + profile
+                    if old_account != new_account and not self._drop_legacy(old_account):
+                        self.message += ' The previous Keychain item is still there. Remove that registration in ChatGPT settings.'
                 return True
             except Exception as error:
                 if self.pending is pending:
                     self.message = str(error) if isinstance(error, AuthError) else 'ChatGPT sign-in could not be completed.'
+                    pending['failure'] = self.message
                 return False
             finally:
                 if self.pending is pending:
@@ -380,8 +437,20 @@ class Service:
             profile = meta.get('active')
             if not profile:
                 raise AuthError('Connect a ChatGPT account in Providers first.')
+            record = meta['profiles'][profile]
+            if self.store.backend == 'keychain' and record.get('storage') != 'native-v1':
+                raise AuthError('Reconnect this ChatGPT registration for native Keychain storage. Previous credentials are unchanged.')
+            if record.get('store_backend', self.store.backend) != self.store.backend:
+                raise AuthError('This ChatGPT connection uses another OS secret store. Sign in again here.')
             account = self._account(profile)
-            bundle = self.store.get(account)
+            held = self.unsaved_bundle if isinstance(self.unsaved_bundle, dict) and self.unsaved_bundle.get('_account') == account else None
+            bundle = {k: v for k, v in held.items() if k != '_account'} if held else self.store.get(account)
+            if held and bundle['expires_at'] > time.time() + 60:
+                if not all(scope in bundle['scopes'] for scope in ('resource.invoke', 'chatgpt.tokens.use.direct')):
+                    raise AuthError('ChatGPT plan usage is not enabled for this connection.')
+                self._remember_or_save(account, bundle)
+                keys.remember_secret(bundle['access_token'])
+                return {'Authorization': 'Bearer ' + bundle['access_token']}
             if not all(scope in bundle['scopes'] for scope in ('resource.invoke', 'chatgpt.tokens.use.direct')):
                 raise AuthError('ChatGPT plan usage is not enabled for this connection.')
             if bundle['expires_at'] <= time.time() + 60:
@@ -393,12 +462,13 @@ class Service:
                     response = self._exchange({'grant_type': 'refresh_token', 'client_id': bundle['client_id'],
                                               'refresh_token': bundle['refresh_token'], 'resource': RESOURCE})
                 except Reauthorize:
+                    self.unsaved_bundle = None
                     meta['active'] = None
                     self._save_meta(meta)
                     self.store.delete(account)
                     raise
                 bundle = self._bundle(response, bundle['client_id'], previous=bundle)
-                self.store.set(account, bundle)  # rotating token set persisted together before use
+                self._remember_or_save(account, bundle)  # a failed save keeps this grant for the next call
                 if not all(scope in bundle['scopes'] for scope in ('resource.invoke', 'chatgpt.tokens.use.direct')):
                     meta['active'] = None
                     meta['profiles'][profile]['plan_enabled'] = False
@@ -406,6 +476,23 @@ class Service:
                     raise AuthError('ChatGPT plan usage is no longer enabled. Sign in again.')
             keys.remember_secret(bundle['access_token'])
             return {'Authorization': 'Bearer ' + bundle['access_token']}
+
+    def _remember_or_save(self, account, bundle):
+        try:
+            self.store.set(account, bundle)
+        except Exception:
+            self.unsaved_bundle = {**bundle, '_account': account}
+        else:
+            self.unsaved_bundle = None
+
+    def _drop_legacy(self, account):
+        drop = getattr(self.store, 'delete_cli', None)
+        try:
+            if drop is not None:
+                return bool(drop(account))
+            return bool(self.store.delete(account))
+        except Exception:
+            return False
 
     def disconnect(self, profile=None):
         with self.mutex, self._locked():
@@ -419,8 +506,12 @@ class Service:
                 meta['active'] = None
             self._save_meta(meta)
             revoked = False
+            record = meta['profiles'][profile]
+            legacy = self.store.backend == 'keychain' and record.get('storage') != 'native-v1'
+            account = self._account(profile)
             try:
-                bundle = self.store.get(self._account(profile))
+                reader = self.store.get_cli if legacy and hasattr(self.store, 'get_cli') else self.store.get
+                bundle = reader(account)
                 discovery = self.client.get(ISSUER + '/.well-known/openid-configuration').json()
                 endpoint = discovery['revocation_endpoint']
                 parsed = urlsplit(endpoint)
@@ -431,7 +522,7 @@ class Service:
                 revoked = response.status_code == 200
             except Exception:
                 pass
-            deleted = self.store.delete(self._account(profile))
+            deleted = self._drop_legacy(account) if legacy else self.store.delete(account)
             self.message = ('ChatGPT disconnected.' if deleted else 'ChatGPT disabled; stored credential cleanup is not confirmed.')
             if not revoked:
                 self.message += ' Remote revocation was not confirmed; manage access in ChatGPT Settings.'

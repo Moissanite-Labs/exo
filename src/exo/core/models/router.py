@@ -488,9 +488,13 @@ class Router:
         failed_credentials: set[str] = set()
         attempted_credentials: set[tuple[str, str]] = set()
         chain = self.chain(role)
-        if chain and (self.providers.get(chain[0].provider) or {}).get("auth") == "chatgpt":
-            # A selected subscription is a billing boundary, including missing/expired authorization.
-            chain = [r for r in chain if (self.providers.get(r.provider) or {}).get("auth") == "chatgpt"]
+        cut = next((i for i, route in enumerate(chain)
+                    if (self.providers.get(route.provider) or {}).get("auth") == "chatgpt"), None)
+        if cut is not None:
+            # A subscription route is a billing boundary for every role. Routes placed ahead of it stay.
+            # Later API-key routes do not run after a missing, expired, or limited ChatGPT attempt.
+            chain = [*chain[:cut], *[route for route in chain[cut:]
+                     if (self.providers.get(route.provider) or {}).get("auth") == "chatgpt"]]
         for provider in {r.provider for r in chain if (self.providers.get(r.provider) or {}).get("auth") == "chatgpt"}:
             await asyncio.to_thread(self._refresh_auth_context, provider)  # invalidate before reading route breakers
         # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.

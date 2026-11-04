@@ -1266,6 +1266,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
   key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
   custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
+- **Amendment 2026-11-03 (ChatGPT billing boundary):** once a ChatGPT route appears in a role's chain, every later non-ChatGPT route is dropped. Routes placed ahead of it stay. A missing, expired, or usage-limited ChatGPT attempt on aux, decision, fast, standard, or deep does not continue into an API-key route behind it.
+- **Amendment 2026-11-03 (ChatGPT credential floor):** native Keychain calls turn process-wide prompts off for the call and restore the previous setting. A locked Keychain fails the call. Code that reads the item through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` is credentials. A successful reconnect deletes the previous CLI item with `security delete-generic-password` and no secret in argv. A registration that was never migrated is removed the same way. A rotated refresh token whose save fails stays in the process and is saved on the next call.
+- **Amendment 2026-10-28 (ChatGPT credential save):** large OAuth bundles use native macOS Security-framework writes, reads and deletion instead of the interactive security tool's bounded line parser. Save failures preserve the previous connection and return a safe retry message. No token enters argv or a temporary file.
 - **Amendment 2026-10-29 (#993):** Responses continuation combines completed streamed items with terminal
   output without dropping tool calls when that output is partial. Missing calls in prior saved replay are
   reconstructed from recorded calls for request construction only. Opaque reasoning stays scoped to its

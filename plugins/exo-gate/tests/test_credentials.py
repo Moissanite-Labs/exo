@@ -231,3 +231,38 @@ def test_chatgpt_secret_module_keeps_credential_floor_and_cannot_get_a_grant(act
     grants = GrantStore(tmp_path / 'grants.json')
     assert grants.add(c.category, c.target, 'fake-binding', 30, 'principal') is None
     assert grants.match(c.category, c.target, 'fake-binding', outward=gate.binds_exact(c, d)) is None
+
+
+@pytest.mark.parametrize('operation', ['set_generic_password', 'get_generic_password', 'delete_generic_password'])
+@pytest.mark.parametrize('shell', [False, True])
+def test_native_keychain_helper_keeps_credential_floor(operation, shell, tmp_path):
+    code = f'from exo.macos_keychain import {operation}; {operation}("exo", "synthetic-account")'
+    action = sh("python3 -c '" + code + "'") if shell else ('execute_code', {'code': code})
+    c = classify(action)
+    assert c.category == 'credentials'
+    d = decide(c, normalize_policies({'gates': {'categories': {'credentials': 'allow', 'opaque_exec': 'allow'},
+        'rules': [{'match': {'tool': action[0]}, 'decision': 'allow'}]}}))
+    assert d.outcome == 'ask'
+    grants = GrantStore(tmp_path / 'grants.json')
+    assert grants.add(c.category, c.target, 'synthetic-binding', 30, 'principal') is None
+    assert grants.match(c.category, c.target, 'synthetic-binding', outward=gate.binds_exact(c, d)) is None
+
+
+@pytest.mark.parametrize('code', [
+    'import keyring; print(keyring.get_password("exo", "synthetic-account"))',
+    'from ctypes import CDLL\nlib = CDLL("/System/Library/Frameworks/Security.framework/Security")\nlib.SecItemCopyMatching',
+    'SecItemAdd(query, None); SecItemUpdate(query, changes); SecItemDelete(query)',
+    'SecKeychainFindGenericPassword(None, 3, "exo", 0, "", None, None, None)',
+])
+@pytest.mark.parametrize('shell', [False, True])
+def test_python_keychain_reads_keep_credential_floor(code, shell, tmp_path):
+    action = sh('python3 -c ' + repr(code)) if shell else ('execute_code', {'code': code})
+    c = classify(action)
+    assert c.category == 'credentials'
+    allowed = decide(c, normalize_policies({'gates': {'categories': {'code': 'allow', 'opaque_exec': 'allow'}}}))
+    assert allowed.outcome == 'ask' and gate.no_grant(c)
+    d = decide(c, normalize_policies({'gates': {'categories': {'credentials': 'allow', 'opaque_exec': 'allow'},
+        'rules': [{'match': {'tool': action[0]}, 'decision': 'allow'}]}}))
+    assert d.outcome == 'ask'
+    grants = GrantStore(tmp_path / 'grants.json')
+    assert grants.add(c.category, c.target, 'synthetic-binding', 30, 'principal') is None

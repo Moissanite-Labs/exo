@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from exo.core.models.base import error_event
 from exo.core.models.responses import OpenAIResponsesProvider
 from exo.core.models.router import Router, load_catalog
 from exo.core.models.fake import FakeProvider
@@ -113,6 +114,28 @@ def test_selected_subscription_never_falls_through_to_paid_api_or_env_key(connec
         events=[e async for e in r.stream('main',[Message.user('hi')],[])]
         assert events[-1].kind=='error' and paid.calls==[]
         assert all(c.key is None for c in r.credentials('chatgpt'))
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize('role', ['aux', 'decision', 'fast'])
+@pytest.mark.parametrize('mode', ['disconnected', 'expired', 'limited'])
+def test_side_role_stops_at_chatgpt_instead_of_billing_a_later_route(role, mode):
+    async def go():
+        early, paid = FakeProvider([error_event('ahead failed', 503, retryable=True)]), FakeProvider(['must not run'])
+        async def headers():
+            if mode == 'expired':
+                raise RuntimeError('expired fake credential')
+            return {'Authorization': 'Bearer fake-subscription'}
+        end = {'type': 'response.failed', 'response': {'error': {'code': 'subscription_sharing_usage_limit_exceeded'},
+               'usage': USAGE}}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=wire(end)))) as client:
+            router = Router(roles={role: ['early:first', 'chatgpt:authorized', 'paid:later']},
+                catalog={'providers': {'chatgpt': {'transport': 'responses', 'auth': 'chatgpt',
+                         'base_url': 'https://api.openai.com/v1'}}},
+                instances={'early': early, 'paid': paid}, env={}, client=client,
+                provider_auth={'chatgpt': (lambda: mode != 'disconnected', headers, lambda: 'profile')})
+            events = [e async for e in router.stream(role, [Message.user('hi')], [])]
+        assert early.calls and events[-1].kind == 'error' and paid.calls == []
     asyncio.run(go())
 
 
