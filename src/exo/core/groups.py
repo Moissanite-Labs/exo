@@ -57,6 +57,8 @@ class GroupStore:
             raise ValueError("unknown group mode")
         if isinstance(members, (str, bytes)):
             raise ValueError("members must be a collection of profile IDs")
+        if isinstance(known_profiles, (str, bytes)):
+            raise ValueError("known_profiles must be a collection of profile IDs")
         profiles = tuple(members)
         if len(profiles) < 2 or any(not isinstance(p, str) or not ID_RE.fullmatch(p) for p in profiles):
             raise ValueError("a group needs at least two valid profile IDs")
