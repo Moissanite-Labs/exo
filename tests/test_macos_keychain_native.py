@@ -24,6 +24,11 @@ pytestmark = pytest.mark.skipif(
 def _enable_real_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
     """Root conftest sets EXO_NO_KEYCHAIN=1; this test must call Security.framework."""
     monkeypatch.delenv('EXO_NO_KEYCHAIN', raising=False)
+    ci_home = os.environ.get('CI_KEYCHAIN_HOME')
+    if ci_home:
+        # Hermetic HOME would hide the CI temporary keychain under ~/Library/Keychains.
+        monkeypatch.setenv('HOME', ci_home)
+        monkeypatch.setenv('USERPROFILE', ci_home)
 
 
 def _synthetic_utf8(nbytes: int) -> str:

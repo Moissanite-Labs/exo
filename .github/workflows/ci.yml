@@ -71,9 +71,11 @@ jobs:
           KEYCHAIN_PATH="$HOME/Library/Keychains/$KEYCHAIN"
           security create-keychain -p "" "$KEYCHAIN"
           security default-keychain -s "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
           security unlock-keychain -p "" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 7200 "$KEYCHAIN_PATH"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "CI_KEYCHAIN_HOME=$HOME" >> "$GITHUB_ENV"
       - name: Root suite
         run: |
           ulimit -n 4096
