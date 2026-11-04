@@ -2435,6 +2435,8 @@ _EXEC_ENV_OPAQUE = {
     **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
         DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
         OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
+    # ssh's SecurityKeyProvider by default: the FIDO library ssh-sk-helper loads here when a key is used (#1134)
+    "SSH_SK_PROVIDER": "changes which libraries are loaded",
     # GH_CONFIG_DIR picks gh's hosts, tokens and settings, its pager and editor commands too (#566)
     **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME GH_CONFIG_DIR BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
@@ -2458,6 +2460,8 @@ _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 # since it supplies every program the earlier ones lack, and a folder written with `..`, which the system resolves
 # through links (`/tmp/s/../../usr/bin`). `$PATH` is the current value only where bash expands it: in single quotes,
 # `$'..'` or after a backslash it is a folder named `$PATH` (`literal`: the assignment holds such text).
+# SSH_SK_PROVIDER set to `internal`, in any case, is ssh's built-in FIDO support and loads no file, as for
+# `-o SecurityKeyProvider=internal` (#1134).
 _EMPTY_IS_UNSET = frozenset("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
     DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH CDPATH""".split())
 
@@ -2469,6 +2473,8 @@ def _harmless_value(name: str, value: str | None, literal: bool = False) -> bool
         return value == ""
     if name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
         return value == "/dev/null"
+    if name == "SSH_SK_PROVIDER":
+        return value.lower() == "internal"
     return name == "PATH" and all(not literal and d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d)
                                   and ".." not in d.split("/") and (
         os.path.normpath(_expand_text(d)) in _SYSTEM_BIN or bool(_ENV_BIN.search(d.rstrip("/") + "/x")))
@@ -5050,7 +5056,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         words = words[1:]
     loop: list[Classification] = []
     if words and not words[0].quoted and words[0].text == "for":
-        loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
+        loop = _indirect_sets("for", words, cmd, ctx)    # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
     # #471: the old reading below scans the folder as it was before a `cd` the new reading reads, and signs the
@@ -5208,6 +5214,28 @@ def _on_other_targets(c: Classification) -> Classification:
     return c
 
 
+# #1126: BusyBox is one binary that runs the applet its first operand names (`busybox sh`, `busybox rm ..`), and its
+# shells also go by ash and hush. Main's reading takes the applet for a script busybox runs, and ash and hush for
+# programs the gate does not know. _applet_met is set while classify reads a call (_classify_read): [met], which a
+# call that names an applet, ash or hush sets (_applet). classify then reads the call again with _applets on, where
+# each applet is the program it names and ash and hush are shells (_applet_reading). Main's reading stays beside.
+_APPLET_SHELLS = frozenset({"ash", "hush"})
+_applet_met: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_applet_met", default=None)
+_applets: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_applets", default=False)
+
+
+def _applet(prog: str, rest: list[str]) -> bool:
+    """#1126: whether the command ``prog`` ``rest`` reads otherwise once BusyBox's applets are read: busybox with an
+    applet, its first operand, or ash or hush. An option of busybox's own there (`--install`, `--list`, `--help`) or
+    no operand at all runs no applet, so main's reading alone reads it. True only in the second reading
+    (_applet_reading). In the first, such a command notes the call in _applet_met."""
+    if not (prog in _APPLET_SHELLS or prog == "busybox" and rest[:1] and not rest[0].startswith("-")):
+        return False
+    if (met := _applet_met.get()) is not None:
+        met[0] = True
+    return _applets.get()
+
+
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                       piped: str | None) -> list[Classification]:
     p = words[0]
@@ -5235,6 +5263,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return [_too_deep(cmd)]
         return _classify_simple(_wrapped(k, ws), cmd, inner_depth, ctx, piped)
 
+    applet = _applet(prog, argv[1:])
+    if applet and prog == "busybox":
+        # #1126: busybox runs the applet its first operand names, with the rest for its arguments: that command
+        return _run_own(words[1:], lambda: inner_words(words[1:]))
     if prog in _WRAPPERS:
         return _classify_wrapper(prog, words, cmd, depth, inner_words)
     if prog in _OPAQUE_PROGRAMS:
@@ -5268,7 +5300,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if depth < _DEPTH:
             parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
         return parts
-    if prog in _SHELLS:
+    if prog in _SHELLS or applet:                       # #1126: ash and hush too, in the applet reading
         args = argv[1:]
         if args[:1] in (["--version"], ["--help"]):
             return [_make("read", summary=f"{prog} {args[0]}", command=cmd)]
@@ -5971,12 +6003,12 @@ def _filled_words(prog: str, args: list) -> list:
     return []
 
 
-def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+def _indirect_sets(prog: str, words: list, cmd: str, ctx: dict | None = None) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
     comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
     name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
-    _classify_simple with prog "for"."""
+    _classify_simple with prog "for". The part for a variable in _ENV_BESIDE goes in ``ctx`` (_env_part)."""
     args, targets, parts = words[1:], [], []
     if prog == "for":
         targets = args[:1]
@@ -6004,10 +6036,24 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
         if _unreadable_name(w):
             parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
         elif why := _env_hazard(name):
-            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd, rebinds=name in _REBIND_VARS))
-        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd, rebinds=n in _REBIND_VARS)  # `read 'a[PATH=1]'`
-                  for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
+            _env_part(parts, ctx, name, f"{name} {why} (set by {prog})", cmd)
+        for n in _subscript_sets(w.text):                                      # `read 'a[PATH=1]'`
+            if why := _env_hazard(n):
+                _env_part(parts, ctx, n, f"{n} {why} (set in a subscript)", cmd)
     return parts
+
+
+# #1134: SSH_SK_PROVIDER names the library ssh-sk-helper loads here, so setting it is an opaque_exec part, as for
+# LD_PRELOAD. That part goes beside the line, as the part for an ssh setting that runs a command here does (#1083,
+# ssh_here), so the line keeps main's reading: a category rule on opaque_exec does not lift such a setting's part,
+# and a reserved hit on a part stays one on another part than the line's own.
+_ENV_BESIDE = frozenset({"SSH_SK_PROVIDER"})
+
+
+def _env_part(parts: list, ctx: dict | None, name: str, summary: str, cmd: str) -> None:
+    """Add the opaque part for setting ``name``: to ``parts``, or beside the line (ctx ssh_here) for _ENV_BESIDE."""
+    part = _opaque(summary, cmd, rebinds=name in _REBIND_VARS)
+    (ctx.setdefault("ssh_here", []) if ctx is not None and name in _ENV_BESIDE else parts).append(part)
 
 
 def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -6131,8 +6177,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
-            parts.append(_opaque(f"{name} {why}", cmd, rebinds=name in _REBIND_VARS))
-    parts += _indirect_sets(prog, words, cmd)
+            _env_part(parts, ctx, name, f"{name} {why}", cmd)
+    parts += _indirect_sets(prog, words, cmd, ctx)
     for (kind, num), value in git_env.items():
         if kind == "KEY":
             git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")
@@ -7014,7 +7060,9 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                                                        if t.startswith(pre) and t[start:]])
             skip.add(j)
 
-        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
+        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES
+                               or ws[i].rsplit("/", 1)[-1] == "busybox" and _applet("busybox", ws[i + 1:])):
+            # #1126: in the applet reading busybox with an applet is a prefix that takes no option
             base = "" if ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) else ws[i].rsplit("/", 1)[-1]
             i += 1
             while base in _PREFIXES and i < len(ws) and ws[i].startswith("-") and ws[i] != "-":
@@ -7072,7 +7120,7 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                             for a in rest)
             if first is not None and not from_file:
                 skip.add(i + 1 + first)
-        elif prog in _SHELLS:
+        elif prog in _SHELLS or prog in _APPLET_SHELLS and _applet(prog, rest):
             for j, a in enumerate(rest):
                 if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
                     bodies += rest[j + 1:j + 2]
@@ -8034,7 +8082,9 @@ _CODE_PATTERNS = [
     (re.compile(r"\b(requests|httpx|session|client|aiohttp\.ClientSession\(\))\.(post|put|patch|delete)\("), "web_post"),
     (re.compile(r"\burllib\.request\.urlopen\([^)]*data="), "web_post"),
     (re.compile(r"\bsmtplib\.SMTP"), "email_send"),
-    (re.compile(r"\bproviders_setup\b|/api/providers\b|\bsecret-tool\b|\bremember_secret\b"), "credentials"),
+    (re.compile(r"\bproviders_setup\b|\bchatgpt_auth\b|\bmacos_keychain\b|\bkeyring\b|"
+                r"\bSecItem(?:CopyMatching|Add|Update|Delete)\b|\bSecKeychain\w*|Security\.framework|"
+                r"/api/providers\b|\bsecret-tool\b|\bremember_secret\b"), "credentials"),
     (re.compile(r"\bstripe\.\w+\.create\("), "payment"),
 ]
 _CODE_STRINGS = re.compile(r"(['\"])((?:(?!\1).){2,400})\1")
@@ -9838,8 +9888,24 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     reading opens those as well (`! time coproc for ..`, read there as `! coproc for ..`). The ``ordinary`` reading
     (D-074) of a call is not opened in either way, as each opened reading reads its own. A shell that reads what
     printf or `echo -e` writes is also read with that output (#1047, _printed_reading), in the reading as before and
-    in each opened one. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved
-    from there too (_in_tool_folder sets it)."""
+    in each opened one. A line that runs a BusyBox applet (`busybox sh`, `busybox rm ..`), ash or hush is also read
+    with each applet as the program it names and ash and hush as shells (#1126, _applet_reading), opened readings and
+    all. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
+    (_in_tool_folder sets it)."""
+    met = [False]
+    token = _applet_met.set(met)
+    try:
+        c = _read_ways(action, cwd)
+    finally:
+        _applet_met.reset(token)
+    if met[0] and not _applets.get() and not _config_off.get():
+        c = _applet_reading(c, action, cwd)
+    return c
+
+
+def _read_ways(action: Any, cwd: str | None) -> Classification:
+    """_classify_read's reading of the call in one reading of BusyBox's applets (#1126): the call, with its printed
+    (#1047) and lead (#1104) readings, and its opened (#853) and late (#864) ones."""
     timed, met = [False], [False]
     t_timed, t_met = _timed.set(timed), _late_met.set(met)
     try:
@@ -9855,6 +9921,49 @@ def _classify_read(action: Any, cwd: str | None = None) -> Classification:
     if met[0] and not _late_open.get() and not _opening.get() and not _config_off.get():
         c = _late_reading(c, action, cwd)
     return c
+
+
+def _applet_reading(c: Classification, action: Any, cwd: str | None) -> Classification:
+    """#1126: the call as read before (c), with a second reading of it beside it in which busybox with an applet runs
+    that applet as the program it names, also behind a prefix or a path (`sudo busybox rm ..`, `/bin/busybox sh`),
+    and ash and hush are shells as sh is: their `-c` text, stdin, heredoc and #1047's printed text are read, and
+    _cd_walk reads them so too. The reading has budgets and memos of its own, with its printed, opened and late
+    readings (_read_ways). The reading as before stays as it is, with its ``ordinary`` reading (D-074) beside the
+    second reading's: decide keeps the strictest, and no_grant (and through it the hook's bypass floor) counts each
+    reading, so a line never decides lower than before. So `busybox ls` still asks as main asks, though `ls` is a
+    read. The call leads with the reading a line of both would lead with (_lead: credentials, then a store write,
+    then the more severe), as #1047's does, so `echo 'cp ..' | busybox sh` leads with its store write as `| sh` does,
+    unless the reading as before holds that lead on another part (_applet_beside)."""
+    left, memo = _brace_left.set(None), _shell_seen.set(None)
+    token, met = _applets.set(True), _applet_met.set(None)
+    try:
+        x = _brace_budget(_read_ways)(action, cwd)
+    finally:
+        _applet_met.reset(met)
+        _applets.reset(token)
+        _shell_seen.reset(memo)
+        _brace_left.reset(left)
+    o, xo = c.ordinary, x.ordinary
+    c = _applet_beside(c, x)
+    c.ordinary = xo if o is None else o if xo is None else _applet_beside(o, xo)
+    return c
+
+
+def _applet_beside(c: Classification, x: Classification) -> Classification:
+    """#1126: the reading as before (c) and the applet reading (x) of one call, as _beside with ``lead`` puts them,
+    unless x would lead with a (category, target) that c holds on a part or reading other than its own lead. Then c
+    keeps the lead and x ends its ``also`` readings. A reserved hit there stays on another part than the line's own,
+    so the exo-gate hook still keeps a standing grant off the call (D-075), as for c alone: `cd ~/.exo && busybox cat
+    config` leads with its store write as before, though `cd ~/.exo && cat config` leads with the secret."""
+    own = {(y.category, y.target) for y in (c, c.displaced) if y is not None}
+    held = {(p.category, p.target) for r in readings(c) for p in _each_part(r)} - own
+    if _lead([c, x]) is x and any((y.category, y.target) in held for y in (x, x.displaced) if y is not None):
+        y = c
+        while y.also is not None:
+            y = y.also
+        y.also = x
+        return c
+    return _beside(c, x, lead=True)
 
 
 def _printed_reading(action: Any, cwd: str | None) -> Classification:

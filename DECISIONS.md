@@ -1268,6 +1268,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Model discovery binds a managed custom provider's core-side cache to its endpoint, protocol, authentication and
   key reference. Legacy or differently bound cache entries are not used, even as an offline fallback. Unchanged
   custom configurations keep the six-hour cache; selected routes and non-custom cache behavior are unchanged.
+- **Amendment 2026-11-04 (ChatGPT connection card):** the web connection card is its own section. An empty model list removes the default-model section and leaves the connection card in place.
+- **Amendment 2026-11-03 (ChatGPT billing boundary):** once a ChatGPT route appears in a role's chain, every later non-ChatGPT route is dropped. Routes placed ahead of it stay. A missing, expired, or usage-limited ChatGPT attempt on aux, decision, fast, standard, or deep does not continue into an API-key route behind it.
+- **Amendment 2026-11-03 (ChatGPT credential floor):** native Keychain calls turn process-wide prompts off for the call and restore the previous setting. A locked Keychain fails the call. Code that reads the item through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` is credentials. A successful reconnect deletes the previous CLI item with `security delete-generic-password` and no secret in argv. A registration that was never migrated is removed the same way. A rotated refresh token whose save fails stays in the process and is saved on the next call.
+- **Amendment 2026-10-28 (ChatGPT credential save):** large OAuth bundles use native macOS Security-framework writes, reads and deletion instead of the interactive security tool's bounded line parser. Save failures preserve the previous connection and return a safe retry message. No token enters argv or a temporary file.
+- **Amendment 2026-10-29 (#993):** Responses continuation combines completed streamed items with terminal
+  output without dropping tool calls when that output is partial. Missing calls in prior saved replay are
+  reconstructed from recorded calls for request construction only. Opaque reasoning stays scoped to its
+  provider, model and authorization. Inconsistent call identities fail closed. HTTP refusal hints use fixed
+  recognized-code messages and do not infer a usage limit from an unknown refusal.
+- **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
+  connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
+  only status crosses the web boundary. The application supplies credential callbacks to the core router,
+  so provider transport does not import product setup code. The account's model list supplies subscription
+  routes. Selecting ChatGPT plan usage prevents automatic fallback into API-key billing. Browser sign-in
+  and a real tool continuation remain live acceptance checks, separate from fixture tests.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
@@ -1485,6 +1500,55 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A third corpus of 2,944 lines prints the forward lines into a shell as the first command of a group or a body
   (#1104), and puts them first in those shapes. Under 232 policies it gives 683,008 pairs (101,551 tightened). Tests:
   `tests/security/test_gate_ssh_forward_keys_1096.py`.
+- *Amendment 2026-11-03 (issue #1126):* BusyBox's shell and applets are read as the program each one names.
+  BusyBox is one binary that runs the applet its first operand names, and on Alpine images `/bin/sh` and `/bin/ash`
+  are that binary. On main 035e8a97 `busybox` was in `_SHELLS`, but that branch takes the first word
+  that is not an option for a script, so `busybox sh` read as busybox running a script named `sh`.
+
+  Neither its `-c` text, its stdin, a heredoc nor #1047's printed text was read, and `_cd_walk` stopped at the same
+  word. `ash` and `hush` were programs the gate does not know. `busybox rm -rf /srv/data` was only `opaque_exec`.
+  So under `deny: [delete]` `printf 'rm -rf /srv/data' | busybox sh` asked where the same line with `sh` denies.
+
+  Under `opaque_exec: allow` such a line ran where the line with `sh` asks. A store write piped or heredoc'd into
+  `busybox sh` or `ash` was no `no_grant` call, so bypass and observe mode ran it, and a standing grant could cover
+  it. Through `sh` it asks at the `store_write` floor.
+
+  Now `_applet` notes a call that names an applet, and `_applet_reading` reads the call again beside main's, with
+  budgets and memos of its own, as #1047's printed reading does. There busybox with an applet runs that applet as
+  the program it names, also by path and behind a prefix (`/bin/busybox sh`, `sudo busybox rm ..`). `ash` and `hush`
+  are shells as `sh` is, in `_classify_program` and in `_cd_walk`.
+
+  `decide` keeps the strictest of the two readings, and a credentials or store write reading leads, as a part of
+  one line would, unless main's reading holds it on another part. So each such line decides as its twin with `sh`,
+  or without busybox, and most read as it too. That holds also behind #1104's reserved words
+  (`{ echo .. | busybox sh; }`).
+
+  The exo-gate hook's floor and observe mode count each reading (`gate.no_grant`), so the store write asks at the
+  floor.
+
+  Rejected: a bare `_PREFIXES` entry for busybox. In a probe it read `busybox --install`, `busybox --list`, `busybox`
+  alone and `echo 'rm -rf /srv/data' | busybox` as reads and allowed them. Main asks for each and reads the last as
+  a delete. So busybox with no applet, or with an option of its own first, keeps main's reading alone.
+
+  `busybox` stays in `_SHELLS`, and `ash` and `hush` are in `_APPLET_SHELLS`, which only the second reading reads.
+  The #1047 amendment above and `docs/GATE.md` now name them among the shells that read what printf writes, and
+  `tests/docs/test_gate_printf_readers_doc.py` (#1119) checks both sets.
+
+  Left open: an applet that only reads keeps main's `opaque_exec` beside it. So `busybox ls` and `ash --version`
+  still ask, and `opaque_exec: allow` allows them, where `ls` and `sh --version` are reads. Taking the second
+  reading alone there lowers the line against main, which needs a decision of its own. `ash -c ls` asks as
+  `sh -c ls` does, in both readings.
+
+  Also left open: where main's reading holds the second reading's lead on another part or reading, main's reading
+  keeps the lead (`_applet_beside`). A reserved hit there then stays on another part than the line's own, so the hook
+  keeps a standing grant off the call (D-075), as on main.
+
+  So `cd ~/.exo && busybox cat config` leads with its store write, where `cd ~/.exo && cat config` leads with the
+  secret. A #479 loop with `busybox cp` leads with `opaque_exec`.
+
+  Main's `scripts/gate_diff.py` lowers no pair against main 035e8a97. The PR lists each run's numbers.
+  Tests: `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/docs/test_gate_printf_readers_doc.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
   command it prints also where the pipe is the first command of a group, a body or a condition, or comes after `!` or
   `time`. On main 6ec085b6 `echo 'rm -rf /srv/data' | bash` was a delete, and so was the same pipe after `true;` in a
@@ -1536,7 +1600,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
   A shell that runs its stdin also reads `out` (`_stdin_texts`, for the texts `_once` reads with `classify_shell`).
   That is `bash`, `sh`, `zsh`, `dash`, `ksh`, `fish`, `mksh` or `busybox` (`_SHELLS`) with no `-c` and no script
-  (`/bin/sh`, `bash -s`).
+  (`/bin/sh`, `bash -s`). Since #1126 `ash`, `hush` (`_APPLET_SHELLS`) and BusyBox's shell by its applet
+  (`busybox sh`, `busybox ash`) read it too, in `_applet_reading`.
 
   The shell `sudo -s`, `sudo -i` or `doas -s` starts with no command reads it too (`_sudo_shells`). So does
   `ssh host` with no command, and an ssh whose command is such an ssh (`ssh host ssh h2`).
@@ -1743,6 +1808,53 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   bisect run`, #1104's pipes into a shell that starts a group or a body, and lines bash rejects. Under 273 policies,
   with `command` rules beside a category deny (#458), it gives 562,380 pairs (141,338 tightened). Tests:
   `tests/security/test_gate_ssh_command_settings_1083.py`.
+- *Amendment 2026-11-03 (issue #1134):* `SSH_SK_PROVIDER` is one of the variables that change which libraries are
+  loaded (`_EXEC_ENV_OPAQUE`), beside `LD_PRELOAD`. On main 0f413c7f `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` was a
+  read that every policy allowed, also behind `env` or `export ..;` and before `git fetch`, which runs ssh.
+
+  `ssh -o SecurityKeyProvider=/tmp/evil.so host ls` and `LD_PRELOAD=/tmp/evil.so ssh host ls` were `opaque_exec`
+  there. ssh takes its FIDO security key library from `SecurityKeyProvider`, whose default is `$SSH_SK_PROVIDER`.
+  ssh-sk-helper loads that library on this machine when a key is used. So the variable picks code that runs here, as
+  the setting does.
+
+  The variable is now read wherever the line sets it, as `LD_PRELOAD` is. That is before a program, through `env`,
+  `sudo` or `timeout`, exported or bare, through `read`, `printf -v`, a `for` loop or `${..:=}`, and in a nested line.
+  A command an ssh setting runs here (#1083) is such a line. Each sets an `opaque_exec` part named `SSH_SK_PROVIDER
+  changes which libraries are loaded`.
+
+  That part goes beside the line (`_ENV_BESIDE`), as #1083's parts do (`ssh_here`). The line keeps the category main
+  gave it, its targets and its reserved hits, so `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` is a `read` that asks.
+  `LD_PRELOAD`'s part leads the line instead.
+
+  So on that line, as on `ssh -o 'ProxyCommand=touch /tmp/x' host ls` (#1083), a rule that allows or logs
+  `opaque_exec` asks, and `opaque_exec: log` gives `allow`, as main did. On `LD_PRELOAD=/tmp/evil.so ssh host ls`,
+  whose part leads, that rule allows or logs and that category line logs.
+
+  *Rejected:* the part leading the line, as `LD_PRELOAD`'s does. Main's `scripts/gate_diff.py` found 643 pairs lower
+  with it on an aimed corpus. On `SSH_SK_PROVIDER=/tmp/evil.so ssh -o 'ProxyCommand=touch /tmp/x' host ls` a category
+  rule on `opaque_exec` allowed the line, and #1083's part with it.
+
+  A reserved hit on that part became the line's own, which a standing grant may cover (D-075). Under `reserved:
+  [command:SSH_SK_PROVIDER]` the line also lost its own `read` hit. A floor of the line read as before, as for
+  `GH_CONFIG_DIR` (#566), kept the outcomes but not the first of these.
+
+  `internal`, in any case, names ssh's built-in support and loads no file. `_harmless_value` keeps it a read, as `-o
+  SecurityKeyProvider=internal` is. Any other value asks. That includes `none`, which the gate takes as off only in
+  the `-o` setting (#232), and an empty value.
+
+  *Cost:* a line that sets the variable before a program that never runs ssh asks too (`SSH_SK_PROVIDER=/tmp/x.so
+  ls`), as `LD_PRELOAD` does. The variable before `ssh-add` or `ssh-keygen` was already `credentials` and asked. It
+  now also has the `opaque_exec` part, so `deny: [opaque_exec]` denies it.
+
+  Main's `scripts/gate_diff.py` against main 0f413c7f lowers 0 pairs on every axis in each of three runs. The built-in
+  corpus gives 1,446,984 pairs without variants (5,525 tightened) and 10,429,496 with them (27,854 tightened).
+
+  An aimed corpus of 7,694 lines sets the variable in each form, with values such as `internal`, `none`, an empty one,
+  a name and a store path. It puts them before ssh, scp, git, ssh-add and other programs, beside #1083's settings and
+  in the command they run. It adds the `-o` settings and near names.
+
+  Under the 88 built-in policies and 185 deny, reserved and rule policies, the aimed corpus gives 2,100,462 pairs
+  (404,033 tightened). Tests: `tests/security/test_gate_ssh_sk_provider_1134.py`.
 - *Amendment 2026-10-30 (issue #484):* ssh's own options that name a file ssh makes on this machine are read for
   store paths whatever its remote line runs. They are its control socket (`-S`, `-o ControlPath`), the known-hosts
   file it adds a host key to (`-o UserKnownHostsFile`) and a forward's socket (`-L`, `-R`, `-D`, `-o LocalForward`,

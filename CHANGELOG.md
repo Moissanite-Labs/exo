@@ -15,6 +15,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
+  missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
+  no longer imply a plan usage limit; provider response text remains private.
+- The ChatGPT connection card is separate from the default-model section. An empty model list removes only that section (D-034).
+- ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Each call turns Keychain prompts off and restores the previous setting. Failed callbacks show a safe retry message and preserve the previous connection. A successful reconnect deletes the previous CLI item without putting the secret in argv. A rotated refresh token whose save fails is kept and saved on the next call. Python reads through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` stay on the credentials floor (D-034 amendment).
+- A ChatGPT route is a billing boundary on every role. Routes placed ahead of it still run. A missing, expired, or usage-limited attempt does not continue into an API-key route behind it (D-034 amendment).
 - A seated core stores its own seat on a new thread when the client omits the name, and refuses a different name before writing a session (#939, D-028 amendment). The terminal's `/new` sends the seat the window was started with. After resuming another seat's thread, `/new` still opens a thread of this core's seat. A window started with a different `--seat` joins this core's seat and says so.
 - The terminal shows the seat of the open thread (#939 follow-up, D-028 amendment). After it joined another core's seat, or opened a new thread after resuming another seat's thread, its status line, brand bar and start card still named the old seat while the thread belonged to the core's seat.
 - `exo web` shutdown waits until open HTTP handlers finish cleanup (#1018, D-036 amendment). On Python 3.11, `close()` returned while a connection was still cancelling. A connection accepted during shutdown is closed. `start()` raises while that drain is still running.
@@ -42,6 +48,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
     second try leaves a warning in the test summary.
   - Once a test's two starts have both failed, later tests start Chrome once, until a start works. A Chrome that
     never starts costs the first test two waits and each later test one, as with a single try.
+- Gate (#1126, D-038 amendment): BusyBox's shell and applets are read as the program each one names. On main
+  035e8a97 `busybox sh`, `ash` and `hush` read no `-c` text, stdin or heredoc, and `busybox rm -rf /srv/data` was
+  only `opaque_exec`. So `deny: [delete]` asked for `printf 'rm -rf /srv/data' | busybox sh` where it denies the
+  line with `sh`. A store write piped into `busybox sh` ran in bypass and observe mode.
+
+  Each now decides as the line with `sh` or without busybox, read in a second reading beside main's, so that store
+  write asks at the floor. busybox with no applet or with an option of its own reads as before, and `busybox ls`
+  still asks.
+
+  The #1047 texts name `ash`, `hush` and `busybox sh` among the shells that read what printf writes. Tests:
+  `tests/security/test_gate_busybox_applets_1126.py`, `plugins/exo-gate/tests/test_bypass.py`,
+  `tests/docs/test_gate_printf_readers_doc.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
 - Gate (#1104, D-038 amendment): a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the command it
   prints also as the first command of a group, a body or a condition, or after `!` or `time`. On main 6ec085b6
   `{ echo 'rm -rf /srv/data' | bash; }` and the same pipe in a `then`, `else` or `do` body, a function or coproc
@@ -99,6 +118,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in four runs, 10,339,296 pairs on the built-in
   corpus with variants). Tests: `tests/security/test_gate_ssh_command_settings_1083.py`. **Docs:** `docs/GATE.md`,
   `docs/USER-GUIDE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
+- Gate (#1134, D-038 amendment): setting `SSH_SK_PROVIDER` asks as `LD_PRELOAD` does. ssh loads the FIDO security
+  key library it names on this machine. On main 0f413c7f `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` was a read that
+  every policy allowed, also behind `env` or `export` and before `git fetch`, while `ssh -o
+  SecurityKeyProvider=/tmp/evil.so host ls` asked.
+
+  The variable now adds an `opaque_exec` part wherever the line sets it. The part sits beside the line, as #1083's
+  parts for ssh's command settings do, so the line keeps the category, targets and reserved hits main gave it.
+  `internal`, ssh's built-in support, stays a read, as it does in the `-o` setting.
+
+  No decision is lower (main's `scripts/gate_diff.py`: 0 lowered pairs in three runs, 10,429,496 pairs on the
+  built-in corpus with variants). Tests: `tests/security/test_gate_ssh_sk_provider_1134.py`. **Docs:**
+  `docs/GATE.md`, `DECISIONS.md` (D-038 amendment), `docs/DOCS-MAP.md`.
 - Gate (#1047, D-038 amendment): a pipe from `printf` or `echo -e` into a shell is also read as the command writes
   it, with its escapes expanded and its `%s`, `%b` and `%%` filled. On main d995d667
   `printf 'cp /tmp/x ~/.exo/config.json\n' | bash` and the same line piped to `sudo -s` were only `opaque_exec`, and
@@ -395,6 +426,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
   while streaming preserves the reader's position. Startup opens directly without a timed overlay.
 
+- Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
+  registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
+  do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport
+  for streamed replies, reasoning and local tool calls. Both require live provider acceptance after
+  user sign-in or key entry (`docs/CHATGPT-PROVIDER.md`, discussions #802 and #804).
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).

@@ -12,9 +12,10 @@ from exo import gate
     "~/.claude/projects/session.json",
     "~/work/.credentials.json",
 ])
-def test_known_claude_secret_paths_are_credentials(path, monkeypatch):
-    home = os.path.abspath("/tmp/exo-gate-home")
-    monkeypatch.setenv("HOME", home)
+def test_known_claude_secret_paths_are_credentials(path, monkeypatch, tmp_path):
+    home = tmp_path / "gate-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     full = os.path.expanduser(path)
     c = gate.classify({"tool": "bash", "args": {"command": f"cat {full}"}})
     assert c.category == "credentials"
