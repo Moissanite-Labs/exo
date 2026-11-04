@@ -8,6 +8,7 @@ Formal model of how a **seated core** binds `session.create` to its loaded seat,
 - **Sessions** (`liveSessions`, `sessionSeat`): rows in the shared home store; `foreignSessions` marks threads created before this core instance loaded its seat (another core or an unseated engine), matching shared `sessions.sqlite` in `docs/SEATS.md`.
 - **Client launch vs display seat** (`clientLaunch`, `clientDisplay`): `ExoApp.launch_seat` and `self.seat` (`clients/tui/exo_tui/app.py`).
 - **Outcomes** (`lastOutcome`): whether a create/resume/`/new` produced a visible result, a core refusal, a join notice, or (pre-fix) a silent failure.
+- **`fromClientNew`**: true on the state immediately after a `ClientNew` step (used by **NewAfterResumeBindsThisCore**).
 
 ## What is abstracted away
 
