@@ -1,4 +1,4 @@
-"""`/new` on a seated core keeps that core's seat after another seat's thread is resumed."""
+"""`/new` on a seated core keeps that core's seat after a thread with another seat label is resumed."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import asyncio
 from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.seats import Seat
-from exo.protocol import schema as s
-from exo.server.app import Dispatcher
 from exo_tui.app import ExoApp
 from exo_tui.conn import LocalClient
 
@@ -27,9 +25,8 @@ def test_new_after_resuming_another_seat_uses_this_core(tmp_path):
         home = tmp_path / "home"
         bare = _engine(home, tmp_path, None)
         try:
-            response = await Dispatcher(bare).run(s.Command.of(s.SessionCreate(seat="scout", title="scout work")))
-            assert response.ok, response.error
-            scout_id = response.result["session"]["id"]
+            # The worker owns this history; its display label is not its owner.
+            scout_id = bare.store.create_session(agent="worker", seat="scout", title="scout work").id
         finally:
             await bare.close()
 
