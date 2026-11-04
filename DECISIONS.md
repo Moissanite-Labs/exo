@@ -1433,6 +1433,55 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-11-01 (issue #1096):* an ssh forward whose socket is a secret store is a credentials part beside the
+  line. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line with
+  `-o StreamLocalBindUnlink=yes` were reads, allowed under the default policy and under `deny: [store_write]`. ssh
+  makes that socket, and with that setting it first removes the file at the path.
+
+  `ssh -S ~/.exo/keys.env host ls` asked as `credentials`. `_shell_credential_hit` cuts a line's text and words at
+  whitespace and quotes, not at `:`, and a secret name such as `keys.env` must end a path, so
+  `~/.exo/keys.env:localhost:5432` met none. A dynamic store (the file `EXO_KEYS_FILE` names) is matched only as a
+  whole path. The issue found the same on 4ea1e323, before #484, so it is no regression.
+
+  A path that ends a forward (`-R 8022:~/.exo/keys.env`) and one inside a secret folder
+  (`-L ~/.ssh/agent.sock:localhost:5432`) already counted. Now `_classify_simple` gives the words of each ssh, scp and
+  sftp command to `_ssh_secrets`.
+
+  It takes each forward field `_ssh_file_words` finds (#484), and the same fields of each word bash makes of a brace
+  set in the word and of each form an expansion in it may print (`_unknown_words`), with `%d` as the home folder.
+
+  Each field meets the test `args_sensitive` gives a path: `_brace_words`, then `_sensitive_words` or `_glob_words`.
+  `_classify_shell` adds a credentials part for each field that meets it (`secret` with a part), unless a credentials
+  part already names that store. The credentials floor then asks the principal, and `deny`, `reserved` and `target:`
+  entries on the store meet the part.
+
+  Chosen over making the line a secret line, as `-S` and `cp /tmp/x ~/.exo/keys.env` make theirs. A secret line keeps
+  the line's parts but drops the readings decide makes of the line itself. A first build did that, and
+  `ssh -L ~/.exo/keys.env:localhost:5432 host 'rm -rf x'` lost its reserved `delete` on the host, which main read
+  through the remote command's other target (#399).
+
+  So the line keeps every reading main made, as a store read from a shell call's own folder keeps it (#311), and the
+  part only adds. `ssh -L ~/.exo/keys.env:localhost:5432 host ls` stays a read and asks. An option after the host
+  (`ssh host -L ... ls`) stays `opaque_exec`, and a credentials deny now denies it.
+
+  Only fields that hold a `/` are tested, the ones ssh reads as a socket path, so a port (`-L 5432:localhost:5432`)
+  and a host stay as they were. Both ends of `-L` and `-R` count: the listening end of `-R` is on a host that may be
+  this one. A dynamic forward on a path is a socket, as #484 found in OpenSSH's parse_forward. *Cost:* such a line
+  asks the principal even when the remote command only reads.
+
+  Main's `scripts/gate_diff.py` against main a2f6ec3d lowers 0 pairs in each of five runs. The built-in corpus gives
+  1,436,688 pairs without variants and 10,369,128 with them.
+
+  An aimed corpus of 10,865 ssh, scp and sftp lines puts each forward form on secret, store and plain paths, in each
+  position and wrapper. Under the 88 built-in policies and 60 deny, reserved and rule policies on the categories it
+  meets, it gives 1,608,020 pairs (213,336 tightened).
+
+  A second corpus of 14,448 lines puts the forward forms under about 90 wrappers and nests. Under 225 policies, 77
+  of them command rules beside a category deny (#458), it gives 3,250,800 pairs (633,110 tightened).
+
+  A third corpus of 2,944 lines prints the forward lines into a shell as the first command of a group or a body
+  (#1104), and puts them first in those shapes. Under 232 policies it gives 683,008 pairs (101,551 tightened). Tests:
+  `tests/security/test_gate_ssh_forward_keys_1096.py`.
 - *Amendment 2026-11-01 (issue #1104):* a pipe from `echo`, `printf` or `cat <<<` into a shell is read as the
   command it prints also where the pipe is the first command of a group, a body or a condition, or comes after `!` or
   `time`. On main 6ec085b6 `echo 'rm -rf /srv/data' | bash` was a delete, and so was the same pipe after `true;` in a
