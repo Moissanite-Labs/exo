@@ -28,9 +28,10 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 from exo import providers_setup as ps
+from exo.chatgpt_auth import NEED_SECRET_STORE
 from exo.core.models.keys import redact_secrets
 from exo.protocol import schema as s
-from .source import core_failure
+from .source import SourceError, core_failure
 
 TOKEN_HEADER = "x-exo-token"
 LOOPBACK_NAMES = ("127.0.0.1", "localhost", "::1")
@@ -112,9 +113,11 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
             request = {"action": "status"} if method == "GET" else {k: body[k] for k in ("action", "profile") if k in body}
             try:
                 result = await centre.source.call(s.CommandRun(name="chatgpt", args=json.dumps(request)))
-            except Exception as error:
-                if getattr(error, "code", "") in ("not_found", "unsupported"):
+            except SourceError as error:
+                if error.code in ("not_found", "unsupported"):
                     return 409, {"error": "This core does not support ChatGPT connections. Upgrade the core first."}
+                if error.code == "unavailable" and error.message == NEED_SECRET_STORE:
+                    return 503, {"error": error.message}
                 raise
             output = result.get("output") if isinstance(result, dict) else None
             if not isinstance(output, dict) or output.get("supported") is not True:
