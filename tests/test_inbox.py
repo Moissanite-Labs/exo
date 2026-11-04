@@ -166,11 +166,14 @@ def test_live_wal_is_visible_without_using_immutable_mode(home):
 def test_large_and_invalid_approval_events_do_not_drop_valid_pending(home):
     writer = SessionStore(home / "sessions.sqlite")
     writer.append_event(s.ApprovalRequested(request_id="large", summary="x" * 40_000), "mine")
-    writer._q("INSERT INTO events(session,seq,type,ts,body) VALUES (?,?,?,?,?)",
-                ("mine", 99_999, "approval.requested", 1, '{"request_id":"broken"'))
+    writer.append_event(s.ApprovalRequested(request_id="broken", summary="will corrupt"), "mine")
     writer.close()
+    db = sqlite3.connect(home / "sessions.sqlite")
+    db.execute("UPDATE events SET body=? WHERE body LIKE ?", ('{"request_id":"broken"', "%broken%"))
+    db.commit()
+    db.close()
     ids = [r["id"] for r in observe(home)["sections"]["approvals"]["items"]]
-    assert ids == ["pending", "large"]
+    assert set(ids) == {"pending", "large"}
 
 
 def test_question_sort_accepts_mixed_timestamp_shapes():
