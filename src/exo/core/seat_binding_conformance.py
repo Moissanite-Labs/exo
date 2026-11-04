@@ -242,6 +242,16 @@ def maybe_note_client_new(session_id: str, *, session_seat: str | None, joined: 
         _active.note_client_new(session_id, session_seat=session_seat, joined=joined)
 
 
+def client_new_begin() -> None:
+    if _active is not None:
+        _active._client_new_depth += 1
+
+
+def client_new_end() -> None:
+    if _active is not None:
+        _active._client_new_depth -= 1
+
+
 class client_new_trace:
     """Mark SessionCreate calls that implement TUI ``/new`` (trace event client_new)."""
 

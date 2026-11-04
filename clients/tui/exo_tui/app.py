@@ -978,12 +978,13 @@ class ExoApp(App):
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
         from exo.protocol.client import ClientError
-        from exo.core.seat_binding_conformance import client_new_trace, maybe_note_client_new
+        from exo.core.seat_binding_conformance import client_new_begin, client_new_end, maybe_note_client_new
 
         # Send the seat this window was started with. self.seat is also a display label, and load_session
         # fills it from a resumed thread, including one that belongs to another seat in this home.
         joined: str | None = None
-        with client_new_trace():
+        client_new_begin()
+        try:
             try:
                 got = await self.client.call(s.SessionCreate(
                     title=self.title_arg, seat=self.launch_seat, kind=kind, cwd=self.new_cwd))
@@ -1001,6 +1002,8 @@ class ExoApp(App):
                     # A seat mismatch is the only refusal this window handles. Other failures still
                     # reach boot, which reports "cannot start" and keeps the event feed running.
                     raise
+        finally:
+            client_new_end()
         await self.leave_thread()
         self.session = got["session"]["id"]
         maybe_note_client_new(

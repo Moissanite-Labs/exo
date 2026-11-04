@@ -143,9 +143,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$EXO_SEAT_BINDING_TRACE_DIR"
-          pytest tests/test_seat_binding_conformance_traces.py -v \
-            --seat-binding-trace-dir "$EXO_SEAT_BINDING_TRACE_DIR"
-          ls -la "$EXO_SEAT_BINDING_TRACE_DIR"
+          pytest_log="${RUNNER_TEMP}/seat-binding-emission-pytest.log"
+          pytest tests/test_seat_binding_conformance_traces.py -v --strict-markers --strict-config \
+            --seat-binding-trace-dir "$EXO_SEAT_BINDING_TRACE_DIR" -rs \
+            2>&1 | tee "$pytest_log"
+          if grep -E '=== .* skipped .* ===|SKIPPED \[|deselected' "$pytest_log"; then
+            echo "seat-binding emission: skipped or deselected tests are not allowed"
+            exit 1
+          fi
+          for name in new_after_resume.jsonl refusal.jsonl; do
+            file="$EXO_SEAT_BINDING_TRACE_DIR/$name"
+            if [ ! -s "$file" ]; then
+              echo "seat-binding emission: missing or empty trace $file"
+              exit 1
+            fi
+          done
 
       - name: Replay conforming seat-binding traces
         if: steps.scope.outputs.run_replay == 'true'
@@ -163,13 +175,15 @@ jobs:
             exit 2
           fi
           cp "${good[@]}" "$golden"/
-          if [ -d "$emitted" ]; then
-            emitted_traces=("$emitted"/*.jsonl)
-            if [ "${#emitted_traces[@]}" -gt 0 ]; then
-              cp "${emitted_traces[@]}" "$golden"/
-              echo "Including ${#emitted_traces[@]} emitted trace(s) from tests"
+          for name in new_after_resume.jsonl refusal.jsonl; do
+            file="$emitted/$name"
+            if [ ! -s "$file" ]; then
+              echo "seat-binding replay: missing or empty emitted trace $file"
+              exit 1
             fi
-          fi
+            cp "$file" "$golden"/
+          done
+          echo "Including 2 emitted trace(s) from tests"
           start=$(date +%s.%N)
           python3 specs/seat-binding/conformance/replay.py --all "$golden"
           exit_code=$?
