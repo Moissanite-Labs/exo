@@ -4,9 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
-
-from tests.test_gate_diff import DELETE_LINE, ROOT, SCRIPT, _gate_diff, _run, _tree
+from tests.test_gate_diff import DELETE_LINE, ROOT, _tree
 
 PR_SCRIPT = ROOT / "scripts" / "gate_diff_pr.py"
 FULL_TOOL_OUTPUT_BLOCK = (
