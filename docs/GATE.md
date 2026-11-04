@@ -1857,10 +1857,13 @@ gate does not read:
   `allow`). The part for `SSH_SK_PROVIDER` sits beside the line, as the parts for ssh's command
   settings above do, so the line keeps the category main gave it, its targets and its reserved
   hits: `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` stays a `read` that asks, and `opaque_exec: allow`
-  allows it. A value that changes nothing the gate relies on keeps the line's class: an empty
-  loader variable (`LD_PRELOAD= ls`; the loader skips it), `SSH_SK_PROVIDER` set to `internal` in
-  any case (ssh's built-in FIDO support, which loads no file, as `-o
-  SecurityKeyProvider=internal` stays `allow`), `GIT_CONFIG_GLOBAL` or
+  allows it. As on those settings' lines, a rule that allows or logs `opaque_exec` asks there, and
+  `opaque_exec: log` gives `allow`, as before. `LD_PRELOAD`'s part leads its line, so on
+  `LD_PRELOAD=/tmp/evil.so ssh host ls` that rule allows or logs and that category line logs. A
+  value that changes nothing the gate relies on keeps the line's class: an empty loader variable
+  (`LD_PRELOAD= ls`; the loader skips it), `SSH_SK_PROVIDER` set to `internal` in any case
+  (ssh's built-in FIDO support, which loads no file, as `-o SecurityKeyProvider=internal` stays
+  `allow`), `GIT_CONFIG_GLOBAL` or
   `GIT_CONFIG_SYSTEM` set to `/dev/null`, a `PATH` made only of the current one (`$PATH`) and
   folders the gate already trusts a program from by path, a system bin folder, a virtualenv's
   `bin` or `node_modules/.bin` (`PATH=$PATH:./node_modules/.bin eslint .`,

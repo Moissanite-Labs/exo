@@ -1709,6 +1709,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   gave it, its targets and its reserved hits, so `SSH_SK_PROVIDER=/tmp/evil.so ssh host ls` is a `read` that asks.
   `LD_PRELOAD`'s part leads the line instead.
 
+  So on that line, as on `ssh -o 'ProxyCommand=touch /tmp/x' host ls` (#1083), a rule that allows or logs
+  `opaque_exec` asks, and `opaque_exec: log` gives `allow`, as main did. On `LD_PRELOAD=/tmp/evil.so ssh host ls`,
+  whose part leads, that rule allows or logs and that category line logs.
+
   *Rejected:* the part leading the line, as `LD_PRELOAD`'s does. Main's `scripts/gate_diff.py` found 643 pairs lower
   with it on an aimed corpus. On `SSH_SK_PROVIDER=/tmp/evil.so ssh -o 'ProxyCommand=touch /tmp/x' host ls` a category
   rule on `opaque_exec` allowed the line, and #1083's part with it.
