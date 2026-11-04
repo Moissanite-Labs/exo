@@ -21,15 +21,19 @@ def _replay_module():
     return mod
 
 
-def _run(trace: Path) -> tuple[int, str]:
+def _run(trace: Path, *extra: str) -> tuple[int, str]:
     proc = subprocess.run(
-        [sys.executable, str(REPLAY), str(trace)],
+        [sys.executable, str(REPLAY), *extra, str(trace)],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
     err = (proc.stderr or "") + (proc.stdout or "")
     return proc.returncode, err
+
+
+def _run_diagnose(trace: Path) -> tuple[int, str]:
+    return _run(trace, "--diagnose")
 
 
 def _require_toolchain():
@@ -98,3 +102,41 @@ def test_replay_dropped_mid_event_mutation_exits_one():
     code, err = _run(tmp)
     assert code == 1
     assert "seq=2 invariant=TraceReplay" in err
+    assert "diagnosed=" not in err
+
+
+def test_replay_diagnose_b1_names_invariant():
+    _require_toolchain()
+    code, err = _run_diagnose(TRACES / "b1_silent_fail.jsonl")
+    assert code == 1
+    assert "invariant=NewAfterResumeBindsThisCore" in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" in err
+
+
+def test_replay_diagnose_dropped_persist_names_invariant():
+    _require_toolchain()
+    code, err = _run_diagnose(TRACES / "dropped_persist.jsonl")
+    assert code == 1
+    assert "invariant=TraceReplay" in err
+    assert "diagnosed=NoForeignBeforeCoreLoad" in err
+
+
+def test_replay_diagnose_fixed_true_trace_replay_names_invariant():
+    """Fixed=TRUE post-state SilentFail on /new is unreplayable; diagnose names policy break."""
+    _require_toolchain()
+    lines = (TRACES / "good_new_after_resume.jsonl").read_text(encoding="utf-8").splitlines()
+    objs = [json.loads(line) for line in lines[:5]]
+    client_new = json.loads(lines[-1])
+    client_new["state"]["last_outcome"] = "SilentFail"
+    client_new["state"]["user_visible_outcome"] = "none"
+    client_new["state"]["client_session"] = "s1"
+    client_new["state"]["sessions"] = [{"id": "s1", "seat": "scout", "foreign": True}]
+    client_new["state"]["client_display_seat"] = "scout"
+    objs.append(client_new)
+    tmp = TRACES.parent / "build" / "fixture_fixed_true_silent.jsonl"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text("\n".join(json.dumps(o, separators=(",", ":")) for o in objs) + "\n", encoding="utf-8")
+    code, err = _run_diagnose(tmp)
+    assert code == 1
+    assert "invariant=TraceReplay" in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" in err

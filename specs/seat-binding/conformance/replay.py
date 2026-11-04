@@ -170,6 +170,12 @@ def validate_line(obj: object, line_no: int) -> dict:
 
 CLIENT_EVENTS_NEED_BOOT = frozenset({"resume", "client_new"})
 
+DIAGNOSE_POLICY_INVARIANTS = (
+    "NoForeignBeforeCoreLoad",
+    "NewAfterResumeBindsThisCore",
+    "NoSilentRefusal",
+)
+
 
 def validate_trace_events(records: list[dict]) -> None:
     if len(records) < 2:
@@ -413,7 +419,93 @@ def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
     return 1, out, step, inv
 
 
-def check_trace(trace_path: Path, jar: Path, display_path: Path | None = None) -> tuple[int, str | None]:
+def trace_refused_from_state(st: dict) -> bool:
+    lo = st["last_outcome"]
+    if lo in ("VisibleRefusal", "VisibleJoin"):
+        return True
+    return lo == "SilentFail" and st["from_client_new"]
+
+
+def policy_violation_in_state(st: dict) -> str | None:
+    """Return the first configured policy invariant violated by a trace post-state."""
+    core = st["core_seat"]
+    _seat_of, _live, foreign = session_maps(st)
+    if core is None and foreign:
+        return "NoForeignBeforeCoreLoad"
+    if st["resumed_other_seat"] and st["from_client_new"]:
+        if st["last_outcome"] != "VisibleRefusal":
+            cs = st["client_session"]
+            seat_of, _, _ = session_maps(st)
+            if cs is None or seat_of.get(cs) != core:
+                return "NewAfterResumeBindsThisCore"
+    refused = trace_refused_from_state(st)
+    if st["last_outcome"] == "SilentFail" or (
+        refused and st["last_outcome"] not in ("VisibleRefusal", "VisibleJoin")
+    ):
+        return "NoSilentRefusal"
+    return None
+
+
+def diagnose_from_trace_states(records: list[dict]) -> str:
+    """When TLC replay deadlocks, infer the first policy invariant from trace states."""
+    if records[0]["fixed"]:
+        persisted: set[str] = set()
+        for rec in records[1:]:
+            params = rec.get("params") or {}
+            if rec["event"] == "persist_session":
+                sid = params.get("session_id")
+                if isinstance(sid, str):
+                    persisted.add(sid)
+            for row in rec["state"]["sessions"]:
+                sid = row["id"]
+                if sid in persisted:
+                    continue
+                if row.get("foreign") and rec["event"] != "persist_session":
+                    return "NoForeignBeforeCoreLoad"
+    for rec in records:
+        hit = policy_violation_in_state(rec["state"])
+        if hit:
+            return hit
+    return "none"
+
+
+def diagnose_invariant(
+    records: list[dict],
+    jar: Path,
+    build: Path,
+) -> str:
+    """Re-run trace with Fixed=FALSE; return first policy invariant TLC or trace scan finds."""
+    write_cfg(build, False)
+    _code, _out, _step, inv = run_tlc(build, jar)
+    if inv and inv in DIAGNOSE_POLICY_INVARIANTS:
+        return inv
+    return diagnose_from_trace_states(records)
+
+
+def format_violation(
+    display: Path,
+    seq: int | str,
+    inv_name: str,
+    diagnose: str | None = None,
+) -> str:
+    rel = display
+    try:
+        rel = display.relative_to(Path.cwd())
+    except ValueError:
+        pass
+    line = f"VIOLATION {rel} seq={seq} invariant={inv_name}"
+    if diagnose is not None:
+        line += f" diagnosed={diagnose}"
+    return line
+
+
+def check_trace(
+    trace_path: Path,
+    jar: Path,
+    display_path: Path | None = None,
+    *,
+    diagnose: bool = False,
+) -> tuple[int, str | None]:
     display = display_path or trace_path
     (ROOT / "build").mkdir(parents=True, exist_ok=True)
     try:
@@ -433,12 +525,15 @@ def check_trace(trace_path: Path, jar: Path, display_path: Path | None = None) -
             return 0, None
         seq = jsonl_seq_for_violation(step, inv)
         inv_name = inv or "Unknown"
-        rel = display
-        try:
-            rel = display.relative_to(Path.cwd())
-        except ValueError:
-            pass
-        return 1, f"VIOLATION {rel} seq={seq} invariant={inv_name}"
+        diagnosed: str | None = None
+        if diagnose:
+            if inv_name == "TraceReplay":
+                diagnosed = diagnose_invariant(records, jar, build)
+            elif inv_name in DIAGNOSE_POLICY_INVARIANTS:
+                diagnosed = inv_name
+            else:
+                diagnosed = "none"
+        return 1, format_violation(display, seq, inv_name, diagnosed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -450,6 +545,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_JAR,
         help="path to tla2tools.jar (default: ../tla2tools.jar or TLA2TOOLS_JAR)",
+    )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="on TraceReplay failures, re-run with Fixed=FALSE and append diagnosed=invariant",
     )
     args = parser.parse_args(argv)
 
@@ -477,7 +577,9 @@ def main(argv: list[str] | None = None) -> int:
         code = 0
         msg: str | None = None
         try:
-            code, msg = check_trace(path.resolve(), jar, path)
+            code, msg = check_trace(
+                path.resolve(), jar, path, diagnose=args.diagnose
+            )
         except ValueError as exc:
             code, msg = 2, str(exc)
         if code == 2:

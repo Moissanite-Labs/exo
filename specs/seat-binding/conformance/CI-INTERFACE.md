@@ -57,6 +57,19 @@ On this VM, `--all` over the sample traces finishes in about 1–2 seconds once 
 | 2 | Malformed trace: JSONL/schema validation failed before TLC (includes header-only files and impossible event order such as `resume` before `client_boot`). |
 | 3 | Missing toolchain: Java not on `PATH`, jar missing, or jar SHA-256 mismatch. One-line message on stderr. |
 
+### `--diagnose` (diagnostic only)
+
+Optional flag for local debugging and CI log triage. **Not part of the blocking gate** — do not pass it in the wired CI job from exo #1152.
+
+When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. If the primary failure is `TraceReplay` (TLC could not match the trace step under the trace’s `fixed` mode), `replay.py` re-runs the same trace with `Fixed=FALSE` and, if TLC still deadlocks, infers the first policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) from the trace. If a named policy invariant already failed on the first run, `diagnosed=` repeats that name. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
+
+Example:
+
+```bash
+python3 specs/seat-binding/conformance/replay.py --diagnose specs/seat-binding/conformance/traces/dropped_persist.jsonl
+# VIOLATION ... seq=1 invariant=TraceReplay diagnosed=NoForeignBeforeCoreLoad
+```
+
 `replay.py` never skips checks.
 
 **Pytest (`tests/specs/test_replay.py`) skips when Java or the pinned jar is unavailable** (missing file or checksum mismatch), so default CI jobs without the jar stay green. That is intentional: pytest is not the conformance gate. The wired CI gate must fetch/verify the jar, set `TLA2TOOLS_JAR`, and run **`replay.py` directly** so missing Java/jar fails with exit **3**.
