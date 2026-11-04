@@ -90,6 +90,12 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
+**Local operations inspection (D-085).** `exo inbox` is a lazy maintenance command in `exo.inbox`, outside
+the runtime. Its bounded read adapters observe Exo's own persisted schemas without constructing service
+managers. It never makes protocol calls: current engine query dispatch starts runtime services. Keep agent
+scope, unknown live states and per-source failures explicit. Test missing/older sources and read budgets.
+Do not treat the configured principal as proof of historical ownership. See [INBOX.md](INBOX.md).
+
 **Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
 `tool_output.enabled` is true. It renders copies and expands retained sanitized text through
 the normal registry/executor path. `for_child(context, tools=names)` is an optional context

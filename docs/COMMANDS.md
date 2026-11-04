@@ -266,6 +266,10 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 
 ### How the harness is doing
 
+`exo inbox [--json] [--agent NAME] [--limit 1..100] [--timeout SECONDS]` reads a bounded local operations
+snapshot without starting the core. `--principal` or `--root` selects only its question store. Missing sources
+and live state are reported as unknown. See [INBOX.md](INBOX.md) for coverage and JSON semantics.
+
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
 | `exo trace [SESSION]` | The per-turn table for a session (default: the newest), with anomaly flags and peer traffic. | `--last N`, `--calls` list every model call with its cost, `--json` | `cmd_trace` in `src/exo/trace_cmd.py` |
