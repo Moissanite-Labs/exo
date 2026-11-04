@@ -22,6 +22,21 @@ notice in the client. It names `exo init <id>`.
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+The consolidation regression for repeated corrections checks reinforcement and then decay 120 days after the
+last evidence timestamp, using fixed event times so its result does not depend on the calendar date of the test run.
+
+A correction or ruling is matched against active beliefs only (proposed, held or accepted). One that agrees with an
+active belief reinforces it; one that opposes an active belief goes through the conflict rule, even when a rejected
+belief matches it better (#861). A rejected belief is never reinforced and stays recorded. A correction or ruling
+that agrees with a rejected belief and with no active one becomes a separate proposal, which then goes through
+promotion like any other: an unguarded, ungated one that cites your ruling is accepted at once by rule 1, and one
+held on a conflict stays held (rule 3, see "Promotion"). A reviewer taste or fact lesson whose evidence is all
+already held by the rejected beliefs it agrees with, one or several together, teaches nothing again: it is not
+proposed, raises no conflict question and reinforces no other belief. A reviewer skill lesson is not checked this
+way and is still proposed. New evidence, alone or beside that evidence, is matched as usual. The rule of three
+still counts a rejected belief that agrees as known, so saying the same instruction three more times in chat does
+not raise a rejected lesson again; a new correction or ruling does.
+
 A correction or ruling in chat is written once, by its capture key. exo-memory writes the same keys, so neither
 doubles the other. After each turn the learner checks the chat against the keys already in the ledger. It keeps
 those keys between turns, with the last row it read, and reads only the rows after that row (#263). The ledger is
@@ -60,7 +75,8 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 `exo.learn.promote.apply_policy` checks mandatory constraints before the direct-ruling shortcut. The rule
 numbers stay fixed for ledger records:
 
-- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer.
+- Rule 3: a conflict already held by consolidation stays held. No client asks its question yet, so you accept or
+  reject the proposal with `exo proposals`, and that closes the question (exo-desktop #54).
 - Rule 2: guarded proposals (irreversible, public, financial, third party) never promote on their own.
   They become a question once, even when they cite a ruling or answer you wrote.
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in

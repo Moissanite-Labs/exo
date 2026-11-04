@@ -1,5 +1,6 @@
 import hashlib
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,20 @@ for p in (str(PLUGIN_DIR), str(TESTS_DIR)):
 import fixtures  # noqa: E402
 
 GENERIC_HOME = "/home/someone"
+
+
+def pytest_terminal_summary(terminalreporter):
+    """#907: name the Chrome the browser tests drove, so a CI log says which build ran (even under -q)."""
+    from browser import find_chrome
+    chrome = find_chrome()
+    if not chrome:
+        terminalreporter.write_line("chrome: none found, browser tests skipped")
+        return
+    try:
+        version = subprocess.run([chrome, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        version = type(exc).__name__
+    terminalreporter.write_line(f"chrome: {chrome} ({version or 'no version'})")
 
 
 @pytest.fixture(autouse=True)

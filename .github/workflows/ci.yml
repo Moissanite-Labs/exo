@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces its older run, which then only holds runners (#907). Pushes to main
+# keep one run per commit.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest

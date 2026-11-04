@@ -163,8 +163,8 @@ def test_the_page_runs_under_the_policy_with_no_violation(page):
          "body": {"usage": {"input_tokens": 1200, "output_tokens": 300, "cost_usd": 0.5}}}])
     for view in ("tasks", "schedule", "command", "providers", "chat"):
         b.eval("location.hash = '#{}'".format(view))
-        b.wait("document.querySelector('.xc-nav button.on') && "
-               "document.querySelector('.xc-nav button.on').textContent.toLowerCase() === '{}'".format(view))
+        b.wait("document.querySelector('.xc-nav a[aria-current=page]') && "
+               "document.querySelector('.xc-nav a[aria-current=page]').textContent.toLowerCase() === '{}'".format(view))
         if view == "tasks":   # inline sizes go through the CSSOM, so they still apply
             b.wait("!!document.querySelector('.xc-board')")
             assert b.eval("getComputedStyle(document.querySelector('.xc-board')).getPropertyValue('--n').trim()") == "2"

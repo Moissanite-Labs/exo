@@ -541,6 +541,9 @@ def build_replays(ledger, cutoff: str | None = None, principals: Iterable[str] |
             if target:
                 tb = target.get("body") or {}
                 ttext = next((tb[k] for k in ("text", "content") if isinstance(tb.get(k), str)), "")
+                # Feedback that found no answer backfills its target with a placeholder, not the agent's words.
+                if tb.get("source") == "learn_backfill" and "answer" in b and not b["answer"]:
+                    ttext = ""
             context = b.get("context") or last_user.get(sess, "")
             verdict = b.get("verdict")
             better = b.get("chosen") or b.get("wanted") or b.get("edit") or b.get("edited") or b.get("text") or ""

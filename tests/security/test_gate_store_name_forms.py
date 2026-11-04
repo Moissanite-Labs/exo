@@ -10,7 +10,9 @@ also reads a glob or a split word that could be one, and a folder that holds a r
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -1005,12 +1007,37 @@ def test_a_case_variant_read_keeps_the_plain_spellings_class(cmd, cat, monkeypat
     assert (c.category, gate.decide(c).outcome) == (cat, "allow"), (cmd, c.category)
 
 
+# A home whose every folder is known (#1029). The gate matches a relative glob such as `[HOME=x]*` against the full
+# paths of the secret files under HOME, and its `*` crosses `/`. So under a temp home the row asked when a folder on
+# the way to it started with x or = (or with H, O, M or E in main's case reading), as on a runner whose temp folder
+# was named so. Nothing is run, so the folder need not exist.
+FIXED_HOME = "/exo-test-home"
+
+
 @pytest.mark.parametrize("on", [True, False], ids=["any-case", "mains-case"])
 @pytest.mark.parametrize("cmd,cat", CASE_ORDINARY)
 def test_an_ordinary_case_spelling_keeps_its_class_in_either_reading(cmd, cat, on, monkeypatch):
     _case(monkeypatch, on)
+    monkeypatch.setenv("HOME", FIXED_HOME)
     c = gate.classify(sh(cmd))
     assert (c.category, gate.decide(c).outcome) == (cat, "allow"), (cmd, c.category)
+
+
+def test_the_ordinary_rows_pass_under_a_temp_folder_named_like_the_class(tmp_path):
+    """#1029: the rows above run again in a child pytest whose temp folder lies below a folder that starts with
+    each character of the class `[HOME=x]`. They must pass there as they pass anywhere."""
+    base = tmp_path.joinpath("x", "=", "H", "O", "M", "E")
+    base.mkdir(parents=True)
+    here = Path(__file__).resolve()
+    root = here.parents[2]
+    node = here.relative_to(root).as_posix() + "::test_an_ordinary_case_spelling_keeps_its_class_in_either_reading"
+    src = str(Path(gate.__file__).resolve().parents[1])   # the exo this suite imports
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    env.update(TMPDIR=str(base), PYTHONPATH=os.pathsep.join(filter(None, (src, env.get("PYTHONPATH")))))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                        f"--basetemp={base / 'pytest'}", node], cwd=root, env=env, capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 0 and f"{2 * len(CASE_ORDINARY)} passed" in r.stdout, r.stdout[-3000:] + r.stderr[-2000:]
 
 
 @pytest.mark.parametrize("cmd,cat", CASE_OFF)

@@ -12,7 +12,7 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
   let browse = -1, draft = "", ghostInfo = { text: "", ok: false }, tip = null;
   const history = [];
   const guide = new Guide();
-  const state = { providerError: false, jobDone: "", findings: 0, longTurn: false, turns: 0, busy: false };
+  const state = { providerError: false, providerAttempts: [], jobDone: "", findings: 0, longTurn: false, turns: 0, busy: false };
 
   const menu = h("div", { class: "xc-menu", role: "listbox", "aria-label": "Suggestions", hidden: true });
   const guideEl = h("div", { class: "xc-guide", "aria-live": "off", hidden: true });

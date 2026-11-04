@@ -84,8 +84,18 @@ def _every_part(c: gate.Classification) -> list:
 def _floor(c: gate.Classification, main: bool = False) -> str:
     """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
     a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
-    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any."""
-    rs = (c.split_readings[:1] or [c]) if main else [c, *c.split_readings]
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any.
+    A line with a quoted prefix assignment (#471) was read by main as its reading as before (``before``), so with
+    ``main`` that reading's is taken, and without it that reading and its split readings count too. Where a ${..}
+    word or a $(( is also read as before #143 (``flat``, #158), main read the line that way, so with ``main`` that
+    reading's category is taken: a secret or store write only bash's reading of a word finds asks at the floor after
+    the hold, as one in any other reading does (``gate.no_grant``)."""
+    if main:
+        m = c.before if c.before is not None else c
+        r = (m.split_readings[:1] or [m])[0]
+        rs = [r.flat if r.flat is not None else r]
+    else:
+        rs = [c, *c.split_readings] + ([c.before, *c.before.split_readings] if c.before is not None else [])
     return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
@@ -489,8 +499,8 @@ class Gate:
         read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
         tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
         The copies of the post on its other targets get the text too (`gate.fill_body`), and each other reading of the
-        line (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read
-        it before.
+        line (`gate.readings`: as read before #399, #311 or #471) has its own body file read the same way, as the hook
+        read it before.
 
         Another part in any reading (a command, a redirection to a file, an assignment that changes what runs, a
         wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
@@ -612,7 +622,7 @@ class Gate:
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
                 c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-                store = gate.no_grant(c)    # a part and each reading count too (#311, #399)
+                store = gate.no_grant(c)    # a part and each reading count too (#311, #399, #471)
             except Exception:
                 pass
             if self.settings.mode == "observe" and not (secret or store):
@@ -697,7 +707,7 @@ class Gate:
         binding = gate.approval_binding(c, args) if outward else ""
         # No standing allow for credentials and store writes (a part of the line counts, #311), nor for a post whose
         # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
-        # Each reading counts (gate.readings: as read before #311 or #399).
+        # Each reading counts (gate.readings: as read before #311, #399 or #471).
         once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant and (self._floor is not None or self._changed_floor is not None):
@@ -862,13 +872,25 @@ class Gate:
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
         # #454: a sudo write line is also the act of the part its write displaced, which led it before, so a hit on
         # the write keeps the ask too, as it did then (`sudo echo hi > /tmp/f` under `reserved: [local_write]`).
-        if any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved):
+        # #471: the line read as before keeps this check as main made it, on that reading's own decision and act.
+        # There an unknown program led `X='a b' sudo git commit -m x; sudo git commit -m x`, so a hit on the commit
+        # under `reserved: [local_write]` keeps the ask, although the commit leads the line now.
+        if c.before is not None and _off_act(c.before, self._reserved_hits(c.before)):
+            return None
+        if _off_act(c, d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)
         except Exception:
             logger.warning("exo-gate: grant lookup failed; asking instead", exc_info=True)
             return None
+
+    def _reserved_hits(self, c: gate.Classification) -> list:
+        """The reserved parts one reading of the call meets, under the policies `_rules` decides with: the pinned one
+        and a changed one (D-038). It spends nothing, and `_rules` already logged a changed policy."""
+        ctx = {"spent_today": self._spent.get(_dt.date.today().isoformat(), 0.0)}
+        pols = [p for p in (self.policies(), self.changed_policies()) if p is not None]
+        return [hit for pol in pols for hit in gate.decide(c, pol, ctx).reserved]
 
     def _grant_days(self, outward: bool) -> float:
         """How long an "always" lasts: the pinned approvals.yaml, or the shorter of pinned and changed while a
@@ -989,6 +1011,12 @@ def permissions_command(g: "Gate", args: str = "") -> Any:
     elif words and words[0] != "status":
         return "usage: permissions [status] | bypass | ask"
     return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
+
+
+def _off_act(c: gate.Classification, hits: list) -> bool:
+    """D-075: a reserved hit that differs from the act of the line, or from that of the part its sudo write displaced
+    (#454)."""
+    return any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in hits)
 
 
 def _iso(ts: float) -> str:
