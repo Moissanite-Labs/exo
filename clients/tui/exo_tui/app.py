@@ -975,6 +975,7 @@ class ExoApp(App):
 
         # Send the seat this window was started with. self.seat is also a display label, and load_session
         # fills it from a resumed thread, including one that belongs to another seat in this home.
+        joined: str | None = None
         try:
             got = await self.client.call(s.SessionCreate(
                 title=self.title_arg, seat=self.launch_seat, kind=kind, cwd=self.new_cwd))
@@ -988,10 +989,10 @@ class ExoApp(App):
                     self.note(f"error: {again.code}: {again.message}", "error")
                     return
                 joined = (got.get("session") or {}).get("seat") or "this core"
-                self.note(f"this window asked for seat {self.launch_seat}; joined {joined}", "warn")
             else:
-                self.note(f"error: {exc.code}: {exc.message}", "error")
-                return
+                # A seat mismatch is the only refusal this window handles. Other failures still
+                # reach boot, which reports "cannot start" and keeps the event feed running.
+                raise
         await self.leave_thread()
         self.session = got["session"]["id"]
         self.draw_delegated_approvals()
@@ -1000,6 +1001,9 @@ class ExoApp(App):
         self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(got["session"])
         self.clear_transcript()
+        if joined is not None:
+            # After the clear, so a startup thread still says which seat it joined.
+            self.note(f"this window asked for seat {self.launch_seat}; joined {joined}", "warn")
         if kind == "private":
             self.note(f"private thread {self.session}: logged here, never added to shared memory")
         elif announce:
