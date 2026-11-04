@@ -57,6 +57,19 @@ On this VM, `--all` over the sample traces finishes in about 1–2 seconds once 
 | 2 | Malformed trace: JSONL/schema validation failed before TLC (includes header-only files and impossible event order such as `resume` before `client_boot`). |
 | 3 | Missing toolchain: Java not on `PATH`, jar missing, or jar SHA-256 mismatch. One-line message on stderr. |
 
+### `--diagnose` (diagnostic only)
+
+Optional flag for local debugging and CI log triage. **Not part of the blocking gate** — do not pass it in the wired CI job from exo #1152.
+
+When `--diagnose` is set, violation lines gain a `diagnosed=` suffix. `replay.py` re-runs the same trace with `Fixed=FALSE` and sets `diagnosed=` to a policy invariant (`NoForeignBeforeCoreLoad`, `NewAfterResumeBindsThisCore`, or `NoSilentRefusal`) **only when TLC reports that invariant on the re-run at or before the TLC `step` where the primary (trace `fixed`) replay stopped**. Otherwise `diagnosed=none`. Exit codes and default output without the flag are unchanged.
+
+Example:
+
+```bash
+python3 specs/seat-binding/conformance/replay.py --diagnose specs/seat-binding/conformance/traces/dropped_persist.jsonl
+# VIOLATION ... seq=1 invariant=TraceReplay diagnosed=none
+```
+
 `replay.py` never skips checks.
 
 **Pytest (`tests/specs/test_replay.py`) skips when Java or the pinned jar is unavailable** (missing file or checksum mismatch), so default CI jobs without the jar stay green. That is intentional: pytest is not the conformance gate. The wired CI gate must fetch/verify the jar, set `TLA2TOOLS_JAR`, and run **`replay.py` directly** so missing Java/jar fails with exit **3**.
@@ -65,10 +78,10 @@ With `--all`, every `*.jsonl` in the directory is checked, all failures are prin
 
 ## Path filter
 
-Paste into a workflow `paths:` block or `dorny/paths-filter` `paths` list:
+Must match the `pathspecs=(…)` list in `.github/workflows/spec-conformance.yml` (seat-binding-conformance job):
 
 ```
-specs/seat-binding/**
+specs/seat-binding/
 src/exo/core/engine.py
 src/exo/core/loop.py
 src/exo/core/sessions.py
@@ -80,12 +93,14 @@ src/exo/protocol/schema.py
 src/exo/server/app.py
 tests/clients/tui/test_seat_new_session.py
 tests/test_session_seat_binding.py
+tests/test_seat_binding_conformance_traces.py
+src/exo/core/seat_binding_conformance.py
+.github/workflows/spec-conformance.yml
 ```
 
 ## Artifacts
 
 - `TraceSeatBinding.tla` — trace replay spec (extends `SeatBinding` + generated `TraceInstance`).
 - `replay.py` — validates JSONL, generates `TraceInstance.tla`, runs TLC.
+- `check_scratch_mutations.py` — temp-copy production mutation harness (pinned `VIOLATION` seq+invariant; wired in spec-conformance workflow).
 - Sample traces under `conformance/traces/`.
-
-Do not edit `.github/workflows` from this PR; wire the gate in a follow-up.
