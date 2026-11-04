@@ -7,7 +7,13 @@ VARIABLES step
 
 traceVars ==
   <<step, coreSeat, liveSessions, foreignSessions, sessionSeat, clientLaunch,
-     clientDisplay, clientSession, resumedOtherSeat, lastOutcome, fromClientNew, nextSid>>
+     clientDisplay, clientSession, resumedOtherSeat, lastOutcome, fromClientNew,
+     refusedThisNew, nextSid>>
+
+TraceRefused(i) ==
+  (PostLastOutcome[i] = "VisibleRefusal")
+  \/ (PostLastOutcome[i] = "VisibleJoin")
+  \/ (PostLastOutcome[i] = "SilentFail" /\ PostFromClientNew[i])
 
 MatchState(i) ==
   /\ coreSeat = PostCoreSeat[i]
@@ -17,6 +23,7 @@ MatchState(i) ==
   /\ resumedOtherSeat = PostResumedOther[i]
   /\ lastOutcome = PostLastOutcome[i]
   /\ fromClientNew = PostFromClientNew[i]
+  /\ refusedThisNew = TraceRefused(i)
   /\ nextSid = PostNextSid[i]
   /\ liveSessions = PostLiveSet(i)
   /\ foreignSessions = PostForeignSet(i)
@@ -30,6 +37,7 @@ SyncPost(j) ==
   /\ resumedOtherSeat' = PostResumedOther[j + 1]
   /\ lastOutcome' = PostLastOutcome[j + 1]
   /\ fromClientNew' = PostFromClientNew[j + 1]
+  /\ refusedThisNew' = TraceRefused(j + 1)
   /\ nextSid' = PostNextSid[j + 1]
   /\ liveSessions' = PostLiveSet(j + 1)
   /\ foreignSessions' = PostForeignSet(j + 1)

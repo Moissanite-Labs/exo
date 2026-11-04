@@ -308,6 +308,7 @@ INVARIANTS
   TypeOK
   TraceStateOk
   SeatMatchesCore
+  NoForeignBeforeCoreLoad
   NewAfterResumeBindsThisCore
   NoSilentRefusal
 """,
