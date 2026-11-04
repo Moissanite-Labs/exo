@@ -1,12 +1,12 @@
 # TLC: SeatBinding.cfg (Fixed = TRUE, post-5ba3813)
 TLC2 Version 2026.11.03.180953 (rev: 309e489)
-Running breadth-first search Model-Checking with fp 5 and seed 953393818838989077 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 3119] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Running breadth-first search Model-Checking with fp 21 and seed -720397591111210378 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 6777] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
 ...
 Model checking completed. No error has been found.
   Estimates of the probability that TLC did not check all reachable states
   because two distinct states had the same fingerprint:
-  calculated (optimistic):  val = 9.7E-12
-41205 states generated, 4911 distinct states found, 0 states left on queue.
+  calculated (optimistic):  val = 1.0E-11
+42393 states generated, 5115 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 8.
-The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 12 and the 95th percentile is 4).
-Finished in 00s at (2026-11-04 06:40:17)
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 12 and the 95th percentile is 3).
+Finished in 00s at (2026-11-04 07:00:29)

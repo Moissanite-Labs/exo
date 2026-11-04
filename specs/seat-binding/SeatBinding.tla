@@ -113,8 +113,13 @@ PersistSession(seat) ==
   /\ nextSid \notin liveSessions
   /\ Unused(nextSid)
   /\ liveSessions' = liveSessions \union {nextSid}
-  /\ foreignSessions' = foreignSessions \union {nextSid}
   /\ sessionSeat' = [sessionSeat EXCEPT ![nextSid] = seat]
+  /\ foreignSessions' =
+       IF coreSeat = NoSeat
+       THEN foreignSessions
+       ELSE IF seat = coreSeat
+            THEN foreignSessions
+            ELSE foreignSessions \union {nextSid}
   /\ nextSid' \in SessionPool \ (liveSessions \union {nextSid})
   /\ UNCHANGED <<coreSeat, clientLaunch, clientDisplay, clientSession,
                   resumedOtherSeat, lastOutcome, fromClientNew>>
