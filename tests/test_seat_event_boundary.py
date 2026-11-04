@@ -71,3 +71,32 @@ def test_persisted_foreign_events_filtered_after_reopen(tmp_path):
         finally:
             await eng.close()
     asyncio.run(run())
+
+
+def test_event_owner_checks_do_not_count_session_messages(tmp_path):
+    async def run():
+        eng = _engine(tmp_path, "worker")
+        queries = []
+        try:
+            own = eng.store.create_session(agent="worker")
+            foreign = eng.store.create_session(agent="other")
+            legacy = eng.store.create_session(agent=None)
+            hub = Hub(visible=eng.event_visible)
+            eng.store._db.set_trace_callback(queries.append)
+            for sid in (own.id, foreign.id, legacy.id, "missing", None):
+                hub.publish(s.Notice(text="payload"), sid)
+            assert [e.session for e in hub.since(0)] == [own.id]
+            sub = hub.subscribe(0)
+            try:
+                assert (await sub.next(timeout=0.1)).session == own.id
+                live = hub.publish(s.Notice(text="live"), own.id)
+                assert await sub.next(timeout=0.1) == live
+                assert await sub.next(timeout=0.01) is None
+            finally:
+                sub.close()
+            assert queries
+            assert not any("count(" in q.lower().replace(" ", "") and "messages" in q.lower() for q in queries)
+        finally:
+            eng.store._db.set_trace_callback(None)
+            await eng.close()
+    asyncio.run(run())
