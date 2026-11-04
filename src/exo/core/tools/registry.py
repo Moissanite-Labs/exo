@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from exo.core.hooks import maybe_await
-from exo.core.types import ContentPart, ToolCall, ToolResult, ToolSpec, to_dict
+from exo.core.types import BadArguments, ContentPart, ToolCall, ToolResult, ToolSpec, to_dict
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutionRequest, thaw_arguments, validate_executor,
 )
@@ -258,6 +258,9 @@ class Registry:
                                       f"Available: {', '.join(self.names())}", is_error=True)
         if not tool.available():
             return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here", is_error=True)
+        if isinstance(call.arguments, BadArguments):  # never run what the model did not ask for, nor ask about it
+            return ToolResult.of_text(call.id, f"Invalid arguments for {call.name}: {call.arguments.error}",
+                                      is_error=True)
         identity = (call.id, call.name)
         request = None
         if self.executor_required:

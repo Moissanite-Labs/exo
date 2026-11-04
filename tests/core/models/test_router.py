@@ -100,7 +100,7 @@ def test_sibling_credentials_rotate_from_env():
     r = Router(roles={"main": ["or:m"]}, providers={"or": {"transport": "openai", "base_url": "http://h/v1",
                                                           "key_env": ["K1", "K2", "K3"]}},
                catalog={}, env={"K1": "a", "K3": "c"}, clock=Clock(), client=rec.client())
-    assert [c.id for c in r.credentials("or")] == ["or#0", "or#1"]
+    assert [c.id for c in r.credentials("or")] == ["or#0", "or#2"]  # numbered by place in key_env (exo-desktop #52)
     events = run(r)
     assert events[-1].message.text() == "Hello there"
     assert [q.headers["authorization"] for q in rec.requests] == ["Bearer a", "Bearer c"]

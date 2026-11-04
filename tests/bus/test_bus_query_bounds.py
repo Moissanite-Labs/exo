@@ -55,4 +55,4 @@ def test_valid_verification_boundaries_still_work(bus):
     status, data, raw = http("GET", f"{bus.url}/v1/verify", params={"from": 1, "to": MAX_SEQ})
     assert status == 200 and data["ok"] and data["checked"] == 3, raw
     status, data, raw = http("GET", f"{bus.url}/v1/verify", params={"from": MAX_SEQ})
-    assert status == 200 and data["ok"] and data["checked"] == 0, raw
+    assert status == 200 and data["ok"] is False and data["checked"] == 0, raw

@@ -11,14 +11,16 @@ the router, not the transport.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from email.utils import parsedate_to_datetime
+from threading import Lock
 from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
-from exo.core.types import ContentPart, Message, ProviderEvent, StopReason, ToolCall, ToolSpec, Usage
+from exo.core.types import BadArguments, ContentPart, Message, ProviderEvent, StopReason, ToolCall, ToolSpec, Usage
 
 # HTTP statuses that may succeed on retry or on another route.
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
@@ -105,17 +107,51 @@ class StreamState:
 
 
 def parse_json_args(raw: str) -> dict[str, Any]:
-    """Decode tool arguments; empty -> {}, bad JSON or non-object -> {} (upstream behavior)."""
+    """Decode tool arguments. Empty means no arguments, ``{}``. Bad JSON or a non-object is ``BadArguments``, which
+    the registry refuses, so the call is not run with nothing (upstream returned ``{}``)."""
     if not raw or not raw.strip():
         return {}
     try:
         val = json.loads(raw)
-    except ValueError:
-        return {}
-    return val if isinstance(val, dict) else {}
+    except ValueError as exc:
+        return BadArguments(f"the arguments are not valid JSON ({exc})")
+    return val if isinstance(val, dict) else BadArguments("the arguments must be a JSON object")
 
 
 USER_AGENT = "exo/0.1"  # some providers (OpenCode Go) ask clients to name themselves, not their HTTP library
+
+
+class LoopClients:
+    """A transport's own HTTP clients, one per event loop, so its calls reuse connections and TLS sessions (#263).
+    A client's connections belong to the loop that opened them: a call on another loop (``aux_sync``'s thread, a
+    command's ``asyncio.run``) gets its own client. A client whose loop has closed is dropped."""
+
+    def __init__(self, timeout: httpx.Timeout | float) -> None:
+        self.timeout = timeout
+        self._clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
+        self._lock = Lock()  # the router serves the engine's loop and aux_sync's thread
+
+    def get(self) -> httpx.AsyncClient:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            for gone in [lp for lp in self._clients if lp.is_closed()]:
+                del self._clients[gone]
+            client = self._clients.get(loop)
+            if client is None or client.is_closed:
+                client = self._clients[loop] = httpx.AsyncClient(timeout=self.timeout)
+            return client
+
+    async def aclose(self) -> None:
+        """Close every client, each on its own loop. Waits at most 5 s for another thread's loop."""
+        with self._lock:
+            clients, self._clients = self._clients, {}
+        here = asyncio.get_running_loop()
+        for loop, client in clients.items():
+            if loop is here:
+                await client.aclose()
+            elif loop.is_running():
+                await asyncio.wait([asyncio.wrap_future(asyncio.run_coroutine_threadsafe(client.aclose(), loop))],
+                                   timeout=5)
 
 
 class HttpTransport:
@@ -139,6 +175,11 @@ class HttpTransport:
         self._timeout = httpx.Timeout(timeout, connect=15.0, read=read_timeout or timeout)
         if name:
             self.name = name
+        self.own_clients = LoopClients(self._timeout)  # used when no client is given; the router closes them
+
+    async def aclose(self) -> None:
+        """Close the transport's own clients. A client passed in stays open: its owner closes it."""
+        await self.own_clients.aclose()
 
     # --- hooks -------------------------------------------------------------
     def headers(self) -> dict[str, str]:
@@ -188,7 +229,7 @@ class HttpTransport:
         sent = {"user-agent": USER_AGENT, **self.headers(), **self.extra_headers}
         if self.session_header and session_id:
             sent[self.session_header] = str(session_id)
-        client = self._client or httpx.AsyncClient(timeout=self._timeout)
+        client = self._client or self.own_clients.get()
         st = StreamState()
         try:
             async with client.stream("POST", url, json=body, headers=sent, timeout=self._timeout) as resp:
@@ -219,9 +260,6 @@ class HttpTransport:
         except httpx.HTTPError as exc:
             yield error_event(f"{type(exc).__name__}: {exc}", None, retryable=True)
             return
-        finally:
-            if self._client is None:
-                await client.aclose()
         finished = st.meta.pop("_finished", False) or st.stop_reason is not None
         if not finished:  # closed cleanly but cut short: no finish event and no stop reason; never a normal end
             yield error_event("stream ended without a response", None, retryable=True)

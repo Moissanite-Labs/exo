@@ -30,8 +30,9 @@ appends never go on more than one event past every anchor. `verify` checks every
 hold at least that many events and the chain hash at that position must match. A ledger file that is gone while an
 anchor remains fails too (`missing_ledger_problem`). A ledger file that is a symlink fails verify, and append and
 anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
-opening it writes nothing through the link. The one exception is SQLite's own `-shm` file beside a target that
-already has a `-wal` file. `verify` warns when the anchors are more than one event apart. `append` also refuses to
+opening it writes nothing through the link. The exceptions are SQLite's own `-shm` file beside a target that
+already has a `-wal` file, and its `-wal` and `-shm` files beside a target read live because no copy of it could be
+taken at open (`_snapshot`). `verify` warns when the anchors are more than one event apart. `append` also refuses to
 write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
 `anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
 `verify` reports it.
@@ -596,17 +597,21 @@ def missing_ledger_problem(path: str | os.PathLike) -> str:
 
 
 def _open_symlinked(path: Path) -> sqlite3.Connection:
-    """A ledger file that is a symlink, opened read-only (SQLite's `mode=ro`): no WAL switch, no schema, no file
-    made at a dangling target. Only a regular file is opened: opening a FIFO would block. `immutable=1` keeps SQLite
-    from making `-wal` and `-shm` files beside a WAL target. Without a `-wal` file there, all its data is in the main
-    file. A target that is gone, not a regular file, not a database or without an events table reads as an empty
-    ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor refuse."""
+    """A ledger file that is a symlink, opened read-only: no WAL switch, no schema, no file made at a dangling target.
+    Only a regular file is opened: opening a FIFO would block. A target with a `-wal` file beside it has a writer: it
+    is read live (SQLite's `mode=ro`) through the writer's own files, and stays current. A target without one holds
+    all its data in its main file, and `_snapshot` copies it at open (#317). Reads are then a snapshot of the target
+    as it stood at open: a fresh open sees later appends. The rare target a writer changes during every copy is read
+    live too, and so is one whose copy fails (a full temporary folder). SQLite may then leave its `-wal` and `-shm`
+    files beside it. A target that is gone, not a regular file, not a database or without an events table reads as an
+    empty ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor
+    refuse."""
     target, db = Path(os.path.realpath(path)), None
     try:
         if target.is_file():
-            ro = "mode=ro" if Path(f"{target}-wal").exists() else "mode=ro&immutable=1"
-            db = sqlite3.connect(f"{target.as_uri()}?{ro}", uri=True, check_same_thread=False, isolation_level=None,
-                                 timeout=30)
+            db = _snapshot(target)
+            if db is None:
+                db = _open_live(target)
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
                 return db
     except sqlite3.DatabaseError:
@@ -616,6 +621,82 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
     db.executescript(SCHEMA)
     return db
+
+
+def _open_live(target: Path) -> sqlite3.Connection:
+    """The target read live (`mode=ro`), through a writer's `-wal` file when there is one. SQLite opens the `-wal` and
+    `-shm` files at the first read, and makes them beside a WAL target that has none. Where it cannot (read-only
+    media, or a folder the reader cannot write), that read fails with `SQLITE_CANTOPEN`, and the ledger would read as
+    empty. A target with no `-wal` file holds all its data in its main file, so it is then read with `immutable=1`, as
+    before #317."""
+    db = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True, check_same_thread=False, isolation_level=None,
+                         timeout=30)
+    try:
+        db.execute("SELECT 1 FROM sqlite_master").fetchone()
+        return db
+    except sqlite3.OperationalError as e:
+        db.close()
+        if (e.sqlite_errorcode & 0xFF) != sqlite3.SQLITE_CANTOPEN or Path(f"{target}-wal").exists():
+            raise
+    return sqlite3.connect(f"{target.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False,
+                           isolation_level=None, timeout=30)
+
+
+SNAPSHOT_TRIES = 3  # copies of a symlinked ledger a writer may spoil before it is read live instead (#317)
+
+
+def _snapshot(target: Path) -> sqlite3.Connection | None:
+    """A read-only copy of a symlinked ledger's target, or None to read it live: a `-wal` file is beside it, a writer
+    changed it during each of `SNAPSHOT_TRIES` copies, or a copy failed while it stayed the same (a full temporary
+    folder: a second copy would fill it again). A target that is not a ledger raises DatabaseError.
+
+    The copy reads the target with `immutable=1`, which makes no `-wal` or `-shm` file beside it but takes no lock. A
+    writer that appends and checkpoints during the copy leaves it torn: it fails `integrity_check`, lookups miss
+    events, and reads can raise `database disk image is malformed` for the reader's life (#317). So the target's
+    inode, size and mtime, and the absence of a `-wal` file, are checked before and after. A copy taken while any of
+    them changed is thrown away. Every write moves the mtime, but many appends keep the size. So the check misses a
+    write that keeps the size and lands in the same tick of the file system's clock as the write before it.
+
+    The copy goes into SQLite's private temporary database, not into memory. About 2 MB stays in SQLite's page cache
+    and the rest goes to a temporary file in SQLite's temporary folder: the first folder it can write of
+    `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp`, `/tmp` and the current folder. SQLite makes it owner-only,
+    unlinks it at once and drops it at close. So an open reader holds disk space the size of the ledger, not memory.
+    (A SQLite built with `SQLITE_TEMP_STORE` 2 or 3 keeps this database in memory. The default build does not.)
+    `query_only` keeps the copy read-only, as the target was."""
+    for _ in range(SNAPSHOT_TRIES):
+        before = _target_state(target)
+        if before is None:
+            return None
+        src = sqlite3.connect(f"{target.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False,
+                              isolation_level=None, timeout=30)
+        try:
+            if not src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+                raise sqlite3.DatabaseError(f"{target} has no events table")
+            db = sqlite3.connect("", check_same_thread=False, isolation_level=None)
+            try:
+                src.backup(db)
+            except sqlite3.DatabaseError:  # a target cut short under the copy: try again
+                db.close()
+                if _target_state(target) == before:  # the copy itself failed (a full temporary folder): read live
+                    return None
+                continue
+        finally:
+            src.close()
+        if _target_state(target) == before:
+            db.execute("PRAGMA query_only=ON")
+            return db
+        db.close()
+    return None
+
+
+def _target_state(target: Path) -> tuple[int, int, int] | None:
+    """The target's inode, size and mtime. None while a `-wal` file is beside it (a writer has it open) or when it is
+    gone: it is then read live, and a target that is gone reads as an empty ledger."""
+    try:
+        st = target.stat()
+    except OSError:
+        return None
+    return None if Path(f"{target}-wal").exists() else (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:

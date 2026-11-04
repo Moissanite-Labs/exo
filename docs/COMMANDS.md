@@ -21,7 +21,7 @@ A client reads the line and decides. Three things can answer:
    unknown name fails with the error code `not_found`.
 
 `commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`) plus every plugin command, each with a name, a description and an argument hint.
+`compact`, `trace`, `findings`), optional `work` and `checkpoint`, plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -40,6 +40,7 @@ one, with a note instead of starting a model turn. A near typo of a command the 
 corrected line back in the box. Until the page has the core's command names it holds every `/name` line that is not
 its own or the terminal client's, and keeps asking for them. Any other line is ordinary message text: paths such as
 `/etc/hosts` or `/tmp is full`, and words such as `/me waves` that are close to no command (D-037).
+It also runs `/permissions` through its own route (`GET`/`POST /api/permissions`); see D-065.
 
 ### Client commands (TUI)
 
@@ -110,7 +111,8 @@ History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 5
 key or password is never kept.
 
 Guidance. With the composer empty, one dim line may suggest a next step, chosen by local rules: first run (`/intro`),
-a failed model call (`/providers` to check the provider), a finished job (ask for its `job_output`), open findings
+a failed model call (`/providers` to check the provider; the web page's line reads the error instead, see
+`docs/ui/WEB.md` "The composer (D-037)"), a finished job (ask for its `job_output`), open findings
 (`/findings`), a slow turn (`/trace`), a long thread (`/context`). At most one new line per 25 seconds, each rule twice
 a session, none while a turn runs, and a rule stops once you run its command. Tab fills the line in. Turn it off with
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
@@ -122,6 +124,15 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 `docs/ui/WEB.md` "The composer".
 
 ### Core built-ins (`command.run`)
+
+`/checkpoint` shows the current conversation's record-derived continuity index
+when `work_checkpoint.enabled` is true (default). It requires a principal
+connection and accepts no arguments. It never executes indexed work. See
+[WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
+
+`/work [show|history]` reads the current session's saved working notes when
+`work_notes.enabled` is true. It requires a principal connection and passes
+through the tool gate and configured executor. See [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
 
 All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 
@@ -150,7 +161,8 @@ description, args_hint)` (`src/exo/core/plugins.py`). A name that is already tak
 | Command | Plugin | What it does | Arguments | Implemented in |
 |---|---|---|---|---|
 | `/grants` | `exo-gate` | Lists standing approval grants. Revoking one writes a `revoke` row to the ledger. | `list` (default), or `revoke <id>` | `grants_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
-| `/gate` | `exo-gate` | Shows whether policy files changed this session. `accept` adopts the change (ledger row `policy_accept`); until then the stricter of old and new applies (D-038). | `status` (default), or `accept` | `gate_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
+| `/permissions` | `exo-gate` | Shows the permission mode, `ask` or `bypass`, with the counts for this run of the core: auto-approved, held, still asked. `bypass` turns asking off except for `store_write` and `credentials`; only a principal connection may, and never under a required executor (D-065). `ask` turns it back on, from any caller. `json` returns `{mode, available, auto_approved, held, floor_asks, by, via, since, floor, summary}` for clients. Each switch writes a `permissions` ledger row. | `status` (default), `bypass`, `bypass launch` (what `exo --skip-permissions` sends), `ask`, `json` | `permissions_command` in `plugins/exo-gate/exo_gate/hook.py`, `plugins/exo-gate/exo_gate/permissions.py`. See `docs/GATE.md` "Bypass mode". |
+| `/gate` | `exo-gate` | Shows whether policy files changed this session, and a policy error in the pinned or the changed files (#557). `accept` adopts the change (ledger row `policy_accept`); until then the stricter of old and new applies (D-038). | `status` (default), or `accept` | `gate_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
 | `/exo` | `exo-memory`, `exo-context` | One front door for Exo plugins. `/exo help` lists subcommands. `/exo help <name>` shows one. | `<subcommand> [args]` | `src/exo/dispatcher.py`, `register_root` |
 | `/exo branch` | `exo-context` | Writes a handoff and prints the line that starts a fresh session on it. | `<topic>` | `cmd_branch` in `plugins/exo-context/exo_context/commands.py` |
 | `/exo handoff` | `exo-context` | Writes a handoff for this session. | optional topic | `cmd_handoff`, same file |
@@ -203,12 +215,12 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo graph` | Writes `graph/graph.json` (store). | none | `cmd_graph` |
 | `exo index` | Refreshes the node table in `INDEX.md` (store). | none | `cmd_index` |
 | `exo log append <kind>` | Appends a signed event to the ledger (store). `<kind>` is one of the ledger kinds in `docs/CORE.md`. | `--author NAME` (required). `--key PATH` (default `$EXO_HOME/keys/<author>.key`). `--text T` or `--body JSON`, else stdin. `--session S`. `--ref ID` (repeatable). | `cmd_log` |
-| `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). A ledger file that is a symlink fails, and opening it writes nothing through the link (`docs/CORE.md` "Head anchor" names the one exception). Prints JSON, with `anchored_seq`, the lowest seq an anchor holds, and a `warning` when the two anchors are more than one event apart (the ledger still passes). Exit code 1 if broken (store). | none | `cmd_log` |
+| `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). A ledger file that is a symlink fails, and opening it writes nothing through the link (`docs/CORE.md` "Head anchor" names the exceptions). Prints JSON, with `anchored_seq`, the lowest seq an anchor holds, and a `warning` when the two anchors are more than one event apart (the ledger still passes). Exit code 1 if broken (store). | none | `cmd_log` |
 | `exo log anchor` | Writes the current head to the ledger's anchor files, for a store made before D-040. The next append does it too. Refuses to replace an anchor that does not match the ledger, since events may have been removed. Exit code 1 then, when the anchor beside the ledger cannot be written, and for a ledger file that is a symlink, even with `--force`. | `--force` replaces it and prints what it replaced: for a store an older Exo left with its anchor ahead after a crash, not for a truncation (`docs/CORE.md` "Head anchor") | `cmd_log` |
 | `exo log tail` | Prints the last events (store). | `-n N` (default 10), `--kind K` | `cmd_log` |
 | `exo keygen <name>` | Creates an Ed25519 key, mode 0600. Refuses to overwrite. A key made in `$EXO_HOME/keys` is pinned in the key registry. | `--out PATH` (default `$EXO_HOME/keys/<name>.key`) | `cmd_keygen` |
-| `exo keys [list]` | The key registry (D-040): pinned signing keys, bus seats, principal ids. | `--json` | `cmd_keys` |
-| `exo keys pin NAME PUB` | Pins a public key (base64 or a `.pub` file) under a name. Refuses to change a pinned key without `--replace`. Exit code 1 if refused. | `--seat` (NAME is a bus seat), `--replace` | `cmd_keys` |
+| `exo keys [list]` | The key registry (D-040): pinned signing keys, bus seats, peer seats of other homes, principal ids. | `--json` | `cmd_keys` |
+| `exo keys pin NAME PUB` | Pins a public key (base64 or a `.pub` file) under a name. Refuses to change a pinned key without `--replace`. Exit code 1 if refused. Without `--seat` or `--peer` the key may sign this home's ledgers. For peer messages, a name with no key file in `keys/` and no seat file here counts as a seat of another home, so its messages are held as `other`. Pin a peer with `--peer`. | `--seat` (NAME is a bus seat), `--peer` (NAME is a peer seat of another home: its key checks that seat's peer messages and receipts and never signs a ledger, `docs/PEERS.md` "Peer keys"), `--replace` | `cmd_keys` |
 | `exo keys principal ID` | Marks a ledger author id as the principal, for consolidation and learning. | none | `cmd_keys` |
 | `exo ingest <kind> <path>` | Imports conversations into the ledger as signed events. Kinds: `claude_code`, `hermes`, `claude_ai_export`, `chatgpt_export`, `grok_export` (aliases such as `claude-code`, `chatgpt`). The source is read only (store, or `--ledger`). | `--since TIME`, `--author NAME`, `--as SEAT` (signing seat, default `ingest`), `--key PATH`, `--ledger PATH` | `src/exo/ingest/cli.py` |
 
@@ -225,6 +237,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo ask seed <path>` | Loads a numbered Markdown question list into the queue. | none | same |
 | `exo ask decide` | Ask or act? Reads a JSON list of predicted choices on stdin and prints the verdict. | `--domain` (default `default`) | same |
 | `exo eval` | An n=1 evaluation report. See `docs/TOOLS-CLI.md`. | `--responder MOD:FN`, `--qa FILE`, `--pairs FILE`, `--seed N`, `--no-write` | `src/exo/eval.py` |
+| `exo improve --offline` | A Harness² experiment on explicit public/synthetic fixtures; no principal store or activation. Stdout JSON, optional new owner-only run export. Exit 0: review-ready proposal; 1: valid experiment failed, exhausted its budget, did not improve or failed held-out checks; 2: invalid input/limits or filesystem-policy/I/O refusal. See `docs/integrations/HARNESS2.md` (D-096). | Required: `--offline`, `--adapter signed-decimal-v1` or `text-normalize-v1`, `--fixture FILE` (plain JSON filename in cwd). Optional: `--output RUN` (new ID under `./improvement-runs`), `--iterations N` (default 1; saturation/later non-improvement discards the candidate), `--max-tasks N` (16 total), `--max-calls N` (64 including held-out), `--margin X` (.01). No `--root`/`--principal`. | `src/exo/improvement/offline.py` |
 | `exo brief` | The morning brief. See `docs/TOOLS-CLI.md`. | `--html`, `--write` | `src/exo/brief.py` |
 | `exo consolidate` | Turns new ledger events into belief proposals. See `docs/TOOLS-CLI.md`. | `--as SEAT`, `--key PATH`, `--dry-run` | `src/exo/consolidate.py` |
 | `exo proposals [list\|show\|accept\|reject\|revert] [id]` | Reviews belief proposals. Default action is `list`. | `--reason` (required for `reject` and `revert`), `--all` list decided ones too, `--as SEAT` (default `principal`), `--key PATH` | `cmd_proposals` in `src/exo/consolidate.py` |
@@ -238,11 +251,11 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 |---|---|---|---|
 | `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). Refuses, with exit 1, a socket that another core answers on or is starting on (the other core's pid is named): give a second seat its own `--socket`. Each socket has an owner-only lock file beside it (`exod.sock.lock`), held for the core's life, so two cores started at once leave exactly one; a crashed core's lock is gone with it. Only the core that holds the default socket's lock writes `run/exod.pid`, the file `exo stop` reads. | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. An approval prompt (`allow/deny/allow_always>`) takes an option it shows, in any case, or `a`, `y` or `yes` for `allow`. Any other reply denies. `allow_always`, like Always in the terminal client, waits for a second step: Enter confirms the standing grant, and any other reply cancels it and shows the options again. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
-| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
+| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` (alias `--dangerously-skip-permissions`: after connecting, the window sends `/permissions bypass launch`; D-065) | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the newest thread with messages in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
 | `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import of every command's module, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
-| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
+| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` (alias `--dangerously-skip-permissions`) | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. When no core answers it clears the stale socket and pid file, unless a core holds the socket's start lock: it then says the core is starting and removes nothing. | none (`-h` prints help and any other word is an error: neither stops the core) | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342), `--no-open` (do not open a browser tab) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 
@@ -250,10 +263,10 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo config show` | Every key with its effective value. | none | `main` in `src/exo/config.py` |
+| `exo config show` | Every key with its effective value. A secret prints as `***`, as `config.get` returns it (`docs/SEATS.md` "Config and secrets"). | none | `main` in `src/exo/config.py` |
 | `exo config path` | Where `config.json` lives. | none | same |
 | `exo config roles` | The model route per role. No secrets. | none | same |
-| `exo config get <key>` | One value. Exit code 1 if unset. | `<key>` | same |
+| `exo config get <key>` | One value, a secret masked as in `show`. Exit code 1 if unset. | `<key>` | same |
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo harness list` | Lists runtime profiles, capabilities and dependencies. | none | `src/exo/harness_cmd.py` |
@@ -273,6 +286,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
+| `exo findings backlog` | Unresolved findings (open, reopened, and fixed awaiting re-verification) counted by severity and by age, with the oldest listed. The backlog read uses one snapshot without a write lock; opening the store still takes a write lock for its schema check. | `--limit N` (oldest rows, 0..100, default 20), `--json` | same |
 | `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too, and so does one whose ledger file is a symlink. A ledger whose two anchors are more than one event apart passes with a warning. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 

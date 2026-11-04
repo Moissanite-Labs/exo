@@ -53,6 +53,14 @@ def create(seat: str | None = None) -> CoreEngine:
     if tool_output.get("enabled", False):
         from exo.tool_evidence import Options
         output_options = Options.parse(tool_output)
+    from exo.work_checkpoint import CheckpointConfig
+    checkpoint_config = CheckpointConfig(cfg.get("work_checkpoint"))
+    notebook_config = None
+    if "work_notes" in cfg.data:
+        from exo.work_notebook import NotebookConfig
+        if not isinstance(cfg.data["work_notes"], dict):
+            raise ConfigError("work_notes must be an object")
+        notebook_config = NotebookConfig(cfg.data["work_notes"])
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     instructions = cfg.get("workspace_instructions", {})
     instruction_provider = None
@@ -159,6 +167,11 @@ def create(seat: str | None = None) -> CoreEngine:
         if instruction_provider is not None:
             eng.workspace_instructions = instruction_provider
             eng.loop.workspace_extra = lambda session, cwd: instruction_provider.render(cwd)
+        if notebook_config is not None and notebook_config.enabled:
+            from exo.work_notebook import attach as attach_work_notebook
+            attach_work_notebook(eng, notebook_config, principal=principal)
+        from exo.work_checkpoint import attach as attach_work_checkpoint
+        attach_work_checkpoint(eng, checkpoint_config, principal=principal or "")
         if (cfg.get("learn") or {}).get("enabled", True) is not False:
             from exo import learn
             learn.attach(eng)

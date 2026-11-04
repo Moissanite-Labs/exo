@@ -208,11 +208,10 @@ def test_apply_patch_does_not_block_on_a_fifo_swapped_in_after_the_check(run, tm
 
 @needs_fifo
 @needs_links
-def test_grep_skips_fifos_devices_and_big_files(run, tmp_path, monkeypatch):
+def test_grep_skips_fifos_devices_and_big_files(run, tmp_path):
     from exo.core.tools.builtin import search
-    monkeypatch.setattr(search, "MAX_FILE_BYTES", 20)
     (tmp_path / "a.txt").write_text("needle\n")
-    (tmp_path / "big.txt").write_text("needle\n" * 5)
+    (tmp_path / "big.txt").write_text("needle\n" * (search.MAX_FILE_BYTES // 7 + 1))
     os.mkfifo(tmp_path / "m_pipe")
     if os.path.exists(DEVICE):
         os.symlink(DEVICE, tmp_path / "n_dev.md")

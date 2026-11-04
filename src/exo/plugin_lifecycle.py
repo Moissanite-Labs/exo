@@ -262,6 +262,8 @@ class PluginToolBridge:
     def hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
                 "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
+                "author": ctx.meta.get("author", ""),   # who started the turn (D-040): the gate lowers only for
+                                                        # the principal's turn (#598)
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
                 "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
 

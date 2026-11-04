@@ -127,4 +127,38 @@ assert.equal(s.answers.length,0); assert.equal(document.activeElement,s.card); s
 def test_chat_wires_the_approval_controller_and_sends_deny_notes():
     chat = (STATIC / "chat.js").read_text()
     assert 'from "./approvals.js"' in chat and "approvalView.draw(mine)" in chat and "approvalView.stop()" in chat
-    assert "{ decision, note }" in chat and 'chip("o a d", "approvals")' in chat
+    assert "{ decision, note }" in chat
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_web_approval_keyboard_hint_multiple_cards_draft_and_cleanup(tmp_path):
+    execute(tmp_path, r'''
+const s=setup(); s.composer.value="draft o a d";
+const req=id=>({request_id:id,summary:id,risk:"medium",options:["allow","deny"]});
+s.view.draw([req("r1"),req("r2")]);
+assert.ok(s.card.textContent.includes("Ctrl+F to focus the first approval."));
+assert.ok(s.card.textContent.includes("Then o once; d, Enter deny. Esc returns to your message."));
+assert.ok(!s.card.textContent.includes("always"));
+assert.equal(document.activeElement,s.composer);
+key(s.composer,"f",{ctrlKey:true}); assert.equal(document.activeElement,s.card);
+key(s.card,"Escape"); assert.equal(document.activeElement,s.composer);
+key(s.composer,"f",{ctrlKey:true}); key(s.card,"d");
+assert.ok(s.card.textContent.includes("Enter sends denial; Esc cancels."));
+assert.ok(!s.card.textContent.includes("Esc returns to your message."));
+key(document.activeElement,"Escape"); assert.equal(document.activeElement,s.card);
+s.view.draw([{...req("r1"),options:["allow","allow_always","deny"]},req("r2")]);
+key(s.card,"a");
+assert.ok(s.card.textContent.includes("Enter confirms always; Esc cancels."));
+assert.ok(!s.card.textContent.includes("Esc returns to your message."));
+key(document.activeElement,"Escape"); assert.equal(document.activeElement,s.card);
+assert.ok(s.card.textContent.includes("Then o once; a, Enter always; d, Enter deny."));
+key(s.card,"Escape"); assert.equal(document.activeElement,s.composer);
+s.view.draw([req("r2")]);
+key(s.composer,"f",{ctrlKey:true}); assert.equal(document.activeElement,s.root.children[0]);
+key(document.activeElement,"o"); await tick(); assert.equal(s.answers[0].decision,"allow");
+assert.equal(document.activeElement,s.composer);
+assert.equal(s.composer.value,"draft o a d");
+s.view.draw([req("r3")]); s.view.stop();
+const e=key(s.composer,"f",{ctrlKey:true});
+assert.equal(e.defaultPrevented,false); assert.equal(document.activeElement,s.composer);
+''')

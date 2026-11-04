@@ -11,7 +11,7 @@ import pytest
 from exo.core.engine import CoreEngine
 from exo.core.hooks import HookError, HookRegistry
 from exo.core.models.fake import FakeProvider
-from exo.core.seats import Seat
+from exo.core.seats import Seat, ensure_key, key_path
 from exo.peers import attach
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
@@ -76,11 +76,24 @@ def env(monkeypatch):
     monkeypatch.delenv("EXO_PRINCIPAL", raising=False)
     monkeypatch.delenv("EXO_BUS_URL", raising=False)
     hp._RUNTIMES.clear()
+    pin_each_other(d)
     yield d
     for rt in hp._RUNTIMES.values():
         rt.stop()
     hp._RUNTIMES.clear()
     shutil.rmtree(d, ignore_errors=True)
+
+
+def pin_each_other(d):
+    """Each home holds the other seat's key and a seat file for it, as seats that share one home do (#132): a peer's
+    messages are checked against the key in the receiving home, never against its presence file. Hermes runs on
+    ``exohome``, exod on ``exo``."""
+    pairs = ((d / "exo", "exo-test", d / "exohome"), (d / "exohome", "hermes-test", d / "exo"))
+    pubs = [ensure_key(key_path(home, seat)).with_suffix(".pub") for home, seat, _ in pairs]  # both keys first
+    for (_, seat, other_home), pub in zip(pairs, pubs):
+        shutil.copy(pub, key_path(other_home, seat).with_suffix(".pub"))
+        (other_home / "seats").mkdir(exist_ok=True)
+        (other_home / "seats" / f"{seat}.toml").write_text(f'name = "{seat}"\n')
 
 
 class Quiet:
@@ -230,6 +243,29 @@ def test_hermes_hold_expires_and_deny_notifies_the_sender(env):
                     break
                 await asyncio.sleep(0.05)
             assert any(isinstance(e.body, s.PeerDelivery) and e.body.state == "expired" for e in eng.hub.since(0))
+        finally:
+            await eng.close()
+            await srv.close()
+
+    asyncio.run(main())
+
+
+def test_an_unpinned_exo_peer_is_held_in_hermes(env):
+    (env / "exohome" / "keys" / "exo-test.pub").unlink()  # this Hermes home no longer holds exod's key
+    ctx, rt, host = start_hermes()
+    ctx.hooks["on_session_start"](session_id="h1", platform="cli")
+
+    async def main():
+        eng, srv = await exo_daemon(env)
+        sx = (await eng.loop.create_session()).id
+        try:
+            out = await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", text="trust me", session=sx,
+                                                        via="human")), eng.hub)
+            assert out["state"] == "held"
+            assert any("(other, key not pinned)" in x and "trust me" in x for x in host.shown)
+            assert host.agent.steered == [] and ctx.hooks["pre_llm_call"](session_id="h1", platform="cli") is None
+            # deny it, so no held message is left waiting when the runtime stops
+            assert "denied" in await asyncio.to_thread(ctx.commands["peer-deny"], out["msg_id"])
         finally:
             await eng.close()
             await srv.close()

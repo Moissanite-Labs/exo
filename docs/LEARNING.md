@@ -22,6 +22,21 @@ notice in the client. It names `exo init <id>`.
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+The consolidation regression for repeated corrections checks reinforcement and then decay 120 days after the
+last evidence timestamp, using fixed event times so its result does not depend on the calendar date of the test run.
+
+A correction or ruling is matched against active beliefs only (proposed, held or accepted). One that agrees with an
+active belief reinforces it; one that opposes an active belief goes through the conflict rule, even when a rejected
+belief matches it better (#861). A rejected belief is never reinforced and stays recorded. A correction or ruling
+that agrees with a rejected belief and with no active one becomes a separate proposal, which then goes through
+promotion like any other: an unguarded, ungated one that cites your ruling is accepted at once by rule 1, and one
+held on a conflict stays held (rule 3, see "Promotion"). A reviewer taste or fact lesson whose evidence is all
+already held by the rejected beliefs it agrees with, one or several together, teaches nothing again: it is not
+proposed, raises no conflict question and reinforces no other belief. A reviewer skill lesson is not checked this
+way and is still proposed. New evidence, alone or beside that evidence, is matched as usual. The rule of three
+still counts a rejected belief that agrees as known, so saying the same instruction three more times in chat does
+not raise a rejected lesson again; a new correction or ruling does.
+
 A correction or ruling in chat is written once, by its capture key. exo-memory writes the same keys, so neither
 doubles the other. After each turn the learner checks the chat against the keys already in the ledger. It keeps
 those keys between turns, with the last row it read, and reads only the rows after that row (#263). The ledger is
@@ -60,7 +75,8 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 `exo.learn.promote.apply_policy` checks mandatory constraints before the direct-ruling shortcut. The rule
 numbers stay fixed for ledger records:
 
-- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer.
+- Rule 3: a conflict already held by consolidation stays held. No client asks its question yet, so you accept or
+  reject the proposal with `exo proposals`, and that closes the question (exo-desktop #54).
 - Rule 2: guarded proposals (irreversible, public, financial, third party) never promote on their own.
   They become a question once, even when they cite a ruling or answer you wrote.
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in
@@ -93,9 +109,17 @@ is not worse on held-out cases, and passes the gate. The night is capped by `cli
 
 The climb adds only ordinary lessons: not guarded, not gated by rule 5, and with no critic objection. Only rule 5
 promotes a gated lesson on its own. It runs earlier the same night and keeps its critic, weight, session and
-held-out checks. A candidate with no held-out case in its domains fails the gate. A lesson's own evidence never
-counts for or against it, on dev or on held-out cases, whether the candidate adds the lesson or drops it. The climb
-can add a lesson drawn only from imported history, but only when the eval shows it helps.
+held-out checks. A lesson is a candidate only while its computed evidence weight, decayed to now, is medium or high
+(the stored `confidence` does not decide). Every rule reaches every domain, so the gate reads all held-out cases in
+two parts. The held-out cases in the candidate's own domains (its domain and `general`) and the pinned cases, from
+any domain, are still checked as one pool, as before: in that pool a gain on one case can still offset a loss on
+another, such as a `general` or pinned case against a case in the lesson's domain. Each other domain's held-out
+cases are checked on their own, so a gain in the pool never pays for a loss in another domain's held-out cases, and
+a gain there never pays for a loss in the pool. A candidate with no held-out case in its domains fails the gate. An
+accepted candidate is scored again on every case, so the cached incumbent is its own scores in every domain.
+A lesson's own evidence never counts for or against it, on dev or on held-out cases, whether the candidate adds the
+lesson or drops it. The climb can add a lesson drawn only from imported history, but only when the eval shows it
+helps.
 
 The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
 your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's

@@ -256,17 +256,70 @@ def test_optional_hook_failures_remain_optional_in_required_engine(tmp_path, mon
     asyncio.run(asyncio.wait_for(main(), 5))
 
 
-def test_ordinary_mode_still_allows_read_when_audit_or_classifier_fails(tmp_path, monkeypatch):
+def test_ordinary_mode_asks_once_on_read_when_classifier_fails(tmp_path, monkeypatch):
     engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", store=False)
     async def main():
         try:
             result = await engine.run_tool(ToolCall("c", "read_file", {"path": "safe"}), {})
-            assert not result.is_error
+            assert not result.is_error and len(ran) == 1
+            asked = []
+            async def deny(*args, **kwargs):
+                asked.append(kwargs.get("options"))
+                return "deny"
+            monkeypatch.setattr(engine.approvals, "ask", deny)
             def fail(*args):
                 raise RuntimeError("ordinary fallback")
             monkeypatch.setattr(gate, "_rules", fail)
             result = await engine.run_tool(ToolCall("c2", "read_file", {"path": "safe"}), {})
-            assert not result.is_error and len(ran) == 2
+            assert result.is_error and len(ran) == 1
+            assert asked == [["allow", "deny"]]
+        finally:
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
+
+
+def test_error_card_on_secret_read_names_principal_approver(tmp_path, monkeypatch):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", store=False)
+    async def main():
+        try:
+            asked = []
+            async def deny(*args, **kwargs):
+                asked.append((kwargs.get("options"), kwargs.get("approvers")))
+                return "deny"
+            monkeypatch.setattr(engine.approvals, "ask", deny)
+            def fail(*args, **kwargs):
+                raise RuntimeError("classifier failed")
+            monkeypatch.setattr(gate, "_rules", fail)
+            import exo.gate as gate_module
+            monkeypatch.setattr(gate_module, "classify", fail)
+            result = await engine.run_tool(ToolCall("c", "read_file", {"path": "~/.exo/keys/seat.key"}), {})
+            assert result.is_error and ran == []
+            assert asked == [(["allow", "deny"], ["principal"])]
+        finally:
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
+
+
+@pytest.mark.parametrize("tool, args", [("bash", {"command": "ls"}), ("read_file", {"path": "x"})])
+def test_an_error_card_answered_always_gives_no_standing_grant(tmp_path, monkeypatch, tool, args):
+    # D-084: the card is once-only, so the core offers allow and deny, an "always" stands for no grant and runs
+    # nothing, and the next call the gate cannot classify asks again.
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", store=False)
+    async def main():
+        try:
+            asked = []
+            async def always(*args, **kwargs):
+                asked.append(kwargs.get("options"))
+                return "allow_always"
+            monkeypatch.setattr(engine.approvals, "ask", always)
+            def fail(*args, **kwargs):
+                raise RuntimeError("classifier failed")
+            monkeypatch.setattr(gate, "_rules", fail)
+            for n in range(2):
+                result = await engine.run_tool(ToolCall(f"c{n}", tool, dict(args)), {})
+                assert result.is_error
+            assert ran == [] and engine.approvals.always == set()
+            assert asked == [["allow", "deny"], ["allow", "deny"]]
         finally:
             await asyncio.wait_for(engine.close(), 5)
     asyncio.run(asyncio.wait_for(main(), 5))

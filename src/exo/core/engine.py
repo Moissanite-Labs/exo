@@ -75,7 +75,7 @@ class SqliteLog:
         self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
-        return self.store.events_since(since, session, limit=1 << 30, with_global=True)
+        return self.store.iter_events(since, session, with_global=True)  # page by page (#254)
 
     def last_seq(self) -> int:
         return self.store.last_event_seq()
@@ -273,9 +273,11 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
         if getattr(self, "_closing", False):
             raise RuntimeError("the engine is closing")
+        if (task := self._started) is not None and task.done() and (task.cancelled() or task.exception() is not None):
+            self._started = None  # it raised (the _main_status provider probe, say) or was cancelled. A running one stays.
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -339,7 +341,7 @@ class CoreRuntime:
         self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp, self.router.aclose):
             try:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
@@ -367,9 +369,8 @@ class CoreRuntime:
                 self.scheduler.close()
 
     async def _close_mcp(self) -> None:
-        if self._started is not None:
-            await self.mcp.close()
-            self._started = None
+        await self.mcp.close()  # always: a start cleared after failing may have left servers running
+        self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
@@ -435,7 +436,8 @@ class CoreRuntime:
         if call.name == "bash" and sid:
             self._guard_cwd(sid, call, info.cwd if info and info.cwd else self.cwd)
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
-                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs, "env_allow": self.env_allow,
+                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
+                                "jobs": self.jobs, "env_allow": self.env_allow,
                                 "env_deny": self.env_deny})
         task = asyncio.current_task()
         owned = task not in self._tasks
@@ -495,14 +497,21 @@ class CoreRuntime:
         info = self.store.get_session(sid)
         if info is None:
             raise CommandFailed("not_found", f"no session {sid}")
-        st = self.loop._state.get(sid)  # session.get and session.resume show a running turn, as session.list does
-        info.status = "live" if st is not None and st.running else "idle"
+        info.cwd = info.cwd or self.cwd  # report the same fallback used by tools for older sessions
+        info.status = "live" if (st := self.loop._state.get(sid)) is not None and st.running else "idle"
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
         if b.kind not in ("", "thread", "private"):
             raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
-        info = await self.loop.create_session(title=b.title, seat=b.seat, model=b.model or self._main_ref(),
+        seat = b.seat  # an unseated core keeps whatever the client asked for (""/None included)
+        if self.seat is not None:
+            seat = b.seat or self.seat.name
+            if seat != self.seat.name:
+                raise CommandFailed(
+                    "bad_request", f"this core runs the {self.seat.name!r} seat; it cannot start a thread for seat {seat!r}"
+                )
+        info = await self.loop.create_session(title=b.title, seat=seat, model=b.model or self._main_ref(),
                                               cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
         why = self.cwd_note if not b.cwd else ""
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
@@ -653,7 +662,7 @@ class CoreRuntime:
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
-        return {"tasks": self.agents.list(b.session)}
+        return {"tasks": self.agents.list(b.session, active=b.active)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         self.approvals.respond(b)
@@ -691,6 +700,10 @@ class CoreRuntime:
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]
+        if getattr(self, "work_checkpoint", None) is not None:
+            own.append({"name": "checkpoint", "description": "record-derived continuity index", "args": ""})
+        if getattr(self, "work_notebook", None) is not None:
+            own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 
@@ -775,7 +788,7 @@ class CoreRuntime:
         value = cfg.get(b.key, _MISSING)
         if value is _MISSING:
             raise CommandFailed("not_found", f"{b.key} is not set")
-        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+        return {"key": b.key, "value": redact(value, b.key.split("."))}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
         require_principal("change settings")

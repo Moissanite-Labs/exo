@@ -18,6 +18,14 @@ read keeps the last good text. A few shorter spellings are accepted (top-level `
 `toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
 does not read are ignored.
 
+Four settings control name lists: `toolsets` (in `[tools]` or at the top level), `[tools] env_deny`, `[skills] load`,
+and top-level `plugins` or `[plugins] enabled`. A non-null non-list value such as `toolsets = "fs"` stops the seat from
+loading (`exo serve --seat` exits with the reason), rather than silently selecting a broader default. An empty list
+is an explicit selection. Omitted toolsets, env_deny and skills.load use every toolset, no additional environment
+denials and every skill respectively; omitted plugins, or a `[plugins]` table without `enabled`, uses the config.json
+default. For JSON files, null is treated as omitted for the first three settings, but an explicit null plugin
+selection is refused. TOML does not have a null value (exo-desktop #52, #988).
+
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name
 name = "scout"
@@ -59,6 +67,9 @@ cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.js
 
 [trace]                       # D-032: anomaly limits for this seat over config.json's [trace] (docs/TRACE.md)
 turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
+
+[permissions]                 # D-065: read once by the exo-gate plugin when the core starts
+mode = "bypass"               # start in permissions bypass (docs/GATE.md "Bypass mode"); omit or "ask" to ask
 ```
 
 The `[models]` tables (`roles`, `providers`, `models` for prices, `fake`) merge over config.json's `models`
@@ -73,8 +84,24 @@ that sets only `read_timeout = 300` under `[models.providers.openai]` keeps the 
 provider, a LAN server for example, and sends no key there unless config.json named one. A seat entry that sets
 `base_url` drops config.json's `key_env` and `headers`: no key or header token follows a new URL unless the seat names it.
 
+A seat file is on the gate's store list, so the agent cannot write `[permissions]` without asking you, even in
+bypass. A required tool executor (Exo OS) ignores `mode = "bypass"`.
+
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
+
+## Truthful seat attribution
+
+On a core running a seat, `session.create` attributes an omitted or empty `seat` to the
+loaded seat. An explicit matching name is accepted. A different name returns `bad_request`
+without creating a session. The message names both seats: `this core runs the 'worker' seat;
+it cannot start a thread for seat 'scout'`. Selecting a label does not load another profile
+or change the core's identity, permissions or memory scope. Use the other seat's core to
+create its session.
+
+An unseated core preserves the client's seat label for compatibility. That label alone is
+not proof of profile execution or a memory access boundary. This check governs new sessions;
+it does not isolate access to existing sessions.
 
 ## Skills
 
@@ -94,10 +121,17 @@ is never replaced: the clash is refused, listed under `refused` in the server's 
 
 ## Config and secrets
 
-`config.get` returns the effective config with secret-looking values masked. `config.set` writes
-`$EXO_HOME/config.json` and refuses secrets: names such as `api_key` or `token` (names ending `_env` are
-fine, they hold an environment variable name), literals under `env` or `headers` (use `"${VAR}"`), and
-values shaped like API keys. Changes apply on the next start.
+`config.set` writes `$EXO_HOME/config.json` and refuses secrets: literals under names such as `api_key` or
+`token` (names ending `_env` are fine, they hold an environment variable name), literals under `env` or `headers`
+(use `"${VAR}"`), and values shaped like API keys, even beside a `${VAR}`. A secret-shaped name guards everything
+beneath it, as `env` and `headers` do, so `{"token": {"a": "x"}}` is refused as `{"token": "x"}` is. Changes apply on
+the next start.
+
+`config.get` returns the effective config with each value `config.set` would refuse printed as `***`, so a file
+written by hand, or before a check existed, shows no secret either. `exo config show` and `exo config get` print the
+same values. All three judge a value by every part of its key path, so
+`exo config get plugin_config.exo-bus.headers.X-Auth` is masked as `show` masks it. A container whose own name looks
+like a secret, such as an MCP server named `github-token`, is masked whole and cannot be set with literals: rename it.
 
 ## Channels
 
@@ -112,7 +146,9 @@ the socket cannot hand in bus messages.
 Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` on the home's `run/exod.sock`,
 `exo tui --seat scout` and `exo tui --seat forge` are two cores, one per seat. So are two `exo serve --seat NAME`,
 each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
-to that server's seat. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+to that server's seat. `/new` sends the seat the window was started with, not a label copied from a resumed thread.
+If that name is a different seat, the core refuses, the window omits the name, and the new thread belongs to the
+core's seat. The window says which seat it joined. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
 all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
 
 - **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside

@@ -44,6 +44,7 @@ AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
     "new": ("session", "start a new thread: a fresh focus, same memory; /new private is not remembered"),
+    "tab": ("session", "open a new conversation in another terminal window: /tab [directory]"),
     "sessions": ("session", "pick one of this agent's threads to switch to"),
     "resume": ("session", "same as /sessions"),
     "fork": ("session", "fork this session"),
@@ -104,6 +105,7 @@ class ExoApp(App):
                                                border-left: outer $cold; }
     #welcome { margin: 1 0; }
     .peer { border-left: double $cold; }
+    #delegated-approvals { height: auto; padding: 0 2; color: $warning; }
     #activity { height: 1; color: $fg-3; padding: 0 2; background: $deep; }
     #compose { height: auto; background: $background; border-top: solid $line; padding: 0 2; }
     #prompt { width: auto; height: 1; margin-right: 1; }
@@ -160,8 +162,11 @@ class ExoApp(App):
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
-                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False) -> None:
+                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
+                 skip_permissions: bool = False, cwd: str | None = None, remote: bool = False) -> None:
         super().__init__()
+        self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
+        self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
         self.motion = not th.reduced_motion()
         self.boot_anim = boot_anim and self.motion  # only the real entry point asks; never under reduced motion
         self.boot_screen: BootScreen | None = None
@@ -189,8 +194,13 @@ class ExoApp(App):
         self.client = client
         self.session = session
         self.resume = resume
+        self.launch_seat = seat  # the --seat this window was started with; a resumed thread must not replace it
         self.seat = seat
         self.title_arg = title
+        self.remote = remote
+        self.local_cwd = os.getcwd()
+        self.new_cwd = cwd if remote else str(Path(cwd or self.local_cwd).expanduser().resolve())
+        self.session_cwd = self.new_cwd or ""
         self.model = ""
         self.memory = ""  # the memory plugin's state (a MEMORY_WORDS key; "" unknown), read once at boot
         self.clipboard_verified = False
@@ -213,6 +223,11 @@ class ExoApp(App):
         self.last_answer: tuple[str | None, str] = (None, "")
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
+        self.delegated_tasks: dict[str, dict] = {}
+        self.delegated_requests: dict[str, dict] = {}
+        self.delegated_closed: dict[str, int] = {}
+        self._delegated_revision = self._delegated_asked = self._delegated_shown = 0
+        self._delegated_stale = self._delegated_due = False
         self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
         self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
@@ -259,6 +274,7 @@ class ExoApp(App):
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
         self._loading = False
+        self.follow_end = True  # classic: the newest line stays in view as the transcript grows, until the reader scrolls up
 
     # ------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -267,6 +283,7 @@ class ExoApp(App):
             with Vertical(id="left"):
                 yield VerticalScroll(id="transcript")
                 yield Static("", id="activity")
+                yield Static("", id="delegated-approvals")
                 yield ComposeHeader()
                 with Horizontal(id="compose"):
                     yield PromptMark(PROMPT_IDLE, id="prompt")
@@ -285,10 +302,13 @@ class ExoApp(App):
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.set_interval(1.0, self.reconcile_approvals)
+        self.set_interval(3.0, self.refresh_delegated_approvals)
+        self.set_interval(3.0, lambda: self.run_worker(self.load_permissions(), exit_on_error=False))  # another window may switch it
         if self.motion:
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
         self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
+        self.watch(self.transcript, "virtual_size", self.follow_latest, init=False)
         self.refresh_status()
         if self.boot_anim:
             self.boot_screen = BootScreen()
@@ -337,21 +357,54 @@ class ExoApp(App):
         return kids[::-1] if self.inverse else kids
 
     def to_latest(self) -> None:
-        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts."""
+        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts.
+
+        Classic also keeps following the bottom (follow_latest): blocks paint in on_mount, so a slow terminal can lay
+        a long thread out in more than one step, and the first scroll lands short of the end (#1023)."""
         tr = self.transcript
-        tr.call_after_refresh(tr.scroll_home if self.inverse else tr.scroll_end, animate=False)
+        self.follow_end = True
+        if self.inverse:
+            tr.call_after_refresh(tr.scroll_home, animate=False)
+        else:
+            tr.call_after_refresh(self.follow_now)
+
+    def follow_latest(self) -> None:
+        """The transcript's content changed size: in classic, stay at the bottom unless the reader scrolled up."""
+        if self.follow_end and not self.inverse:
+            self.transcript.call_after_refresh(self.follow_now)
+
+    def follow_now(self) -> None:
+        """After the layout, ask again: a reader who scrolled up in the meantime keeps the place they chose."""
+        if self.follow_end and not self.inverse:
+            self.transcript.scroll_end(animate=False, immediate=True)
 
     def transcript_text(self) -> str:
         old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]  # history not mounted yet
         return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
                                 for w in self.chrono() if isinstance(w, (Block, ToolBlock))])
 
+    @property
+    def bypass(self) -> bool:
+        return self.perm.get("mode") == "bypass"
+
+    async def load_permissions(self) -> None:
+        """The core's permission mode for the banner. An older core or one without the gate leaves it empty."""
+        try:
+            out = (await self.client.call(s.CommandRun(name="permissions", args="json"))).get("output")
+        except Exception:
+            out = None
+        perm = out if isinstance(out, dict) else {}
+        if perm != self.perm:
+            self.perm = perm
+            self.refresh_status()
+
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
         pct = str(min(999, round(100 * self.ctx_tokens / self.window))) + "%" if self.window else "capacity unknown"
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
+        perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
+        return f"{perm}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -363,7 +416,8 @@ class ExoApp(App):
     def refresh_status(self) -> None:
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
                                         window=self.window, cache=self.cache_share, cost=self.cost_label(),
-                                        findings=self.findings)
+                                        findings=self.findings, bypass=self.bypass,
+                                        auto=int(self.perm.get("auto_approved") or 0))
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
         self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
@@ -481,6 +535,13 @@ class ExoApp(App):
                 await self.resume_or_new(self.session)
             else:
                 await self.new_session(announce=False)
+            if self.skip_permissions:  # the launch flag is this principal window sending /permissions bypass (D-065)
+                try:
+                    out = (await self.client.call(s.CommandRun(name="permissions", args="bypass launch"))).get("output")
+                    self.note(out if isinstance(out, str) else "permissions: bypass")
+                except Exception as exc:
+                    self.note(f"--skip-permissions: {getattr(exc, 'message', None) or exc}", "error")
+            await self.load_permissions()
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
@@ -505,9 +566,10 @@ class ExoApp(App):
     async def pump(self, since: int) -> None:
         try:
             async for ev in self.client.events(since=since, reconnect=True):
-                if ev.session not in (None, self.session):
-                    continue
                 try:
+                    self.observe_delegated(ev)
+                    if ev.session not in (None, self.session):
+                        continue
                     self.handle(ev)
                 except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
                     self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
@@ -678,7 +740,10 @@ class ExoApp(App):
             if b.usage is not None and (b.usage.input_tokens or b.usage.output_tokens or b.usage.cache_read_tokens
                                         or b.usage.cache_write_tokens):
                 self.calls_seen += 1
-                self.unpriced += b.usage.cost_usd is None
+                # A route that stopped on its spend limit leaves the figure a floor, so it carries the same "+"
+                # an unpriced call carries (D-093). The notice already said why in words.
+                self.unpriced += b.usage.cost_usd is None or any(
+                    a.get("outcome") == "spend_limit" for a in b.attempts)
             if b.usage is not None and (share := self.cache_of(b.usage)) is not None:
                 self.cache_share = share
             if (b.requested and b.route and b.requested != b.route) or any(
@@ -842,6 +907,7 @@ class ExoApp(App):
                 self.update_earlier_row()
                 return
             anchor = next((w for w in tr.children if w is not self.earlier_row), None)
+            self.follow_end = False  # the reader asked for older lines: the view goes to them, not to the bottom
             await tr.mount(*widgets, before=anchor if anchor is not None else 0)
             self.update_earlier_row()
             if anchor is not None:  # keep what the reader was looking at in place
@@ -850,6 +916,7 @@ class ExoApp(App):
             self._loading = False
 
     def watch_transcript_scroll(self, old: float, new: float) -> None:
+        self.follow_end = new >= self.transcript.max_scroll_y  # scrolled up: leave the reader there; back down: follow
         if not self.older:
             return
         if self.inverse:  # the oldest end is the bottom
@@ -864,12 +931,20 @@ class ExoApp(App):
         name = info.get("title") or str(info.get("id", ""))[-8:]
         return f"thread {name}" + (" (private)" if info.get("kind") == "private" else "")
 
+    def set_session_cwd(self, cwd: str | None) -> None:
+        self.session_cwd = cwd or ""
+        root = self.local_cwd if self.remote else self.session_cwd
+        if root and self.files.cwd != Path(root):
+            self.files = cm.FileIndex(root, executor_required=self.files.executor_required)
+
     async def load_session(self, sid: str, resume: bool = True) -> None:
         got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
         if sid != self.session:
             await self.leave_thread(sid)
         self.session = sid
+        self.draw_delegated_approvals()
         info = got["session"]
+        self.set_session_cwd(info.get("cwd"))
         self.busy = info.get("status") == "live"  # a turn already running there: LIVE, steer, ctrl+c stops it
         self.seat = self.seat or info.get("seat")
         self.model = info.get("model") or self.model
@@ -896,13 +971,39 @@ class ExoApp(App):
 
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
-        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
+        from exo.protocol.client import ClientError
+
+        # Send the seat this window was started with. self.seat is also a display label, and load_session
+        # fills it from a resumed thread, including one that belongs to another seat in this home.
+        joined: str | None = None
+        try:
+            got = await self.client.call(s.SessionCreate(
+                title=self.title_arg, seat=self.launch_seat, kind=kind, cwd=self.new_cwd))
+        except ClientError as exc:
+            if exc.code == "bad_request" and self.launch_seat and "cannot start a thread for seat" in exc.message:
+                # This window joined a core that runs a different seat (SEATS.md). Omit the name and use that core.
+                try:
+                    got = await self.client.call(s.SessionCreate(
+                        title=self.title_arg, seat=None, kind=kind, cwd=self.new_cwd))
+                except ClientError as again:
+                    self.note(f"error: {again.code}: {again.message}", "error")
+                    return
+                joined = (got.get("session") or {}).get("seat") or "this core"
+            else:
+                # A seat mismatch is the only refusal this window handles. Other failures still
+                # reach boot, which reports "cannot start" and keeps the event feed running.
+                raise
         await self.leave_thread()
         self.session = got["session"]["id"]
+        self.draw_delegated_approvals()
+        self.set_session_cwd(got["session"].get("cwd"))
         self.model = got["session"].get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(got["session"])
         self.clear_transcript()
+        if joined is not None:
+            # After the clear, so a startup thread still says which seat it joined.
+            self.note(f"this window asked for seat {self.launch_seat}; joined {joined}", "warn")
         if kind == "private":
             self.note(f"private thread {self.session}: logged here, never added to shared memory")
         elif announce:
@@ -1041,7 +1142,8 @@ class ExoApp(App):
         if self.hist.browsing or not c.at_end():
             self.sug = cm.Suggestion()
         else:
-            self.sug = cm.suggest(c.text, self.catalog, self.arg_ctx, self.files)
+            self.sug = cm.suggest(c.text, self.catalog, self.arg_ctx,
+                                  self.files if self.remote or self.session_cwd else None)
         if self.sug.need and self.sug.need not in self.arg_at:
             self.arg_at[self.sug.need] = time.monotonic()
             self.run_worker(self.fetch_ctx(self.sug.need), exit_on_error=False)
@@ -1146,7 +1248,9 @@ class ExoApp(App):
             rel = m.group(1).rstrip(".,;:)")
             p = Path(rel).expanduser()
             if not p.is_absolute():
-                p = Path(os.getcwd()) / p
+                if not self.remote and not self.session_cwd:
+                    continue  # an older core has not supplied an effective directory
+                p = self.files.cwd / p
             if rel in seen or not p.is_file():
                 continue
             seen.add(rel)
@@ -1362,6 +1466,38 @@ class ExoApp(App):
                 return
             await self.new_session("private" if args.strip() == "private" else "")
             self.hint("new_thread")
+        elif name == "tab":
+            from exo_tui import restart as rs
+            directory = args.strip() or self.session_cwd
+            if not directory:
+                self.note("choose a working directory: /tab <directory>", "warn")
+                return
+            if self.remote:
+                # This is a server-side path; file attachments remain local to this client.
+                cwd = directory
+            else:
+                from exo_tui import directory as checked_directory
+                path = Path(directory).expanduser()
+                if not path.is_absolute():
+                    path = Path(self.session_cwd or self.local_cwd) / path
+                try:
+                    cwd = checked_directory(str(path))
+                except ValueError as exc:
+                    self.note(str(exc), "warn")
+                    return
+            cmd = rs.new_command(cwd)
+            result = await asyncio.to_thread(rs.open_tab, cmd)
+            dropped = rs.dropped_permission_flags()
+            if dropped:
+                # The new window keeps --seat and EXO_HOME, so it joins this core (D-028, D-039) and the
+                # permission mode it gets is the core's, not the command line's (#669). The mode is read from
+                # the gate now, not from the cached banner, so the note is right when another window of this
+                # core changed it since this window last looked.
+                await self.load_permissions()
+                core = ("bypass still applies there" if self.bypass
+                        else "this core's permission mode still applies")
+                self.note(f"the new window runs without {' '.join(dropped)}: it joins this core, so {core}", "warn")
+            self.note("opened a new conversation window" if result == "opened" else "open a new window and run: " + result)
         elif name == "intro":
             await self.intro("manual")
         elif name == "handoff":
@@ -1420,6 +1556,8 @@ class ExoApp(App):
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
                     self.note(out if isinstance(out, str) else str(out))
+            if name == "permissions":
+                await self.load_permissions()
 
     # ------------------------------------------------------------ onboarding (D-030)
     async def intro(self, kind: str) -> None:
@@ -1733,6 +1871,102 @@ class ExoApp(App):
             self.window = self.capacities.get(ref, 0)
             self.refresh_status()
 
+    def observe_delegated(self, ev: s.Event) -> None:
+        """Observe only task/approval metadata globally; child content never enters this thread."""
+        b = ev.body
+        if not isinstance(b, (s.TaskUpdated, s.ApprovalRequested, s.ApprovalResolved)):
+            return
+        self._delegated_revision += 1
+        revision = self._delegated_revision
+        if isinstance(b, s.TaskUpdated):
+            task = dict(self.delegated_tasks.get(b.task_id, {}), task_id=b.task_id, revision=revision)
+            for key in ("title", "status", "child_session"):
+                if value := getattr(b, key):
+                    task[key] = value
+            if ev.session:
+                task["parent"] = ev.session
+            self.delegated_tasks[b.task_id] = task
+        elif isinstance(b, s.ApprovalRequested):
+            self.delegated_requests[b.request_id] = {"session": ev.session, "revision": revision}
+            self.delegated_closed.pop(b.request_id, None)
+            if ev.session not in (None, self.session) and not self._delegated_due:
+                self._delegated_due = True  # place it now, not on the next tick, with one read for a burst
+                self.run_worker(self.refresh_delegated_approvals(), exit_on_error=False)
+        else:
+            self.delegated_requests.pop(b.request_id, None)
+            self.delegated_closed[b.request_id] = revision
+        self.draw_delegated_approvals()
+
+    def draw_delegated_approvals(self) -> None:
+        edges = {t["child_session"]: t for t in self.delegated_tasks.values()
+                 if t.get("child_session") and t.get("parent") and t.get("status") in ("queued", "running")}
+        children = {}
+        for request in self.delegated_requests.values():
+            sid = request.get("session")
+            if not sid or sid == self.session:
+                continue
+            child, visited = sid, set()
+            while child in edges and child not in visited:
+                visited.add(child)
+                child = edges[child]["parent"]
+                if child == self.session:
+                    children[sid] = edges[sid]
+                    break
+        # A title is model text: a line break in it must not draw a second cue line.
+        lines = [f"Delegated approval{' (last known)' if self._delegated_stale else ''}: "
+                 f"{' '.join(str(task.get('title') or '').split()) or sid} ({sid}). /open {task['task_id']} to review."
+                 for sid, task in list(children.items())[:5]]
+        if len(children) > 5:  # /tasks lists only this thread's own tasks, so name the nested ones here
+            hidden = ", ".join(task["task_id"] for task in list(children.values())[5:])
+            lines.append(f"{len(children) - 5} more delegated threads need approval: {hidden}. "
+                         "/open <task> reviews one.")
+        for cue in self.query("#delegated-approvals").results(Static):
+            cue.update(Text("\n".join(lines)))
+            cue.display = bool(lines)
+
+    def delegated_pending(self, listed: list[dict], revision: int) -> dict[str, dict]:
+        """Open requests: the snapshot without those closed since it was asked for, plus newer events."""
+        pending = {a["request_id"]: {"session": a.get("session")} for a in listed
+                   if a.get("request_id") and self.delegated_closed.get(a["request_id"], 0) <= revision}
+        pending.update({rid: a for rid, a in self.delegated_requests.items() if a.get("revision", 0) > revision})
+        return pending
+
+    async def refresh_delegated_approvals(self) -> None:
+        """Task records alone prove ancestry. Merge events newer than either snapshot request. ``tasks.list`` is asked
+        only while another session has an open request, and only for active tasks: an unrelated window's request
+        must not pull every task ever written on each tick (#997)."""
+        self._delegated_due = False
+        self._delegated_asked += 1
+        asked, revision = self._delegated_asked, self._delegated_revision
+        tasks = None
+        try:
+            approvals = await self.client.send(s.ApprovalsList())
+            if not approvals.ok:
+                raise ValueError("metadata unavailable")
+            listed = approvals.result.get("approvals", [])
+            pending = self.delegated_pending(listed, revision).values()
+            if any(a.get("session") not in (None, self.session) for a in pending):
+                tasks = await self.client.send(s.TasksList(active=True))  # only queued and running tasks are edges
+                if not tasks.ok:
+                    raise ValueError("metadata unavailable")
+        except Exception:
+            if asked >= self._delegated_shown:
+                self._delegated_stale = True
+                self.draw_delegated_approvals()
+            return
+        if asked < self._delegated_shown:
+            return
+        self._delegated_shown = asked
+        if tasks is not None:  # keep only what the cue reads, not each row's brief and receipt
+            fresh = {t["task_id"]: {k: t.get(k) for k in ("task_id", "parent", "child_session", "title", "status")}
+                     for t in tasks.result.get("tasks", []) if t.get("task_id")}
+            fresh.update({tid: t for tid, t in self.delegated_tasks.items() if t.get("revision", 0) > revision})
+            self.delegated_tasks = fresh
+        self.delegated_requests = self.delegated_pending(listed, revision)
+        self.delegated_closed = {rid: version for rid, version in self.delegated_closed.items() if version > revision}
+        self._delegated_stale = False
+        self.draw_delegated_approvals()
+
     # ------------------------------------------------------------ approvals
     def show_approval(self) -> None:
         if self.card is not None or not self.approvals:
@@ -1790,6 +2024,7 @@ class ExoApp(App):
                     self.threadless.add(a.get("request_id", ""))
                 self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
             self.show_approval()
+        await self.refresh_delegated_approvals()
 
     async def close_card(self, request_id: str) -> bool:
         """True when this call closed the request's card; False when it was already gone."""
@@ -1872,9 +2107,9 @@ class ExoApp(App):
     def arrange(self) -> None:
         """Put the input, menu, activity line and transcript in the order the layout wants."""
         left = self.query_one("#left")
-        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.transcript]
+        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.query_one("#delegated-approvals"), self.transcript]
         if not self.inverse:
-            order = [self.transcript, self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
+            order = [self.transcript, self.query_one("#delegated-approvals"), self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
         prev = None
         for w in order:
             if prev is None:

@@ -125,8 +125,21 @@ class ThreadSrc:
 
 GEOMETRY = ("(()=>{const l=document.querySelector('.xc-log');const i=document.querySelector('.xc-input');"
             "return {top:l.scrollTop,h:l.scrollHeight,c:l.clientHeight,page:window.scrollY,inputY:i.getBoundingClientRect().top,"
-            "inH:innerHeight,first:l.firstElementChild.textContent,last:l.lastElementChild.textContent,"
+            "inH:innerHeight,rects:Object.fromEntries(['.xc-chat-main','.xc-composer','.xc-stage','.xc-input'].map(s=>{const r=document.querySelector(s).getBoundingClientRect();return [s,{top:r.top,bottom:r.bottom,left:r.left,right:r.right}]})),first:l.firstElementChild.textContent,last:l.lastElementChild.textContent,"
             "msgs:document.querySelectorAll('.xc-msg').length}})()")
+
+
+def assert_layout_geometry(g, layout):
+    """Composer order is relative to the column, independent of host frame origin."""
+    main, composer, stage, field = (g["rects"][s] for s in (".xc-chat-main", ".xc-composer", ".xc-stage", ".xc-input"))
+    for rect in (composer, stage):
+        assert main["top"] <= rect["top"] < rect["bottom"] <= main["bottom"] + 1
+        assert main["left"] <= rect["left"] < rect["right"] <= main["right"] + 1
+    assert composer["top"] <= field["top"] < field["bottom"] <= composer["bottom"]
+    if layout == "inverse":
+        assert composer["bottom"] <= stage["top"] + 1
+    else:
+        assert stage["bottom"] <= composer["top"] + 1
 
 
 @pytest.fixture
@@ -140,9 +153,10 @@ def page():
 def open_chat(srv, b, layout):
     b.goto(srv.url())
     b.eval(f'localStorage.setItem("xc-layout", "{layout}")')
-    b.goto(srv.url())
+    b.reload()   # a second goto() would keep the document and remount the view later (see Browser.reload)
     b.wait("document.querySelectorAll('.xc-msg').length > 20")
     b.wait("(()=>{const l=document.querySelector('.xc-log');return l.scrollHeight > l.clientHeight})()")
+    b.settle()   # the stream's start-up catch-up has redrawn the transcript, so the geometry below is final
     b.eval("new Promise((r) => setTimeout(r, 700))")   # the fade-in and the frame callback have run
     return b.eval(GEOMETRY)
 
@@ -153,6 +167,7 @@ def test_classic_opens_at_the_newest_item_at_the_bottom(page):
     g = open_chat(srv, b, "classic")
     assert g["h"] > g["c"] and abs(g["top"] - (g["h"] - g["c"])) < 2     # scrolled to the end of the log
     assert g["page"] == 0 and 0 < g["inputY"] < g["inH"]                  # the page itself does not scroll; the box is on screen
+    assert_layout_geometry(g, "classic")
     assert g["last"].startswith("answer 39") and g["first"].endswith("question 0")
 
 
@@ -161,7 +176,7 @@ def test_inverse_opens_with_the_box_on_top_and_the_newest_item_under_it(page):
     srv, b = page
     g = open_chat(srv, b, "inverse")
     assert g["top"] == 0 and g["page"] == 0
-    assert g["inputY"] < 120                                              # the box sits at the top of the column
+    assert_layout_geometry(g, "inverse")
     assert g["first"].startswith("answer 39") and g["last"].endswith("question 0")
     assert b.eval("document.querySelector('.xc-chat-main').classList.contains('xc-inverse')")
     order = b.eval("[...document.querySelector('.xc-chat-main').children].map(e=>e.className.split(' ')[0])")
@@ -214,3 +229,83 @@ def test_a_new_message_in_classic_lands_at_the_bottom_and_keeps_the_view_there(p
     b.wait("document.querySelector('.xc-log').lastElementChild.textContent.includes('streaming now')")
     g = b.eval(GEOMETRY)
     assert abs(g["top"] - (g["h"] - g["c"])) < 2
+
+
+@needs_chrome
+@pytest.mark.parametrize("layout", ["classic", "inverse"])
+def test_status_instruments_and_notices_fit_after_window_and_pane_resize(page, layout):
+    srv, b = page
+    open_chat(srv, b, layout)
+    # Mount demanding status contents in the real themed chat. The longer estimate
+    # also covers the experimental display without depending on its unmerged JS.
+    b.eval('''(() => {
+      const strip = document.querySelector('.xc-strip');
+      const cell = (label, value, cls = '') => {
+        const node = document.createElement('span'); node.className = cls;
+        const key = document.createElement('span'); key.className = 'xc-i'; key.textContent = label;
+        const val = document.createElement('span'); val.className = 'xc-v'; val.textContent = value;
+        node.append(key, val); return node;
+      };
+      const model = cell('model', 'provider/' + 'long-model-name-'.repeat(8), 'xc-model');
+      const fallback = document.createElement('span'); fallback.className = 'xc-via';
+      fallback.textContent = '← fallback'; model.append(fallback);
+      const state = cell('state', 'working', 'xc-state on');
+      const wire = document.createElement('span'); wire.className = 'xc-wire';
+      const notice = document.createElement('span'); notice.className = 'xc-flash';
+      notice.textContent = 'Repeated call detected: exec_command; check the last result before repeating. ' + 'unbroken'.repeat(35);
+      strip.replaceChildren(state, model,
+        cell('memory', 'Estimated next call: about 15k. Limit unknown. Next model: gpt-6.1-sol.', 'xc-opt'),
+        cell('last call', '14k input tokens'), cell('cache', '72%', 'xc-opt'),
+        cell('findings', '2', 'xc-opt'), cell('cost', 'unknown'), wire, notice);
+    })()''')
+    for width, pane in [(2000, None), (1460, None), (1460, 320), (900, None), (360, None), (2000, None)]:
+        b.resize(width, 1000)
+        b.eval(f"document.querySelector('.xc-chat').style.gridTemplateColumns = {json.dumps('224px 320px 340px' if pane else '')}")
+        got = b.eval('''(() => {
+          const strip = document.querySelector('.xc-strip'), box = strip.getBoundingClientRect();
+          const visible = el => el.getClientRects().length && getComputedStyle(el).display !== 'none';
+          const bad = [...strip.querySelectorAll('.xc-i, .xc-v, .xc-via, .xc-flash')].filter(visible).filter(el => {
+            const range = document.createRange(); range.selectNodeContents(el);
+            return [...range.getClientRects()].some(r => r.left < box.left - 1 || r.right > box.right + 1 ||
+              r.top < box.top - 1 || r.bottom > box.bottom + 1) || el.scrollWidth > el.clientWidth + 1;
+          }).map(el => el.textContent);
+          const notice = strip.querySelector('.xc-flash').getBoundingClientRect();
+          return {bad, width: box.width, scroll: strip.scrollWidth,
+            page: document.documentElement.scrollWidth, viewport: innerWidth,
+            model: strip.querySelector('.xc-model .xc-v').getBoundingClientRect().width,
+            noticeWidth: notice.width, wire: getComputedStyle(strip.querySelector('.xc-wire')).display};
+        })()''')
+        assert not got["bad"], (layout, width, pane, got)
+        assert got["scroll"] <= got["width"] + 1, got
+        assert got["page"] <= got["viewport"] + 1, got
+        assert got["model"] > 20 and abs(got["noticeWidth"] - got["width"]) < 2, got
+        assert got["wire"] != "none", got
+
+
+@needs_chrome
+@pytest.mark.parametrize("layout", ["inverse", "classic"])
+@pytest.mark.parametrize("width,height,offset", [(1440, 900, 0), (1024, 900, 80)])
+def test_long_conversation_geometry_follows_the_host_frame(layout, width, height, offset):
+    srv = Served(ThreadSrc())
+    try:
+        with Browser(width=width, height=height) as b:
+            open_chat(srv, b, layout)
+            if offset:
+                b.eval(f"(()=>{{const frame=document.querySelector('.xc-chat');frame.style.transform='translateY({offset}px)';frame.style.height='calc(100dvh - {89 + offset}px)'}})()")
+                b.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
+            if offset and layout == "classic":
+                # Resize changes the scroll range; restore the same newest-message view for this geometry probe.
+                b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop=l.scrollHeight})()")
+            g = b.eval(GEOMETRY)
+            assert_layout_geometry(g, layout)
+            assert g["page"] == 0 and g["h"] > g["c"]
+            assert 0 <= g["inputY"] < g["inH"]
+            if layout == "inverse":
+                assert g["top"] == 0 and g["first"].startswith("answer 39")
+                if offset:
+                    assert g["inputY"] > 120  # valid shifted frame contradicts the former absolute threshold
+            else:
+                assert abs(g["top"] - (g["h"] - g["c"])) < 2
+                assert g["last"].startswith("answer 39")
+    finally:
+        srv.close()

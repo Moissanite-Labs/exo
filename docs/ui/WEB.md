@@ -1,10 +1,65 @@
 # Web client look (D-031)
 
-The web client (`plugins/exo-command/exo_command/static/`) now speaks the language of the project site
-(`site/assets/style.css`, the `figure.term` section): same tokens, hairlines instead of boxes, mono uppercase
-labels, `·` as the separator, orange only for the one thing that matters, cold blue for what the system knows.
-Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
-or file from outside.
+The web client (`plugins/exo-command/exo_command/static/`) is a shared workspace for a person and an agent.
+Conversation text uses a readable sans serif face; code and measurements use monospace. Angular forms,
+quiet surface levels and the orange accent retain the project's identity. Strong color identifies the
+current action, attention requests and errors. Text names each state as well.
+
+The application bar keeps navigation, connection state and Appearance available across views. Dark is the
+default; Light and System are explicit choices. Only that choice is saved in browser storage, alongside
+the existing conversation layout preference. No font, asset or dependency loads from another site.
+
+Navigation links support browser Back and Forward. The keyboard skip link moves directly to the main
+content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
+“Connected” describes the event connection, while the conversation reports its own work state.
+
+## Native display preferences
+
+An installed desktop host may inject `window.__exoDesktopPrefs` before scripts run. The shared web client
+validates its display choices and gives them priority over browser storage left behind on a reused loopback
+port. Browser-only sessions retain their current storage behavior. The host owns persistence and its seat/core
+scope; this bridge does not open a file or infer a seat from conversation data.
+
+Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scroll` fraction cross
+`window.webkit.messageHandlers.exoDesktop.postMessage`. Thread IDs accept letters, digits, underscores and
+hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
+No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
+Open request takes priority over the restored view/thread. The conversation list is bounded, so restoration fetches the saved thread directly and keeps its returned
+metadata visible in the chooser. Only an exact session 404 clears the saved pointer and leaves the chooser
+open. A failed list or other failed transcript read preserves the saved thread and fraction; a successful
+reconnect can finish the initial restore. Restoration uses the ordinary conversation-open event buffer, so
+live messages and tool state arriving during the snapshot read are reconciled afterward. A reconnect
+waits for an active open to finish; queued recovery belongs to that selection and is discarded on navigation
+or unmount. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+saved-thread response from changing a newer selection, and unmount cancels restoration.
+
+A host with no saved thread opens the latest conversation, as a browser does. That covers a first launch and a
+launch after a 404 cleared the pointer. Only the load whose exact read returned 404 leaves the chooser open.
+
+When the stream catches up, the redraw keeps the reader's place in a native page as in a browser ("Reading
+position" under "What is where"). The host then stores that place. While the reader scrolls, the page sends the
+scroll fraction at most once every 250 ms, because each message is a write to the host's preferences. It sends the
+latest fraction at once when the page is hidden or closed (`visibilitychange`, `pagehide`), the conversation
+changes or the view unmounts.
+
+`petMode` comes from the Exopet display control, a `select.xc-pet-mode` that Exopet (#826) adds to the page. The
+page listens for its change event from the start, so a choice made while start-up is loading is saved too. Until
+#826 lands, Exo has no such control and sends no `petMode`.
+
+## Conversation drafts and unconfirmed sends (D-045)
+
+Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
+visiting another web view restores that conversation's draft. New thread starts with its own composer;
+returning to the source conversation restores its draft. The initial composer belongs to the conversation
+created by its first submission. Drafts live only in JavaScript memory, never browser storage or the core.
+Reloading or closing the page discards them.
+
+While a submission is pending, Send says “Sending…” and repeated Enter does not submit it twice. You can
+keep drafting or visit another conversation. If the reply fails, the original text returns to an unchanged
+empty composer. If you wrote something newer, “Restore text” adds the failed text ahead of that newer
+draft when you choose it. Recovery stays with the originating conversation, including through view changes.
+Check the transcript before sending again: an unconfirmed reply may have reached the core. Nothing retries
+automatically. “Dismiss” removes the recovery notice; it does not erase the current draft.
 
 ## Connecting to the core (D-036)
 
@@ -23,6 +78,12 @@ When the core ends the event stream (a restart, or a stream 4,096 events behind,
 replays from the last event it applied, so no reply or approval card is lost. That holds up to 16,384 missed
 events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
 start, so an approval asked before them does not show.
+
+Stopping the page waits for open HTTP handlers to finish their cleanup before `close()` returns (#1018).
+A handler that starts the shutdown is not cancelled, and it is not asked to wait for itself. A connection
+accepted while that drain is running is closed and is not served. `start()` raises while the drain is still
+running, so a second launch cannot replace a server that has not finished stopping. On Python 3.11 this wait
+is what keeps a caller that then stops the event loop from leaving a connection task unfinished.
 
 ## Opening the page and the page token (D-039)
 
@@ -78,6 +139,13 @@ same-origin or none. Besides the launch route, only the page shell (`/`, `/stati
 Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
 below.
 
+`POST /api/approvals/<id>` takes a JSON object with `decision` (`allow`, `deny` or `allow_always`) and an optional
+`note`. An array, null or scalar gets 400 with `{"error": "body must be a json object"}` before any approval answer
+reaches the core; malformed JSON keeps its 400 `{"error": "bad json"}` response (#740).
+JSON deeper than the decoder supports gets that same approval error. The shared body reader used by chat and
+provider POSTs rejects such input with its existing 400 `{"error": "body must be a json object"}` response
+(follow-up to #751).
+
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
 credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
@@ -119,6 +187,11 @@ the policy and does not run with it.
 
 ## Screens
 
+Current workspace samples are `docs/ui/workspace-dark.png`, `workspace-light.png` and
+`workspace-mobile.png`. They contain synthetic conversations. `scripts/shots_workspace.py OUTDIR`
+renders both themes at 320, 390, 768, 1024 and 1440 pixels and records viewport geometry. It uses a
+temporary browser profile and a stand-in server, without a real core or credentials.
+
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
 instrument column on the right), `web-02-turn.png` (a turn with tools running), `web-03-approval.png` (an
 approval panel) and `web-04-memory.png` (the memory column filled in). `scripts/promo_shots_web.py` makes them.
@@ -126,13 +199,15 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 ## What is where
 
-- **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
-  pulses orange while a turn runs and is hollow when idle.
-- **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
+- **Brand bar.** The Exo mark, selected conversation, navigation links, Appearance and connection state.
+  The square activity indicator turns orange while a turn runs and is hollow when idle.
+- **Status strip** (wrapping instruments, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
   `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
+  Instruments wrap within the available conversation width; model names and values remain readable. Notices
+  occupy a full row and wrap, including long unbroken text, in both classic and inverse layouts.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
   and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with
@@ -151,7 +226,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
-  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  automatically. Each card shows the answer sequence for its available options and says "Ctrl+F to focus the first
+  approval". The help changes during always confirmation and deny-note entry. A deliberately focused card has an
+  accent outline. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
@@ -162,15 +239,35 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   message has the sender in the header, a grey rule and the line "from another session, not from you": it never
   looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
   (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
-  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
-- **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
-  `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
+  live `peer.message` and its stored message make one card.
+- **Composer.** A framed writing area with a separate action row. The desktop prompt says `steer ›` instead of
+  `›` while a turn runs. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
   not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
   thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
-- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
-  the core `rename` built-in, principal only (D-069).
+- **Conversation list.** Find a conversation filters loaded titles, IDs and agent names. The count names its
+  loaded scope; this is not full-history or message search. The status selector shows all conversations,
+  working conversations or those with an approval waiting. Search and filtering do not switch the active
+  conversation or touch its draft. Clear or Show all conversations resets the search.
+  The list comes from `GET /api/chat/sessions`, which takes a `limit` from 1 to 500 (100 when none is given).
+  A larger limit is cut to 500. A limit below 1, or one that is not a number, gets a 400 and sends nothing to
+  the core: SQLite reads a negative `LIMIT` as no limit, so `limit=-1` used to return every session (exo-desktop #55).
+  Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
+  search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
+  does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
+  Each thread has a Rename button. It opens a labeled title field with Save and Cancel.
+  Enter saves and Escape cancels. Double-click also opens this editor (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069). Renaming another thread does not select it or change the
+  current composer draft. A refused save keeps the title draft and shows the error.
+  The page asks for the thread list again after each change, and two such requests can answer in either
+  order. Only an answer to a later request replaces the list on screen, so a list asked for before a new
+  thread existed cannot hide that thread once a newer list shows it (#859).
+- **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
+  It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
+  readers already at the newest item continue following it. So does the redraw each time the event stream catches
+  up, on load and after a reconnect, when the page reads the conversation again. Before, that redraw moved the
+  reader back to the newest item. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -181,18 +278,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
   whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
   reconnects and gets the reset.
-- **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
-  route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
-  `?boot=0`, and after the first time in a tab.
+- **Startup.** The workspace opens directly. Connection status and authentication errors remain visible;
+  there is no timed boot overlay or duplicate startup request for a visual check sequence.
 
 ## Empty thread and instrument column
 
-- An empty thread shows the site's hero: the masked hairline grid and the node shell around an orange core
-  (`hero.js`, ported from `site/assets/main.js`), behind a brand block (`E X O`, agent, model, memory line)
-  and key hints as chips. It fades out when the first item arrives. It draws about 24 frames a second with the
-  pixel ratio capped at 1.5, stops when the tab is hidden or the canvas is off screen, and draws one still
-  frame under reduced motion. Measured in headless Chrome on an idle empty thread: 1.7 percent main-thread
-  time with motion, 0.0 percent with reduced motion.
+- An empty thread asks “What are we working on?” with a short prompt and relevant keyboard hints.
+  Its presentation is static. Opening an empty conversation starts no canvas animation,
+  observers or model calls. The prompt disappears when the first transcript item arrives.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
   ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
@@ -231,7 +324,14 @@ not move the backoff on. So a long core restart never turns a core command into 
 as soon as the core answers. An older core that answers `unknown_command` or `unsupported` for `commands.list` also
 counts as an answer (`core` is `[]`); a core-only name the page then cannot know goes as a message.
 A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
-a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
+a finished job, open findings, a slow turn, a long thread). A failed call reads its own error and the errors of its
+attempts, since a failure before any output ends as "all routes for 'main' failed or are cooling down" and its cause
+is only in the attempts (#855). A refusal (`HTTP 401` or `HTTP 403`, an invalid or missing key, a permission denial,
+the router's "rejected the key", "refused the login" or "no credentials for role") may point at the Providers page.
+A transport failure (`ReadError`, `ReadTimeout`, `ConnectError` and the like) says the model could not be reached,
+offers no key advice, and Tab fills in `/trace`. An error that reads as neither, a spend limit included, points at
+`/trace` (D-092). Each of the three keeps its own count of two a session. The line shows one new tip per 25 seconds
+at most, and it is off when the core
 config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
 yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back; an
 unset key, which the core answers with `not_found`, is on, and the asking ends once both answers are in),
@@ -247,11 +347,16 @@ with the approval cards under it, then the thread with the newest item first; cl
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
-(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+(`localStorage` key `xc-layout`; Appearance uses the separate `xc-appearance` key). The code is `static/layout.js` (pure, tested in node)
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
-DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+DevTools (`tests/browser.py`, skipped when Chrome is missing). The driver turns off Chrome's throttling of background
+timers and frames, and the suite's summary line names the Chrome binary and version it drove, so a CI log shows which
+build a layout failure came from (#907). When a wrapped status and composer exceed the available
+height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
+pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
+its bounded height when the chat column scrolls.
 
 ## Cost and jobs (D-032)
 
@@ -274,6 +379,29 @@ need the page token: `exo web` prints a link with `#token=...`; the page moves i
 tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
 routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider
 is ready, the Chat view shows one quiet line with a link to this tab.
+
+When the model list cannot be fetched the tab says why: a core that never answered, one that answered and
+refused this page, or one whose own call failed. A core on TCP that refuses this web process's bearer token
+(`exo web --url URL --token-file FILE` with a stale token) is a refusal too, and the sentence names the token
+file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
+`error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
+the "Try again" button appears only for the transport class, because a refusal would answer the same way.
+A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
+"Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
+section, so focus then moves to "Try again" when it is offered again, or else to the model select. A refusal
+with no list leaves neither, so focus moves to the refusal message. An empty list removes the section, so focus
+moves to the workspace.
+
+Focus moved to another Providers control while the retry ran, such as a provider's Test button, the model select
+or "Add custom provider", is on that control again once the reply is drawn (#1014). An open custom provider form
+is not redrawn, so focus in it stays put. Focus moved out of the Providers panel while the retry ran stays where
+it is.
+
+While a key typed into a provider's field is waiting there (the field has focus and holds text), the provider
+rows are not redrawn, so the key and its field stay as they are. The rest of the page is still drawn. The readout at
+the top shows a new default or ready count. Below the rows, a retry's reply shows the list or a new "Try again", and
+a saved custom provider's form closes and shows the entry (#1099, #1100). Add custom provider, Edit and Cancel work
+as at any other time.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.
@@ -300,6 +428,18 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
+  Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
+  drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
+  Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
+  and run now act at once, ignore the second click of a double click, and disable that job's buttons while an edit
+  is in flight. Other jobs remain usable; a failed edit restores the buttons. Keyboard activation remains available.
+  Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
+  while focus is in the step, closes it and puts focus back on remove. While the remove is in flight the step stays,
+  with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
+  for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
+  the first step as it is. A failed remove shows the error and puts focus on that card's remove, unless focus is on
+  a control outside the job list by then, such as a form field. Each redraw replaces the buttons in the list, so
+  focus on another card's button does not stay.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
@@ -307,8 +447,20 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   jump back to its top each time.
   Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
+  Focus moves to Cancel when the confirm opens. Cancel, or Escape while focus is in the confirm, puts it back on
+  allow always. A redraw on a core event keeps focus on the same approval button.
+  While an answer is in flight, every button on its card is disabled, and an allow always answer keeps its confirm
+  (#1117). Cancel cannot stop a POST that is out, and a second click would send a second answer. A redraw on a core
+  event keeps the card disabled, and each card waits for its own answer. A failed answer shows the error and gives
+  the card its buttons back, with focus on the button for that answer. Focus on another approval's button, or on a
+  control outside the page such as the nav, stays where it is.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
+- **Providers** offers a Google AI Studio Gemini key using Google's OpenAI-compatible endpoint and a custom provider form
+  for OpenAI Chat Completions or Anthropic Messages. Custom endpoint settings apply after the core restarts; keys use the
+  existing secret store. Endpoint changes use a separate key reference. See `docs/PROVIDERS.md` for protocol and URL limits.
+  Add requires a new name; use Edit to replace an existing entry. Other provider actions can show status while the
+  custom form retains its in-progress fields.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals
@@ -321,8 +473,9 @@ table and snapshot stubbed, no key read) and shoots every tab with data and empt
 
 ## Motion and accessibility
 
-Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
-turns them all off and hides the boot. The page is dark only, like the site, and paints its own background.
+Motion respects `prefers-reduced-motion: reduce`. Focus remains visible in both themes. Appearance can
+follow the operating system or keep an explicit light or dark choice. The mobile composer puts its writing
+area above its actions so a narrow window does not squeeze the text between buttons.
 
 ## Fix found on the way
 
@@ -343,3 +496,12 @@ The Providers shots use a stub `/api/providers` table with demo names (no real s
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.
+
+### Chat notice ownership
+
+The chat status strip shows notices for the selected session only. Unscoped notices do not replace its
+status. Model retry and fallback notices carry `source: model_route` and a `call_id` matching the
+`model.call` record. A successful matching call clears that transient warning; another call cannot.
+Turn completion clears any remaining route warning, while newer general notices and command errors
+remain visible. Attempt details remain in the model-call records. Older cores without these fields retain
+notices until another status message or thread selection replaces them.

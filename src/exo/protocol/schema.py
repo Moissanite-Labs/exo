@@ -265,6 +265,7 @@ class SkillsList:
 @command("tasks.list")
 class TasksList:
     session: str | None = None
+    active: bool = False  # True: only queued and running tasks, not every task ever written (#997)
 
 
 @command("seat.list")
@@ -564,7 +565,9 @@ class PeerDelivery:
 @event("model.call")
 class ModelCall:
     """One model call as the harness saw it (D-025): what was asked, which route served it, every attempt.
-    attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."""
+    attempts: [{route, outcome: ok|timeout|spend_limit|error|fallback, error, ms}]. An outcome of spend_limit means
+    the provider said the route is over its spend limit (HTTP 402), so the call's cost figure is a floor.
+    ttft_ms is None when nothing streamed."""
 
     iteration: int = 0
     role: str = ""  # the router role asked for, when the provider is a router
@@ -577,6 +580,7 @@ class ModelCall:
     stop_reason: str = ""
     error: str = ""
     retries: int = 0  # loop-level retries before this outcome
+    call_id: str = ""  # assistant message ID identifying this model call
 
 
 @event("harness.error")
@@ -594,6 +598,8 @@ class HarnessError:
 class Notice:
     text: str
     level: Literal["info", "warn"] = "info"
+    source: str = ""  # model_route identifies a transient routing warning
+    call_id: str = ""  # matching ModelCall; empty on legacy/general notices
 
 
 @event("error")

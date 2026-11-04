@@ -97,6 +97,28 @@ def test_correction_survives_compaction_verbatim(tmp_path, monkeypatch):
     pm.slots.memory.shutdown()
 
 
+def test_a_hosts_undo_reaches_exo_context_through_exo_memory(tmp_path, monkeypatch):
+    """#389: Hermes tells only its memory provider about /undo. With both plugins loaded as a host loads them,
+    exo-memory's switch notice reaches exo-context, which drops the undone correction's pin, and the next turn's
+    block leaves it out."""
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "home"))
+    pm = PluginManager(config={"exo-context": {"handoff_dir": str(tmp_path / "handoffs")}})
+    for name in ("exo-memory", "exo-context"):
+        rec = pm.load_folder(REPO / "plugins" / name)
+        assert rec.ok, rec.error
+    ctx, mem = pm.slots.context, pm.slots.memory
+    convo = [{"role": "system", "content": "sys"}, {"role": "user", "content": "Please tidy the release notes."},
+             {"role": "assistant", "content": "Done."}]
+    ctx.on_session_start("hermes-1")
+    ctx.select_context(convo + [{"role": "user", "content": CORRECTION}])
+    pinned = tmp_path / "home" / "context-pins" / "hermes-1.json"
+    assert CORRECTION in pinned.read_text()
+    mem.on_session_switch("hermes-1", rewound=True)  # what Hermes's /undo does, and all it does
+    assert CORRECTION not in pinned.read_text()
+    out = ctx.select_context(convo + [{"role": "user", "content": "What are we doing now?"}])
+    assert out is None or CORRECTION not in out[0]["content"]
+
+
 def test_pins_survive_a_restart(tmp_path, monkeypatch):
     """A new process (new engine, same EXO_HOME and session) still pins the correction."""
     eng, pm, rec = _engine(tmp_path, monkeypatch)

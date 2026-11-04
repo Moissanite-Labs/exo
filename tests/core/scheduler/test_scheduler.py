@@ -19,6 +19,9 @@ from exo.core.seats import Seat
 from exo.core.types import ProviderEvent, ToolSpec
 from exo.core.agents.delegate import BLOCKED_TOOLS
 from exo.protocol import schema as s
+from exo import principal as pr
+from exo.server.app import Dispatcher
+from exo.server.engine import CommandFailed
 
 
 def aio(fn):
@@ -49,6 +52,16 @@ class Clock:
 
 def bodies(eng, cls):
     return [e.body for e in eng.hub.since(0) if isinstance(e.body, cls)]
+
+
+async def edit(scheduler, body):
+    caller = pr.Caller("principal:test")
+    token = pr.CALLER.set(caller)
+    try:
+        return await scheduler.edit(body)
+    finally:
+        caller.live = False
+        pr.CALLER.reset(token)
 
 
 def test_cron_parse_fields():
@@ -180,9 +193,9 @@ def test_add_list_remove_and_due(tmp_path):
 @aio
 async def test_run_now_emits_task_and_notice(tmp_path):
     eng = mk(tmp_path)
-    r = await eng.scheduler.edit({"action": "add", "when": "every 1h", "prompt": "make the report", "title": "Report"})
+    r = await edit(eng.scheduler, {"action": "add", "when": "every 1h", "prompt": "make the report", "title": "Report"})
     jid = r["job"]["id"]
-    r = await eng.scheduler.edit({"action": "run_now", "job_id": jid})
+    r = await edit(eng.scheduler, {"action": "run_now", "job_id": jid})
     assert r["task_id"]
     await eng.scheduler.wait()
     ev = [t for t in bodies(eng, s.TaskUpdated) if t.task_id == r["task_id"]]
@@ -195,6 +208,126 @@ async def test_run_now_emits_task_and_notice(tmp_path):
     assert notes and notes[-1].text == "Report: the report" and notes[-1].level == "info"
     job = eng.scheduler.get(jid)
     assert job["last_status"] == "done" and job["last_run"]
+
+
+@pytest.mark.parametrize("caller", ["local", "unknown", "seat:helper", "channel", "stdio"])
+@pytest.mark.parametrize("action", ["add", "pause", "resume", "run_now", "remove"])
+@aio
+async def test_schedule_mutations_need_principal_and_leave_jobs_untouched(tmp_path, caller, action):
+    eng = mk(tmp_path)
+    sch = eng.scheduler
+    job = sch.add("every 1h", "original job")
+    before = sch.list()
+    try:
+        result = await Dispatcher(eng, caller=caller).run(s.Command.of(s.ScheduleEdit(
+            action=action, job_id=job["id"], when="every 1m", prompt="replacement")))
+        assert not result.ok and result.error.code == "forbidden"
+        assert sch.list() == before and not sch.running
+        assert not bodies(eng, s.TaskUpdated)
+        listing = await Dispatcher(eng, caller=caller).run(s.Command.of(s.ScheduleEdit(action="list")))
+        assert listing.ok and listing.result["jobs"] == before
+    finally:
+        await eng.close()
+
+
+@pytest.mark.parametrize("caller", ["principal:tui", "principal:web"])
+@aio
+async def test_principal_can_manage_every_schedule_action(tmp_path, caller):
+    eng = mk(tmp_path)
+    d = Dispatcher(eng, caller=caller)
+
+    async def edit(action, **kw):
+        result = await d.run(s.Command.of(s.ScheduleEdit(action=action, **kw)))
+        assert result.ok, result.error
+        return result.result
+
+    try:
+        job = (await edit("add", when="every 1h", prompt="the report"))["job"]
+        assert (await edit("list"))["jobs"] == [job]
+        assert (await edit("pause", job_id=job["id"]))["job"]["paused"]
+        assert not (await edit("resume", job_id=job["id"]))["job"]["paused"]
+        assert (await edit("run_now", job_id=job["id"]))["task_id"]
+        await eng.scheduler.wait()
+        assert eng.scheduler.get(job["id"])["last_status"] == "done"
+        assert (await edit("remove", job_id=job["id"]))["removed"] == job["id"]
+        assert (await edit("list"))["jobs"] == []
+    finally:
+        await eng.close()
+
+
+@pytest.mark.parametrize("stamped", [False, True])
+@pytest.mark.parametrize("direct", [False, True])
+@aio
+async def test_schedule_mutation_refuses_missing_or_expired_principal(tmp_path, stamped, direct):
+    eng = mk(tmp_path)
+    token = pr.CALLER.set(pr.Caller("principal:tui", live=False) if stamped else None)
+    try:
+        method = eng.scheduler.edit if direct else eng._schedule_edit
+        with pytest.raises(CommandFailed, match="forbidden"):
+            await method(s.ScheduleEdit(action="add", when="every 1h", prompt="report"))
+        assert eng.scheduler.list() == []
+        assert await eng._schedule_edit(s.ScheduleEdit(action="list")) == {"jobs": []}
+    finally:
+        pr.CALLER.reset(token)
+        await eng.close()
+
+
+@pytest.mark.parametrize("name", sorted(BLOCKED_TOOLS))
+@aio
+async def test_scheduled_model_cannot_call_a_blocked_tool_even_when_gate_allows(tmp_path, name):
+    eng = mk(tmp_path, [tool_turn(name, call_id="blocked"), "report"])
+    ran, gate = [], []
+    eng.registry.register(ToolSpec(name=name, description="blocked tool", risk="low", toolset="test"),
+                          lambda args, ctx: ran.append(name) or "should not run", replace=True)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: gate.append(kw["tool_name"]) or {"action": "allow"})
+    try:
+        sch = eng.scheduler
+        assert await sch.run(sch.add("every 1h", "report"), "test") == "done"
+        sid = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
+        [result] = [r for m in eng.store.messages(sid) for r in m.tool_results]
+        assert result.call_id == "blocked" and result.is_error
+        assert "not available to this scheduled run" in result.text()
+        assert name not in {t.name for t in eng.loop.provider.calls[0]["tools"]}
+        assert not ran and not gate
+    finally:
+        await eng.close()
+
+
+@pytest.mark.parametrize("already_registered", [False, True])
+@aio
+async def test_scheduled_tool_allowlist_is_fixed_before_the_run(tmp_path, already_registered):
+    eng = mk(tmp_path, [tool_turn("enable_tool", call_id="enable"),
+                        tool_turn("later_tool", call_id="late"), "report"])
+    ran, gate = [], []
+    enabled = False
+
+    def install():
+        eng.registry.register(ToolSpec(name="later_tool", description="late tool", risk="low", toolset="test"),
+                              lambda args, ctx: ran.append("later_tool") or "late", check_fn=lambda: enabled)
+
+    if already_registered:
+        install()
+
+    def enable(args, ctx):
+        nonlocal enabled
+        ran.append("enable_tool")
+        enabled = True
+        if not already_registered:
+            install()
+        return "enabled"
+
+    eng.registry.register(ToolSpec(name="enable_tool", description="allowed tool", risk="low", toolset="test"), enable)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: gate.append(kw["tool_name"]) or {"action": "allow"})
+    try:
+        sch = eng.scheduler
+        assert await sch.run(sch.add("every 1h", "report"), "test") == "done"
+        sid = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
+        results = [r for m in eng.store.messages(sid) for r in m.tool_results]
+        assert [(r.call_id, r.is_error) for r in results] == [("enable", False), ("late", True)]
+        assert ran == gate == ["enable_tool"]
+        assert all("later_tool" not in {t.name for t in call["tools"]} for call in eng.loop.provider.calls)
+    finally:
+        await eng.close()
 
 
 @aio
@@ -281,13 +414,13 @@ async def test_pause_resume(tmp_path):
     eng, clk = mk(tmp_path), Clock(ts(2026, 10, 11, 8, 0))
     sch = eng.scheduler = Scheduler(eng, clk)
     jid = sch.add("every 10m", "x")["id"]
-    await eng.scheduler.edit({"action": "pause", "job_id": jid})
+    await edit(eng.scheduler, {"action": "pause", "job_id": jid})
     clk.t += 3600
     assert sch.due() == [] and await sch.tick() == []
-    r = await eng.scheduler.edit({"action": "resume", "job_id": jid})
+    r = await edit(eng.scheduler, {"action": "resume", "job_id": jid})
     assert not r["job"]["paused"] and r["job"]["next_run"] == clk.t + 600  # no catch-up for the paused time
     assert sch.due() == []
-    assert (await eng.scheduler.edit({"action": "remove", "job_id": "nope"}))["error"]
+    assert (await edit(eng.scheduler, {"action": "remove", "job_id": "nope"}))["error"]
 
 
 @aio
@@ -310,7 +443,7 @@ async def test_one_run_at_a_time(tmp_path):
     job = sch.add("every 1h", "x")
     assert sch.launch(job)
     assert sch.launch(job) is None
-    assert (await eng.scheduler.edit({"action": "run_now", "job_id": job["id"]}))["error"]
+    assert (await edit(eng.scheduler, {"action": "run_now", "job_id": job["id"]}))["error"]
     await sch.wait()
     assert sch.launch(job)
     await sch.wait()
@@ -335,8 +468,8 @@ async def test_start_stop_runs_due_job(tmp_path):
 @aio
 async def test_bad_action(tmp_path):
     eng = mk(tmp_path)
-    assert "error" in await eng.scheduler.edit({"action": "dance"})
-    assert (await eng.scheduler.edit(s.ScheduleEdit(action="list")))["jobs"] == []
+    assert "error" in await edit(eng.scheduler, {"action": "dance"})
+    assert (await edit(eng.scheduler, s.ScheduleEdit(action="list")))["jobs"] == []
 
 
 @aio
@@ -725,7 +858,7 @@ async def test_seat_bound_job_runs_only_in_its_seat(tmp_path):
     jid = forge.scheduler.add("every 1h", "make the report", seat="scout")["id"]  # added from forge, for scout
     clk.t += 3600
     assert forge.scheduler.due() == [] and await forge.scheduler.tick() == []
-    r = await forge.scheduler.edit({"action": "run_now", "job_id": jid})
+    r = await edit(forge.scheduler, {"action": "run_now", "job_id": jid})
     assert "scout" in r["error"] and "task_id" not in r
     assert await scout.scheduler.tick() == [jid]
     await scout.scheduler.wait()
@@ -799,7 +932,7 @@ async def test_add_rejects_a_seat_no_core_could_run(tmp_path):
     scout = seat_mk(tmp_path, "scout", clk)
     with pytest.raises(ValueError, match="nosuch"):
         scout.scheduler.add("every 1h", "x", seat="nosuch")
-    r = await scout.scheduler.edit({"action": "add", "when": "every 1h", "prompt": "x", "seat": "nosuch"})
+    r = await edit(scout.scheduler, {"action": "add", "when": "every 1h", "prompt": "x", "seat": "nosuch"})
     assert "nosuch" in r["error"] and scout.scheduler.list() == []
     assert scout.scheduler.add("every 1h", "x", seat="scout")["seat"] == "scout"  # its own seat
     (tmp_path / "home" / "seats").mkdir(exist_ok=True)

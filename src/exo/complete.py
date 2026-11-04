@@ -23,7 +23,7 @@ from .core.private import atomic_write
 # name -> argument shape shown after the name. Descriptions live with each client's own table (the TUI COMMANDS
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
-    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
+    "new": "[private]", "tab": "[directory]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
     "cwd": "", "context": "", "compact": "", "restart": "", "stop": "[task]", "tasks": "", "open": "<task>", "steer": "<task> <text>", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
@@ -31,7 +31,7 @@ ARG_HINTS: dict[str, str] = {
     "compose": "[task|edit|close]", "layout": "[inverse|classic]",
     "trace": "[last N turns]", "findings": "[count]",
     "grants": "[list | revoke <id>]", "exo": "<subcommand> [args]", "orchestra": "[seats|skills|seat|check]",
-    "peer-release": "<id>", "peer-deny": "<id>", "exo-command": "",
+    "peer-release": "<id>", "peer-deny": "<id>", "exo-command": "", "permissions": "[status|bypass|ask]",
 }
 
 
@@ -101,6 +101,10 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
                                                  "classic|input at the bottom, newest at the bottom")) if n == 0 else None
     elif cmd == "trace":
         return Slot("[last N turns]", "", _c("5|last 5 turns", "10|last 10 turns", "25|last 25 turns")) if n == 0 else None
+    elif cmd == "permissions":
+        return Slot("[status|bypass|ask]", "", _c("status|the mode and how many calls bypass auto-approved",
+                                                   "bypass|stop asking, except Exo's own records and secrets",
+                                                   "ask|ask before risky calls again")) if n == 0 else None
     elif cmd == "findings":
         return Slot("[count]", "", _c("count|how many are open")) if n == 0 else None
     elif cmd == "send":

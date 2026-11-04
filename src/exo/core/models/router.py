@@ -51,7 +51,7 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
-REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key, the login or the spend: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
@@ -186,6 +186,7 @@ class Router:
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
         self._creds: dict[str, list[Credential]] = {}
+        self._retired: list[Any] = []  # own clients of transports a reload dropped (maybe mid-call), not their keys
         self._cred_lock = threading.Lock()
         self._cred_versions: dict[str, int] = {}
         self._cred_pending: dict[tuple[str, int], concurrent.futures.Future] = {}
@@ -305,8 +306,11 @@ class Router:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
-            keys = [k for e in envs if (k := self._key(e))] if envs else [None]
+            # One place per key_env name, so a key keeps its id when another comes or goes (exo-desktop #52).
+            keys = [self._key(e) for e in envs] if envs else [None]
             for i, key in enumerate(keys):
+                if envs and not key:  # this name has no key now
+                    continue
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
                                  headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
@@ -321,13 +325,26 @@ class Router:
                                                                    *(n for n, _ in self._cred_pending)]))
             for n in names:
                 self._cred_versions[n] = self._cred_versions.get(n, 0) + 1
-                self._creds.pop(n, None)
+                self._retired += self._own_clients(self._creds.pop(n, []))
         for n in names:
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
             for k in [k for k in self.breakers if k.startswith(n + ":")]:
                 self.breakers.pop(k, None)
         return names
+
+    def _own_clients(self, creds: list[Credential]) -> list[Any]:
+        """The HTTP clients of the transports this router made. An instance it was given is not its own."""
+        made = [c.provider for c in creds if c.provider not in self.instances.values()]
+        return [pool for p in made if (pool := getattr(p, "own_clients", None)) is not None]
+
+    async def aclose(self) -> None:
+        """Close the HTTP clients of every transport this router made, also those a reload dropped (#263)."""
+        with self._cred_lock:
+            pools = [*self._retired, *self._own_clients([c for cs in self._creds.values() for c in cs])]
+            self._retired = []
+        for pool in pools:
+            await pool.aclose()
 
     def _key(self, name: str) -> str | None:
         return lookup_key(name, self.env, sources=self.key_sources)
@@ -353,6 +370,8 @@ class Router:
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
                        sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
+        if status == 501:  # the transport cannot carry this request (muse-cli with tools): the key and model are fine
+            return Cooldown()
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
@@ -455,7 +474,9 @@ class Router:
                             break
                 if candidate is not None:
                     if last is not None:
-                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                        why = (f"is over its provider spend limit ({(last.error or '')[:80]}); this turn's cost is a floor"
+                               if last.status == 402 else f"failed ({(last.error or '')[:80]})")
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} {why}; "
                                                        f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
@@ -505,7 +526,14 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
+                    if last.status == 402:
+                        # The route stopped on the provider's own spend limit. Say it in those words once, and say the
+                        # money figure will read low: the paid route did work nobody will bill this turn for.
+                        yield ProviderEvent(kind="notice", attempts=attempts,
+                                            text=f"{route.ref} is over its provider spend limit; trying {nxt.ref}"
+                                                 " (this turn's cost is a floor)")
+                    else:
+                        yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
@@ -562,7 +590,9 @@ class Router:
                     ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
-                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                    # "spend_limit" keeps the cause after the fallback, so the money figure can say it is a floor.
+                    note("spend_limit" if ev.status == 402 else
+                         "timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
                          else "fallback", ev.error or "")
                     failed.append(ev)
                 return
@@ -613,9 +643,9 @@ class Router:
 
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
-        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
-        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
-        not running."""
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 403), or the key is
+        over its spend limit (402) which a new key does not fix; on a later call too, while that credential, or a model
+        of the chain on it, reopens first; or a local server is not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
             cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
@@ -623,6 +653,9 @@ class Router:
         else:
             name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
         spec = self.providers.get(name) or {}
+        if status == 402:  # the provider's own spend limit: a new key fixes nothing, raising the limit does
+            return status, (f"{name} is over its provider spend limit ({err}): raise the limit or top up the account, "
+                            "then test it in /providers")
         if status in REFUSED_STATUS:
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else envs

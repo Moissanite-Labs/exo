@@ -461,7 +461,7 @@ class StatusStrip(Widget):
     def __init__(self) -> None:
         super().__init__(id="status")
         self.d: dict[str, Any] = {"model": "", "requested": "", "ctx": 0, "window": 0, "cache": None, "cost": "\u2013",
-                                  "findings": 0}
+                                  "findings": 0, "bypass": False, "auto": 0}
 
     def set(self, **d: Any) -> None:
         self.d.update(d)
@@ -478,6 +478,11 @@ class StatusStrip(Widget):
         def sep() -> None:
             t.append(f"  {DOT}  ", style=rich_style("line2"))
 
+        if d["bypass"]:  # D-065: first, so a narrow window cuts the instruments, never this
+            t.append("permissions: bypass", style=rich_style("accent2", "bold reverse"))
+            if w >= 80:
+                t.append(f" {d['auto']} auto-approved", style=rich_style("accent2"))
+            sep()
         label("MODEL")
         fell = bool(d["requested"] and d["model"] and d["requested"] != d["model"])
         t.append(d["model"] or "-", style=rich_style("accent" if fell else "fg2", "bold" if fell else ""))
