@@ -21,7 +21,7 @@ concurrency:
 
 env:
   # Bootstrap hash when PR base lacks scripts/gate_diff_pr.py (#1147). Update when that file changes.
-  GATE_DIFF_PR_BOOTSTRAP_SHA256: ae132ae1aab529a73883086415d5f4e73bdf9b7f310ee36f08fd740a76c59e9a
+  GATE_DIFF_PR_BOOTSTRAP_SHA256: 003c287ea79bf15fead5f50eadedcfa26040c6d8118e12cca24f197a5dc4a2aa
 
 jobs:
   never-looser:
@@ -59,12 +59,19 @@ jobs:
             git show "$GITHUB_SHA:scripts/gate_diff_pr.py" > "$COMPARATOR"
             echo "${GATE_DIFF_PR_BOOTSTRAP_SHA256}  $COMPARATOR" | sha256sum -c -
           fi
+          export GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE"
           uv run python -c "
-          import os, scripts.gate_diff as gd
+          import os, sys
+          from pathlib import Path
           root = os.environ['GATE_COMPARATOR_ROOT']
+          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
+          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
+          if root not in sys.path:
+              sys.path.insert(0, root)
+          import scripts.gate_diff as gd
           assert gd.__file__.startswith(root + os.sep), (gd.__file__, root)
           "
-          uv run python "$COMPARATOR" \
+          GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" PYTHONPATH="$TRUSTED" uv run python "$COMPARATOR" \
             --pr-base "$TRUSTED" \
             --head "$GITHUB_WORKSPACE" \
             --git-dir "$GITHUB_WORKSPACE" \

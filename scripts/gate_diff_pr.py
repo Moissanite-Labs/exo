@@ -36,6 +36,13 @@ def _comparator_repo() -> Path:
 _REPO = _comparator_repo()
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
+elif os.environ.get("GATE_COMPARATOR_ROOT"):
+    sys.path.remove(str(_REPO))
+    sys.path.insert(0, str(_REPO))
+_untrusted = os.environ.get("GATE_UNTRUSTED_REPO")
+if _untrusted:
+    _untrusted = str(Path(_untrusted).resolve())
+    sys.path[:] = [p for p in sys.path if Path(p).resolve() != _untrusted]
 
 from scripts import gate_diff as gd
 
