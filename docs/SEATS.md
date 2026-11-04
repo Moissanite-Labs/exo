@@ -90,6 +90,19 @@ bypass. A required tool executor (Exo OS) ignores `mode = "bypass"`.
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
 
+## Truthful seat attribution
+
+On a core running a seat, `session.create` attributes an omitted or empty `seat` to the
+loaded seat. An explicit matching name is accepted. A different name returns `bad_request`
+without creating a session. The message names both seats: `this core runs the 'worker' seat;
+it cannot start a thread for seat 'scout'`. Selecting a label does not load another profile
+or change the core's identity, permissions or memory scope. Use the other seat's core to
+create its session.
+
+An unseated core preserves the client's seat label for compatibility. That label alone is
+not proof of profile execution or a memory access boundary. This check governs new sessions;
+it does not isolate access to existing sessions.
+
 ## Skills
 
 Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/` in the checkout, or
@@ -133,7 +146,9 @@ the socket cannot hand in bus messages.
 Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` on the home's `run/exod.sock`,
 `exo tui --seat scout` and `exo tui --seat forge` are two cores, one per seat. So are two `exo serve --seat NAME`,
 each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
-to that server's seat. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+to that server's seat. `/new` sends the seat the window was started with, not a label copied from a resumed thread.
+If that name is a different seat, the core refuses, the window omits the name, and the new thread belongs to the
+core's seat. The window says which seat it joined. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
 all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
 
 - **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
