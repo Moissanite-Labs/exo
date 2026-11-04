@@ -60,6 +60,11 @@ OpenAI-compatible API. In the web Providers tab, **Add custom provider** configu
 Completions or Anthropic Messages endpoint, model and optional key. Use **Edit** for an existing entry, then
 restart the core to apply settings. Supported protocols and remote-core key limits are in `docs/PROVIDERS.md`.
 
+For a ChatGPT subscription, open Providers and choose **Continue with ChatGPT**. Sign in in your browser,
+then select an account and one of its models. This is a separate connection from an OpenAI API key.
+**Manage usage** opens your ChatGPT usage settings. See `docs/CHATGPT-PROVIDER.md` for accounts and limits.
+The direct Meta API provider uses the same protected API-key entry as other hosted providers.
+
 A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
 learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
 limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
