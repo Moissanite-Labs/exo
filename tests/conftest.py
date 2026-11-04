@@ -28,10 +28,7 @@ def pytest_configure(config):
     if soft != resource.RLIM_INFINITY and soft < want:
         try:
             resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
-        except (
-            ValueError,
-            OSError,
-        ):  # a platform that refuses: run with the limit it gives
+        except (ValueError, OSError):  # a platform that refuses: run with the limit it gives
             pass
 
 
@@ -48,22 +45,11 @@ def template_store(tmp_path):
 @pytest.fixture
 def trusted_gate(tmp_path):
     from exo.core.plugins import PluginManager
-
-    root = tmp_path / "gate-store"
+    root = tmp_path / 'gate-store'
     root.mkdir()
-    manager = PluginManager(
-        config={
-            "exo-gate": {
-                "principal_store": str(root),
-                "key_path": str(tmp_path / "gate.key"),
-                "decision_model": False,
-            }
-        },
-        executor_required=True,
-    )
-    assert manager.load_folder(
-        Path(__file__).resolve().parents[1] / "plugins/exo-gate"
-    ).ok
+    manager = PluginManager(config={'exo-gate': {'principal_store': str(root),
+        'key_path': str(tmp_path / 'gate.key'), 'decision_model': False}}, executor_required=True)
+    assert manager.load_folder(Path(__file__).resolve().parents[1] / 'plugins/exo-gate').ok
     return manager
 
 
@@ -77,12 +63,8 @@ def isolated_home(tmp_path, monkeypatch):
 def hermetic_env(tmp_path, monkeypatch):
     """The caller's bus seat, keys and peers directory must never reach a test (a launcher exports them)."""
     import os
-
     for k in list(os.environ):
-        if k.startswith(("EXO_BUS_", "DIVAN_", "EXO_PEERS")) or k in (
-            "EXO_SEAT",
-            "XDG_RUNTIME_DIR",
-        ):
+        if k.startswith(("EXO_BUS_", "DIVAN_", "EXO_PEERS")) or k in ("EXO_SEAT", "XDG_RUNTIME_DIR"):
             monkeypatch.delenv(k)
     monkeypatch.setenv("EXO_PEERS_DIR", str(tmp_path / "peers"))
     # D-034: no test reads or writes the real Keychain, Secret Service or keys file.
