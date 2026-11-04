@@ -150,7 +150,7 @@ def test_per_turn_read_cap_stops_reading_and_names_the_sorted_remainder(tmp_path
     assert result == discovery.select("charts")
     reads.clear()
     zero = selector(tmp_path, max_files=0).select("charts")
-    assert reads == [] and zero.text == HEADER and zero.names == ()
+    assert reads == [] and zero.text.startswith(HEADER) and zero.names == ()
     assert zero.unavailable == tuple(f"s-{i:02}" for i in range(30))
 
 

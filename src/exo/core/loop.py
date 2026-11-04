@@ -286,14 +286,15 @@ class Loop:
             await self._add(session, m, turn_id)
         st.steer.clear()
 
+    def _per_turn_tail(self) -> bool:
+        """True when the context engine injects recall and skill blocks as tail data."""
+        target = getattr(self.context, "tree", self.context)
+        return callable(getattr(target, "_insert_per_turn_block", None))
+
     def _takes_recall(self) -> bool:
         """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
         message stays byte-stable for the prompt cache."""
-        try:
-            params = inspect.signature(self.context.build).parameters
-        except (TypeError, ValueError):
-            return False
-        return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+        return self._per_turn_tail()
 
     async def base_system(self, session: str | None = None) -> str:
         """The stable part of the system text: system prompt, memory block (no recall) and the session's cwd line."""
@@ -312,7 +313,7 @@ class Loop:
         """
         base = await self.base_system(session)
         block = self.turn_extra(session, query) if self.turn_extra else ""
-        tail = self._takes_recall()
+        tail = self._per_turn_tail()
         parts = [base, block if block and not tail else ""]
         # recalled memory is data (D-040): it may quote a peer, so its pinned-block tags are escaped (#279)
         recall = provenance.defuse_pins(await self._memory("prefetch", query, session_id=session) or "")
@@ -325,7 +326,7 @@ class Loop:
                       result: TurnResult) -> None:
         system, recall, skills = await self._system(session, user.text())
         extra: dict[str, Any] = {}
-        if self._takes_recall():
+        if self._per_turn_tail():
             extra = {"recall": recall, "turn_id": turn_id}
             if skills:
                 extra["turn_extra"] = skills

@@ -218,7 +218,7 @@ def test_subagent_and_plain_sessions_keep_their_own_tree():
         await loop.send(plain.id, "legacy")
     run(go())
     assert store.last_pos("razi") == 0
-    assert all("Recalled memory" in c[0].text() for c in prov.calls)  # old placement for per-session trees
+    assert all(any("Recalled memory" in m.text() for m in c) for c in prov.calls)
 
 
 async def settle_own(ctx, sid):

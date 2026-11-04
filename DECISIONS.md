@@ -3009,6 +3009,7 @@ Rejected a path+mtime+size metadata cache: rereading each turn is what makes sam
 effect, and a shared cache would add mutable state behind concurrent session and scheduled turns.
 The ranked block is injected as per-turn user-side data through `AgentContext.build`, not appended
 to the stable system text, so provider prompt-cache breakpoints on the system block stay valid.
+*Budget 2026-11-04:* counted core lines for the tail seam land within CORE_HEADROOM (+25).
 
 ## D-084 (2026-10-23) Retained tool-output views with exact bounded expansion
 - **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.

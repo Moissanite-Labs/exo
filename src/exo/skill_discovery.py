@@ -102,29 +102,30 @@ class SkillDiscovery:
         index_names = [name for name, _ in indexed]
         tails = Counter(name.rsplit(":", 1)[-1].casefold() for name in index_names)
 
-        def explicit(name: str) -> bool:
+        def named_in_query(name: str) -> bool:
             names = [name]
             tail = name.rsplit(":", 1)[-1]
             if tails[tail.casefold()] == 1:
                 names.append(tail)
             return any(re.search(r"(?<![\w:-])" + re.escape(n) + r"(?![\w:-])", query, re.I) for n in names)
 
-        explicit_hits = {name for name in index_names if explicit(name)}
-        rows, unavailable = [], []
-        reads = 0
+        explicit_hits = {name for name in index_names if named_in_query(name)}
+        rows: list[tuple[str, str, Counter[str], int]] = []
+        unavailable: list[str] = []
+        metadata_reads = 0
         for name, skill in indexed:
-            if reads >= cfg.max_files:  # past the cap the name is only marked, never read
+            if metadata_reads >= cfg.max_files:
                 unavailable.append(name)
                 if name in explicit_hits:
                     rows.append((name, "", Counter(), 0))
                 continue
-            reads += 1
             description = _description(skill)
             if description is None:
                 unavailable.append(name)
                 if name in explicit_hits:
                     rows.append((name, "", Counter(), 0))
                 continue
+            metadata_reads += 1
             description = " ".join(self.overrides.get(name, description).split())[:MAX_DESC]
             words = _words(name) + _words(description)
             rows.append((name, description, Counter(words), len(words)))
@@ -133,25 +134,20 @@ class SkillDiscovery:
                 return Selection("", (), 0, tuple(unavailable))
             text = HEADER
             if len(indexed) > cfg.max_files:
-                note = f"[read cap: {reads} of {len(indexed)} indexed files this turn]"
+                note = f"[read cap: {metadata_reads} of {len(indexed)} indexed files this turn]"
                 if len(text) + 1 + len(note) <= limit:
                     text += "\n" + note
             return Selection(text, (), 0, tuple(unavailable))
         frequency = Counter(word for _, _, counts, _ in rows for word in counts)
         average = sum(size for _, _, _, size in rows) / len(rows) or 1.0
-        aliases = Counter(name.rsplit(":", 1)[-1].casefold() for name, *_ in rows)
         ranked = []
         for name, description, counts, size in rows:
-            names = [name]
-            tail = name.rsplit(":", 1)[-1]
-            if aliases[tail.casefold()] == 1:
-                names.append(tail)
-            explicit = any(re.search(r"(?<![\w:-])" + re.escape(n) + r"(?![\w:-])", query, re.I) for n in names)
+            named = name in explicit_hits
             score = sum(math.log(1 + (len(rows) - frequency[t] + 0.5) / (frequency[t] + 0.5))
                         * (counts[t] * 2.2) / (counts[t] + 1.2 * (0.25 + 0.75 * size / average))
                         for t in terms if counts[t])
-            if explicit or score:
-                ranked.append((not explicit, -score, name, description))
+            if named or score:
+                ranked.append((not named, -score, name, description))
         selected: list[str] = []
         text = HEADER
         for _, _, name, description in sorted(ranked):
@@ -169,7 +165,7 @@ class SkillDiscovery:
             text += row
             selected.append(name)
         if len(indexed) > cfg.max_files:  # name the cap in the block when the budget has room left
-            note = f"[read cap: {reads} of {len(indexed)} indexed files this turn]"
+            note = f"[read cap: {metadata_reads} of {len(indexed)} indexed files this turn]"
             if len(text) + 1 + len(note) <= limit:
                 text += "\n" + note
         return Selection(text, tuple(selected), len(rows), tuple(unavailable))

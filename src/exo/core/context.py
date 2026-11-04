@@ -660,8 +660,9 @@ class TreeContext:
                 return False
             await asyncio.wait(pending, timeout=remaining)
 
-    async def build(self, session: str, system: str, settle: bool = True) -> list[Message]:
+    async def build(self, session: str, system: str, settle: bool = True, **ignored: Any) -> list[Message]:
         """Fresh model input: system prompt with the view appended, then the verbatim tail."""
+        del ignored
         self.note(session)
         if settle:
             await settle_for_turn(self, session)
@@ -989,14 +990,20 @@ class AgentContext(TreeContext):
         tail.insert(at, block)
 
     async def build(self, session: str, system: str, settle: bool = True, recall: str = "",
-                    turn_id: str = "", turn_extra: str = "") -> list[Message]:
+                    turn_id: str = "", turn_extra: str = "", **ignored: Any) -> list[Message]:
         key = self._agent_key(session)
         if key is None:
+            msgs = await super().build(session, system, settle)
+            if not (turn_extra or recall):
+                return msgs
+            head, tail = ([msgs[0]], msgs[1:]) if msgs and msgs[0].role == "system" else ([], msgs)
             if turn_extra:
-                system = (system + "\n\n" if system else "") + turn_extra
+                self._insert_per_turn_block(tail, turn_id, turn_extra)
             if recall:
-                system = (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
-            return await super().build(session, system, settle)
+                block = Message.user("# Recalled memory (for this turn)\n" + recall)
+                block.meta["author"] = "system"
+                self._insert_per_turn_block(tail, turn_id, block.text())
+            return head + tail
         self.note(session)
         if settle:
             await settle_for_turn(self, key)
