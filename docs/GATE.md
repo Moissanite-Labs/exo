@@ -3292,6 +3292,25 @@ things (`scp -S` is the program to run). A value outside the store keeps the lin
 file, so `ssh -F ~/.exo/state/cfg host ls` stays a read. ssh's log file (`-E`) is not covered here.
 It is still a known limit (above), and #919 is open for it.
 
+A forward's socket on a secret store (#1096). ssh makes a forward's socket, and with
+`StreamLocalBindUnlink=yes` it first removes the file at that path. The secret check cuts a line's
+words only at whitespace and quotes, so a secret name followed by a forward's `:host:port` met none.
+
+`ssh -L ~/.exo/keys.env:localhost:5432 host ls` was a read that the default policy allowed, while
+`ssh -S ~/.exo/keys.env host ls` asked. Each forward field the store check reads (above) now also
+meets the test a path argument meets: a secret name, a dynamic store such as the file
+`EXO_KEYS_FILE` names, a glob that may match one, a brace set or an expansion.
+
+Each match is a credentials part beside the line, as a store read from a shell call's own folder is.
+So the credentials floor asks the principal, and a `deny`, `reserved` or `target:` entry on the
+store meets the part. The line keeps its own reading:
+`ssh -L ~/.exo/keys.env:localhost:5432 host ls` stays a read with a credentials part, and a remote
+`rm` is still decided on the host too.
+
+Both ends of `-L` and `-R` count, since the listening end of `-R` is on a host that may be this one.
+So do a dynamic forward on a path, the three settings and scp's and sftp's `-o` settings. A port
+stays a read (`ssh -L 5432:localhost:5432 host ls`), and so does a socket outside the stores.
+
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
 directory aliases into protected stores, aliases used to delete a store or its ancestors, a `cd` into

@@ -113,6 +113,32 @@ assert.ok(root.textContent.includes("Weekly digest"));
 
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_edits_ignore_double_clicks_and_disable_only_the_busy_card(tmp_path):
+    execute(tmp_path, r'''
+// Second click is ignored even after a fast response; detail 0 keeps keyboard activation.
+await click(onCard("Morning brief", "pause"), 2);
+await click(onCard("Morning brief", "run now"), 2);
+jobs[0].paused=true; await click(onCard("Weekly digest", "pause"), 0);
+assert.deepEqual(posts,[{action:"pause",job_id:"j2"}]);
+await click(onCard("Morning brief", "resume"), 2);
+assert.equal(posts.length,1);
+let land; holds.j1=new Promise(r=>{ land=r; });
+await click(onCard("Morning brief", "resume"), 0);
+assert.deepEqual(shown("Morning brief"),["resume (disabled)","run now (disabled)","remove (disabled)"]);
+assert.deepEqual(shown("Weekly digest"),["pause","run now","remove"]);
+await click(onCard("Morning brief", "resume"));
+await click(onCard("Morning brief", "run now"));
+await click(onCard("Morning brief", "remove"));
+assert.equal(posts.length,2);
+land(); delete holds.j1; await sleep(20);
+assert.deepEqual(shown("Morning brief"),["resume","run now","remove"]);
+refuse=true; await click(onCard("Morning brief", "run now"));
+assert.ok(root.textContent.includes("no such job"));
+assert.deepEqual(shown("Morning brief"),["resume","run now","remove"]);
+''')
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_other_job_actions_do_not_ask(tmp_path):
     execute(tmp_path, r'''
 await click(button("remove"));                     // j1 asks
@@ -360,5 +386,42 @@ def test_two_removes_in_flight_in_chrome_keep_their_steps_and_a_failed_one_gives
             assert b.eval("document.activeElement === {}.querySelectorAll('button')[2]".format(
                 on_card("Morning brief")))
             assert srv.call(lambda: list(src.posts)) == [["remove", "j1"], ["remove", "j2"]]
+    finally:
+        srv.close()
+
+
+class FastScheduleSrc(ScheduleSrc):
+    """A synthetic core whose edits land before the second click."""
+    async def call(self, body):
+        if type(body).TYPE != "schedule.edit" or body.action == "list":
+            return await super().call(body)
+        self.posts.append([body.action, body.job_id])
+        for job in self.jobs:
+            if job["job_id"] == body.job_id and body.action in ("pause", "resume"):
+                job["paused"] = body.action == "pause"
+        return {"ok": True}
+
+
+@needs_chrome
+def test_double_click_after_a_fast_pause_keeps_the_job_paused():
+    src = FastScheduleSrc()
+    srv = Served(src)
+    try:
+        with Browser() as b:
+            b.goto(srv.url("schedule"))
+            b.wait("document.querySelectorAll('.xc-job').length === 2")
+            b.settle()
+            click(b, "Weekly digest", 1)  # show a note before the double click
+            b.wait("document.querySelector('.xc-sched-note').textContent.includes('Run started')")
+            x, y = b.eval("(() => { const e = " + on_card("Morning brief") + ".querySelector('button');"
+                          " const r = e.getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]; })()")
+            for kind in ("mousePressed", "mouseReleased"):
+                b.call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button="left", clickCount=1)
+            b.wait(on_card("Morning brief") + ".textContent.includes('paused')")
+            for kind in ("mousePressed", "mouseReleased"):
+                b.call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button="left", clickCount=2)
+            b.settle()
+            assert srv.call(lambda: list(src.posts)) == [["run_now", "j2"], ["pause", "j1"]]
+            assert srv.call(lambda: src.jobs[0]["paused"]) is True
     finally:
         srv.close()

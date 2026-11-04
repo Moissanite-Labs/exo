@@ -15,6 +15,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
+  the principal. On main f8f1d28b `ssh -L ~/.exo/keys.env:localhost:5432 host ls`, its `-R` form and the same line
+  with `-o StreamLocalBindUnlink=yes` were reads that the default policy allowed. ssh makes that socket, and with that
+  setting it first removes the file at the path.
+
+  Each forward field the store check reads (#484) now meets the secret test that `ssh -S ~/.exo/keys.env` already met.
+  That covers a forward's brackets, the `-o` settings, scp's and sftp's `-o` settings and a custom `EXO_KEYS_FILE`. A
+  port and a socket outside the secret stores stay reads.
+
+  The line keeps its own reading, with the part beside it, so no decision is lower (main's `scripts/gate_diff.py`: 0
+  lowered pairs in five runs against main a2f6ec3d, 10,369,128 pairs on the built-in corpus with variants). Tests:
+  `tests/security/test_gate_ssh_forward_keys_1096.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038 amendment),
+  `docs/DOCS-MAP.md`.
+- Schedule ignores the second click of a double click on pause, resume and run now, and disables each job's controls
+  while its edit is in flight (#1128).
 - Tests: headless Chrome startup on hosted runners (#907, D-046 amendment).
   - The first start in a test run waits up to 90 s for DevTools instead of 20 s. The two hosted startup timeouts on
     record were each a job's first start, in `test_csp_web.py`, where a fresh runner reads the browser from a cold

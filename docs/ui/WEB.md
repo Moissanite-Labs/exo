@@ -425,7 +425,9 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
   drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
   Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
-  and run now act at once. Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
+  and run now act at once, ignore the second click of a double click, and disable that job's buttons while an edit
+  is in flight. Other jobs remain usable; a failed edit restores the buttons. Keyboard activation remains available.
+  Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
   while focus is in the step, closes it and puts focus back on remove. While the remove is in flight the step stays,
   with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
   for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
