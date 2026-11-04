@@ -1,0 +1,155 @@
+name: spec conformance
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+# pull_request: cancel superseded runs on the same branch (#907).
+# merge_group: one run per merge-group ref (no cross-cancel with PRs).
+concurrency:
+  group: spec-conformance-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  seat-binding-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect seat-binding conformance scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          run_replay=true
+          skip_reason=""
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = "merge_group" ]; then
+            base_sha="$MERGE_GROUP_BASE_SHA"
+          else
+            base_sha=""
+          fi
+
+          pathspecs=(
+            specs/seat-binding/
+            src/exo/core/engine.py
+            src/exo/core/loop.py
+            src/exo/core/sessions.py
+            src/exo/core/seats.py
+            src/exo/compose.py
+            clients/tui/exo_tui/app.py
+            clients/tui/exo_tui/conn.py
+            src/exo/protocol/schema.py
+            src/exo/server/app.py
+            tests/clients/tui/test_seat_new_session.py
+            tests/test_session_seat_binding.py
+            .github/workflows/spec-conformance.yml
+          )
+
+          if [ -z "$base_sha" ]; then
+            echo "No base SHA for event $EVENT_NAME; running full replay (fail closed)."
+          elif ! git rev-parse --verify "${base_sha}^{commit}" >/dev/null 2>&1; then
+            echo "Base SHA ${base_sha} not available; running full replay (fail closed)."
+          else
+            set +e
+            changed="$(git diff --name-only "$base_sha" HEAD -- "${pathspecs[@]}")"
+            diff_status=$?
+            set -e
+            if [ "$diff_status" -ne 0 ]; then
+              echo "git diff failed (exit $diff_status); running full replay (fail closed)."
+            elif [ -z "$changed" ]; then
+              run_replay=false
+              skip_reason="No files changed under the seat-binding conformance path filter (see specs/seat-binding/conformance/CI-INTERFACE.md)."
+            else
+              echo "Relevant changes detected:"
+              echo "$changed"
+            fi
+          fi
+
+          echo "run_replay=$run_replay" >> "$GITHUB_OUTPUT"
+          if [ -n "$skip_reason" ]; then
+            {
+              echo "skip_reason<<EOF"
+              echo "$skip_reason"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip replay (no relevant changes)
+        if: steps.scope.outputs.run_replay != 'true'
+        run: |
+          echo "${{ steps.scope.outputs.skip_reason }}"
+          echo "seat-binding-conformance: success (skipped replay)."
+
+      - uses: actions/setup-java@v4
+        if: steps.scope.outputs.run_replay == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache tla2tools.jar
+        if: steps.scope.outputs.run_replay == 'true'
+        uses: actions/cache@v4
+        id: tla-cache
+        with:
+          path: specs/seat-binding/tla2tools.jar
+          key: tla2tools-v1.8.0-e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
+
+      - name: Download tla2tools.jar
+        if: steps.scope.outputs.run_replay == 'true' && steps.tla-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          JAR=specs/seat-binding/tla2tools.jar
+          mkdir -p specs/seat-binding
+          curl -fsSL -o "$JAR" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+          echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
+
+      - name: Verify cached tla2tools.jar
+        if: steps.scope.outputs.run_replay == 'true' && steps.tla-cache.outputs.cache-hit == 'true'
+        run: |
+          echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  specs/seat-binding/tla2tools.jar" | sha256sum -c -
+
+      - name: Replay conforming seat-binding traces
+        if: steps.scope.outputs.run_replay == 'true'
+        env:
+          TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
+        run: |
+          set -euo pipefail
+          golden="${RUNNER_TEMP}/seat-binding-golden-traces"
+          mkdir -p "$golden"
+          shopt -s nullglob
+          good=(specs/seat-binding/conformance/traces/good_*.jsonl)
+          if [ "${#good[@]}" -eq 0 ]; then
+            echo "No conforming traces (good_*.jsonl) found under specs/seat-binding/conformance/traces/"
+            exit 2
+          fi
+          cp "${good[@]}" "$golden"/
+          start=$(date +%s.%N)
+          python3 specs/seat-binding/conformance/replay.py --all "$golden"
+          exit_code=$?
+          end=$(date +%s.%N)
+          wall=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')
+          echo "replay_wall_time_seconds=$wall"
+          if [ "$exit_code" -ne 0 ]; then
+            case "$exit_code" in
+              1) echo "replay.py exited 1: violation (TLC invariant or unreplayable step)" ;;
+              2) echo "replay.py exited 2: malformed trace (JSONL/schema validation)" ;;
+              3) echo "replay.py exited 3: missing toolchain (Java/jar/checksum)" ;;
+              *) echo "replay.py exited $exit_code" ;;
+            esac
+            exit "$exit_code"
+          fi
+          echo "replay.py exited 0: all conforming traces passed."
