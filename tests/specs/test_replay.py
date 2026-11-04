@@ -39,7 +39,9 @@ def test_replay_good_exits_zero():
 
 def test_replay_b1_exits_one():
     _require_java()
-    assert _run(TRACES / "b1_silent_fail.jsonl")[0] == 1
+    code, err = _run(TRACES / "b1_silent_fail.jsonl")
+    assert code == 1
+    assert "seq=5 invariant=NewAfterResumeBindsThisCore" in err
 
 
 def test_replay_malformed_exits_two():
@@ -65,7 +67,7 @@ def test_replay_dropped_persist_exits_one():
     _require_java()
     code, err = _run(TRACES / "dropped_persist.jsonl")
     assert code == 1
-    assert "VIOLATION" in err
+    assert "seq=1 invariant=TraceReplay" in err
 
 
 def test_replay_dropped_mid_event_mutation_exits_one():
@@ -86,4 +88,4 @@ def test_replay_dropped_mid_event_mutation_exits_one():
     tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
     code, err = _run(tmp)
     assert code == 1
-    assert "VIOLATION" in err
+    assert "seq=2 invariant=TraceReplay" in err

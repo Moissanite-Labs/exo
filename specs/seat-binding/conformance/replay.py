@@ -351,6 +351,17 @@ def parse_violation(output: str) -> tuple[int | None, str | None]:
     return step, inv
 
 
+def jsonl_seq_for_violation(tlc_step: int | None, invariant: str | None) -> int | str:
+    """Map TLC trace-replay `step` to JSONL `seq` of the failing event."""
+    if tlc_step is None:
+        return "?"
+    # Deadlock: `step` is the last completed index; TraceDo(step+1) could not fire.
+    if invariant == "TraceReplay":
+        return tlc_step + 1
+    # Named invariant on a completed replay step: step matches JSONL seq of that event.
+    return tlc_step
+
+
 def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
     cmd = [
         "java",
@@ -400,7 +411,7 @@ def check_trace(trace_path: Path, jar: Path, display_path: Path | None = None) -
         code, out, step, inv = run_tlc(build, jar)
         if code == 0:
             return 0, None
-        seq = step if step is not None else "?"
+        seq = jsonl_seq_for_violation(step, inv)
         inv_name = inv or "Unknown"
         rel = display
         try:
