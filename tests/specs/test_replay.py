@@ -98,3 +98,18 @@ def test_replay_dropped_mid_event_mutation_exits_one():
     code, err = _run(tmp)
     assert code == 1
     assert "seq=2 invariant=TraceReplay" in err
+
+
+def test_scratch_production_mutations_pin_violation_line():
+    """Temp-copy production patches; replay must match pinned seq+invariant (not exit 1 alone)."""
+    _require_toolchain()
+    script = ROOT / "specs/seat-binding/conformance/check_scratch_mutations.py"
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "seq=5 invariant=TraceReplay" in proc.stdout
+    assert "seq=2 invariant=TraceReplay" in proc.stdout

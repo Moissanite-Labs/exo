@@ -206,3 +206,10 @@ jobs:
         env:
           TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
         run: python3 specs/seat-binding/conformance/check_negative_fixtures.py
+
+      - name: Check scratch production mutations (pinned VIOLATION lines)
+        if: steps.scope.outputs.run_replay == 'true'
+        env:
+          TLA2TOOLS_JAR: ${{ github.workspace }}/specs/seat-binding/tla2tools.jar
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/clients/tui
+        run: python3 specs/seat-binding/conformance/check_scratch_mutations.py
