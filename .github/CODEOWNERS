@@ -1,0 +1,12 @@
+# These paths govern whether the gate never-looser check and the seat-binding
+# spec conformance check can be trusted. On pull_request, GitHub executes the
+# PR branch's own workflow YAML, so mandatory code-owner review is the guard.
+# Any of @ahrazzle, @orda-aska, or @zero-aska other than the PR author may approve.
+
+/.github/CODEOWNERS @ahrazzle @orda-aska @zero-aska
+/.github/workflows/gate-preflight.yml @ahrazzle @orda-aska @zero-aska
+/.github/workflows/spec-conformance.yml @ahrazzle @orda-aska @zero-aska
+/scripts/gate_diff*.py @ahrazzle @orda-aska @zero-aska
+/scripts/gate_preflight_relevant.py @ahrazzle @orda-aska @zero-aska
+/src/exo/gate.py @ahrazzle @orda-aska @zero-aska
+/specs/seat-binding/conformance/** @ahrazzle @orda-aska @zero-aska
