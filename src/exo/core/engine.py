@@ -149,10 +149,8 @@ class CoreRuntime:
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
-        from exo.core.sessions import seat_binding_set_core_seat
         from exo.core.seat_binding_conformance import maybe_note_load_core_seat
 
-        seat_binding_set_core_seat(seat.name if seat else None)
         maybe_note_load_core_seat(seat.name if seat else None)
         self.env_allow = tuple(seat.env_allow) if seat else ()  # [tools] env_allow, see tool_env
         self.env_deny = tuple(seat.env_deny) if seat else ()  # [tools] env_deny (D-039)

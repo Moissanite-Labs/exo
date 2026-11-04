@@ -79,32 +79,6 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 
-_seat_binding_core_seat: str | None = None
-_persist_foreign_guard = True
-
-
-def seat_binding_set_core_seat(seat: str | None) -> None:
-    global _seat_binding_core_seat
-    _seat_binding_core_seat = seat
-
-
-def persist_session_marks_foreign(seat: str | None) -> bool:
-    """True when a persisted row is added to foreignSessions on this persist step."""
-    if not _persist_foreign_guard:
-        return True
-    if _seat_binding_core_seat is None:
-        return False
-    seat_name = seat or ""
-    if seat_name == _seat_binding_core_seat:
-        return False
-    return True
-
-
-def drop_persist_foreign_guard() -> None:
-    """Disable PersistSession foreign guard (mutation / scratch only)."""
-    global _persist_foreign_guard
-    _persist_foreign_guard = False
-
 
 def canonical_cwd(path: str | None) -> str | None:
     """Real path with each component spelled as it is on disk (fixes ``~/work`` vs ``~/Work``)."""
@@ -272,7 +246,7 @@ class SessionStore:
                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
         from exo.core.seat_binding_conformance import maybe_note_session_row
 
-        maybe_note_session_row(seat=seat, session_id=sid, foreign=persist_session_marks_foreign(seat))
+        maybe_note_session_row(seat=seat, session_id=sid)
         return sid
 
     def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:

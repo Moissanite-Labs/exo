@@ -85,13 +85,17 @@ class SeatBindingRecorder:
     def session_create_exit(self) -> None:
         self._session_create_depth -= 1
 
-    def note_session_row(self, *, seat: str | None, session_id: str, foreign: bool = False) -> None:
+    def _observed_foreign_on_persist(self, seat: str | None) -> bool:
+        """PersistSession: foreign only when a core seat is loaded and the row seat differs."""
+        if not self.core_loaded or self.core_seat is None:
+            return False
+        return (seat or "") != self.core_seat
+
+    def note_session_row(self, *, seat: str | None, session_id: str) -> None:
         tid = self.trace_id(session_id)
         seat_name = seat or ""
         self.live_ids.add(tid)
         self.session_seats[tid] = seat_name
-        if foreign:
-            self.foreign_ids.add(tid)
         if self._client_new_depth > 0:
             return
         if self._session_create_depth > 0 and self.core_loaded:
@@ -101,6 +105,8 @@ class SeatBindingRecorder:
             self.user_visible_outcome = "created"
             self._emit("session_create", "core", params)
             return
+        if self._observed_foreign_on_persist(seat):
+            self.foreign_ids.add(tid)
         if not self.core_loaded:
             params = {"seat": seat_name, "session_id": tid}
             self._emit("persist_session", "core", params)
@@ -217,9 +223,9 @@ def maybe_note_load_core_seat(seat: str | None) -> None:
         _active.note_load_core_seat(seat)
 
 
-def maybe_note_session_row(*, seat: str | None, session_id: str, foreign: bool = False) -> None:
+def maybe_note_session_row(*, seat: str | None, session_id: str) -> None:
     if _active is not None:
-        _active.note_session_row(seat=seat, session_id=session_id, foreign=foreign)
+        _active.note_session_row(seat=seat, session_id=session_id)
 
 
 def maybe_note_refusal(request_seat: str | None) -> None:
