@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Bootstrap hash when PR base lacks scripts/gate_diff_pr.py (#1147). Update when that file changes.
+  # Bootstrap hashes when PR base predates merge-aware preflight (#1147). Update when those files change.
+  GATE_DIFF_BOOTSTRAP_SHA256: c9d05b36860829f7bc454e80c6a9dcbf1556a237f59f7943fa346e36161f4e21
   GATE_DIFF_PR_BOOTSTRAP_SHA256: 0192fa92069b4ca2409616ced94a4f24c1d050ab2c19c90095eb53e48f824958
 
 jobs:
@@ -53,24 +54,40 @@ jobs:
             echo "gate-preflight: trusted PR base is missing scripts/gate_diff.py" >&2
             exit 2
           fi
+          export GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE"
+          _assert_comparator() {
+            GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" uv run python -c "
+          import os, sys
+          from pathlib import Path
+          root = os.environ['GATE_COMPARATOR_ROOT']
+          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
+          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
+          sys.path.insert(0, root)
+          import scripts.gate_diff as gd
+          assert gd.__file__.startswith(root + os.sep), (gd.__file__, root)
+          "
+          }
+          if ! GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" uv run python -c "
+          import os, sys
+          from pathlib import Path
+          root = os.environ['GATE_COMPARATOR_ROOT']
+          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
+          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
+          sys.path.insert(0, root)
+          import scripts.gate_diff as gd
+          raise SystemExit(0 if hasattr(gd, '_ranks') else 1)
+          "; then
+            echo "gate-preflight: PR base gate_diff.py predates merge-aware API; bootstrap from pinned head copy"
+            git show "$GITHUB_SHA:scripts/gate_diff.py" > "$TRUSTED/scripts/gate_diff.py"
+            echo "${GATE_DIFF_BOOTSTRAP_SHA256}  $TRUSTED/scripts/gate_diff.py" | sha256sum -c -
+          fi
           COMPARATOR="$TRUSTED/scripts/gate_diff_pr.py"
           if [ ! -f "$COMPARATOR" ]; then
             echo "gate-preflight: PR base lacks gate_diff_pr.py; bootstrap from pinned head copy"
             git show "$GITHUB_SHA:scripts/gate_diff_pr.py" > "$COMPARATOR"
             echo "${GATE_DIFF_PR_BOOTSTRAP_SHA256}  $COMPARATOR" | sha256sum -c -
           fi
-          export GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE"
-          uv run python -c "
-          import os, sys
-          from pathlib import Path
-          root = os.environ['GATE_COMPARATOR_ROOT']
-          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
-          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
-          if root not in sys.path:
-              sys.path.insert(0, root)
-          import scripts.gate_diff as gd
-          assert gd.__file__.startswith(root + os.sep), (gd.__file__, root)
-          "
+          _assert_comparator
           GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" PYTHONPATH="$TRUSTED" uv run python "$COMPARATOR" \
             --pr-base "$TRUSTED" \
             --head "$GITHUB_WORKSPACE" \
