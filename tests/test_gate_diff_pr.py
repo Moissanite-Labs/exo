@@ -1,6 +1,7 @@
 """Merge-aware gate preflight (scripts/gate_diff_pr.py)."""
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ FULL_TOOL_OUTPUT_BLOCK = (
     '          and type(args.get("limit", 1)) is int and 1 <= args.get("limit", 1) <= 24000):\n'
     '        c = _make("read", tool=tool, summary="expand retained tool output")\n'
 )
+MB_STRICTER_THAN_PR_BASE = (DELETE_LINE, DELETE_LINE.replace("False", "True"))
 SYNTHETIC_BRIDGE_BLOCK = (
     '    elif tool == "exo_mb_test_tool" and not args:\n'
     '        c = _make("store_write", tool=tool, summary="bridge-only synthetic")\n'
@@ -29,10 +31,13 @@ def _gate_diff_pr(
     merge_base: Path | None = None,
     *args: str,
     timeout: int = 120,
+    comparator_root: Path | None = None,
+    runner: Path | None = None,
 ) -> tuple[object, dict]:
     out = tmp_path / "pr.json"
     out.unlink(missing_ok=True)
-    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    comp_root = comparator_root or ROOT
+    env = {**os.environ, "PYTHONPATH": str(comp_root), "GATE_COMPARATOR_ROOT": str(comp_root)}
     mb = merge_base or pr_base
     base_args = [
         "--git-dir", str(ROOT),
@@ -43,12 +48,42 @@ def _gate_diff_pr(
         "--merge-base", str(mb),
     ]
     proc = __import__("subprocess").run(
-        [sys.executable, str(PR_SCRIPT), "--pr-base", str(pr_base), "--main", str(main), "--head", str(head),
+        [sys.executable, str(runner or PR_SCRIPT), "--pr-base", str(pr_base), "--main", str(main), "--head", str(head),
          *base_args, "--json", str(out), *args],
         capture_output=True, text=True, timeout=timeout, cwd=str(ROOT), env=env,
     )
     return proc, (json.loads(out.read_text(encoding="utf-8")) if out.exists() else {})
 
+
+def _trusted_comparator_tree(tmp_path: Path, name: str = "trusted") -> Path:
+    """Minimal tree layout for a trusted comparator checkout (scripts only)."""
+    trusted = tmp_path / name
+    (trusted / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts" / "gate_diff.py", trusted / "scripts" / "gate_diff.py")
+    shutil.copy(ROOT / "scripts" / "gate_diff_pr.py", trusted / "scripts" / "gate_diff_pr.py")
+    return trusted
+
+
+def test_head_gate_diff_pr_stub_does_not_replace_trusted_comparator(tmp_path):
+    """Workflow runs the PR-base comparator path; a stub ``gate_diff_pr.py`` on head must not affect the run."""
+    patch = (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible"))
+    pr_base = _tree(tmp_path, "pr_base")
+    mb = _tree(tmp_path, "mb")
+    main = _tree(tmp_path, "main")
+    head = _tree(tmp_path, "head", patch)
+    trusted = _trusted_comparator_tree(tmp_path)
+    workspace = tmp_path / "workspace"
+    shutil.copytree(ROOT, workspace, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
+    (workspace / "scripts" / "gate_diff_pr.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    corpus = tmp_path / "corpus-trust.txt"
+    corpus.write_text("rm notes.txt\n", encoding="utf-8")
+    proc, rep = _gate_diff_pr(
+        pr_base, main, head, tmp_path, mb,
+        "--only-corpus", "--no-variants", "--corpus", str(corpus), "--pick", "default", "--jobs", "1",
+        comparator_root=trusted, runner=trusted / "scripts" / "gate_diff_pr.py",
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert rep["merge_aware"]["counts"]["forbidden_vs_base"] >= 1
 
 def test_a_lowered_pair_main_changed_since_mb_untouched_by_bridge_is_allowed(tmp_path):
     patch = (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible"))
@@ -144,3 +179,54 @@ def test_a_pair_lowered_vs_main_fails(tmp_path):
                               "--corpus", str(corpus), "--pick", "default", "--jobs", "1")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert rep["merge_aware"]["counts"]["lowered_vs_main"] >= 1
+
+
+def test_allow_rule_requires_pr_base_decision_equals_merge_base_decision(tmp_path):
+    """Kills mutation dropping ``db == dmb`` from the allow rule."""
+    patch_allow = (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible"))
+    mb = _tree(tmp_path, "mb", MB_STRICTER_THAN_PR_BASE)
+    pr_base = _tree(tmp_path, "pr_base")
+    main = _tree(tmp_path, "main", patch_allow)
+    head = _tree(tmp_path, "head", patch_allow)
+    corpus = tmp_path / "c-allow-db-dmb.txt"
+    corpus.write_text("rm notes.txt\n", encoding="utf-8")
+    proc, rep = _gate_diff_pr(pr_base, main, head, tmp_path, mb, "--only-corpus", "--no-variants",
+                              "--corpus", str(corpus), "--pick", "default", "--jobs", "1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    ma = rep["merge_aware"]["counts"]
+    assert ma["allowed_because_main"] == 0
+    assert ma["forbidden_vs_base"] >= 1
+
+
+def test_exit_status_nonzero_when_only_lowered_vs_main(tmp_path):
+    """Kills mutation ignoring ``lowered_vs_main`` in the exit code."""
+    patch_allow = (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible"))
+    mb = _tree(tmp_path, "mb", patch_allow)
+    pr_base = _tree(tmp_path, "pr_base", patch_allow)
+    main = _tree(tmp_path, "main")
+    head = _tree(tmp_path, "head", patch_allow)
+    corpus = tmp_path / "c-exit-main.txt"
+    corpus.write_text("rm notes.txt\n", encoding="utf-8")
+    proc, rep = _gate_diff_pr(pr_base, main, head, tmp_path, mb, "--only-corpus", "--no-variants",
+                              "--corpus", str(corpus), "--pick", "default", "--jobs", "1")
+    ma = rep["merge_aware"]["counts"]
+    assert ma["lowered_vs_main"] >= 1
+    assert ma["forbidden_vs_base"] == 0
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+def test_allow_compares_full_decision_tuple_not_outcome_only(tmp_path):
+    """Kills mutation using ``db[0] == dmb[0]`` instead of ``db == dmb`` on the allow rule."""
+    patch_allow = (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible"))
+    mb = _tree(tmp_path, "mb", MB_STRICTER_THAN_PR_BASE)
+    pr_base = _tree(tmp_path, "pr_base")
+    main = _tree(tmp_path, "main", patch_allow)
+    head = _tree(tmp_path, "head", patch_allow)
+    corpus = tmp_path / "c-tuple-allow.txt"
+    corpus.write_text("rm notes.txt\n", encoding="utf-8")
+    proc, rep = _gate_diff_pr(pr_base, main, head, tmp_path, mb, "--only-corpus", "--no-variants",
+                              "--corpus", str(corpus), "--pick", "default", "--jobs", "1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    ma = rep["merge_aware"]["counts"]
+    assert ma["allowed_because_main"] == 0
+    assert ma["forbidden_vs_base"] >= 1

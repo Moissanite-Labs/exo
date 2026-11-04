@@ -19,6 +19,10 @@ concurrency:
   group: gate-preflight-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  # Bootstrap hash when PR base lacks scripts/gate_diff_pr.py (#1147). Update when that file changes.
+  GATE_DIFF_PR_BOOTSTRAP_SHA256: ae132ae1aab529a73883086415d5f4e73bdf9b7f310ee36f08fd740a76c59e9a
+
 jobs:
   never-looser:
     runs-on: ubuntu-latest
@@ -36,12 +40,32 @@ jobs:
       - name: Gate plugin acceptance
         working-directory: plugins/exo-gate
         run: uv run --project ../.. pytest -q
-      - name: Merge-aware gate preflight
+      - name: Merge-aware gate preflight (trusted comparator)
         run: |
+          set -euo pipefail
           git fetch origin main
-          git worktree add --detach "$RUNNER_TEMP/gate-pr-base" "$BASE_SHA"
-          uv run python scripts/gate_diff_pr.py \
-            --pr-base "$RUNNER_TEMP/gate-pr-base" \
+          TRUSTED="$RUNNER_TEMP/gate-pr-base"
+          git worktree add --detach "$TRUSTED" "$BASE_SHA"
+          export GATE_COMPARATOR_ROOT="$TRUSTED"
+          export PYTHONPATH="$TRUSTED"
+          mkdir -p "$TRUSTED/scripts"
+          if [ ! -f "$TRUSTED/scripts/gate_diff.py" ]; then
+            echo "gate-preflight: trusted PR base is missing scripts/gate_diff.py" >&2
+            exit 2
+          fi
+          COMPARATOR="$TRUSTED/scripts/gate_diff_pr.py"
+          if [ ! -f "$COMPARATOR" ]; then
+            echo "gate-preflight: PR base lacks gate_diff_pr.py; bootstrap from pinned head copy"
+            git show "$GITHUB_SHA:scripts/gate_diff_pr.py" > "$COMPARATOR"
+            echo "${GATE_DIFF_PR_BOOTSTRAP_SHA256}  $COMPARATOR" | sha256sum -c -
+          fi
+          uv run python -c "
+          import os, scripts.gate_diff as gd
+          root = os.environ['GATE_COMPARATOR_ROOT']
+          assert gd.__file__.startswith(root + os.sep), (gd.__file__, root)
+          "
+          uv run python "$COMPARATOR" \
+            --pr-base "$TRUSTED" \
             --head "$GITHUB_WORKSPACE" \
             --git-dir "$GITHUB_WORKSPACE" \
             --pr-base-ref "$BASE_SHA" \

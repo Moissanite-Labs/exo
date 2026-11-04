@@ -94,3 +94,9 @@ def test_update_meta_keeps_every_key_written_from_many_threads():
     assert store.get_meta(sid) == {"keep": 1, "k0": 49, "k1": 49, "k2": 49, "k3": 49}
     store.lock(sid, "done")
     assert store.get_meta(sid) == {"keep": 1, "k0": 49, "k1": 49, "k2": 49, "k3": 49, "locked": "done"}
+
+
+def test_update_meta_skips_when_session_row_is_missing():
+    store = SessionStore()
+    assert store.update_meta("missing-session", {"seen_pos": 1}) is None
+    assert store.update_meta("missing-session", lambda meta: meta.update(seen_pos=2)) is None

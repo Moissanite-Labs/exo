@@ -305,7 +305,7 @@ class SessionStore:
         def write(db: sqlite3.Connection) -> Any:
             row = db.execute("SELECT meta FROM sessions WHERE id=?", (sid,)).fetchone()
             if row is None:
-                raise KeyError(sid)
+                return None
             meta = json.loads(row["meta"])
             if callable(changes):
                 result = changes(meta)
