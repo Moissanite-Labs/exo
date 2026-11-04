@@ -39,3 +39,35 @@ def test_search_owner_boundary(tmp_path, seat):
         finally:
             await eng.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("recall", [False, True], ids=["protocol-history", "agent-log-recall"])
+def test_shared_bm25_statistics_can_reorder_owned_hits(tmp_path, recall):
+    """Characterize the known ranking residual; an owner-isolated ranking fix should replace this expectation."""
+    async def run():
+        eng = _engine(tmp_path, "worker")
+        try:
+            own = eng.store.create_session(agent="worker")
+            foreign = eng.store.create_session(agent="other")
+            first = eng.store.append_message(own.id, Message.user("beaconzebra beaconzebra beaconzebra controlterm"))
+            second = eng.store.append_message(own.id, Message.user("beaconzebra controlterm controlterm controlterm"))
+            # Give both query terms positive IDF before the foreign insert; these rows never match the query.
+            for _ in range(3):
+                eng.store.append_message(own.id, Message.user("neutral background filler"))
+
+            async def hits():
+                if recall:
+                    return eng.store.search("beaconzebra controlterm", agent="worker", owner="worker")
+                response = await Dispatcher(eng).run(s.Command.of(s.Search(query="beaconzebra controlterm")))
+                assert response.ok, response.error
+                return response.result["results"]
+
+            before = await hits()
+            assert [hit["message_id"] for hit in before] == [first.id, second.id]
+            eng.store.append_message(foreign.id, Message.user("beaconzebra synthetic background"))
+            after = await hits()
+            assert [hit["message_id"] for hit in after] == [second.id, first.id]
+            assert all(hit["session"] == own.id for hit in before + after)
+        finally:
+            await eng.close()
+    asyncio.run(run())
