@@ -55,6 +55,7 @@ jobs:
       # Plugin suites reach for a bus; point them at a closed port so nothing leaves the runner.
       EXO_BUS_URL: http://127.0.0.1:9
       EXO_BUS_SEAT: builder
+      EXO_NATIVE_KEYCHAIN_TEST: ${{ matrix.os == 'macos-latest' && '1' || '' }}
       # Nightly schedule stays serial; pull_request, merge_group, and push to main use xdist.
       PYTEST_PARALLEL: ${{ github.event_name == 'schedule' && '' || '-n auto' }}
     steps:
@@ -63,6 +64,35 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-extras --python ${{ matrix.python }}
+      - name: Prepare temporary keychain for native tests
+        if: runner.os == 'macOS'
+        run: |
+          KEYCHAIN=exo-ci-native.keychain-db
+          KEYCHAIN_PATH="$HOME/Library/Keychains/$KEYCHAIN"
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "CI_KEYCHAIN_HOME=$HOME" >> "$GITHUB_ENV"
+      - name: Native macOS Keychain evidence
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -o pipefail
+          ulimit -n 4096
+          output=$(uv run pytest tests/test_macos_keychain_native.py -v -rA -W error 2>&1 | tee /dev/stderr)
+          if echo "$output" | grep -q SKIPPED; then
+            echo "native Keychain test must not be skipped on macOS CI"
+            exit 1
+          fi
+          case "$output" in
+            *PASSED\ tests/test_macos_keychain_native.py::test_native_keychain_large_generic_password_round_trip*) ;;
+            *)
+              echo "expected explicit PASSED line for native Keychain test"
+              exit 1
+              ;;
+          esac
       - name: Root suite
         run: |
           ulimit -n 4096
@@ -88,3 +118,7 @@ jobs:
         run: |
           ulimit -n 4096
           uv run pytest plugins -q $PYTEST_PARALLEL
+      - name: Remove temporary keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
