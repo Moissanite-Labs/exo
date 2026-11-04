@@ -4887,6 +4887,52 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   skipped in that way, as on d3cbd874.
   *Revisit if:* the gate parses bash's command positions itself: `_parse_line`'s opener check then takes `head`
   and `pre` and this second reading can go.
+- *Amendment 2026-11-01 (issue #1095, to the #479 amendment's decision):* a reserved word right after a compound's
+  closer, with no `;` between, is read as after `;`. bash ends a command at `done`, `fi`, `esac` and `}`, so it
+  takes `done }`, `done fi`, `done done`, `done esac`, `done then`, `done else`, `done elif`, `fi done` and
+  `} done` as their forms with a `;`.
+
+  `bash -n` 5.2.21 parses each, and `{ for i in 1 2; do cd /; done }; pwd` prints `/`. `_parse_line` kept such a
+  closer and the word after it in one command. It closed both compounds there, but the command's `opens` named
+  the last one only.
+
+  `_loop_spans` takes a loop only at a command whose leading reserved words end with `done`, so the loop got no
+  second reading. `_feed_compound` ran for the last closer only too, so a pipe into the loop did not reach its
+  body.
+
+  On main b6670ab8 `{ for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done }` and its
+  `if true; then ..; done fi` form were allowed reads, also under `deny: [store_write]`. Their `done; }` and
+  `done; fi` forms ask as a principal-only `store_write` and deny there. The `case`, function, `then`, `else` and
+  `elif` forms asked as `opaque_exec` or were reads, and none denied.
+
+  `{ cat cmds | while read l; do ssh h; done }` was an allowed `shell` line, where its `done; }` form asks as
+  `opaque_exec` (#316), and so were the same pipe into an `if` before `fi fi` and into a loop before `done done`.
+
+  Now `_parse_line` ends the command at the closer before such a word (`_AFTER_CLOSER`), as it does at a `;`. Each
+  closer is then a command of its own, with its own `opens` and feed, so the line is read as its form with a `;`,
+  by main's reading and by #479's second reading alike. #867's reading (#894) finds each loop there too, so
+  `{ for ..; cd /dev/fd; done; for ..; cd /proc/self/fd; done }` names both folders, as with the `;`.
+
+  Unlike #853 and #864, this needs no reading beside main's. bash runs the two forms the same, and the change only
+  gives the first form what the second already has.
+
+  Words bash rejects there are read as before: any other word right after a closer (`done if`, `done {`,
+  `done !`, `done for`), a word after a closer's redirection (`done > f }`) and a quoted word (`done "}"`).
+  Each of the eight words in a place where bash rejects it (`done then` outside an `if` condition, `done do`
+  outside a `while` condition, `done fi` with no `if` open) is read as its `;` form. bash rejects that form as well
+  and runs nothing there.
+
+  `done )` was already read as `done; )`, since the lexer ends a command at `)`. So were nested loops closed by
+  `done done` alone or in a subshell, since the outer loop's span holds the inner one.
+
+  Known limit, not part of this change: a closer right after `]]` or `))` is still a word to `_parse_line`
+  (`[[ -d x ]] done`). There `[[` reads as an unknown program, so such a line asks as on main.
+
+  Against main b6670ab8, main's `scripts/gate_diff.py` lowers nothing on any axis in three runs. The built-in corpus
+  without variants holds 1,393,040 pairs and with variants 10,138,656 pairs, none tightened in either. An aimed
+  corpus of 9,859 lines holds 2,780,238 pairs, 136,211 of them tightened. It puts each word after each closer, with
+  and without `;`, under 13 bodies, and adds the words bash rejects there and the `]]` and `))` limit. It runs under
+  the 88 built-in policies and 53 deny, reserved and rule policies.
 ### Amendment proposal, 2026-10-29: Invariant gh field parsing (#550)
 
 The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.

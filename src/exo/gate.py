@@ -2142,6 +2142,10 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             (a, o_end), o_tok = marks[i], i
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
+            if lead and cur.words and not v.quoted and v.text in _AFTER_CLOSER and not cur.words[-1].quoted \
+                    and cur.words[-1].text in _COMPOUND_CLOSERS and not (cur.redirs or cur.heredocs or cur.herestrings):
+                after = None
+                end()           # #1095: `done }` is read as `done; }`, so the closer is a command of its own
             if i not in prefix and not v.quoted and v.text == "time" and _command_word(cur.words, head, pre) \
                     and _time_at(cur, toks, i):
                 prefix.update(_time_prefix(toks, i))
@@ -4645,6 +4649,12 @@ def _stdin_texts(k: _Cmd, piped: str | None, shell: bool = False) -> list[str]:
 # A compound command's closing word, and the openers it closes.
 _COMPOUND_CLOSERS = {"}": ("{",), "done": ("while", "until", "for", "select"), "fi": ("if",), "esac": ("case",)}
 _COMPOUND_OPENERS = frozenset(o for names in _COMPOUND_CLOSERS.values() for o in names)
+# #1095: the reserved words bash reads right after a compound's closer with no `;` between (`done }`, `fi done`,
+# `done then`, `esac fi`). The closer ends a command there, so _parse_line ends it before such a word, as at a `;`,
+# and #479's loop reading finds the loop's `done`. Any other word right after a closer (`done if`, `done {`,
+# `done !`), a closer with a redirection (`done > f }`) and a quoted word are syntax errors or plain words in bash,
+# and _parse_line reads them as before.
+_AFTER_CLOSER = frozenset({"}", "done", "fi", "esac", "then", "do", "else", "elif"})
 _READ_REDIRS = ("<", "<&", "<>")
 
 
