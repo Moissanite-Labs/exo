@@ -20,6 +20,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_real_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Root conftest sets EXO_NO_KEYCHAIN=1; this test must call Security.framework."""
+    monkeypatch.delenv('EXO_NO_KEYCHAIN', raising=False)
+
+
 def _synthetic_utf8(nbytes: int) -> str:
     """Return a UTF-8 string whose encoded length is exactly ``nbytes``."""
     if nbytes <= 0:
