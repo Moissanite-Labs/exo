@@ -11,9 +11,10 @@ This connection uses OpenAI's [Sign in with ChatGPT for open-source apps](https:
 It has its own Exo registration and does not read or replace a Codex or Hermes login. It does not import
 ChatGPT conversations. Existing Exo sessions and memory stay in the shared Exo home.
 
-Connection management is available in the desktop and web Providers view attached to the core. Direct
-standalone CLI router commands, including `exo models --remote chatgpt`, do not yet attach this account
-connection. Use the app's account model list for this provider.
+Connection management is available in the desktop and web Providers view attached to the core. The
+connection card is its own section. An empty model list removes the default-model section and leaves this
+card in place. Direct standalone CLI router commands, including `exo models --remote chatgpt`, do not yet
+attach this account connection. Use the app's account model list for this provider.
 
 ## Accounts and plan usage
 
