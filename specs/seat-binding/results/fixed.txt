@@ -1,7 +1,29 @@
 # TLC: SeatBinding.cfg (Fixed = TRUE, post-5ba3813)
 TLC2 Version 2026.11.03.180953 (rev: 309e489)
-Running breadth-first search Model-Checking with fp 21 and seed -720397591111210378 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 6777] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
-...
+Running breadth-first search Model-Checking with fp 79 and seed 8359883042962658643 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 8488] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /agent/repos/exo/specs/seat-binding/SeatBinding.tla
+Parsing file /tmp/tlc-12074422351510230278/Naturals.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-12074422351510230278/FiniteSets.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-12074422351510230278/_TLCTrace.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-12074422351510230278/Sequences.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-12074422351510230278/TLC.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-12074422351510230278/TLCExt.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-12074422351510230278/Integers.tla (jar:file:/agent/repos/exo/specs/seat-binding/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Integers
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module SeatBinding
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module SeatBinding
+Starting... (2026-11-04 07:07:45)
+Computing initial states...
+Computed 2 initial states...
+Finished computing initial states: 3 distinct states generated at 2026-11-04 07:07:45.
 Model checking completed. No error has been found.
   Estimates of the probability that TLC did not check all reachable states
   because two distinct states had the same fingerprint:
@@ -9,4 +31,4 @@ Model checking completed. No error has been found.
 42393 states generated, 5115 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 8.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 12 and the 95th percentile is 3).
-Finished in 00s at (2026-11-04 07:00:29)
+Finished in 00s at (2026-11-04 07:07:45)
