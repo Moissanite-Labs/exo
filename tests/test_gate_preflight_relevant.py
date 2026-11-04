@@ -1,7 +1,5 @@
 """scripts/gate_preflight_relevant.py: path filter for the never-looser workflow."""
 
-import os
-
 from scripts import gate_preflight_relevant
 from scripts.gate_preflight_relevant import (
     GATE_RELEVANT_PATTERNS,
