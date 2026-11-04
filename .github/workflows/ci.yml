@@ -7,7 +7,7 @@ on:
   merge_group:
     types: [checks_requested]
   schedule:
-    # Nightly full suite for checks skipped on pull_request (see Plugins collected together).
+    # Serial full suite (no xdist) to catch order-dependent bugs; includes the aggregate plugin pass.
     - cron: "0 6 * * *"
 
 permissions:
@@ -55,8 +55,8 @@ jobs:
       # Plugin suites reach for a bus; point them at a closed port so nothing leaves the runner.
       EXO_BUS_URL: http://127.0.0.1:9
       EXO_BUS_SEAT: builder
-      # Parallel root/plugin runs on pull_request only; merge_group, main, and schedule run the full path.
-      PYTEST_PARALLEL: ${{ github.event_name == 'pull_request' && '-n auto' || '' }}
+      # Nightly schedule stays serial; pull_request, merge_group, and push to main use xdist.
+      PYTEST_PARALLEL: ${{ github.event_name == 'schedule' && '' || '-n auto' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -82,7 +82,9 @@ jobs:
             fi
           done
           exit $status
-      # Redundant with per-plugin runs (same 3765 tests) but kept off pull_request for wall time; still runs on main, merge queue, and nightly.
+      # Same 3765 tests as the loop; skipped on pull_request only. Serial on schedule, parallel otherwise.
       - name: Plugins collected together
         if: github.event_name != 'pull_request'
-        run: uv run pytest plugins -q
+        run: |
+          ulimit -n 4096
+          uv run pytest plugins -q $PYTEST_PARALLEL
