@@ -25,7 +25,15 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterator
 
-_REPO = Path(__file__).resolve().parents[1]
+def _comparator_repo() -> Path:
+    """Directory whose ``scripts/gate_diff`` (and this runner when present) are trusted comparator code."""
+    env = os.environ.get("GATE_COMPARATOR_ROOT")
+    if env:
+        return Path(env).resolve()
+    return Path(__file__).resolve().parents[1]
+
+
+_REPO = _comparator_repo()
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
