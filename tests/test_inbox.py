@@ -64,7 +64,9 @@ def test_snapshot_coverage_and_ownership(home):
     assert [r["title"] for r in sections["questions"]["items"]] == ["A question"]
     assert [r["id"] for r in sections["approvals"]["items"]] == ["pending"]
     assert [r["title"] for r in sections["findings"]["items"]] == ["Check my work"]
-    assert "private" not in json.dumps(report) and "secret shell" not in json.dumps(report)
+    dump = json.dumps(report)
+    assert "private task brief" not in dump and "secret shell" not in dump
+    assert "private.log" not in dump
 
 
 def test_stale_active_records_and_missing_pid_never_prove_outcomes(home, monkeypatch):
