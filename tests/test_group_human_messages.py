@@ -1,3 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from threading import Barrier
+
 import pytest
 
 from exo.core.group_messages import GroupMessages
@@ -109,3 +113,72 @@ def test_old_schema_migration_and_reopen(tmp_path):
         assert messages.pending(group.id, owner="human", member="two") == [human]
     finally:
         store.close()
+
+
+def test_observation_preserves_mixed_receipts_and_sessions(room):
+    store, gid, messages = room
+    broadcast = messages.send_human(gid, owner="one", audience=["lead", "one", "two"], text="shared")
+    messages.pending(gid, owner="one", member="lead")
+    messages.consume(gid, owner="one", member="lead", message_id=broadcast.id)
+    messages.pending(gid, owner="one", member="two")
+
+    def snapshot():
+        return {table: [dict(row) for row in store._q(f"SELECT * FROM {table} ORDER BY rowid")]
+                for table in ("swarm_messages", "swarm_delivery", "sessions")}
+
+    before = snapshot()
+    assert {(r["delivered"], r["consumed"]) for r in before["swarm_delivery"]} == {(0, 0), (1, 0), (1, 1)}
+    assert messages.observe(gid, owner="one", limit=1) == [broadcast]
+    for member in ("lead", "one", "two"):
+        assert messages.history(gid, owner="one", member=member, limit=1) == [broadcast]
+    assert snapshot() == before
+    with pytest.raises(ValueError, match="not been delivered"):
+        messages.consume(gid, owner="one", member="one", message_id=broadcast.id)
+    assert snapshot() == before
+
+
+def test_interleaved_history_filters_before_every_page(room):
+    _, gid, messages = room
+    foreign = messages.groups.create(owner="other", mode="socratic", members=["one", "two"],
+                                    known_profiles=["one", "two"])
+    visible = []
+    for _ in range(12):
+        messages.send_human(foreign.id, owner="other", audience=["one"], text="foreign")
+        messages.send_human(gid, owner="one", audience=["two"], text="hidden")
+        visible.append(messages.send_human(gid, owner="one", audience=["one"], text="visible"))
+    seen, after = [], 0
+    while page := messages.history(gid, owner="one", member="one", after=after, limit=2):
+        seen.extend(page)
+        after = page[-1].seq
+    assert seen == visible
+    assert len(messages.observe(gid, owner="one")) == 24
+
+
+def test_concurrent_old_schema_migration_keeps_default_and_reopens(tmp_path):
+    path = tmp_path / "migration.sqlite"
+    with closing(SessionStore(path)) as store:
+        groups = GroupStore(store)
+        group = groups.create(owner="human", mode="socratic", members=["one", "two"],
+                              known_profiles=["one", "two"])
+        store._q("CREATE TABLE swarm_messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+                 "id TEXT NOT NULL UNIQUE, group_id TEXT NOT NULL, sender TEXT NOT NULL, "
+                 "audience TEXT NOT NULL, text TEXT NOT NULL, created TEXT NOT NULL)")
+        store._q("INSERT INTO swarm_messages (id,group_id,sender,audience,text,created) VALUES (?,?,?,?,?,?)",
+                 ("legacy", group.id, "one", '["two"]', "legacy text", "now"))
+    barrier = Barrier(6)
+    def initialize(_):
+        with closing(SessionStore(path)) as store:
+            groups = GroupStore(store)
+            barrier.wait(timeout=5)
+            return GroupMessages(groups).observe(group.id, owner="human")[0].sender_kind
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        assert list(pool.map(initialize, range(6))) == ["member"] * 6
+    with closing(SessionStore(path)) as store:
+        messages = GroupMessages(GroupStore(store))
+        store._q("INSERT INTO swarm_messages (id,group_id,sender,audience,text,created) VALUES (?,?,?,?,?,?)",
+                 ("later-legacy", group.id, "one", '["two"]', "later text", "now"))
+        assert [m.sender_kind for m in messages.observe(group.id, owner="human")] == ["member", "member"]
+        human = messages.send_human(group.id, owner="human", audience=["two"], text="human text")
+    with closing(SessionStore(path)) as store:
+        messages = GroupMessages(GroupStore(store))
+        assert messages.observe(group.id, owner="human")[-1] == human
