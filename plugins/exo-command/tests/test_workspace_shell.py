@@ -91,7 +91,7 @@ def test_appearance_controls_persist_choice_and_do_not_change_route_or_draft():
                 assert b.eval("location.hash") == "#chat"
                 assert b.eval("[document.querySelector('.xc-input').value,document.querySelector('.xc-input').selectionStart,document.querySelector('.xc-input').selectionEnd]") == ["keep this draft", 2, 6]
             b.eval("document.querySelector('.xc-appearance').value='light';document.querySelector('.xc-appearance').dispatchEvent(new Event('change'))")
-            b.eval("location.reload()")
+            b.reload()
             b.wait("document.documentElement.dataset.theme === 'light' && !!document.querySelector('.xc-appearance')")
             assert b.eval("document.querySelector('.xc-appearance').value") == "light"
             assert b.eval("sessionStorage.getItem('xc-token')") == srv.token
@@ -103,6 +103,7 @@ def test_appearance_controls_persist_choice_and_do_not_change_route_or_draft():
 @pytest.mark.skipif(not shutil.which("node"), reason="Node is needed")
 def test_slow_bootstrap_keeps_route_changes_and_initial_panels_before_mount(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
+    (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>"test-token",redeem=async()=>({});

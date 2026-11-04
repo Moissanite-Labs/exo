@@ -50,6 +50,7 @@ def test_loaded_search_filters_preserve_active_conversation_and_draft():
     try:
         with Browser(width=1200, height=900) as b:
             b.goto(srv.url()); b.wait("document.querySelectorAll('.xc-sess').length===3 && !!document.querySelector('[aria-current=true]')")
+            b.settle()   # the stream's first catch-up reads the snapshot again: that read is not the filter's
             assert b.eval("document.querySelector('.xc-sess[aria-current=true]').textContent.includes('Ship <img')")
             assert not b.eval("!!document.querySelector('.xc-sessions img')")
             put(b, '.xc-composer .xc-input', 'keep this draft', 2, 7)
@@ -93,9 +94,9 @@ def test_show_latest_keeps_reading_position_and_selection_during_stream(layout, 
     src = WorkspaceSource(); srv = Served(src)
     try:
         with Browser(width=width, height=900) as b:
-            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.goto(srv.url())
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
             b.wait("document.querySelectorAll('.xc-msg').length>30")
-            b.eval("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
+            b.settle()   # the start-up redraw is done, so the element read below is the one on screen
             put(b, '.xc-composer .xc-input', 'keep selection', 2, 6)
             b.eval(f"(()=>{{const l=document.querySelector('.xc-log');l.scrollTop={('400' if layout == 'inverse' else 'Math.max(0,l.scrollHeight-l.clientHeight-400)')};l.dispatchEvent(new Event('scroll'));"
                    "window.readingElement=[...l.children].find(e=>e.getBoundingClientRect().bottom>l.getBoundingClientRect().top+10);window.readingTop=readingElement.getBoundingClientRect().top;})()")
@@ -112,6 +113,72 @@ def test_show_latest_keeps_reading_position_and_selection_during_stream(layout, 
             position = b.eval("(()=>{const l=document.querySelector('.xc-log');return [l.scrollTop,l.scrollHeight-l.clientHeight]})()")
             assert abs(position[0] - (0 if layout == 'inverse' else position[1])) < 2
             assert b.eval('document.documentElement.scrollWidth<=innerWidth')
+    finally:
+        srv.close()
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_a_stream_catch_up_keeps_the_reader_where_they_were(layout):
+    """Each time the event stream catches up (on load, and after any reconnect) the view reads its snapshot again and
+    redraws the transcript. A reader who scrolled away from the newest messages stays where they were, as they do
+    when new output arrives; a reader at the newest messages stays there."""
+    src = WorkspaceSource(); srv = Served(src)
+    try:
+        with Browser(width=1200, height=900) as b:
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
+            b.wait("document.querySelectorAll('.xc-msg').length>30")
+            b.settle()
+            top = b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop="
+                         + ('400' if layout == 'inverse' else 'l.scrollHeight-l.clientHeight-400') + ";return l.scrollTop;})()")
+            b.wait("!document.querySelector('.xc-latest').hidden")
+            reads = src.calls.count('session.get')
+            b.eval("import('/static/bus.js').then(bus=>{bus.restart();return true;})")
+            b.settle(syncs=2)
+            assert src.calls.count('session.get') > reads   # the catch-up did read and redraw the snapshot
+            assert abs(b.eval("document.querySelector('.xc-log').scrollTop") - top) < 2
+            assert not b.eval("document.querySelector('.xc-latest').hidden")
+            b.eval("document.querySelector('.xc-latest').click()")
+            b.wait("document.querySelector('.xc-latest').hidden")
+            b.eval("import('/static/bus.js').then(bus=>{bus.restart();return true;})")
+            b.settle(syncs=3)
+            position = b.eval("(()=>{const l=document.querySelector('.xc-log');return [l.scrollTop,l.scrollHeight-l.clientHeight]})()")
+            assert abs(position[0] - (0 if layout == 'inverse' else position[1])) < 2
+            assert b.eval("document.querySelector('.xc-latest').hidden")
+    finally:
+        srv.close()
+
+
+# The first message at least partly in view, and how far its top sits below the top of the transcript's box.
+READING = ("(()=>{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+           "const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.getBoundingClientRect().bottom>top);"
+           "return [m.textContent,m.getBoundingClientRect().top-top];})()")
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_a_catch_up_with_new_messages_keeps_the_message_being_read_in_place(layout):
+    """A catch-up can bring messages that came while the stream was down. The redraw adds them on the newest side
+    (above the reader in the inverse layout, below in classic), and the message the reader was looking at stays
+    where it was on screen."""
+    src = WorkspaceSource(); srv = Served(src)
+    try:
+        with Browser(width=1200, height=900) as b:
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
+            b.wait("document.querySelectorAll('.xc-msg').length>30")
+            b.settle()
+            b.eval("(()=>{const l=document.querySelector('.xc-log');l.scrollTop="
+                   + ('400' if layout == 'inverse' else 'l.scrollHeight-l.clientHeight-400') + ";})()")
+            b.wait("!document.querySelector('.xc-latest').hidden")
+            count = b.eval("document.querySelectorAll('.xc-log .xc-msg').length")
+            text, offset = b.eval(READING)
+            src.pairs += 3   # three exchanges arrive while the stream is down
+            b.eval("import('/static/bus.js').then(bus=>{bus.restart();return true;})")
+            b.settle(syncs=2)
+            assert b.eval("document.querySelectorAll('.xc-log .xc-msg').length") == count + 6
+            moved = b.eval(f"(()=>{{const top=document.querySelector('.xc-log').getBoundingClientRect().top;"
+                           f"const m=[...document.querySelectorAll('.xc-log .xc-msg')].find(e=>e.textContent==={json.dumps(text)});"
+                           f"return m.getBoundingClientRect().top-top-({offset});}})()")
+            assert abs(moved) < 2
+            assert not b.eval("document.querySelector('.xc-latest').hidden")
     finally:
         srv.close()
 
@@ -223,8 +290,9 @@ def test_appending_inside_a_tall_stream_does_not_move_the_prefix_being_read(layo
     src = WorkspaceSource(pairs=0); srv = Served(src)
     try:
         with Browser(width=1200, height=900) as b:
-            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.goto(srv.url())
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
             b.wait("!!document.querySelector('.xc-sess[aria-current=true]')")
+            b.settle()   # a start-up redraw after the reader scrolls would be a second, unrelated move
             srv.call(srv.centre.record, {'seq': 1, 'type': 'message.delta', 'session': 's1',
                 'body': {'message_id': 'long-stream', 'text': 'An unchanged prefix. ' + 'A long response is still being written. ' * 1800}})
             b.wait("document.querySelector('.xc-streaming')?.textContent.length>50000")
@@ -274,9 +342,9 @@ def test_pending_home_frame_cannot_override_a_newer_reader_position(layout):
     src = WorkspaceSource(pairs=0); srv = Served(src)
     try:
         with Browser(width=1200, height=900) as b:
-            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.goto(srv.url())
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.reload()
             b.wait("!!document.querySelector('.xc-sess[aria-current=true]')")
-            b.eval('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+            b.settle()
             put(b, '.xc-composer .xc-input', 'keep the draft', 2, 6)
             b.eval('window.nativeFrame=requestAnimationFrame;window.heldFrames=[];window.requestAnimationFrame=callback=>heldFrames.push(callback)')
             srv.call(srv.centre.record, {'seq': 1, 'type': 'message.delta', 'session': 's1',

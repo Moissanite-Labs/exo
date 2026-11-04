@@ -76,7 +76,7 @@ class SqliteLog:
         self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
-        return self.store.events_since(since, session, limit=1 << 30, with_global=True)
+        return self.store.iter_events(since, session, with_global=True)  # page by page (#254)
 
     def last_seq(self) -> int:
         return self.store.last_event_seq()
@@ -272,6 +272,8 @@ class CoreRuntime:
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        if (task := self._started) is not None and task.done() and (task.cancelled() or task.exception() is not None):
+            self._started = None  # it raised (the _main_status provider probe, say) or was cancelled. A running one stays.
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -280,14 +282,7 @@ class CoreRuntime:
             self._started = asyncio.ensure_future(self._start_runtime())
             if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
-        try:
-            await asyncio.shield(self._started)
-        except BaseException:
-            # A start that raised (the _main_status provider probe, any error) or was cancelled is cleared to retry.
-            task = self._started
-            if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
-                self._started = None
-            raise
+        await asyncio.shield(self._started)
 
     async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         from exo import providers_setup
@@ -342,7 +337,7 @@ class CoreRuntime:
         self._writer = None
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp, self.router.aclose):
             try:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
@@ -706,7 +701,7 @@ class CoreRuntime:
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
-        return {"tasks": self.agents.list(b.session)}
+        return {"tasks": self.agents.list(b.session, active=b.active)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         self.approvals.respond(b)

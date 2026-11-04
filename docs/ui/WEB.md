@@ -13,6 +13,39 @@ Navigation links support browser Back and Forward. The keyboard skip link moves 
 content. Changing views preserves the navigation nodes and each conversation's page-memory draft.
 “Connected” describes the event connection, while the conversation reports its own work state.
 
+## Native display preferences
+
+An installed desktop host may inject `window.__exoDesktopPrefs` before scripts run. The shared web client
+validates its display choices and gives them priority over browser storage left behind on a reused loopback
+port. Browser-only sessions retain their current storage behavior. The host owns persistence and its seat/core
+scope; this bridge does not open a file or infer a seat from conversation data.
+
+Only `view`, `thread`, `layout`, `appearance`, `petMode` and a transcript `scroll` fraction cross
+`window.webkit.messageHandlers.exoDesktop.postMessage`. Thread IDs accept letters, digits, underscores and
+hyphens up to 200 characters; scroll is a finite fraction from zero to one. Null clears thread and scroll.
+No token, prompt, draft, transcript or model response enters this channel. An explicit URL view or Tasks
+Open request takes priority over the restored view/thread. The conversation list is bounded, so restoration fetches the saved thread directly and keeps its returned
+metadata visible in the chooser. Only an exact session 404 clears the saved pointer and leaves the chooser
+open. A failed list or other failed transcript read preserves the saved thread and fraction; a successful
+reconnect can finish the initial restore. Restoration uses the ordinary conversation-open event buffer, so
+live messages and tool state arriving during the snapshot read are reconciled afterward. A reconnect
+waits for an active open to finish; queued recovery belongs to that selection and is discarded on navigation
+or unmount. Thread changes clear the old scroll fraction. Snapshot and navigation checks prevent a late
+saved-thread response from changing a newer selection, and unmount cancels restoration.
+
+A host with no saved thread opens the latest conversation, as a browser does. That covers a first launch and a
+launch after a 404 cleared the pointer. Only the load whose exact read returned 404 leaves the chooser open.
+
+When the stream catches up, the redraw keeps the reader's place in a native page as in a browser ("Reading
+position" under "What is where"). The host then stores that place. While the reader scrolls, the page sends the
+scroll fraction at most once every 250 ms, because each message is a write to the host's preferences. It sends the
+latest fraction at once when the page is hidden or closed (`visibilitychange`, `pagehide`), the conversation
+changes or the view unmounts.
+
+`petMode` comes from the Exopet display control, a `select.xc-pet-mode` that Exopet (#826) adds to the page. The
+page listens for its change event from the start, so a choice made while start-up is loading is saved too. Until
+#826 lands, Exo has no such control and sends no `petMode`.
+
 ## Conversation drafts and unconfirmed sends (D-045)
 
 Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
@@ -226,7 +259,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   thread existed cannot hide that thread once a newer list shows it (#859).
 - **Reading position.** Show latest messages appears when the reader moves away from the newest messages.
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
-  readers already at the newest item continue following it. The transcript is keyboard focusable.
+  readers already at the newest item continue following it. So does the redraw each time the event stream catches
+  up, on load and after a reconnect, when the page reads the conversation again. Before, that redraw moved the
+  reader back to the newest item. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -345,7 +380,22 @@ refused this page, or one whose own call failed. A core on TCP that refuses this
 file. A core's own failure is shown in its own words, with no exception class name (#856). The reply is still 200 with both lists present, plus
 `error`, `error_class` and `retryable` (D-091). The sentence is redacted and capped at 300 characters, and
 the "Try again" button appears only for the transport class, because a refusal would answer the same way.
-A failed retry keeps the last good list, so the default picker stays usable.
+A failed retry keeps the last good list, so the default picker stays usable. Retryable failures keep the
+"Try again" control beside that cached list. A successful refresh clears the warning. A retry redraws the
+section, so focus then moves to "Try again" when it is offered again, or else to the model select. A refusal
+with no list leaves neither, so focus moves to the refusal message. An empty list removes the section, so focus
+moves to the workspace.
+
+Focus moved to another Providers control while the retry ran, such as a provider's Test button, the model select
+or "Add custom provider", is on that control again once the reply is drawn (#1014). An open custom provider form
+is not redrawn, so focus in it stays put. Focus moved out of the Providers panel while the retry ran stays where
+it is.
+
+While a key typed into a provider's field is waiting there (the field has focus and holds text), the provider
+rows are not redrawn, so the key and its field stay as they are. The rest of the page is still drawn. The readout at
+the top shows a new default or ready count. Below the rows, a retry's reply shows the list or a new "Try again", and
+a saved custom provider's form closes and shows the entry (#1099, #1100). Add custom provider, Edit and Cancel work
+as at any other time.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.
@@ -375,7 +425,15 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
   drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
   Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
-  and run now act at once.
+  and run now act at once, ignore the second click of a double click, and disable that job's buttons while an edit
+  is in flight. Other jobs remain usable; a failed edit restores the buttons. Keyboard activation remains available.
+  Focus moves to Cancel when the step opens, so a second Enter cancels. Cancel, or Escape
+  while focus is in the step, closes it and puts focus back on remove. While the remove is in flight the step stays,
+  with both buttons disabled: Cancel cannot stop it, and the card's other buttons do not come back under the pointer
+  for the second click of a double click. Each job's remove keeps its own step, so a remove on a second job leaves
+  the first step as it is. A failed remove shows the error and puts focus on that card's remove, unless focus is on
+  a control outside the job list by then, such as a form field. Each redraw replaces the buttons in the list, so
+  focus on another card's button does not stay.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
@@ -383,8 +441,20 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   jump back to its top each time.
   Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
+  Focus moves to Cancel when the confirm opens. Cancel, or Escape while focus is in the confirm, puts it back on
+  allow always. A redraw on a core event keeps focus on the same approval button.
+  While an answer is in flight, every button on its card is disabled, and an allow always answer keeps its confirm
+  (#1117). Cancel cannot stop a POST that is out, and a second click would send a second answer. A redraw on a core
+  event keeps the card disabled, and each card waits for its own answer. A failed answer shows the error and gives
+  the card its buttons back, with focus on the button for that answer. Focus on another approval's button, or on a
+  control outside the page such as the nav, stays where it is.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
+- **Providers** offers a Google AI Studio Gemini key using Google's OpenAI-compatible endpoint and a custom provider form
+  for OpenAI Chat Completions or Anthropic Messages. Custom endpoint settings apply after the core restarts; keys use the
+  existing secret store. Endpoint changes use a separate key reference. See `docs/PROVIDERS.md` for protocol and URL limits.
+  Add requires a new name; use Edit to replace an existing entry. Other provider actions can show status while the
+  custom form retains its in-progress fields.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals

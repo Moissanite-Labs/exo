@@ -105,7 +105,12 @@ class Findings:
     # ---------------------------------------------------------------- read
 
     def get(self, fid: str) -> dict[str, Any] | None:
-        rows = self.store._q("SELECT * FROM findings WHERE id=? OR id LIKE ?", (fid, fid + "%"))
+        """The finding with this id, or the one whose id starts with it. ``%`` and ``_`` match only themselves, and an
+        empty id names none (exo-desktop #52)."""
+        if not fid:
+            return None
+        prefix = fid.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = self.store._q("SELECT * FROM findings WHERE id=? OR id LIKE ? ESCAPE '\\'", (fid, prefix))
         return self._row(rows[0]) if len(rows) == 1 else None
 
     def list(self, status: str | None = None) -> list[dict[str, Any]]:
