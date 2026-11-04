@@ -29,7 +29,9 @@ determine eligibility and available allowance. A limit may apply to Exo's access
 not infer a reset time or report a token allowance as a dollar balance.
 
 If a turn selects ChatGPT plan usage, a missing connection or failed request does not silently continue
-through an API-key provider in its fallback chain. Choose another provider explicitly if you want to use it.
+through an API-key provider later in that chain. This holds for every role, including aux, decision and
+the delegate tiers. A route placed ahead of ChatGPT still runs. Choose another provider explicitly if
+you want to use it.
 An OpenAI API key remains a separate provider with separate billing.
 
 ## Credential handling

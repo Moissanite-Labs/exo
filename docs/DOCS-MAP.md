@@ -55,7 +55,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | PR #674 (exo-desktop #17) `exo.wire.verify` checks a detached signature only against a key the caller pins, and returns False with none: the `pub` a signature carries is never trusted on its own (D-016 amendment) | `docs/AGENT-WIRE.md` §4.2, `DECISIONS.md` D-016, `CHANGELOG.md`, `src/exo/wire/packets.py` | n/a (no user commands changed) | §9 "Work with subagents" (the wire: pin the key) | n/a |
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | §5 "Subagents" | §5 (`[models] tier`), §9 "Work with subagents" | WP §8, §13.2, §16.1 |
 | D-018 Provider agnostic, user-chosen models | `docs/PROVIDERS.md` | §1, §3 (`/model`) | §5 | WP §13 |
-| D-034 amendment: ChatGPT subscription and direct Meta API providers | `docs/CHATGPT-PROVIDER.md`, `docs/PROVIDERS.md` | §1 provider setup | §5 provider credentials | MISSING (next batch) |
+| D-034 amendment: ChatGPT subscription and direct Meta API providers. A ChatGPT route drops every later non-ChatGPT route on every role | `docs/CHATGPT-PROVIDER.md`, `docs/PROVIDERS.md` | §1 provider setup | §5 provider credentials | MISSING (next batch) |
 | D-019 Jev default decision model | `docs/PROVIDERS.md` "Providers" | n/a | n/a | WP §14.5 |
 | D-020 Exo OS | OS in `exo-os`; shared interface in `docs/EXECUTORS.md`, required handoff in `docs/HANDOFF.md`, audit and authority ordering in `docs/GATE.md`, ledger authority in `docs/LEDGER-AUTHORITY.md` | §6 (executor denial and audit) | §3 (executor interface), §4 (required gate hooks and approval tokens) | WP §15.6, §20.2, §27 |
 | D-021 Wave 2 closed | `docs/SEATS.md`, `docs/STANDALONE.md` §6 | §8 | §4, §5 | WP §18, §29, §31 |
