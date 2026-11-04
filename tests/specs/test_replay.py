@@ -79,19 +79,34 @@ def _b1_fixed_true() -> Path:
     return _write_trace(BUILD / "b1_fixed_true.jsonl", [json.dumps(o, separators=(",", ":")) for o in objs])
 
 
-def test_replay_diagnose_seq_guard_rejects_late_policy_violation():
-    """No JSONL fixture found where Fixed=TRUE TraceReplay at seq k and Fixed=FALSE policy at seq>k.
+LATE_POLICY_VIOLATION = TRACES / "late_policy_violation.jsonl"
 
-    Brute search over b1/good mutations: when FALSE reports a policy invariant, its JSONL seq
-    matches the primary failure seq (e.g. b1_fixed_true seq 5). Early TraceReplay cases
-    (dropped_persist, b1 without persist) deadlock FALSE at the same step with TraceReplay,
-    so diagnose returns none before the guard. Exercise the guard directly on TLC-shaped inputs.
-    """
+
+def test_replay_diagnose_seq_guard_rejects_late_policy_violation():
+    """Unit test for diagnose_policy_from_false_result JSONL seq guard (TLC-shaped inputs)."""
     mod = _replay_module()
     inv = "NewAfterResumeBindsThisCore"
     assert mod.diagnose_policy_from_false_result(4, 5, inv) == "none"
     assert mod.diagnose_policy_from_false_result(5, 5, inv) == inv
     assert mod.diagnose_policy_from_false_result(5, 4, inv) == inv
+
+
+def test_replay_late_policy_violation_exits_one():
+    """Fixed=TRUE TraceReplay at seq 4 (null launch seat before core load)."""
+    _require_toolchain()
+    code, err = _run(LATE_POLICY_VIOLATION)
+    assert code == 1
+    assert "seq=4 invariant=TraceReplay" in err
+    assert "diagnosed=" not in err
+
+
+def test_replay_diagnose_late_policy_violation_guard_end_to_end():
+    """Fixed=FALSE reaches NewAfterResumeBindsThisCore at seq 7; guard must yield diagnosed=none."""
+    _require_toolchain()
+    code, err = _run_diagnose(LATE_POLICY_VIOLATION)
+    assert code == 1
+    assert "seq=4 invariant=TraceReplay diagnosed=none" in err
+    assert "diagnosed=NewAfterResumeBindsThisCore" not in err
 
 
 def test_replay_diagnose_fixed_true_trace_replay_at_seq5():
