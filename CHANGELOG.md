@@ -15,6 +15,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
+  missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
+  no longer imply a plan usage limit; provider response text remains private.
+- The ChatGPT connection card is separate from the default-model section. An empty model list removes only that section (D-034).
+- ChatGPT sign-in saves large OAuth bundles through the native macOS Keychain API, avoiding the interactive security tool's line limit. Each call turns Keychain prompts off and restores the previous setting. Failed callbacks show a safe retry message and preserve the previous connection. A successful reconnect deletes the previous CLI item without putting the secret in argv. A rotated refresh token whose save fails is kept and saved on the next call. Python reads through `keyring`, `SecItem`, `SecKeychain`, or `Security.framework` stay on the credentials floor (D-034 amendment).
+- A ChatGPT route is a billing boundary on every role. Routes placed ahead of it still run. A missing, expired, or usage-limited attempt does not continue into an API-key route behind it (D-034 amendment).
 - A seated core stores its own seat on a new thread when the client omits the name, and refuses a different name before writing a session (D-028 amendment). The terminal's `/new` sends the seat the window was started with. After resuming another seat's thread, `/new` still opens a thread of this core's seat. A window started with a different `--seat` joins this core's seat and says so.
 - `exo web` shutdown waits until open HTTP handlers finish cleanup (#1018, D-036 amendment). On Python 3.11, `close()` returned while a connection was still cancelling. A connection accepted during shutdown is closed. `start()` raises while that drain is still running.
 - Gate (#1096, D-038 amendment): an ssh forward whose socket is a secret store is a credentials part, so the line asks
@@ -419,6 +425,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item
   while streaming preserves the reader's position. Startup opens directly without a timed overlay.
 
+- Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
+  registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
+  do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport
+  for streamed replies, reasoning and local tool calls. Both require live provider acceptance after
+  user sign-in or key entry (`docs/CHATGPT-PROVIDER.md`, discussions #802 and #804).
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).
