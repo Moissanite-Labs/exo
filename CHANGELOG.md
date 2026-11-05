@@ -20,7 +20,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `src/exo/__init__.py`, `src/exo/store.py` and `src/exo/core/models/catalog.toml`, a package, extension module or
   cached `.pyc` that Python imports in place of one of them, `.gitattributes`, and `src/` and `clients/tui/` outside
   their packages. A change there skipped the comparator and the check passed. A name git quotes (non-ASCII, a tab, a
-  quote) no longer skips the check.
+  newline, a quote) no longer skips the check. The comparator stops (exit 2) when a tree's gate loads from a package
+  or an extension module in place of `src/exo/gate.py`, or from a `gate.py` that links to another file (#1162).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.

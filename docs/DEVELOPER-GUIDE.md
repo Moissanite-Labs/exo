@@ -496,6 +496,11 @@ The list holds the gate plugin, the comparator and the detector, their tests, th
 tree's `src/` first on `sys.path` and imports `exo.gate`. That runs `src/exo/__init__.py`, imports `store.py` and
 reads `core/models/catalog.toml`. Python imports a package or an extension module named like one of those modules in
 its place, and a committed `.pyc` in place of its source. A `.gitattributes` line can change their bytes on checkout.
+The comparator stops with exit 2 when the gate a child loaded does not resolve to the tree's own `src/exo/gate.py`.
+So a package or an extension module in its place, or a `gate.py` that links to another file, fails the job. To move
+the gate into a package, first change the three places in `scripts/gate_diff.py` that name `src/exo/gate.py`
+(`_tree_arg`, `gate_tables` and `_load_tree`) in a pull request of their own, since CI runs the base revision's
+comparator.
 
 Because the child puts `src/` first, a module in `src/` outside `src/exo/` can be imported in place of a standard
 library module the gate imports. The editable install also lists `src/` and `clients/tui/` on every interpreter's

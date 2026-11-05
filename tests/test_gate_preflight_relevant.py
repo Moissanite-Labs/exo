@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import gate_preflight_relevant
 from scripts.gate_preflight_relevant import (
     GATE_RELEVANT_PATTERNS,
@@ -342,31 +344,71 @@ def test_name_status_keeps_both_paths_of_a_rename_or_copy():
     assert changed_paths_from_name_status(out) == ["README.md", "a.py", "b.py", "src/exo/gate.py", "src/exo/gate2.py", "uv.lock"]
 
 
-def test_git_diff_lists_names_git_would_quote(tmp_path, monkeypatch):
-    """Without -z git C-quotes the first two names, so they matched no pattern and the check was skipped. The third
-    has a space, which -z keeps as it is."""
-    monkeypatch.chdir(tmp_path)
-    for cmd in (
-        ["git", "init"],
-        ["git", "config", "user.email", "t@example.com"],
-        ["git", "config", "user.name", "t"],
-    ):
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-m", "base"], check=True, capture_output=True, text=True)
-    base_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-    ).stdout.strip()
-    names = ["plugins/exo-gate/exo_gate/é.py", 'tests/security/test_gate"q".py', "src/exo/gate/a b.py"]
-    for name in names:
-        target = tmp_path / name
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _commit_files(root: Path, files: dict[str, str], message: str) -> str:
+    for name, text in files.items():
+        target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# new\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-m", "add"], check=True, capture_output=True, text=True)
+        target.write_text(text, encoding="utf-8")
+    _git("add", "-A")
+    _git("commit", "-m", message)
+    return _git("rev-parse", "HEAD")
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _git("init")
+    _git("config", "user.email", "t@example.com")
+    _git("config", "user.name", "t")
+    return tmp_path
+
+
+# Without -z git C-quotes each of these but the space, so they matched no pattern and the check was skipped (#1162).
+QUOTED_NAMES = [
+    "plugins/exo-gate/exo_gate/é.py",
+    'tests/security/test_gate"q".py',
+    "src/exo/gate/a b.py",
+    "src/exo/gate/tab\there.py",
+    "src/exo/store/new\nline.py",
+    "plugins/exo-gate/back\\slash.py",
+]
+
+
+def test_git_diff_lists_names_git_would_quote(repo):
+    base_sha = _commit_files(repo, {"README.md": "base\n"}, "base")
+    _commit_files(repo, {name: "# new\n" for name in QUOTED_NAMES}, "add")
     paths, err = git_changed_paths(base_sha)
     assert err is None
-    assert sorted(paths) == sorted(names)
-    for name in names:
+    assert sorted(paths) == sorted(QUOTED_NAMES)
+    for name in QUOTED_NAMES:
         assert diff_touches_gate_paths([name]), name
+
+
+def test_git_diff_keeps_the_old_name_of_a_rename_and_a_deleted_name(repo):
+    """Renaming a gate file out of the list, or deleting one, still runs the comparator, with names git would quote."""
+    body = "".join(f"line {i}\n" for i in range(40))  # long enough for git to find the rename
+    moved, deleted = "src/exo/gate/tab\there.py", "src/exo/store/new\nline.py"
+    base_sha = _commit_files(repo, {"README.md": "base\n", moved: body, deleted: "# old\n"}, "base")
+    (repo / moved).replace(repo / "docs-moved.md")
+    (repo / deleted).unlink()
+    _git("add", "-A")
+    _git("commit", "-m", "move and delete")
+    paths, err = git_changed_paths(base_sha)
+    assert err is None
+    assert sorted(paths) == sorted([moved, "docs-moved.md", deleted])
+    assert not diff_touches_gate_paths(["docs-moved.md"])
+    assert diff_touches_gate_paths(paths)
+    assert all(diff_touches_gate_paths([p]) for p in (moved, deleted))
+
+
+def test_a_docs_only_diff_still_skips(repo):
+    base_sha = _commit_files(repo, {"README.md": "base\n"}, "base")
+    _commit_files(repo, {"README.md": "changed\n", "docs/new\tname.md": "# doc\n"}, "docs")
+    paths, err = git_changed_paths(base_sha)
+    assert err is None
+    assert sorted(paths) == ["README.md", "docs/new\tname.md"]
+    assert not diff_touches_gate_paths(paths)

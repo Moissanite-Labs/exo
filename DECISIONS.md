@@ -3570,8 +3570,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   passed. The list now covers `src/exo/gate*`, `src/exo/__init__*`, `src/exo/store*`, `__pycache__` under
   `src/exo/`, `catalog.toml`, `.gitattributes`, and `src/` and `clients/tui/` outside their packages. A test walks
   what the gate imports and reads, and fails when a file or a stand-in for it is not covered, or on a form of loading
-  it knows but cannot follow. The comparator still measures whatever Python loads from the tree, as the hook does.
-  The detector reads `git diff -z`, so a name git would quote (non-ASCII, a tab, a quote) still matches.
+  it knows but cannot follow. The comparator's child also checks that the gate it loaded resolves to the tree's own
+  `src/exo/gate.py` (#1162). A package or an extension module that Python imports in its place, or a `gate.py` that
+  links to another file, stops the run (exit 2). So a pull request that moves the gate into a package changes the
+  comparator first. The check reads what the module reports, which the stand-in itself or `src/exo/__init__.py` can
+  change. It is a tripwire for an honest move, not a guard, and the list covers those files, so the comparator still
+  runs on them. The detector reads `git diff -z`, so a name git would quote (non-ASCII, a tab, a newline, a quote)
+  still matches.
   `.github/CODEOWNERS` covers the same paths. The list is no guard against a PR written to defeat the comparator:
   the job runs the PR's own tests and dependencies first. Only review guards against that, and `.github/CODEOWNERS`
   does not cover `plugins/exo-gate/`, `pyproject.toml` or `uv.lock`.

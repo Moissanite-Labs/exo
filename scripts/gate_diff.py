@@ -6,8 +6,10 @@
 
 Each tree is a checkout of this repo. The script runs `gate.classify` and `gate.decide` for every action of the
 corpus under every policy of the set, once in each tree, in two child processes started with `python -I` and the
-tree's `src` first on `sys.path`. Each child checks that `gate.__file__` is inside its tree. This process never
-imports either gate. Both children get the same small environment (a shared temp HOME holding `~/.exo/state`,
+tree's `src` first on `sys.path`. Each child checks that `gate.__file__` resolves to its tree's own `src/exo/gate.py`,
+so a package or extension module that Python imports in its place, or a `gate.py` that links elsewhere, stops the run
+(#1162). This process never imports either gate.
+Both children get the same small environment (a shared temp HOME holding `~/.exo/state`,
 `~/.ssh`, `~/.kube` and `~/.config/gh`, a key file and a grants file, and two plain names that are links to them,
 HOME_LINKS; no `EXO_*`, `DIVAN_*` or `CLAUDE_CONFIG_DIR`) and run in that HOME, so store and secret paths classify
 the same way in both. The HOME is kept out of /tmp (work_dir).
@@ -1994,8 +1996,14 @@ def _load_tree(tree: str, corpus: str, policies: str) -> None:
     sys.path.insert(0, src)
     from exo import gate  # the tree's own gate: this runs only in a child started for that tree
     here = os.path.realpath(gate.__file__)
-    if not here.startswith(os.path.realpath(tree) + os.sep):
-        raise SystemExit(f"gate_diff: gate loaded from {here}, not from {tree}")
+    # The tree's own src/exo/gate.py, as a plain file (#1162). A package src/exo/gate/ or an extension module beside
+    # gate.py would be imported in its place, and a gate.py that links to another file, in the tree or out of it,
+    # loads that file. Each of those resolves to another path. This reads what the module reports, which the stand-in
+    # itself or src/exo/__init__.py (it runs first) can change: a tripwire for an honest move, not a guard. The
+    # preflight's list covers all of those files, so the comparator runs on them.
+    want = os.path.join(os.path.realpath(tree), "src", "exo", "gate.py")
+    if here != want:
+        raise SystemExit(f"gate_diff: gate loaded from {here}, not from {want}")
     with open(corpus, encoding="utf-8") as f:
         actions = json.load(f)
     with open(policies, encoding="utf-8") as f:
