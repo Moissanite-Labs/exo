@@ -15,6 +15,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- After an identified turn times out waiting for overflowing memory upkeep, later rounds of that thread/tree use the existing fallback without repeating the timeout. Short successful summary waits remain available, preserving existing context-budget behavior (#832).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.

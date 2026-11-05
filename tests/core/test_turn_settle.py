@@ -72,12 +72,13 @@ def test_build_uses_ready_summaries_only():
 class Gated:
     """Summarizer fake for an AgentContext: finishes nothing until ``gate`` opens."""
 
-    def __init__(self):
+    def __init__(self, text="S"):
         self.gate = asyncio.Event()
+        self.text = text
 
     async def summarize(self, content, previous=None, **kw):
         await self.gate.wait()
-        return "S"
+        return self.text
 
 
 def test_cut_pending_cuts_whole_pending_leaves_and_keeps_a_call_with_its_results():
@@ -417,3 +418,233 @@ def test_turn_during_merge_sees_a_consistent_view_then_the_merged_one():
     import pathlib
     import tempfile
     asyncio.run(go(pathlib.Path(tempfile.mkdtemp())))
+
+
+@pytest.mark.parametrize('private', [False, True])
+def test_overflow_wait_is_not_repeated_for_rounds_of_the_same_turn(tmp_path, private):
+    async def go():
+        store, summ = SessionStore(tmp_path / 'wait.sqlite'), Gated()
+        ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=0, view_budget=10)
+        ctx.overflow_settle = 0.02
+        sid = store.create_session(agent='fixture', kind='private' if private else 'thread').id
+        fill(store, sid, 6, 1000)
+        user = Message.user('current task'); user.meta['turn_id'] = 'fixture-turn-one'
+        store.append_message(sid, user)
+        waits = []
+        original = asyncio.wait
+        async def counted(tasks, **kw):
+            waits.append(kw.get('timeout'))
+            return await original(tasks, **kw)
+        from unittest.mock import patch
+        try:
+            with patch('exo.turn_settle.asyncio.wait', counted):
+                first = await ctx.build(sid, 'stable system', turn_id='fixture-turn-one')
+                count = len(waits)
+                assert count >= 1
+                for i in range(4):
+                    message = Message.assistant(f'round {i}'); message.meta['turn_id'] = 'fixture-turn-one'
+                    store.append_message(sid, message)
+                    out = await ctx.build(sid, 'stable system', turn_id='fixture-turn-one')
+                    assert out and out[0].text().startswith('stable system')
+                assert len(waits) == count, 'one pending summarizer must not add the full wait to every round'
+                assert any('current task' in m.text() for m in first)
+                user = Message.user('next task'); user.meta['turn_id'] = 'fixture-turn-two'
+                store.append_message(sid, user)
+                await ctx.build(sid, 'stable system', turn_id='fixture-turn-two')
+                assert len(waits) > count, 'a new turn gets its own opportunity to wait'
+                assert len(ctx.settled_turns) <= 2
+        finally:
+            summ.gate.set()
+            while pending := TreeContext.pending(ctx, ctx._agent_key(sid)) + TreeContext.pending(ctx, sid):
+                await original(pending)
+            store.close()
+    asyncio.run(go())
+
+
+def test_shared_agent_wait_is_isolated_by_thread_and_unidentified_builds_keep_legacy_wait(tmp_path):
+    async def go():
+        store, summ = SessionStore(tmp_path / 'wait.sqlite'), Gated()
+        ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=0, view_budget=10)
+        ctx.overflow_settle = 0.01
+        first = store.create_session(agent='fixture').id
+        second = store.create_session(agent='fixture').id
+        fill(store, first, 6, 1000)
+        key = ctx._agent_key(first)
+        ctx.note(first)
+        try:
+            assert not await settle_for_turn(ctx, key, 'same-fixture-id', owner=first)
+            assert not await settle_for_turn(ctx, key, 'same-fixture-id', owner=second)
+            assert ctx.settled_turns[(first, key)] == ctx.settled_turns[(second, key)]
+            # No turn identity means no claim that two calls belong to the same turn.
+            before = dict(ctx.settled_turns)
+            from unittest.mock import patch
+            original = asyncio.wait
+            waits = []
+            async def counted(tasks, **kw):
+                waits.append(kw.get('timeout'))
+                return await original(tasks, **kw)
+            with patch('exo.turn_settle.asyncio.wait', counted):
+                assert not await settle_for_turn(ctx, key)
+                assert not await settle_for_turn(ctx, key)
+            assert len(waits) == 2 and ctx.settled_turns == before
+        finally:
+            summ.gate.set()
+            while pending := TreeContext.pending(ctx, key): await asyncio.wait(pending)
+            store.close()
+    asyncio.run(go())
+
+
+def test_ready_summaries_are_used_after_the_turn_wait_was_spent(tmp_path):
+    async def go():
+        store, summ = SessionStore(tmp_path / 'ready.sqlite'), Gated('READY_879_SUMMARY')
+        ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=0, view_budget=100)
+        ctx.overflow_settle = 0.01
+        sid = store.create_session(agent='fixture', kind='private').id
+        fill(store, sid, 6, 1000)
+        question = Message.user('keep this task'); question.meta['turn_id'] = 'fixture-turn'
+        store.append_message(sid, question)
+        await ctx.build(sid, 'stable system', turn_id='fixture-turn')
+        summ.gate.set()
+        result = await ctx.build(sid, 'stable system', turn_id='fixture-turn')
+        assert any(node.status == 'done' for node in store.summaries(sid))
+        assert any('keep this task' in m.text() for m in result)
+        prompt = '\n'.join(m.text() for m in result)
+        assert 'READY_879_SUMMARY' in prompt
+        assert 'm1 ' + 'x' * 1000 not in prompt
+        while pending := TreeContext.pending(ctx, sid): await asyncio.wait(pending)
+        store.close()
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize('private', [False, True])
+def test_successful_summary_waits_keep_the_existing_per_build_budget_behavior(tmp_path, private):
+    """Compare identified builds to the existing wait-per-build behavior, not a new token cap."""
+    from unittest.mock import patch
+
+    class Fast:
+        async def summarize(self, content, previous=None, **kw):
+            await asyncio.sleep(0.005)
+            return 'FAST_879_SUMMARY'
+
+    async def scenario(reset_wait_state):
+        store = SessionStore(tmp_path / ('control.sqlite' if reset_wait_state else 'identified.sqlite'))
+        ctx = AgentContext(store, Fast(), leaf_size=2, tail_messages=2,
+                           min_compact_tokens=0, view_budget=2000)
+        ctx.overflow_settle = 0.5
+        sid = store.create_session(id='budget-thread', agent='fixture',
+                                   kind='private' if private else 'thread').id
+        store.append_message(sid, Message.user('budget task'))
+        waits, tokens = [], []
+        original = asyncio.wait
+
+        async def counted(tasks, **kw):
+            waits.append(kw.get('timeout'))
+            return await original(tasks, **kw)
+
+        try:
+            with patch('exo.turn_settle.asyncio.wait', counted):
+                for index in range(8):
+                    store.append_message(sid, Message.assistant('', [ToolCall(
+                        id=f'call-{index}', name='read_file', arguments={})]))
+                    store.append_message(sid, Message.tool([ToolResult.of_text(f'call-{index}', 'x' * 4000)]))
+                    if reset_wait_state:
+                        getattr(ctx, 'settled_turns', {}).clear()
+                    prompt = await ctx.build(sid, 'stable system', turn_id='budget-turn')
+                    tokens.append(sum(estimate_tokens(message) for message in prompt))
+            return tokens, len(waits)
+        finally:
+            while pending := TreeContext.pending(ctx, ctx._agent_key(sid)) + TreeContext.pending(ctx, sid):
+                await asyncio.wait_for(original(pending), 2)
+            store.close()
+
+    control_tokens, control_waits = asyncio.run(scenario(True))
+    identified_tokens, identified_waits = asyncio.run(scenario(False))
+    assert control_waits > 1
+    assert identified_tokens == control_tokens, 'successful summaries must preserve the existing budget behavior'
+    assert identified_waits == control_waits
+
+
+@pytest.mark.parametrize('private', [False, True])
+def test_interleaved_builds_keep_each_threads_timeout_allowance(tmp_path, private):
+    from unittest.mock import patch
+
+    async def scenario():
+        store, summ = SessionStore(tmp_path / 'interleaved.sqlite'), Gated()
+        ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2,
+                           min_compact_tokens=0, view_budget=10)
+        ctx.overflow_settle = 0.01
+        shared = store.create_session(agent='fixture').id
+        fill(store, shared, 6, 1000)
+        ctx.note(shared)
+        sessions = [store.create_session(agent='fixture', kind='private' if private else 'thread').id
+                    for _ in range(2)]
+        for sid in sessions:
+            fill(store, sid, 6, 1000)
+        original, waits, counts = asyncio.wait, [], []
+
+        async def counted(tasks, **kw):
+            waits.append(kw.get('timeout'))
+            return await original(tasks, **kw)
+
+        try:
+            with patch('exo.turn_settle.asyncio.wait', counted):
+                for _ in range(3):
+                    for index, sid in enumerate(sessions):
+                        before = len(waits)
+                        await ctx.build(sid, 'stable system', turn_id=f'thread-{index}-turn')
+                        counts.append(len(waits) - before)
+            assert counts[:2] == ([2, 2] if private else [1, 1])
+            assert counts[2:] == [0, 0, 0, 0], 'each build must pass its session as the shared-tree wait owner'
+        finally:
+            summ.gate.set()
+            keys = {ctx._agent_key(shared), *sessions}
+            while pending := [task for key in keys for task in TreeContext.pending(ctx, key)]:
+                await asyncio.wait_for(original(pending), 2)
+            store.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+
+
+@pytest.mark.parametrize('private', [False, True])
+def test_cancelled_build_does_not_spend_wait_and_new_turn_gets_its_own(tmp_path, private):
+    from unittest.mock import patch
+
+    async def scenario():
+        store, summ = SessionStore(tmp_path / 'cancelled.sqlite'), Gated()
+        ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2,
+                           min_compact_tokens=0, view_budget=10)
+        ctx.overflow_settle = 0.5  # cancellation is event-driven, well before this first deadline
+        sid = store.create_session(agent='fixture', kind='private' if private else 'thread').id
+        fill(store, sid, 6, 1000)
+        entered, waits, original = asyncio.Event(), [], asyncio.wait
+
+        async def counted(tasks, **kw):
+            waits.append(kw.get('timeout'))
+            entered.set()
+            return await original(tasks, **kw)
+
+        try:
+            with patch('exo.turn_settle.asyncio.wait', counted):
+                build = asyncio.create_task(ctx.build(sid, 'stable system', turn_id='cancelled-turn'))
+                await asyncio.wait_for(entered.wait(), 2)
+                build.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await build
+                assert not getattr(ctx, 'settled_turns', {}), 'cancellation is not an exhausted timeout'
+                assert TreeContext.pending(ctx, ctx._agent_key(sid)) or TreeContext.pending(ctx, sid)
+                ctx.overflow_settle = 0.01
+                before = len(waits)
+                await ctx.build(sid, 'stable system', turn_id='cancelled-turn')
+                assert len(waits) > before
+                after_timeout = len(waits)
+                await ctx.build(sid, 'stable system', turn_id='cancelled-turn')
+                assert len(waits) == after_timeout
+                await ctx.build(sid, 'stable system', turn_id='new-turn')
+                assert len(waits) > after_timeout
+        finally:
+            summ.gate.set()
+            while pending := TreeContext.pending(ctx, ctx._agent_key(sid)) + TreeContext.pending(ctx, sid):
+                await asyncio.wait_for(original(pending), 2)
+            store.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))

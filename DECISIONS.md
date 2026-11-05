@@ -6523,6 +6523,13 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
   (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
   whole, which the next turn's call can cut.
+- *Amendment 2026-10-29 (#832, wait component):* an identified turn stops repeating a thread/tree's timed overflow
+  wait only after that wait reaches its existing timeout while jobs remain live. Short successful waits do not
+  spend the allowance and remain available on later builds. Cancellation does not consume it either. New turns
+  and other threads are independent. Anonymous builds retain per-build waits. After a timed-out wait, later
+  rounds of that turn can carry more verbatim content and larger prompts than with per-round waiting.
+  The configured `view_budget`, ready-summary assembly, private pending-span cuts and current-turn retention
+  remain unchanged. This adds no wall-time limit or autonomy policy.
 - *Amendment 2026-10-31 (#262, summary reads):* each step of a build reads a summary tree once. `note`, the merge
   check, both views, the overflow check, a thread's tail and `/context` share one read of each tree with every
   helper they call (`_one_read` in `src/exo/core/context.py`). Before, each helper read the whole tree again, and
