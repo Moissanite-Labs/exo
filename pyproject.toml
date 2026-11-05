@@ -35,6 +35,9 @@ packages = ["src/exo", "clients/tui/exo_tui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# xdist's controller must import the same ChromeStartWarning as plugin workers.
+# Nested conftest.py path setup runs only on workers during aggregate collection.
+pythonpath = ["plugins/exo-command/tests"]
 markers = [
     "real_claude: runs one real turn through the claude CLI; needs EXO_TEST_REAL_CLAUDE=1 and claude on PATH",
 ]
