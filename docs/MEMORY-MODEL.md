@@ -202,14 +202,16 @@ pending span (#244). That check counts each message in full, where the view cuts
 just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
 nothing to cut. Both waits of the private tree are for its own jobs only, leaves and merges: a merge shrinks the
 view the cut counts. The agent tree's jobs shrink neither the private view nor the cut, so they do not stretch
-either wait. So a private turn can now wait where it did not: while a cut would apply, its first identified build waits up to
+either wait. So a private turn can now wait where it did not: while a cut would apply, a call can wait up to
 `overflow_settle` for those jobs.
 
-For builds carrying a turn ID, each thread gets one timed overflow-wait opportunity per tree in that turn
-(#832). Later model rounds use ready summaries and the existing verbatim or pending-span fallback without
-another timed wait. Ready background work still gets an event-loop opportunity to publish. A new turn gets
-a fresh opportunity, and two threads sharing an agent tree do not consume each other's wait. Builds without
-a turn ID retain the previous per-build behavior. Context budgets and private-turn preservation are unchanged.
+For builds carrying a turn ID, a wait that reaches its existing timeout while jobs remain live is spent for
+that thread/tree in the turn (#832). Later rounds use ready summaries and the existing verbatim or pending-span
+fallback without another timed wait. A short successful wait does not spend the allowance: later rounds can
+still wait for useful summaries, preserving the existing context-budget behavior. Cancellation does not spend
+it either. Ready background work still gets an event-loop opportunity to publish. New turns and other threads
+have independent allowances; builds without a turn ID retain their previous per-build behavior. Private-context
+cuts and current-turn retention are unchanged. This adds no whole-turn wall budget or timing-attribution policy.
 
 An agent tree and a private thread's own tree send a leaf of large tool results to the summarizer, since #1013
 sizes it in full. A tail of such results keeps the view over `view_budget`, so a call can wait up to

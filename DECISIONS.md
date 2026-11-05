@@ -6490,7 +6490,6 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
 
 ## D-068 (2026-10-13) Turns do not wait for memory upkeep
-- **Amendment 2026-10-29 (#832, wait component):** an identified turn gets one timed overflow-wait opportunity per thread/tree, rather than repeating it before every model round. New turns and other threads retain independent opportunities. Ready-summary assembly, private pending-span cuts and context budgets are unchanged. This adds no wall-time limit or autonomy policy.
 - **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
   bookkeeping delayed replies (issue #99).
 - **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in
@@ -6566,6 +6565,11 @@ The aimed 17-action by 88-policy differential has zero lowered pairs and zero cl
   merge still measures its two halves as the view shows them. The summarized event and `/compact` report the size
   the shrink test used. `leaf_tokens` sits in `src/exo/turn_settle.py`, outside the counted core. Validation:
   `tests/core/test_context_leaf_size_1013.py`, `tests/core/test_agent_context.py`.
+- *Amendment 2026-10-29 (#832, wait component):* an identified turn stops repeating a thread/tree's timed overflow
+  wait only after that wait reaches its existing timeout while jobs remain live. Short successful waits remain
+  available on later builds, and cancellation does not consume the allowance. New turns and other threads are
+  independent; anonymous builds retain per-build waits. Ready-summary assembly, private pending-span cuts, current-
+  turn retention and context budgets are unchanged. This adds no wall-time limit or autonomy policy.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title

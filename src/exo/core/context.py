@@ -407,7 +407,7 @@ class TreeContext:
         self.tail_messages = tail_messages
         self.view_budget = view_budget
         self.settle_timeout = settle_timeout
-        self.settled_turns: dict[tuple[str, str], str] = {}  # one overflow-wait opportunity per thread/tree/turn
+        self.settled_turns: dict[tuple[str, str], str] = {}  # latest timed-out turn per thread/tree
         self.render_limit = render_limit
         self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
         self.max_attempts = max_attempts  # cap for explicitly non-retryable failures
