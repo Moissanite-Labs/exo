@@ -176,7 +176,7 @@ def test_remote_models_hermetic():
     r = Router(env={"OPENCODE_GO_API_KEY": KEY})
     assert remote_models(r, "opencode-go", get=get) == ["glm-5.3", "kimi-k3"]
     assert got["url"] == "https://opencode.ai/zen/go/v1/models"
-    with pytest.raises(ValueError, match="no OpenAI-style"):
+    with pytest.raises(ValueError, match="no supported"):
         remote_models(r, "jev", get=get)
     def bad(url, headers, timeout):
         raise RuntimeError(f"failed with {headers}")
