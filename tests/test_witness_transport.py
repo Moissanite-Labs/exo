@@ -100,10 +100,13 @@ def test_witness_key_separation_uses_decoded_bytes(state, tmp_path, source, alia
     assert WitnessJournal(state[1].path, state[2], state[6]).head() == state[1].head()
 
 
+# Default deadlines for honest requests. The server applies one deadline per connection, and it covers the TLS
+# handshake, the witness's SQLite read or write, signing and the reply. On a busy CI runner that work can stall past
+# half a second, and the client then sees "incomplete HTTP message". Tests that check a deadline pass their own.
 @contextlib.contextmanager
 def running(state, certs, **overrides):
     options = dict(ca=certs["ca"], cert=certs["server"]["cert"], tls_key=certs["server"]["key"],
-                   client_cert_sha256=certs["client"]["pin"], timeout=0.5)
+                   client_cert_sha256=certs["client"]["pin"], timeout=3)
     options.update(overrides)
     server = wt.WitnessServer(state[1], state[3], **options)
     thread = threading.Thread(target=server.serve_forever)
@@ -112,14 +115,14 @@ def running(state, certs, **overrides):
         yield server
     finally:
         server.close()
-        thread.join(2)
+        thread.join(10)  # returns as soon as the server loop ends; the bound only catches a hang
         assert not thread.is_alive()
 
 
 def client(state, certs, server, **overrides):
     options = dict(host="127.0.0.1", port=server.address[1], server_hostname="witness.test", ca=certs["ca"],
                    cert=certs["client"]["cert"], tls_key=certs["client"]["key"],
-                   server_cert_sha256=certs["server"]["pin"], timeout=1)
+                   server_cert_sha256=certs["server"]["pin"], timeout=5)
     options.update(overrides)
     return wt.WitnessClient(state[2], state[3], crypto.pubkey_b64(state[6]), **options)
 
@@ -308,9 +311,8 @@ def test_bounded_strict_request_parser_rejects_malformed(state, certificates, ra
 
 
 def test_handshake_and_slow_request_timeout_do_not_block_next_client(state, certificates):
-    # The server's one deadline also covers the honest request at the end: handshake, the witness's SQLite read,
-    # signing and the reply. At 0.1 s a busy CI runner can stall that read past the deadline, and the honest client
-    # then sees "incomplete HTTP message". 0.5 s still cuts off the stalled clients well inside the bounds below.
+    # The server's one deadline also covers the honest request at the end (see running() above). At 0.1 s a busy CI
+    # runner can stall it past the deadline. 0.5 s still cuts off the stalled clients well inside the bounds below.
     with running(state, certificates, timeout=0.5) as server:
         c = client(state, certificates, server)
         with socket.create_connection(server.address, timeout=3) as idle:
