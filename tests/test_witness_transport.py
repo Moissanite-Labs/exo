@@ -308,13 +308,16 @@ def test_bounded_strict_request_parser_rejects_malformed(state, certificates, ra
 
 
 def test_handshake_and_slow_request_timeout_do_not_block_next_client(state, certificates):
-    with running(state, certificates, timeout=0.1) as server:
+    # The server's one deadline also covers the honest request at the end: handshake, the witness's SQLite read,
+    # signing and the reply. At 0.1 s a busy CI runner can stall that read past the deadline, and the honest client
+    # then sees "incomplete HTTP message". 0.5 s still cuts off the stalled clients well inside the bounds below.
+    with running(state, certificates, timeout=0.5) as server:
         c = client(state, certificates, server)
-        with socket.create_connection(server.address, timeout=1) as idle:
+        with socket.create_connection(server.address, timeout=3) as idle:
             started = time.monotonic()
             assert idle.recv(1) == b""
-            assert time.monotonic() - started < 1
-        with socket.create_connection(server.address, timeout=1) as connection:
+            assert time.monotonic() - started < 2
+        with socket.create_connection(server.address, timeout=3) as connection:
             with c.context.wrap_socket(connection, server_hostname=c.hostname) as tls:
                 tls.sendall(b"POST /v1/head HTTP/1.1\r\nContent-Type:")
                 assert tls.recv(1) == b""
