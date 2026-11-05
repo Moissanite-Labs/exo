@@ -15,6 +15,12 @@ The argument is one JSON object after the subcommand name:
 /group inspect {"id": "<group>"}
 /group send {"id": "<group>", "text": "change direction", "audience": ["lead"]}
 /group observe {"id": "<group>", "member": "lead", "after": 0, "limit": 100}
+/group create {"mode": "conductor", "members": ["lead", "one"], "conductor": "lead"}
+/group start {"id": "<group>", "audiences": {"lead": ["one"], "one": ["lead"]}}
+/group status {"id": "<group>"}
+/group pause {"id": "<group>", "member": "one"}
+/group resume {"id": "<group>"}
+/group stop {"id": "<group>"}
 ```
 
 - `list` — this seat's groups (no fields).
@@ -26,6 +32,32 @@ The argument is one JSON object after the subcommand name:
   delivery or consumption. `after` is a nonnegative integer, `limit` a
   positive integer (≤ 1000); bools are not integers. Unknown keys are
   rejected everywhere.
+
+- `create` — persist a group owned by this seat. `mode` is `"socratic"`
+  or `"conductor"`; `members` is a non-empty list of profile strings;
+  `conductor` is optional. Invalid shapes/modes/fields fail before the host;
+  unknown or unauthorized profile IDs are rejected by the host without writes.
+- `start` — validate `audiences` (a non-empty object mapping each member
+  profile to a list of profile strings; never inferred or defaulted) and
+  hand off to the host, which re-validates stored members against the
+  injected profile set, builds engines through the authorized factory
+  and claims one durable execution. Pre-claim validation/factory failures leave
+  no runtime or new claim. An existing receipt blocks start before construction;
+  a partial failure after the atomic claim still blocks retry. Resource ownership
+  on failed construction is the trusted integration's responsibility (SWARM-HOST.md).
+- `status` — the host snapshot: per-member state, the durable receipt or
+  `null`, whether a local runtime object exists in this host and whether
+  reconciliation is required (active claim, no local runtime). An active
+  receipt is never proof of liveness. `local_runtime` can remain true after
+  completion. Another host in the same process can report unknown member states
+  and `reconciliation_required` while the owning host is still live.
+- `pause` / `resume` / `stop` — group-wide or member-scoped hooks via
+  `member`. Response flags acknowledge accepted control requests, not completed
+  pause or cleanup. Pause takes effect at a checkpoint and does not suspend an
+  in-flight turn. Stop requests cancellation; a member remains `stopping` until
+  cleanup finishes. Poll status for terminal states and the settled receipt.
+  Host rejections surface as `bad_request` with the host's reason.
+
 
 Observation returns `messages` and `next_after`. A nonempty page advances to its
 last sequence; an empty page preserves the requested `after`, so polling does not
@@ -40,7 +72,28 @@ developer guide's product-layer pattern. Its principal check remains first in
 the command handler, including direct calls; the dispatcher only routes to it.
 Stores use the engine's public sessions database without adding engine caches.
 
-There is deliberately **no create, start, pause, stop or control** here:
-no authorized engine factory exists yet, so group creation and control
-stay unimplemented until a trusted host can supply per-profile engines
-(see `docs/SWARM-ENGINE-ADAPTER.md`).
+## Fail-closed injection prerequisite
+
+The lifecycle operations (`create`/`start`/`status`/`pause`/`resume`/
+`stop`) act only through a trusted `GroupHost` explicitly injected as
+`eng._group_host` by the wiring that owns this engine. This command layer
+never constructs the host, engines or profiles and never reads
+configuration to build one. With no injected host, or a host whose
+`owner` differs from `eng.agent`, every lifecycle operation fails closed
+(`forbidden`); malformed arguments fail with `bad_request` before the
+host is ever touched. `GroupHost` is an internal composition seam, not an
+authentication boundary: host objects must never be exposed to models
+(see `docs/SWARM-HOST.md`).
+
+The host's public `groups.sessions` must be the identical `SessionStore` object
+as `eng.store`; even a second connection to the same file is refused. This keeps
+lifecycle and list/inspect/send/observe operations on the same database and store
+lifecycle. A mismatched store is `forbidden` before any host operation or factory.
+
+Unknown keys are rejected everywhere.
+
+## Not wired
+
+Real per-profile engine composition, client controls and authorized
+engine factories are not wired: the wired host must be supplied by
+trusted external wiring that is out of scope for this slice.
