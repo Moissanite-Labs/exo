@@ -15,6 +15,7 @@ TRACES = ROOT / "specs/seat-binding/conformance/traces"
 NEGATIVE_FIXTURES: tuple[tuple[str, int], ...] = (
     ("b1_silent_fail.jsonl", 1),
     ("dropped_persist.jsonl", 1),
+    ("late_policy_violation.jsonl", 1),
     ("header_only.jsonl", 2),
     ("malformed.jsonl", 2),
     ("no_client_boot.jsonl", 2),
