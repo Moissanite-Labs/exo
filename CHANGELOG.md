@@ -6,6 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Added principal-only group lifecycle command forwarding through an explicitly injected owner/store-matched GroupHost; live host/engine composition remains unwired (#995).
 - Added principal-only `/group list`, `inspect`, `send` and read-only `observe` through `command.run`, scoped to the loaded seat's saved groups. No group creation or execution controls are added (#978).
 - Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
   supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.

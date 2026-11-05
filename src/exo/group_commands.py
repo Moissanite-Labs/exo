@@ -171,6 +171,8 @@ def _host(eng: CoreRuntime) -> GroupHost:
     owner = getattr(host, "owner", None)
     if not isinstance(owner, str) or owner != eng.agent:
         raise CommandFailed("forbidden", "injected group host is not owned by this seat")
+    if host.groups.sessions is not eng.store:
+        raise CommandFailed("forbidden", "injected group host must use the same session store as this engine")
     return host
 
 
@@ -179,6 +181,8 @@ def _control(args: dict[str, Any]) -> tuple[str, str | None]:
     unknown = set(args) - {"id", "member"}
     if unknown:
         raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    if "id" not in args:
+        raise _bad("missing field(s): id")
     group_id = _group_id(args)
     member = args.get("member")
     if member is not None and (not isinstance(member, str) or not member.strip()):
@@ -249,8 +253,9 @@ def _op_start(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
 
 def _op_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     _take(args, "id")
+    group_id = _group_id(args)
     try:
-        return _status_view(_host(eng).status(_group_id(args)))
+        return _status_view(_host(eng).status(group_id))
     except HostError as e:
         raise _bad(str(e))
 
