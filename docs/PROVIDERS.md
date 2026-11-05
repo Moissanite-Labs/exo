@@ -391,9 +391,11 @@ The numbers above are an example, not a quote: use the provider's published list
 `cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
 price added later applies to new calls only, so a session recorded before it keeps `unknown`.
 
-These values affect trace estimates only. They do not supply `models.spend.routes` contracts or extend the
-audited native ceilings. Spend refusals point to `docs/MODEL-SPEND.md`, which describes the principal-owned
-policy and protected-policy source. Adding an estimate does not lift a refusal.
+These prices are estimates used in model-call usage, session totals and delegated receipts as well as trace
+output. The optional `context` value is used in model listings and context-capacity reports. These values do
+not supply `models.spend.routes` contracts or extend the audited native ceilings. The refusal for a missing
+spend contract points to `docs/MODEL-SPEND.md`, which describes the principal-owned policy and protected-policy
+source. Adding an estimate does not lift a refusal.
 
 ## Roles
 

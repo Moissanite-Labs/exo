@@ -517,6 +517,24 @@ def test_table_hint_controls_for_requested_unknown_and_unspent_calls():
     assert trace.price_hint('') not in out
 
 
+def test_table_names_a_route_present_only_in_an_earlier_displayed_turn():
+    earlier = tt(calls=[_usage_call('early:m', None)], t0=1.0)
+    later = tt(calls=[_usage_call('priced:m', 0.01)], t0=2.0)
+    out = trace.table([earlier, later])
+    assert out.count(trace.price_hint('early:m')) == 1
+    assert trace.price_hint('priced:m') not in out
+
+
+@pytest.mark.parametrize('undercounted', [False, True])
+def test_table_does_not_name_a_priced_zero_cost_call(undercounted):
+    turn = tt(calls=[_usage_call('free:m', 0.0, undercounted=undercounted)], t0=1.0)
+    assert turn.cost() == (0.0, 0)
+    assert turn.summary()['cost'] == '$0.0000' + ('+' if undercounted else '')
+    out = trace.table([turn])
+    assert turn.summary()['cost'] in out
+    assert 'no price for' not in out
+
+
 def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
     from exo.core.models.router import Route
 

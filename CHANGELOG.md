@@ -16,8 +16,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - `exo trace` names up to three unpriced routes, including child turns, with the config key for trace estimates
-  and counts remaining routes. A model-spend refusal instead points to `docs/MODEL-SPEND.md`: an estimate does
-  not pin a spend contract or extend audited native ceilings. Admission and accounting are unchanged (#841).
+  and counts remaining routes. When a spend contract is missing, the refusal points to `docs/MODEL-SPEND.md`.
+  An estimate does not pin a spend contract or extend audited native ceilings. Admission and accounting are
+  unchanged (#841).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.

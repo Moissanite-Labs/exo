@@ -59,7 +59,8 @@ override prices the same way under `[models.models]`, model by model, and config
 Prices of calls already recorded are as recorded: a price added later applies to new calls only.
 The table names up to three unique routes it could not price, including child turns, with the config key for
 trace estimates (`docs/PROVIDERS.md` "Prices"). Remaining routes are counted. These estimates do not supply
-model-spend contracts or extend audited native ceilings; spend refusals point to `docs/MODEL-SPEND.md`.
+model-spend contracts or extend audited native ceilings. The refusal for a missing spend contract points to
+`docs/MODEL-SPEND.md`.
 
 ## Rules
 Each flag has a stable signature, so the same problem counts instead of repeating. Limits are in the `trace`
