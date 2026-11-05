@@ -457,6 +457,84 @@ def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     assert "unknown" in trace.table([u]) and trace.as_dict("s", [u])["turns"][0]["cost_usd"] is None
 
 
+def test_table_names_each_unpriced_route_and_where_its_price_goes():
+    t = tt(calls=[_usage_call("provider:model", None), _usage_call("p:a", 0.01)], t0=1.0)
+    out = trace.table([t])
+    assert "$0.0100+" in out  # the priced call, still marked as a mixed turn
+    assert trace.price_hint("provider:model") in out
+    assert 'models.models in config.json' in out and 'docs/PROVIDERS.md "Prices"' in out
+    assert trace.price_hint("p:a") not in out  # a priced route is never named
+    priced = tt(calls=[_usage_call("p:a", 0.01)], t0=1.0)
+    assert "no price for" not in trace.table([priced])
+    many = tt(calls=[_usage_call(f"p:m{i}", None) for i in range(5)], t0=1.0)
+    capped = trace.table([many])
+    assert capped.count('no price for "') == 3  # three named, the rest in one summary line
+    assert 'no price for "p:m0"' in capped and 'no price for "p:m3"' not in capped
+    assert "no price for 2 more routes" in capped
+
+
+def test_table_names_unpriced_descendants_once_across_shown_turns():
+    grandchild = tt(calls=[_usage_call('child:m', None)])
+    child = tt(calls=[_usage_call('child:m', None)], children=[grandchild])
+    parent = tt(calls=[_usage_call('p:a', 0.01)], children=[child], t0=1.0)
+    other = tt(calls=[_usage_call('child:m', None)], t0=2.0)
+    assert parent.cost() == (0.01, 2)
+    out = trace.table([parent, other])
+    assert '$0.0100+' in out and 'unknown' in out
+    assert out.count(trace.price_hint('child:m')) == 1
+    assert trace.price_hint('p:a') not in out
+    # A child-only turn must have the hint even without a parent's own model calls.
+    out = trace.table([tt(children=[child], t0=1.0)])
+    assert 'unknown' in out and out.count(trace.price_hint('child:m')) == 1
+
+
+@pytest.mark.parametrize('count', [0, 1, 3, 4, 5])
+def test_table_caps_unique_unpriced_descendant_hints(count):
+    calls = [_usage_call(f'p:m{i}', None) for i in reversed(range(count))]
+    child = tt(calls=calls + calls)
+    parent = tt(calls=[_usage_call('p:priced', 0.01)], children=[child], t0=1.0)
+    out = trace.table([parent])
+    assert out.count('no price for "') == min(count, 3)
+    for index in range(count):
+        assert (trace.price_hint(f'p:m{index}') in out) == (index < 3)
+    if count > 3:
+        assert f'no price for {count - 3} more routes; each takes its own key under models.models' in out
+    else:
+        assert 'more routes' not in out
+    assert trace.price_hint('p:priced') not in out
+
+
+def test_table_hint_controls_for_requested_unknown_and_unspent_calls():
+    child = tt(calls=[_usage_call('', None, requested='requested:m'),
+                      _usage_call('', None),  # the cost is unknown, but no route identity was recorded
+                      _usage_call('priced:m', 0.01),
+                      _usage_call('unused:m', None, tin=0, tout=0)])
+    out = trace.table([tt(children=[child], t0=1.0)])
+    assert '$0.0100+' in out
+    assert out.count('no price for "') == 1
+    assert trace.price_hint('requested:m') in out
+    assert trace.price_hint('priced:m') not in out and trace.price_hint('unused:m') not in out
+    assert trace.price_hint('') not in out
+
+
+def test_table_names_a_route_present_only_in_an_earlier_displayed_turn():
+    earlier = tt(calls=[_usage_call('early:m', None)], t0=1.0)
+    later = tt(calls=[_usage_call('priced:m', 0.01)], t0=2.0)
+    out = trace.table([earlier, later])
+    assert out.count(trace.price_hint('early:m')) == 1
+    assert trace.price_hint('priced:m') not in out
+
+
+@pytest.mark.parametrize('undercounted', [False, True])
+def test_table_does_not_name_a_priced_zero_cost_call(undercounted):
+    turn = tt(calls=[_usage_call('free:m', 0.0, undercounted=undercounted)], t0=1.0)
+    assert turn.cost() == (0.0, 0)
+    assert turn.summary()['cost'] == '$0.0000' + ('+' if undercounted else '')
+    out = trace.table([turn])
+    assert turn.summary()['cost'] in out
+    assert 'no price for' not in out
+
+
 def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
     from exo.core.models.router import Route
 

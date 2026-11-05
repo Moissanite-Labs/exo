@@ -380,6 +380,23 @@ ended can no longer be closed, and its connection stays open until Python collec
 baseline decision judge run each question in its own `asyncio.run`, so they close the router they built after
 each question.
 
+### Prices
+
+A route without a trace price reads `unknown` in `exo trace`, never `$0` (D-032). Set or override an estimate
+in config.json under `models.models`, keyed by `provider:model`, in USD per million tokens:
+
+    {"models": {"models": {"provider:model": {"input": 0.28, "output": 0.42, "cache_read": 0.028}}}}
+
+The numbers above are an example, not a quote: use the provider's published list price. `cache_read` and
+`cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
+price added later applies to new calls only, so a session recorded before it keeps `unknown`.
+
+These prices are estimates used in model-call usage, session totals and delegated receipts as well as trace
+output. The optional `context` value is used in model listings and context-capacity reports. These values do
+not supply `models.spend.routes` contracts or extend the audited native ceilings. The refusal for a missing
+spend contract points to `docs/MODEL-SPEND.md`, which describes the principal-owned policy and protected-policy
+source. Adding an estimate does not lift a refusal.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.

@@ -22,6 +22,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   their packages. A change there skipped the comparator and the check passed. A name git quotes (non-ASCII, a tab, a
   newline, a quote) no longer skips the check. The comparator stops (exit 2) when a tree's gate loads from a package
   or an extension module in place of `src/exo/gate.py`, or from a `gate.py` that links to another file (#1162).
+- `exo trace` names up to three unpriced routes, including child turns, with the config key for trace estimates
+  and counts remaining routes. When a spend contract is missing, the refusal points to `docs/MODEL-SPEND.md`.
+  An estimate does not pin a spend contract or extend audited native ceilings. Admission and accounting are
+  unchanged (#841).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.
