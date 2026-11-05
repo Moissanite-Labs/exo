@@ -15,6 +15,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate preflight (#1151 follow-up, D-038 amendment): never-looser runs when a pull request changes a file that
+  changes the gate's code or data as Python loads it, not only `src/exo/gate.py`. These were outside the list:
+  `src/exo/__init__.py`, `src/exo/store.py` and `src/exo/core/models/catalog.toml`, a package, extension module or
+  cached `.pyc` that Python imports in place of one of them, `.gitattributes`, and `src/` and `clients/tui/` outside
+  their packages. A change there skipped the comparator and the check passed. A name git quotes (non-ASCII, a tab, a
+  quote) no longer skips the check.
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.
