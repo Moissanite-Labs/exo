@@ -35,21 +35,28 @@ The argument is one JSON object after the subcommand name:
 
 - `create` — persist a group owned by this seat. `mode` is `"socratic"`
   or `"conductor"`; `members` is a non-empty list of profile strings;
-  `conductor` is optional. Unknown ids/modes/fields fail before the host.
+  `conductor` is optional. Invalid shapes/modes/fields fail before the host;
+  unknown or unauthorized profile IDs are rejected by the host without writes.
 - `start` — validate `audiences` (a non-empty object mapping each member
   profile to a list of profile strings; never inferred or defaulted) and
   hand off to the host, which re-validates stored members against the
   injected profile set, builds engines through the authorized factory
-  and claims one durable execution. A failed start leaves no runtime
-  and no durable claim; a partial failure after the claim still blocks
-  retry by design.
+  and claims one durable execution. Pre-claim validation/factory failures leave
+  no runtime or new claim. An existing receipt blocks start before construction;
+  a partial failure after the atomic claim still blocks retry. Resource ownership
+  on failed construction is the trusted integration's responsibility (SWARM-HOST.md).
 - `status` — the host snapshot: per-member state, the durable receipt or
-  `null`, whether the runtime is active in this process and whether
+  `null`, whether a local runtime object exists in this host and whether
   reconciliation is required (active claim, no local runtime). An active
-  receipt is never proof of liveness.
+  receipt is never proof of liveness. `local_runtime` can remain true after
+  completion. Another host in the same process can report unknown member states
+  and `reconciliation_required` while the owning host is still live.
 - `pause` / `resume` / `stop` — group-wide or member-scoped hooks via
-  `member`; `stop` is immediate, not graceful. Host rejections surface
-  as `bad_request` with the host's reason.
+  `member`. Response flags acknowledge accepted control requests, not completed
+  pause or cleanup. Pause takes effect at a checkpoint and does not suspend an
+  in-flight turn. Stop requests cancellation; a member remains `stopping` until
+  cleanup finishes. Poll status for terminal states and the settled receipt.
+  Host rejections surface as `bad_request` with the host's reason.
 
 
 Observation returns `messages` and `next_after`. A nonempty page advances to its
@@ -77,6 +84,11 @@ configuration to build one. With no injected host, or a host whose
 host is ever touched. `GroupHost` is an internal composition seam, not an
 authentication boundary: host objects must never be exposed to models
 (see `docs/SWARM-HOST.md`).
+
+The host's public `groups.sessions` must be the identical `SessionStore` object
+as `eng.store`; even a second connection to the same file is refused. This keeps
+lifecycle and list/inspect/send/observe operations on the same database and store
+lifecycle. A mismatched store is `forbidden` before any host operation or factory.
 
 Unknown keys are rejected everywhere.
 

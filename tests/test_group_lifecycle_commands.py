@@ -1,17 +1,20 @@
 """Lifecycle ops of the command.run name "group" against an injected GroupHost.
 
-The engine is a SimpleNamespace with ``agent`` (the seat name) and optionally
-``_group_host`` (a fake injected host). No CoreEngine, no store, no live
-install: the command layer must fail closed without a host, reject a host
-owned by another seat, and forward validated arguments only.
+Unit tests use a fake injected host; integration tests use Dispatcher(CoreEngine)
+and a real GroupHost with fake member engines. No live provider or installation.
+The command layer must reject missing/mismatched composition, preserve the caller
+gate and forward validated arguments only.
 """
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from exo import group_commands, principal
-from exo.core.group_host import HostError
+from exo.core.group_host import GroupHost, HostError
+from exo.core.groups import GroupStore
+from exo.core.sessions import SessionStore
 from exo.server.engine import CommandFailed
 
 OPS = ("create", "start", "status", "pause", "resume", "stop")
@@ -28,8 +31,9 @@ ARGS = {
 class FakeHost:
     """Records calls; raises HostError like the real GroupHost does."""
 
-    def __init__(self, owner="one"):
+    def __init__(self, owner="one", store=None):
         self.owner = owner
+        self.groups = SimpleNamespace(sessions=store)
         self.calls = []
         self.errors = {}
 
@@ -68,8 +72,8 @@ class FakeHost:
 
 @pytest.fixture
 def eng():
-    engine = SimpleNamespace(agent="one")
-    engine._group_host = FakeHost(owner="one")
+    engine = SimpleNamespace(agent="one", store=object())
+    engine._group_host = FakeHost(owner="one", store=engine.store)
     return engine
 
 
@@ -166,35 +170,35 @@ def test_host_rejections_become_bad_request(eng):
         run(eng, 'stop {"id": "g-1", "member": "ghost"}')
 
 
-@pytest.mark.parametrize("args", [
-    'create {}',                                                   # missing fields
-    'create {"mode": "council", "members": ["lead"]}',             # unknown mode
-    'create {"mode": true, "members": ["lead"]}',                  # mode not a string
-    'create {"mode": "conductor"}',                                # members required
-    'create {"mode": "conductor", "members": []}',                 # empty members
-    'create {"mode": "conductor", "members": "lead"}',             # members not a list
-    'create {"mode": "conductor", "members": ["lead", 3]}',        # member not a string
-    'create {"mode": "conductor", "members": ["lead", " "]}',      # blank member
-    'create {"mode": "socratic", "members": ["lead"], "conductor": 4}',
-    'create {"mode": "socratic", "members": ["lead"], "extra": 1}',  # unknown key
-    'start {"id": "g-1"}',                                         # audiences required
-    'start {"audiences": {"lead": ["one"]}}',                      # id required
-    'start {"id": "g-1", "audiences": []}',                        # audiences not an object
-    'start {"id": "g-1", "audiences": {}}',                        # empty audiences
-    'start {"id": "g-1", "audiences": {"lead": "one"}}',           # audience not a list
-    'start {"id": "g-1", "audiences": {"lead": ["one", 2]}}',      # target not a string
-    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "x": 1}',  # unknown key
-    'status {}',                                                   # id required
-    'status {"id": 5}',                                            # id not a string
-    'status {"id": "g-1", "verbose": true}',                       # unknown key
-    'pause {"id": " "}',                                           # blank id
-    'pause {"id": "g-1", "member": 3}',                            # member not a string
-    'pause {"id": "g-1", "member": " "}',                          # blank member
-    'resume {"id": "g-1", "profile": "one"}',                      # unknown key
-    'stop {"id": "g-1", "all": true}',                             # unknown key
+@pytest.mark.parametrize("args,message", [
+    ('create {}', 'missing field'),
+    ('create {"mode": "council", "members": ["lead"]}', 'mode must be'),
+    ('create {"mode": true, "members": ["lead"]}', 'mode must be'),
+    ('create {"mode": "conductor"}', 'missing field'),
+    ('create {"mode": "conductor", "members": []}', 'members must be'),
+    ('create {"mode": "conductor", "members": "lead"}', 'members must be'),
+    ('create {"mode": "conductor", "members": ["lead", 3]}', 'members must be'),
+    ('create {"mode": "conductor", "members": ["lead", " "]}', 'members must be'),
+    ('create {"mode": "socratic", "members": ["lead"], "conductor": 4}', 'conductor must be'),
+    ('create {"mode": "socratic", "members": ["lead"], "extra": 1}', 'unknown field'),
+    ('start {"id": "g-1"}', 'missing field'),
+    ('start {"audiences": {"lead": ["one"]}}', 'missing field'),
+    ('start {"id": "g-1", "audiences": []}', 'audiences must be'),
+    ('start {"id": "g-1", "audiences": {}}', 'audiences must be'),
+    ('start {"id": "g-1", "audiences": {"lead": "one"}}', 'must be a list'),
+    ('start {"id": "g-1", "audiences": {"lead": ["one", 2]}}', 'must be a list'),
+    ('start {"id": "g-1", "audiences": {"lead": ["one"]}, "x": 1}', 'unknown field'),
+    ('status {}', 'missing field'),
+    ('status {"id": 5}', 'id must be'),
+    ('status {"id": "g-1", "verbose": true}', 'unknown field'),
+    ('pause {"id": " "}', 'id must be'),
+    ('pause {"id": "g-1", "member": 3}', 'member must be'),
+    ('pause {"id": "g-1", "member": " "}', 'member must be'),
+    ('resume {"id": "g-1", "profile": "one"}', 'unknown field'),
+    ('stop {"id": "g-1", "all": true}', 'unknown field'),
 ])
-def test_malformed_args_rejected_before_host(eng, args):
-    with pytest.raises(CommandFailed) as e:
+def test_malformed_args_rejected_before_host(eng, args, message):
+    with pytest.raises(CommandFailed, match=message) as e:
         run(eng, args)
     assert e.value.code == "bad_request"
     assert eng._group_host.calls == []
@@ -212,3 +216,162 @@ def test_no_authority_from_message_text(eng):
     out = run(eng, 'pause {"id": "g-1"}')
     assert out["paused"] is True
     assert eng._group_host.owner == "one"
+
+
+@pytest.fixture
+def stores():
+    first, second = SessionStore(), SessionStore()
+    try:
+        yield first, second
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.parametrize("op", OPS)
+def test_real_host_store_mismatch_fails_before_operation(op, stores):
+    engine_store, host_store = stores
+    async def scenario():
+        host = GroupHost(GroupStore(host_store), owner="one", known_profiles=["lead", "one"],
+                         engine_factory=lambda group: pytest.fail("factory must not run"))
+        engine = SimpleNamespace(agent="one", store=engine_store, _group_host=host)
+        with pytest.raises(CommandFailed, match="same session store") as error:
+            await group_commands.command(engine, SimpleNamespace(args=ARGS[op]))
+        assert error.value.code == "forbidden"
+        assert host_store._q("SELECT * FROM swarm_groups") == []
+    token = principal.CALLER.set(principal.Caller("principal"))
+    try:
+        asyncio.run(scenario())
+    finally:
+        principal.CALLER.reset(token)
+
+
+def test_invalid_status_id_precedes_missing_host():
+    with pytest.raises(CommandFailed, match="id must be a non-empty string") as error:
+        run(SimpleNamespace(agent="one"), 'status {"id": 5}')
+    assert error.value.code == "bad_request"
+
+
+@pytest.mark.parametrize("op", ["pause", "resume", "stop"])
+def test_control_requires_id_before_host(op):
+    with pytest.raises(CommandFailed, match="missing field.*id") as error:
+        run(SimpleNamespace(agent="one"), op+' {}')
+    assert error.value.code == "bad_request"
+
+
+@pytest.mark.parametrize("who,allowed", [
+    ("principal", True), ("principal:tui", True), ("local", False),
+    ("unknown", False), ("seat:helper", False), ("channel", False), ("principalx", False),
+])
+def test_real_dispatcher_lifecycle_and_denial(tmp_path, who, allowed):
+    from exo.core.engine import CoreEngine
+    from exo.core.plugins import PluginManager
+    from exo.core.seats import Seat
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+
+    async def scenario():
+        engine = CoreEngine(tmp_path / "home", {"fake": {"rules": []}, "roles": {"main": ["fake:x"]}},
+                            plugins=PluginManager(), cwd=str(tmp_path), env={}, seat=Seat(name="one"))
+        factory_calls = []
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def ack(command):
+            entered.set()
+            await release.wait()
+            return SimpleNamespace(stop_reason="end", error=None,
+                                   message=SimpleNamespace(text=lambda: "reply"))
+
+        def factory(group):
+            factory_calls.append(group.id)
+            return {m.profile: SimpleNamespace(agent=m.profile, store=engine.store, run_turn=ack)
+                    for m in group.members}
+
+        host = GroupHost(GroupStore(engine.store), owner="one", known_profiles=["lead", "one"],
+                         engine_factory=factory)
+        engine._group_host = host  # Trusted test composition only; no production wiring.
+        dispatcher = Dispatcher(engine, caller=who)
+
+        async def raw(args):
+            return await asyncio.wait_for(dispatcher.run(s.Command.of(
+                s.CommandRun(name="group", args=args))), timeout=2)
+
+        async def command(op, fields=None):
+            result = await raw(op + (" " + json.dumps(fields) if fields is not None else ""))
+            assert result.ok, result.error
+            json.dumps(result.result["output"])
+            return result.result["output"]
+
+        async def bad(op, fields, message, code="bad_request"):
+            result = await raw(op+" "+json.dumps(fields))
+            assert not result.ok and result.error.code == code
+            assert message in result.error.message
+
+        try:
+            if not allowed:
+                for op in OPS:
+                    for args in (ARGS[op], op+" {", op+" "+"["*100000):
+                        result = await raw(args)
+                        assert not result.ok and result.error.code == "forbidden"
+                assert not factory_calls
+                for table in ("swarm_groups", "swarm_messages", "swarm_delivery"):
+                    assert engine.store._q("SELECT * FROM "+table) == []
+                assert engine.store._q("SELECT name FROM sqlite_master WHERE name='swarm_executions'") == []
+                return
+
+            group = await command("create", {"mode": "conductor", "members": ["lead", "one"],
+                                             "conductor": "lead"})
+            gid = group["id"]
+            assert host.groups.sessions is engine.store
+            assert [g["id"] for g in (await command("list"))["groups"]] == [gid]
+            assert (await command("inspect", {"id": gid}))["members"] == group["members"]
+            note = await command("send", {"id": gid, "audience": ["one"], "text": "question"})
+            assert [m["id"] for m in (await command("observe", {"id": gid}))["messages"]] == [note["id"]]
+            assert (await command("status", {"id": gid}))["receipt"] is None
+            await bad("start", {"id": gid, "audiences": {"lead": ["one"]}}, "one engine and audience")
+            assert (await command("status", {"id": gid}))["receipt"] is None
+            started = await command("start", {"id": gid, "audiences": {"lead": ["one"], "one": ["lead"]}})
+            assert {m["state"] for m in started["members"]} == {"queued"}
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            await bad("start", {"id": gid, "audiences": {"lead": ["one"], "one": ["lead"]}}, "already started")
+            await command("pause", {"id": gid})
+            snapshot = await command("status", {"id": gid})
+            assert next(m["state"] for m in snapshot["members"] if m["profile"] == "one") == "pausing"
+            await bad("pause", {"id": gid, "member": "ghost"}, "unknown member")
+            await command("resume", {"id": gid})
+            for _ in range(2):
+                await command("stop", {"id": gid})
+            await asyncio.wait_for(host.wait(gid), timeout=5)
+            final = await command("status", {"id": gid})
+            assert final["receipt"]["state"] == "settled"
+            assert final["local_runtime"] is True
+            assert final["receipt"]["members"] == {m["profile"]: m["state"] for m in final["members"]}
+            assert {m["state"] for m in final["members"]} <= {"completed", "stopped"}
+
+            foreign = host.groups.create(owner="other", mode="socratic", members=["lead", "one"],
+                                         known_profiles=["lead", "one"])
+            for op in ("status", "pause", "resume", "stop", "start"):
+                fields = {"id": foreign.id}
+                if op == "start":
+                    fields["audiences"] = {"lead": ["one"], "one": ["lead"]}
+                await bad(op, fields, "no such group")
+            assert all(group_id == gid for group_id in factory_calls)
+
+            def broken(group):
+                raise RuntimeError("factory implementation detail")
+
+            engine._group_host = GroupHost(host.groups, owner="one", known_profiles=["lead", "one"],
+                                          engine_factory=broken)
+            fresh = await command("create", {"mode": "socratic", "members": ["lead", "one"]})
+            await bad("start", {"id": fresh["id"], "audiences": {"lead": ["one"], "one": ["lead"]}},
+                      "engine factory failed")
+            assert (await command("status", {"id": fresh["id"]}))["receipt"] is None
+        finally:
+            release.set()
+            for group in host.groups.listing(owner="one"):
+                if host.status(group.id)["local_runtime"]:
+                    host.stop(group.id)
+                    await asyncio.wait_for(host.wait(group.id), timeout=5)
+            await engine.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=15))
