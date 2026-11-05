@@ -12,6 +12,17 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 
+// A conversation's "5m ago" ages while the app sits idle, so the label is a <time> that keeps the absolute stamp it
+// was drawn from and a clock rewrites only its text: no request, no stored time changed, no reorder, no list redraw.
+export const RELATIVE_TICK_MS = 30000;
+const relativeLabel = (iso) => { const text = when(iso); return text ? h("time", { class: "xc-rel", datetime: iso, "data-xc-rel": iso }, text) : ""; };
+export function refreshRelative(root) {
+  for (const el of root.querySelectorAll("time[data-xc-rel]")) {
+    const text = when(el.getAttribute("data-xc-rel"));
+    if (text && el.textContent !== text) el.textContent = text;
+  }
+}
+
 // Page-lifetime intent only: never write prompts to browser storage.
 const drafts = new Map();
 let lastThread = null;
@@ -532,6 +543,19 @@ export function mount(root) {
     el.replaceChildren(...(s ? [h("b", null, s.agent || s.seat || "exo"), " \u00B7 " + short(s.title || s.id, 36)] : []));
   }
 
+  // Started by the first drawn label, so a page with none keeps no timer. It pauses while the page is hidden and
+  // catches up the moment it is shown again; unmount stops it.
+  let relativeTimer = null, relativeWatching = false;
+  const relativeTick = () => refreshRelative(listEl);
+  const relativeVisibility = () => { if (document.hidden) pauseRelative(); else { relativeTick(); relativeClock(); } };
+  function pauseRelative() { if (relativeTimer != null) { clearInterval(relativeTimer); relativeTimer = null; } }
+  function relativeClock() {
+    if (!mounted) return;
+    if (!relativeWatching) { relativeWatching = true; document.addEventListener("visibilitychange", relativeVisibility); }
+    if (relativeTimer == null && !document.hidden) relativeTimer = setInterval(relativeTick, RELATIVE_TICK_MS);
+  }
+  function stopRelativeClock() { pauseRelative(); if (relativeWatching) { relativeWatching = false; document.removeEventListener("visibilitychange", relativeVisibility); } }
+
   function drawSessions() {
     const pendingApprovals = Object.values(approvals);
     const waiting = new Set(pendingApprovals.map(a => a.session));
@@ -552,13 +576,14 @@ export function mount(root) {
         title: "Open conversation", "aria-current": s.id === current ? "true" : null,
         ondblclick: () => beginRename(s) },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
+        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", relativeLabel(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
       conversationButtons.set(s.id, conversationButton);
       return h("div", { class: "xc-session-row" }, conversationButton, button);
     }) : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
       sessions.length ? h("button", { class: "xc-btn", onclick: () => {
         searchInput.value = threadQuery = ""; threadFilterInput.value = threadFilter = "all"; drawSessions(); searchInput.focus();
       } }, "Show all conversations") : null)]));
+    if (listEl.querySelector && listEl.querySelector("time[data-xc-rel]")) relativeClock();
     if (focusedConversation) (conversationButtons.get(focusedConversation[0]) || searchInput).focus({ preventScroll: true });
     else if (focusedRename) (renameButtons.get(focusedRename[0]) || searchInput).focus({ preventScroll: true });
     const selected = sessions.find(s => s.id === current);
@@ -991,7 +1016,7 @@ export function mount(root) {
       else recover();
     }
   });
-  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); stopRelativeClock(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
