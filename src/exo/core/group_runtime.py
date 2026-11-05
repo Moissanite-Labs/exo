@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 
-from exo.core.group_execution import GroupExecutions
+from exo.core.group_execution import ExecutionReceipt, GroupExecutions
 from exo.core.group_messages import GroupMessage, GroupMessages
 from exo.core.group_runner import GroupRunner, MemberStatus
 from exo.core.groups import GroupMember
@@ -110,7 +110,7 @@ class GroupRuntime:
         self._executions.finish(self.group.id, owner=self.group.owner, execution_id=execution_id,
                                 members={s.profile: s.state for s in statuses})
 
-    def receipt(self):
+    def receipt(self) -> ExecutionReceipt | None:
         """Last durable receipt, not a liveness probe or live member status."""
         return self._executions.get(self.group.id, owner=self.group.owner)
 
