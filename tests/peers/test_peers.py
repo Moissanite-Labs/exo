@@ -112,8 +112,8 @@ async def pair(run_dir, b_peers=None, **kw):
     b = await Daemon(run_dir, "beta", peers=b_peers, **kw).start()
     pin_peer(a.eng.home, "beta", b.eng.peers.node.signer.pub)
     pin_peer(b.eng.home, "alpha", a.eng.peers.node.signer.pub)
-    sa = (await a.eng.loop.create_session(title="a work")).id
-    sb = (await b.eng.loop.create_session(title="b work")).id
+    sa = (await a.eng.loop.create_session(title="a work", agent=a.eng.agent)).id
+    sb = (await b.eng.loop.create_session(title="b work", agent=b.eng.agent)).id
     return a, b, sa, sb
 
 
@@ -296,8 +296,8 @@ def test_gate_peer_policy():
 async def test_different_principal_is_held_by_default(run_dir):
     a = await Daemon(run_dir, "alpha", principal="ada").start()
     b = await Daemon(run_dir, "beta", principal="bob").start()
-    sa = (await a.eng.loop.create_session()).id
-    await b.eng.loop.create_session()
+    sa = (await a.eng.loop.create_session(agent=a.eng.agent)).id
+    await b.eng.loop.create_session(agent=b.eng.agent)
     try:
         out = await a.cmd(s.Peers(action="send", to="beta", text="hello", session=sa, via="agent"))
         assert out["state"] == "held"
