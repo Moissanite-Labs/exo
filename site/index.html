@@ -29,6 +29,8 @@
 <link rel="stylesheet" href="assets/style.css">
 <script>document.documentElement.classList.add("js")</script>
 <script src="assets/main.js" defer></script>
+<script src="brand/egg-feed.js" defer></script>
+<script src="assets/activity.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -79,6 +81,15 @@
       <div><dt>Wave 4</dt><dd><span class="led led--next"></span>Channels and cutover: next</dd></div>
       <div><dt>Horizon</dt><dd><span class="led"></span>Portable companion device</dd></div>
     </dl>
+    <aside class="egg-legend" aria-label="What the egg shows" hidden>
+      <p class="egg-legend__k">The egg reacts to project activity <span class="egg-legend__demo" hidden>Demo activity: simulated, not real</span></p>
+      <ul>
+        <li><i class="egg-pips" style="--n:1"></i><b>issue</b><span>level 1 · a small, quick pulse</span></li>
+        <li><i class="egg-pips" style="--n:2"></i><b>pull request</b><span>level 2 · a stronger pulse and a bright packet</span></li>
+        <li><i class="egg-pips" style="--n:3"></i><b>merge</b><span>level 3 · a flash through the whole lattice</span></li>
+      </ul>
+      <p class="egg-legend__live" aria-live="polite"></p>
+    </aside>
   </div>
   <div class="ticker" aria-hidden="true"><div class="ticker__track"></div></div>
 </section>

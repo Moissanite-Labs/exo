@@ -1,0 +1,157 @@
+{
+ "v": 1,
+ "generated": "2026-10-13T12:00:04Z",
+ "cursor": "demo",
+ "poll_s": 20,
+ "egg": {
+  "xp": 612,
+  "pending": 38,
+  "target": 2048,
+  "stage": 0.239,
+  "state": "filling",
+  "crack_at": null,
+  "hatch_at": null
+ },
+ "events": [
+  {
+   "id": "9f767c45",
+   "t": "2026-10-13T08:03:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "4164d839",
+   "t": "2026-10-13T08:32:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "bde5c099",
+   "t": "2026-10-13T09:03:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "5bc8fbbc",
+   "t": "2026-10-13T09:32:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "cb91ce37",
+   "t": "2026-10-13T10:03:00Z",
+   "type": "merge",
+   "level": 3,
+   "weight": 10
+  },
+  {
+   "id": "b0c11fde",
+   "t": "2026-10-13T10:32:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "f1446bea",
+   "t": "2026-10-13T11:03:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "d76d4330",
+   "t": "2026-10-13T11:32:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "bd69fe29",
+   "t": "2026-10-13T12:03:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "a6eb8c9e",
+   "t": "2026-10-13T12:32:00Z",
+   "type": "merge",
+   "level": 3,
+   "weight": 10
+  },
+  {
+   "id": "ec1d7da0",
+   "t": "2026-10-13T13:03:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "87b0b125",
+   "t": "2026-10-13T13:32:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "076ce2ef",
+   "t": "2026-10-13T14:03:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "d7210dff",
+   "t": "2026-10-13T14:32:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "77330bdb",
+   "t": "2026-10-13T15:03:00Z",
+   "type": "release",
+   "level": 4,
+   "weight": 25
+  },
+  {
+   "id": "c6a53877",
+   "t": "2026-10-13T15:32:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "f17fd374",
+   "t": "2026-10-13T16:03:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  },
+  {
+   "id": "3fc1ea36",
+   "t": "2026-10-13T16:32:00Z",
+   "type": "merge",
+   "level": 3,
+   "weight": 10
+  },
+  {
+   "id": "a6233255",
+   "t": "2026-10-13T17:03:00Z",
+   "type": "pr",
+   "level": 2,
+   "weight": 3
+  },
+  {
+   "id": "0d464138",
+   "t": "2026-10-13T17:32:00Z",
+   "type": "issue",
+   "level": 1,
+   "weight": 1
+  }
+ ]
+}

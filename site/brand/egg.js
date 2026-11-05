@@ -16,6 +16,24 @@
  *
  *   var egg = ExoEgg.mount(canvas, { stage: 0, activity: 0.5 });
  *   egg.setStage(2);  egg.setActivity(0.8);  egg.pulse(6);  egg.destroy();
+ *
+ * The activity layer (repository events drive the egg; interface in docs/LIVE-EGG.md section 1.2):
+ *
+ *   egg.event("issue" | "pr" | "merge" | "release", { replay: false, weight });   // unknown types play as "issue"
+ *   egg.signal(level);   // the same, by level 1..4
+ *   egg.queued();        // events waiting to play
+ *   ExoEgg.EVENTS        // { issue: {level: 1}, pr: {level: 2}, merge: {level: 3}, release: {level: 4} }
+ *
+ *   issue    level 1  the core beats once, brighter, and a small quick pulse lights one lattice node
+ *   pr       level 2  a stronger pulse, and a bright packet that travels several edges
+ *   merge    level 3  a growth flash through the whole lattice, a brief rise in brightness and activity,
+ *                     and the core heartbeat quickening for a few seconds
+ *   release  level 4  a merge, a lift of the stage, and a second, fainter flash after it
+ *
+ * Events play from a queue (gaps 0.4 s after a level 1, 1.2 s after a 2, 2.5 s after a 3 or 4; at most 20 wait,
+ * then the rest fold into one at the highest level). A bloom (3 or 4) happens at most once every 3 seconds; extra
+ * merges play as level 2. Replayed events play at 0.6 strength and never bloom twice. weight is only for a HUD.
+ * With prefers-reduced-motion there is no motion: one node is lit briefly, then it fades back.
  */
 (function (root) {
   "use strict";
@@ -134,6 +152,8 @@
     return { pts: pts, edges: edges };
   }
 
+  var EVENTS = { issue: { level: 1 }, pr: { level: 2 }, merge: { level: 3 }, release: { level: 4 } };
+  var GAP = [0, 0.4, 1.2, 2.5, 2.5];
   var cache = {};
   function lattice(D) { return cache[D] || (cache[D] = build(D)); }
   var FRAME = null, SHELL = null;
@@ -151,6 +171,8 @@
     this.rand = rng(opt.seed == null ? 7 : opt.seed);
     this.spin = opt.spin == null ? 1 : +opt.spin;
     this.packets = []; this.t = opt.time || 0; this.last = 0; this.beatPrev = 0; this.raf = 0; this.running = false;
+    this.phase = this.t; this.boost = 0; this.bloom = 0; this.quick = 0; this.kick = 0; this.flares = []; this.wave = null;
+    this.q = []; this.gap = 0; this.lastBloom = -99; this.replayBloom = false; this.later = []; this.lift = null;
     FRAME = FRAME || buildFrame(); SHELL = SHELL || buildShell();
     this.shellSeed = SHELL.edges.map(this.rand);
     this.useDim(this.stage);
@@ -192,7 +214,7 @@
 
   /* ---------- public API ---------- */
   Egg.prototype.setStage = function (s, o) {
-    this.target = clamp(+s || 0, 0, MAX_STAGE);
+    this.lift = null; this.target = clamp(+s || 0, 0, MAX_STAGE);
     this.useDim(Math.max(this.target, this.stage));
     if ((o && o.immediate) || this.reduce) { this.stage = this.target; if (!this.running) this.reduce ? this.still() : this.draw(0); }
     return this;
@@ -204,6 +226,76 @@
     var core = this.L.cells[0].dots;
     for (var i = 0; i < (n || 4); i++) this.spawn(core[(this.rand() * core.length) | 0], 10 + ((this.rand() * 8) | 0));
     return this;
+  };
+  /* Repository activity (docs/LIVE-EGG.md 1.2). Events wait in a queue and play in order. */
+  Egg.prototype.event = function (type, o) {
+    var ev = Object.prototype.hasOwnProperty.call(EVENTS, type) ? EVENTS[type] : EVENTS.issue;
+    return this.enqueue(ev.level, !!(o && o.replay));
+  };
+  Egg.prototype.signal = function (level) { return this.enqueue(clamp(Math.round(+level || 1), 1, 4), false); };
+  Egg.prototype.queued = function () { return this.q.length; };
+  Egg.prototype.enqueue = function (lv, replay) {
+    if (this.reduce) { this.highlight(); return this; }
+    this.q.push({ lv: lv, replay: replay });
+    if (this.q.length > 20) {                                          // a full queue folds into one event at the highest level
+      var m = 1, rp = true; this.q.forEach(function (e) { m = Math.max(m, e.lv); rp = rp && e.replay; });
+      this.q = [{ lv: m, replay: rp }];
+    }
+    return this;
+  };
+  Egg.prototype.play = function (item) {
+    var lv = item.lv, k = item.replay ? 0.6 : 1, d = this.randDot();
+    if (!item.replay) this.replayBloom = false;
+    if (lv >= 3) {
+      if (this.t - this.lastBloom < 3 || (item.replay && this.replayBloom)) lv = 2;
+      else { this.lastBloom = this.t; if (item.replay) this.replayBloom = true; }
+    }
+    this.gap = GAP[lv] * (item.replay ? 0.6 : 1);
+    this.kick = Math.max(this.kick, k);                                  // the core beats once, brighter
+    this.lightDot(d, k, lv === 1 ? 0.35 : 0.55);
+    this.pulse(lv === 1 ? 2 : lv === 2 ? 4 : lv === 3 ? 12 : 24);
+    if (lv === 1) this.flares.push({ d: d, age: 0, dur: 0.7, size: 0.55 * k });
+    if (lv === 2) {
+      this.flares.push({ d: d, age: 0, dur: 1.1, size: k });
+      var e = this.pick(d, -1);
+      if (e >= 0) { var E = this.L.edges[e]; this.packets.push({ e: e, from: d, to: E.a === d ? E.b : E.a, p: 0, v: 3.2, life: 6 + ((this.rand() * 3) | 0), big: true }); }
+    }
+    if (lv >= 3) this.bloomFrom(d, k, lv >= 4 ? 1.25 : 1);
+    if (lv >= 4) {
+      var self = this;
+      if (!this.lift) this.lift = { base: this.target };
+      this.target = Math.min(MAX_STAGE, this.lift.base + 0.15);
+      this.later.push({ at: 1.0, fn: function () { if (self.lift) { self.target = self.lift.base; self.lift = null; } } });
+      this.later.push({ at: 0.9, fn: function () { self.bloomFrom(self.randDot(), 0.7, 1); } });
+    }
+  };
+  Egg.prototype.randDot = function () {
+    var L = this.L;
+    for (var i = 0; i < 24; i++) { var d = (this.rand() * L.dots.length) | 0; if (vis(this.stage, L.dots[d].t) > 0.6) return d; }
+    return L.cells[0].dots[0];
+  };
+  Egg.prototype.lightDot = function (d, h, ch) {
+    var L = this.L; L.dots[d].heat = Math.max(L.dots[d].heat, h);
+    var c = L.cells[L.dots[d].cell]; c.heat = Math.min(1, c.heat + ch);
+  };
+  Egg.prototype.bloomFrom = function (d, wf, size) {
+    var L = this.L, o = L.dots[d].p, dist = new Float32Array(L.dots.length), max = 0;
+    for (var i = 0; i < dist.length; i++) {
+      var p = L.dots[i].p, s = 0; for (var k = 0; k < p.length; k++) s += (p[k] - o[k]) * (p[k] - o[k]);
+      dist[i] = Math.sqrt(s); if (dist[i] > max) max = dist[i];
+    }
+    this.wave = { dist: dist, done: new Uint8Array(dist.length), r: 0, speed: max / 1.5, max: max, h: 0.7 * wf };
+    this.flares.push({ d: d, age: 0, dur: 1.6, size: 1.7 * size * wf });
+    this.bloom = Math.min(1.1, this.bloom + 0.8 * wf * size);
+    this.boost = Math.min(1, this.boost + 0.8 * wf);
+    this.quick = 4.5;
+  };
+  /* Reduced motion: light one node for a moment, then put the still frame back. No movement. */
+  Egg.prototype.highlight = function () {
+    var self = this, L = this.L, d = this.randDot();
+    clearTimeout(this._hl);
+    L.dots[d].heat = 1; L.cells[L.dots[d].cell].heat = 0.6; this.draw(0, true);
+    this._hl = setTimeout(function () { self.still(); }, 900);
   };
   Egg.prototype.pause = function () { if (this.running) { this.running = false; cancelAnimationFrame(this.raf); } return this; };
   Egg.prototype.resume = function () {
@@ -225,7 +317,7 @@
   };
   /* Reduced motion: one still frame, with a few cells lit along a path so the picture still says "information". */
   Egg.prototype.still = function () {
-    this.t = 9.5; this.packets = [];
+    this.t = 9.5; this.phase = 9.5; this.packets = [];
     var L = this.L, s = this.stage, r = rng(3);
     L.dots.forEach(function (d) { d.heat = 0; }); L.cells.forEach(function (c) { c.heat = 0; });
     var d = L.cells[0].dots[0];
@@ -251,12 +343,31 @@
   };
 
   Egg.prototype.step = function (dt) {
-    var L = this.L, a = this.activity;
+    var L = this.L, a = clamp(this.activity + 0.35 * this.boost, 0, 1);
+    this.boost *= Math.exp(-dt * 0.45); this.bloom *= Math.exp(-dt * 1.1);
+    if (this.quick > 0) this.quick = Math.max(0, this.quick - dt);
+    this.kick *= Math.exp(-dt * 4);
+    if ((this.gap -= dt) <= 0 && this.q.length) this.play(this.q.shift());
+    if (this.later.length) for (var li = this.later.length - 1; li >= 0; li--) { if ((this.later[li].at -= dt) <= 0) this.later.splice(li, 1)[0].fn(); }
+    var W = this.wave;
+    if (W) {
+      W.r += dt * W.speed;
+      var band = 0.5 * W.max;                                        // the flash has a body, not just a front
+      for (var wi = 0; wi < W.dist.length; wi++) if (W.dist[wi] <= W.r && vis(this.stage, L.dots[wi].t) > 0.3) {
+        var behind = W.r - W.dist[wi];
+        if (!W.done[wi]) { W.done[wi] = 1; this.lightDot(wi, W.h, 0.1); }
+        else if (behind < band) this.lightDot(wi, W.h * (1 - behind / band), 0.01);
+      }
+      if (W.r > W.max) this.wave = null;
+    }
+    for (var fi = this.flares.length - 1; fi >= 0; fi--) { this.flares[fi].age += dt; if (this.flares[fi].age >= this.flares[fi].dur) this.flares.splice(fi, 1); }
     // ease the stage toward its target
     var ds = this.target - this.stage;
     if (Math.abs(ds) > 1e-4) this.stage += clamp(ds, -dt * 0.7, dt * 0.7); else this.stage = this.target;
     // heartbeat: a beat sends packets out of the core; the rate rises with activity
-    var f = 0.5 + a * 0.9, ph = (this.t * f) % 1, beat = ph < this.beatPrev;
+    var f = (0.5 + a * 0.9) * (1 + 0.9 * smooth(this.quick)), ph;
+    this.phase += dt * f; ph = this.phase % 1;
+    var beat = ph < this.beatPrev;
     this.beatPrev = ph;
     if (beat) this.pulse(1 + Math.round(a * 3 + this.stage));
     // background traffic anywhere in the lattice
@@ -286,7 +397,9 @@
     var W = this.W, H = this.H, cx = this.cx, cy = this.cy, R = this.R;
     ctx.clearRect(0, 0, W, H);
     var bright = s >= 3 ? 1 : STAGES[Math.floor(s)].brightness + (STAGES[Math.min(3, Math.floor(s) + 1)].brightness - STAGES[Math.floor(s)].brightness) * (s - Math.floor(s));
-    var f = 0.5 + this.activity * 0.9, beat = Math.pow(Math.max(0, Math.cos(Math.PI * 2 * ((t * f) % 1))), 12);
+    var beat = Math.pow(Math.max(0, Math.cos(Math.PI * 2 * (this.phase % 1))), 12) * (1 + 0.45 * smooth(this.quick));
+    beat = Math.max(beat, this.kick);
+    bright *= 1 + 0.22 * Math.min(1, this.bloom);
     var breathe = 1 + 0.012 * Math.sin(t * 0.9) + 0.01 * beat;
 
     // rotation: a slow turn in 3D, and turns through each higher axis
@@ -402,9 +515,23 @@
       var Pk = this.packets[pk], fa = Pk.from * 4, ta = Pk.to * 4, tt = Pk.p;
       var px = pr[fa] + (pr[ta] - pr[fa]) * tt, py = pr[fa + 1] + (pr[ta + 1] - pr[fa + 1]) * tt;
       var tb = Math.max(0, tt - 0.45), qx = pr[fa] + (pr[ta] - pr[fa]) * tb, qy = pr[fa + 1] + (pr[ta + 1] - pr[fa + 1]) * tb;
-      ctx.strokeStyle = "rgba(" + ACC2 + ",0.7)"; ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.moveTo(qx, qy); ctx.lineTo(px, py); ctx.stroke();
-      ctx.globalAlpha = 0.8; ctx.drawImage(glow, px - 7, py - 7, 14, 14); ctx.globalAlpha = 1;
+      var bg = Pk.big;
+      ctx.strokeStyle = bg ? "rgba(255,200,160,0.9)" : "rgba(" + ACC2 + ",0.7)"; ctx.lineWidth = bg ? 2.4 : 1.6;
+      ctx.beginPath(); ctx.moveTo(bg ? pr[fa] + (pr[ta] - pr[fa]) * Math.max(0, tt - 0.8) : qx, bg ? pr[fa + 1] + (pr[ta + 1] - pr[fa + 1]) * Math.max(0, tt - 0.8) : qy); ctx.lineTo(px, py); ctx.stroke();
+      var gs = bg ? 24 : 14;
+      ctx.globalAlpha = bg ? 1 : 0.8; ctx.drawImage(glow, px - gs / 2, py - gs / 2, gs, gs); ctx.globalAlpha = 1;
+    }
+    // 5b. activity: flares at the nodes that were hit, and a soft bloom over the whole lattice
+    if (this.bloom > 0.02) {
+      var br = R * (0.95 + 0.1 * (1 - Math.min(1, this.bloom)));
+      ctx.globalAlpha = clamp(0.13 * this.bloom, 0, 0.16); ctx.drawImage(glow, cx - br, cy - br, br * 2, br * 2); ctx.globalAlpha = 1;
+    }
+    for (var fl = 0; fl < this.flares.length; fl++) {
+      var Fl = this.flares[fl], u = Fl.age / Fl.dur, eo = 1 - Math.pow(1 - u, 3), fo = Fl.d * 4;
+      var fr2 = (8 + eo * 34 * Fl.size) * (R / 200 > 1 ? Math.min(1.6, R / 200) : 1), fa = (1 - u) * (1 - u);
+      ctx.globalAlpha = clamp(0.8 * fa, 0, 1); ctx.drawImage(glow, pr[fo] - fr2, pr[fo + 1] - fr2, fr2 * 2, fr2 * 2);
+      ctx.globalAlpha = 1; ctx.strokeStyle = "rgba(" + ACC2 + "," + (0.55 * fa).toFixed(3) + ")"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(pr[fo], pr[fo + 1], fr2 * 0.7, 0, 6.2832); ctx.stroke();
     }
     ctx.globalCompositeOperation = "source-over";
 
@@ -434,12 +561,13 @@
     STAGES: STAGES,
     K: K,
     mount: function (canvas, opt) { return new Egg(canvas, opt); },
+    EVENTS: EVENTS,
     autoMount: function (scope) {
       var out = [];
       (scope || document).querySelectorAll("canvas[data-exo-egg]").forEach(function (cv) {
         if (cv._exoEgg) return;
         cv._exoEgg = new Egg(cv, { stage: cv.dataset.stage, activity: cv.dataset.activity,
-          seed: cv.dataset.seed == null ? undefined : +cv.dataset.seed, shell: cv.dataset.shell !== "off" });
+          seed: cv.dataset.seed == null ? undefined : +cv.dataset.seed, shell: cv.dataset.shell !== "off"});
         out.push(cv._exoEgg);
       });
       return out;
