@@ -174,7 +174,8 @@ class Loop:
         return gone
 
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
-                   mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
+                   mode: str = "send", meta: dict[str, Any] | None = None,
+                   guard: Callable[[], bool] | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn still takes steers injects the message between tool rounds and returns None
         (the newest of ``state(session).steer``); otherwise, as ``queue`` and ``send`` do, it waits for the running turn."""
         if self.store.get_session(session) is None:
@@ -195,6 +196,8 @@ class Loop:
             return None
         async with st.lock:
             self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
+            if guard is not None and not guard():  # optional preflight under the lock (a voided continuation wake)
+                return None
             st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:
