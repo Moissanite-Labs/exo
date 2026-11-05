@@ -31,6 +31,8 @@ Only **SeatMatchesCore** is flagged as relying on code/docs justification in add
 - **Sessions** (`liveSessions`, `sessionSeat`): rows in the shared home store; `foreignSessions` marks threads created before this core instance loaded its seat (another core or an unseated engine), matching shared `sessions.sqlite` in `docs/SEATS.md`.
 - **`PersistSession` / foreign rows:** When `coreSeat = NoSeat`, persisted rows stay non-foreign until **`LoadCoreSeat`**. After the core is seated, a newly persisted row with a different seat is foreign immediately.
 - **Client launch vs display seat** (`clientLaunch`, `clientDisplay`): `ExoApp.launch_seat` and `self.seat` (`clients/tui/exo_tui/app.py`).
+  - With `Fixed = TRUE` the label is the open thread's seat: a resume shows the resumed thread's seat and `/new` shows the new thread's seat, which is the core's seat after a join (#1146). With `Fixed = FALSE` the label keeps the first seat it saw, as the pre-fix window did.
+  - Apart from TypeOK's range check, no invariant reads `clientDisplay`. Trace replay compares it at every step (`MatchState`). With `Fixed = TRUE` no other variable's next value depends on it, so the label rule does not change which values of the other variables are reachable.
 - **Outcomes** (`lastOutcome`): whether a create/resume/`/new` produced a visible result, a core refusal, a join notice, or (pre-fix) a silent failure.
 - **`fromClientNew`**: true on the state immediately after a `ClientNew` step (used by **NewAfterResumeBindsThisCore**).
 
@@ -104,7 +106,7 @@ apalache-mc check --init=Init --next=Next --inv=SeatMatchesCore SeatBinding.tla
 
 (Apalache needs its own config; TLC is the checked-in reference.)
 
-Recorded outputs: `results/fixed.txt` (`Fixed = TRUE`, all invariants pass), `results/prefix-counterexample.txt` (`Fixed = FALSE`, see **Pre-fix counterexample** above).
+Recorded outputs: `results/fixed.txt` (`Fixed = TRUE`, all invariants pass), `results/prefix-counterexample.txt` (`Fixed = FALSE`, see **Pre-fix counterexample** above). `results/fixed.txt` was recorded before the #1146 label rule. That rule changes only `clientDisplay`, so the invariant results carry over, but its state counts will differ until TLC is re-run.
 
 ## Conformance plan (trace replay — not implemented)
 

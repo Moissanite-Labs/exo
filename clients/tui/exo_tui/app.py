@@ -961,7 +961,7 @@ class ExoApp(App):
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         from exo.core.seat_binding_conformance import maybe_note_resume
 
-        maybe_note_resume(sid, session_seat=info.get("seat"))
+        maybe_note_resume(sid, session_seat=info.get("seat"), display_seat=self.seat or "")
         await self.restore_approvals()  # a request that waited before this window showed the thread (D-045)
         self.refresh_status()
 
@@ -1011,6 +1011,7 @@ class ExoApp(App):
             self.session,
             session_seat=got["session"].get("seat"),
             joined=joined,
+            display_seat=self.seat or "",
         )
         self.draw_delegated_approvals()
         self.set_session_cwd(got["session"].get("cwd"))
