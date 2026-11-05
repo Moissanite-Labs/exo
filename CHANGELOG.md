@@ -15,6 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- `exo trace` names up to three unpriced routes, including child turns, with the config key for trace estimates
+  and counts remaining routes. When a spend contract is missing, the refusal points to `docs/MODEL-SPEND.md`.
+  An estimate does not pin a spend contract or extend audited native ceilings. Admission and accounting are
+  unchanged (#841).
 - Responses tool continuations retain streamed items when terminal output is missing or partial, and repair
   missing calls while building requests from older saved replay metadata (#993). Unknown ChatGPT refusals
   no longer imply a plan usage limit; provider response text remains private.

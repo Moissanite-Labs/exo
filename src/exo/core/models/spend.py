@@ -30,7 +30,7 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
             return
         price = journal.prices.get(route)
         if price is None:
-            raise SpendDenied(f"no pinned model-spend contract for {route}")
+            raise SpendDenied(f"no pinned model-spend contract for {route}; see docs/MODEL-SPEND.md")
         admit_native(price)
         expected = AnthropicProvider if price.transport == "anthropic" else OpenAIChatProvider
         if type(provider) is not expected or provider.base_url != price.base_url:
