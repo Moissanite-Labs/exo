@@ -4,12 +4,12 @@ The engine is a SimpleNamespace: the handlers touch only ``eng.agent`` (the seat
 name, always the group owner) and ``eng.store`` (a SessionStore), nothing else.
 """
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from exo import principal
-from exo.core import group_commands
+from exo import group_commands, principal
 from exo.core.group_messages import GroupMessages
 from exo.core.groups import GroupStore
 from exo.core.sessions import SessionStore
@@ -129,3 +129,121 @@ def test_bad_json_and_non_object(eng):
     for args in ("observe {nope", "observe [1, 2]", "observe \"s\""):
         with pytest.raises(CommandFailed, match="JSON|json|object"):
             run(engine, args)
+
+
+@pytest.mark.parametrize("member", [None, "two", "one"])
+def test_empty_observation_page_keeps_requested_cursor(eng, member):
+    engine, gid, _ = eng
+    sent = run(engine, f'send {{"id": "{gid}", "text": "hi", "audience": ["two"]}}')
+    args = {"id": gid, "after": sent["seq"], "limit": 1}
+    if member is not None:
+        args["member"] = member
+    for _ in range(2):
+        page = run(engine, "observe " + json.dumps(args))
+        assert page == {"messages": [], "next_after": sent["seq"]}
+        args["after"] = page["next_after"]
+
+
+@pytest.mark.parametrize("prefix", ["  list", "list\t{}", "\nlist  {}\t", "list\n{}"])
+def test_command_whitespace(eng, prefix):
+    engine, gid, _ = eng
+    assert [g["id"] for g in run(engine, prefix)["groups"]] == [gid]
+
+
+@pytest.mark.parametrize("args", ["", "inspect {bad"])
+def test_usage_does_not_suggest_shell_quotes(eng, args):
+    engine, _, _ = eng
+    with pytest.raises(CommandFailed) as e:
+        run(engine, args)
+    assert e.value.code == "bad_request"
+    assert "usage: /group" in e.value.message
+    assert "'<json" not in e.value.message
+
+
+def test_nested_json_is_bad_request_and_does_not_poison_next_call(eng):
+    engine, gid, _ = eng
+    with pytest.raises(CommandFailed) as e:
+        run(engine, "observe " + "[" * 100000)
+    assert e.value.code == "bad_request"
+    assert [g["id"] for g in run(engine, "list")["groups"]] == [gid]
+    assert engine.store._q("SELECT * FROM swarm_messages") == []
+
+
+def test_json_integer_conversion_failure_is_bad_request(eng):
+    engine, gid, _ = eng
+    with pytest.raises(CommandFailed) as e:
+        run(engine, 'observe {"id": ' + '9' * 5000 + '}')
+    assert e.value.code == "bad_request"
+    assert [g["id"] for g in run(engine, "list")["groups"]] == [gid]
+
+
+@pytest.mark.parametrize("who,allowed", [
+    ("principal:tui", True), ("principal", True), ("local", False),
+    ("unknown", False), ("seat:helper", False), ("channel", False), ("principalx", False),
+])
+def test_real_dispatcher_principal_gate_and_owner_boundary(tmp_path, who, allowed):
+    from exo.core.engine import CoreEngine
+    from exo.core.plugins import PluginManager
+    from exo.core.seats import Seat
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+    async def scenario():
+        engine = CoreEngine(tmp_path / "home", {"fake": {"rules": []}, "roles": {"main": ["fake:x"]}},
+                            plugins=PluginManager(), cwd=str(tmp_path), env={}, seat=Seat(name="one"))
+        try:
+            groups = GroupStore(engine.store)
+            group = groups.create(owner="one", mode="socratic", members=["one", "two"],
+                                  known_profiles=["one", "two"])
+            foreign = groups.create(owner="other", mode="socratic", members=["one", "two"],
+                                    known_profiles=["one", "two"])
+            dispatcher = Dispatcher(engine, caller=who)
+            async def invoke(op, fields=None):
+                args = op + (" " + json.dumps(fields) if fields is not None else "")
+                return await asyncio.wait_for(dispatcher.run(s.Command.of(s.CommandRun(name="group", args=args))), 2)
+            if not allowed:
+                for op, fields in [("list", None), ("inspect", {"id": group.id}),
+                                   ("send", {"id": group.id, "text": "hi"}),
+                                   ("observe", {"id": group.id})]:
+                    got = await invoke(op, fields)
+                    assert not got.ok and got.error.code == "forbidden"
+                nested = await asyncio.wait_for(dispatcher.run(s.Command.of(
+                    s.CommandRun(name="group", args="observe " + "[" * 100000))), 2)
+                assert not nested.ok and nested.error.code == "forbidden"
+                huge = await asyncio.wait_for(dispatcher.run(s.Command.of(s.CommandRun(
+                    name="group", args='observe {"id": ' + '9' * 5000 + '}'))), 2)
+                assert not huge.ok and huge.error.code == "forbidden"
+                assert engine.store._q("SELECT name FROM sqlite_master WHERE name IN "
+                                       "('swarm_messages','swarm_delivery')") == []
+                return
+            listed = await invoke("list")
+            assert listed.ok, listed.error
+            assert [g["id"] for g in listed.result["output"]["groups"]] == [group.id]
+            inspected = await invoke("inspect", {"id": group.id})
+            assert inspected.ok and inspected.result["output"]["owner"] == "one"
+            sent = await invoke("send", {"id": group.id, "text": "hi", "audience": ["two"]})
+            assert sent.ok, sent.error
+            message = sent.result["output"]
+            assert message["sender"] == "one" and message["sender_kind"] == "human"
+            seen = await invoke("observe", {"id": group.id})
+            assert seen.ok and [m["id"] for m in seen.result["output"]["messages"]] == [message["id"]]
+            empty = await invoke("observe", {"id": group.id, "after": message["seq"]})
+            assert empty.ok and empty.result["output"] == {"messages": [], "next_after": message["seq"]}
+            hidden = await invoke("observe", {"id": group.id, "member": "one"})
+            assert hidden.ok and hidden.result["output"]["messages"] == []
+            assert [(r["delivered"], r["consumed"]) for r in engine.store._q(
+                "SELECT * FROM swarm_delivery")] == [(0, 0)]
+            for op, fields in [("inspect", {"id": foreign.id}), ("observe", {"id": foreign.id}),
+                               ("send", {"id": foreign.id, "text": "no"})]:
+                denied = await invoke(op, fields)
+                assert not denied.ok and denied.error.code == "bad_request"
+            nested = await asyncio.wait_for(dispatcher.run(s.Command.of(
+                s.CommandRun(name="group", args="observe " + "[" * 100000))), 2)
+            assert not nested.ok and nested.error.code == "bad_request"
+            huge = await asyncio.wait_for(dispatcher.run(s.Command.of(s.CommandRun(
+                name="group", args='observe {"id": ' + '9' * 5000 + '}'))), 2)
+            assert not huge.ok and huge.error.code == "bad_request"
+            assert (await invoke("list")).ok
+            assert len(engine.store._q("SELECT * FROM swarm_messages")) == 1
+        finally:
+            await engine.close()
+    asyncio.run(asyncio.wait_for(scenario(), 10))

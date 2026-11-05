@@ -29,18 +29,12 @@ _LIMIT = 100  # matches the GroupMessages default page; observe/history allow up
 
 
 def _groups(eng: CoreRuntime) -> GroupStore:
-    """The store on this engine's own sessions database; created lazily, exposed only here."""
-    store = getattr(eng, "_group_store", None)
-    if store is None:
-        store = eng._group_store = GroupStore(eng.store)
-    return store
+    """Use the engine's public sessions store without adding private engine state."""
+    return GroupStore(eng.store)
 
 
 def _messages(eng: CoreRuntime) -> GroupMessages:
-    msgs = getattr(eng, "_group_messages", None)
-    if msgs is None:
-        msgs = eng._group_messages = GroupMessages(_groups(eng))
-    return msgs
+    return GroupMessages(_groups(eng))
 
 
 def _args(raw: str) -> dict[str, Any]:
@@ -50,8 +44,8 @@ def _args(raw: str) -> dict[str, Any]:
         return {}
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise CommandFailed("bad_request", "usage: /group <op> '<json object>'")
+    except (ValueError, RecursionError):
+        raise CommandFailed("bad_request", "usage: /group <op> <json object>")
     if not isinstance(data, dict):
         raise CommandFailed("bad_request", "the group command takes one JSON object")
     return data
@@ -92,11 +86,11 @@ def _describe(group) -> dict[str, Any]:
             "created": group.created}
 
 
-def _show(messages: list) -> dict[str, Any]:
+def _show(messages: list, *, after: int = 0) -> dict[str, Any]:
     return {"messages": [{"seq": m.seq, "id": m.id, "sender": m.sender, "sender_kind": m.sender_kind,
                           "audience": list(m.audience), "text": m.text, "created": m.created}
                          for m in messages],
-            "next_after": messages[-1].seq if messages else 0}
+            "next_after": messages[-1].seq if messages else after}
 
 
 def _op_list(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
@@ -147,8 +141,8 @@ def _op_observe(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     limit = _bounded(args["limit"], "limit", 1, 1000) if "limit" in args else _LIMIT
     try:
         if member is None:
-            return _show(_messages(eng).observe(group_id, owner=eng.agent, after=after, limit=limit))
-        return _show(_messages(eng).history(group_id, owner=eng.agent, member=member, after=after, limit=limit))
+            return _show(_messages(eng).observe(group_id, owner=eng.agent, after=after, limit=limit), after=after)
+        return _show(_messages(eng).history(group_id, owner=eng.agent, member=member, after=after, limit=limit), after=after)
     except ValueError as e:
         raise _bad(str(e))
 
@@ -160,10 +154,12 @@ _OPS = {"list": _op_list, "inspect": _op_inspect,
 async def command(eng: CoreRuntime, b) -> Any:
     """The command.run name "group". The subcommand name is ``b.args``'s first word; the rest is one JSON object."""
     principal.require_principal("manage swarm groups")
-    op, _, rest = b.args.partition(" ")
-    fn = _OPS.get(op.strip())
+    parts = b.args.strip().split(None, 1)
+    op = parts[0] if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+    fn = _OPS.get(op)
     if fn is None:
         raise CommandFailed("bad_request",
-                            "usage: /group <list|inspect|send|observe> '<json>' "
+                            "usage: /group <list|inspect|send|observe> <json> "
                             "(create/start/control is not implemented)")
     return fn(eng, _args(rest))
