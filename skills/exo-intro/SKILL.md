@@ -46,6 +46,8 @@ shared into memory. `/sessions` (or `/resume`) lists this agent's threads. `/for
 thread, `/undo` takes back the last turn (hidden, not deleted), `/clear` clears only the screen, `/cwd`
 shows the working folder (Exo warns once when it is not inside a git repo; a seat can set a default folder
 with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab, `/exit` and `/quit` leave.
+`/tab [directory]` opens a fresh conversation in another terminal window without closing this one.
+It uses the current thread's working directory when no directory is given.
 
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
@@ -118,7 +120,7 @@ smaller: a folder with a SKILL.md the agent loads when its description matches t
 
 ## Slash command index
 Every command `/help` lists, in one line each, so you can answer "what does /x do":
-- `/new`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
+- `/new`, `/tab`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.

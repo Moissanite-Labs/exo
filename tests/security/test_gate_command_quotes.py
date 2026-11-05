@@ -1,6 +1,5 @@
 """Literal shell quoting cannot weaken a command deny or reservation."""
 import json
-import re
 
 import pytest
 
@@ -301,8 +300,9 @@ def test_placeholders_match_no_word(command, entry, kind):
 
 @pytest.mark.parametrize('entry', ['command:[', {'command': '['}])
 def test_invalid_regex_still_raises(entry):
-    with pytest.raises(re.error):
-        gate.decide(classify('r"m" -"rf" ~'), policy('deny', entry))
+    # #466: it raises when the policy loads, naming the entry, before decide can run it.
+    with pytest.raises(gate.PolicyError):
+        policy('deny', entry)
 
 
 def test_command_views_stay_out_of_ledger():

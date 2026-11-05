@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from exo import provenance
 from exo.bus import wire
-from exo.core.ingress import Held, Ingress, Receipt, Target, frame
+from exo.core.ingress import Held, Ingress, Receipt, Target, frame, named
 from exo.core.types import ContentPart, Message
 from exo.protocol import schema as s
 
@@ -58,8 +58,14 @@ class EngineTarget(Target):
         out.sort(key=lambda r: r["state"] != "running")  # stable: running first, then most recent
         return out[:MAX_LIVE]
 
+    def takes(self, session: str) -> bool:
+        """A session a sender may name (exo-desktop #52): it exists here, is not a subagent (D-070) and is not finished
+        (locked). A scheduled run is not listed but can be named by its id."""
+        info = self.e.store.get_session(session)
+        return info is not None and info.kind != "subagent" and not self.e.store.get_meta(session).get("locked")
+
     def pick_session(self, ing: Ingress) -> str | None:
-        if ing.session and self.e.store.get_session(ing.session) is not None:
+        if ing.session and self.takes(ing.session):
             return ing.session
         live = self.live_sessions()
         return live[0]["id"] if live else None  # none: a delivered message is refused, a held one waits
@@ -104,9 +110,9 @@ class EngineTarget(Target):
     async def on_held(self, held: Held) -> None:
         ing = held.ing
         sid = self.pick_session(ing)
-        text = ing.body.strip().replace("\n", " ")
+        text, note = ing.body.strip().replace("\n", " "), ing.meta.get("note")  # note: "key not pinned" (#132)
         label = "Bus message from seat" if ing.source == "bus" else "Peer message from"
-        summary = (f"{label} {ing.sender} ({ing.trust}) is held for you. It says: \"{text[:400]}"
+        summary = (f"{label} {ing.sender} ({ing.trust}{f', {note}' if note else ''}) is held for you. It says: \"{text[:400]}"
                    f"{'...' if len(text) > 400 else ''}\". Allow delivers it to the session; deny drops it. "
                    "It is not delivered unless you allow it, and it expires on its own.")
         opened: list[str] = []
@@ -115,7 +121,9 @@ class EngineTarget(Target):
 
         async def ask() -> None:
             decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
-            if decision == "allow" and self.pick_session(ing) is None:  # nothing live takes it: a new thread does
+            # A message that named no session, and nothing live takes it: a new thread does. One that named a session
+            # that finished meanwhile is denied on release (exo-desktop #52).
+            if decision == "allow" and named(ing) is None and self.pick_session(ing) is None:
                 new = s.SessionCreate(title=f"{label} {ing.sender}", seat=self.e.seat.name if self.e.seat else None)
                 try:  # in the seat's threads, so a seated window's --resume finds it
                     ing.session = (await self.e._session_create(new))["session"]["id"]

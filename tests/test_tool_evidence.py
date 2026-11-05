@@ -214,8 +214,7 @@ def test_metadata_initialization_preserves_updates_and_rolls_back(tmp_path, monk
         assert "failed" not in first.get_meta(sid)
         assert second.update_meta(sid, lambda meta: meta.setdefault("value", "returned")) == "returned"
         assert first.get_meta(sid)["value"] == "returned"
-        with pytest.raises(KeyError):
-            first.update_meta("missing-session", failed)
+        assert first.update_meta("missing-session", failed) is None
     finally:
         first.close()
         second.close()

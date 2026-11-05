@@ -61,16 +61,25 @@ def test_a_substitution_after_cd_into_a_descriptor_folder_is_a_store_write_there
     assert d.outcome == "deny", (line, d)
 
 
+# #320's fail-closed cost (D-038 amendment 2026-10-22): a word that is a substitution alone is read as `*`, any name its
+# output may be, and on a line that enters a store folder `*` could name a store file there, as `cd ~/.exo/policies
+# && echo *` is credentials on main. The reads in the substitution stay reads: none is a store write.
+_STAR = "credentials"
+
+
 @pytest.mark.parametrize("line,cat", [
-    ("cd ~/.exo/policies && echo $(ls)", "read"),                     # reads in the store stay reads
-    ("cd ~/.exo/policies && echo $(cat gates.yaml)", "read"),
-    ("cd ~/.exo/policies && git log -n1 $(git rev-parse HEAD)", "read"),
+    ("cd ~/.exo/policies && echo $(ls)", _STAR),                      # reads in the store are no store writes
+    ("cd ~/.exo/policies && echo $(cat gates.yaml)", _STAR),
+    ("cd ~/.exo/policies && git log -n1 $(git rev-parse HEAD)", _STAR),
+    ("cd ~/.exo/policies && echo \"$(ls) files\"", "read"),           # not a word of its own: stays a read
     ("cd ~/project && echo $(cp a b)", "read"),                       # not a store folder
     ("echo $(cp a b)", "read"),
     ('git commit -m "$(date)"', "local_write"),
 ])
 def test_controls_keep_their_class(line, cat):
-    assert _bash(line).category == cat, line
+    c = _bash(line)
+    assert c.category == cat, line
+    assert not any(p.category == "store_write" for p in gate._each_part(c)), line
 
 
 def test_a_substitution_text_read_both_outside_and_inside_the_store_on_one_line():
@@ -83,12 +92,9 @@ def test_a_substitution_text_read_both_outside_and_inside_the_store_on_one_line(
 
 def test_a_substitution_runs_where_its_command_runs():
     # bash runs a $( ) where its command runs: in the `cd` itself or before it, the line has not entered the store
-    for line in ("echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies",
-                 "cd ~/.exo/policies/$(cp a b)",
+    for line in ("cd ~/.exo/policies/$(cp a b)",
                  "cd ~/.exo/policies <<< $(cp a b)",              # its redirections expand before it runs
                  "cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status",
-                 "pid=$(docker inspect -f '{{.State.Pid}}' web); cd /proc/$pid && cat status",
-                 "V=$(sed -n 1p VERSION); cd ~/.exo && ls",
                  # bash expands a compound's own redirections before the compound runs
                  "while read -r f; do cd ~/.exo/state && cat \"$f\"; done < <(sort list.txt)",
                  "while read -r f; do cd ~/.exo/state && cat \"$f\"; done <<< \"$(sort list.txt)\"",
@@ -97,6 +103,15 @@ def test_a_substitution_runs_where_its_command_runs():
                  "( cd ~/.exo/state; ls ) < <(sort list.txt)",
                  "while read -r p; do cd /proc/$p && cat status; done < <(ps -eo pid= | sort -n)"):
         assert _bash(line).category == "read", line
+    # #320's cost: the output of one before the `cd`, a word or a value of its own, is `*`, which D-038 reads as a
+    # name in the folder the line enters wherever it stands, as main reads `echo *; cd ~/.exo/policies` and `V=*; cd
+    # ~/.exo && ls` (the value may be used after the `cd`). Its commands still run outside: none is a store write.
+    for line in ("echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies",
+                 "pid=$(docker inspect -f '{{.State.Pid}}' web); cd /proc/$pid && cat status",
+                 "V=$(sed -n 1p VERSION); cd ~/.exo && ls"):
+        c = _bash(line)
+        assert c.category == _STAR, line
+        assert not any(p.category == "store_write" for p in gate._each_part(c)), line
     # a here-doc body on an earlier line runs with its command, before the `cd`
     for line in ("cat <<EOF > notes.txt\n$(cp a b)\nEOF\ncd ~/.exo/policies && ls",
                  "cat > /tmp/x <<EOF &&\n$(cp a b)\nEOF\ncd ~/.exo/state && ls"):
@@ -140,8 +155,14 @@ def test_a_copy_of_the_substitution_text_before_the_cd_does_not_turn_the_store_o
 def test_a_line_nested_in_a_substitution_keeps_its_own_folder():
     # an ssh remote command runs on the host, not in the local store folder; a local shell still runs there
     for line in ("cd ~/.exo/policies && diff gates.yaml <(ssh prod 'cat /etc/exo/gates.yaml | sort')",
-                 'cd ~/.exo && echo "$(ssh prod \'ls /srv; sort /srv/x\')"'):
+                 "cd ~/.exo && diff a <(ssh prod 'ls /srv; sort /srv/x')",
+                 "cd ~/.exo && ssh prod 'cd /srv && echo $(ls)'"):
         assert _bash(line).category == "read", line
+    # #320's cost: the local `echo` word that is the substitution alone is `*` in the store folder; the remote
+    # commands keep their own folder, so none is a store write
+    c = _bash('cd ~/.exo && echo "$(ssh prod \'ls /srv; sort /srv/x\')"')
+    assert c.category == _STAR, c
+    assert not any(p.category == "store_write" for p in gate._each_part(c)), c
     assert _bash("cd ~/.exo/policies && echo $(bash -c 'cp /tmp/evil gates.yaml')").category == "store_write"
 
 

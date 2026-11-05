@@ -14,7 +14,7 @@ from exo import providers_setup as ps
 from exo.core.models import muse_cli
 from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
-from exo.core.types import Message, ToolSpec
+from exo.core.types import Message, ToolCall, ToolResult, ToolSpec
 from exo.models_cmd import available_models
 
 CANARY = "canary-secret-value-123456"
@@ -114,6 +114,31 @@ def test_history_is_flattened_with_roles_and_model_passes_through(tmp_path):
     run(r, [Message.user("x")])
     a = seen(tmp_path)["argv"]
     assert a[a.index("--model") + 1] == "m1"
+
+
+def test_tool_history_is_kept_as_text(tmp_path):
+    """A call with no tools can still carry earlier tool rounds (a summary of a thread, a tool-less role). The
+    flattened prompt used to drop every tool call and result, and a reply that only called tools (exo-desktop #52)."""
+    history = [
+        Message.system("be brief"),
+        Message.user("weather in Oslo?"),
+        Message.assistant("Checking.", [ToolCall(id="c1", name="get_weather", arguments={"city": "Oslo"})]),
+        Message.tool([ToolResult.of_text("c1", "12 C, rain")]),
+        Message.assistant("", [ToolCall(id="c2", name="get_time"), ToolCall(id="c3", name="get_tide")]),
+        Message.tool([ToolResult.of_text("c2", "boom", is_error=True), ToolResult(call_id="c3")]),
+        Message.user("and tomorrow?"),
+    ]
+    want = ("be brief\n\n[user]\nweather in Oslo?\n\n"
+            '[assistant]\nChecking.\n[tool call get_weather] {"city": "Oslo"}\n\n'
+            "[tool result get_weather]\n12 C, rain\n\n"
+            "[assistant]\n[tool call get_time] {}\n[tool call get_tide] {}\n\n"
+            "[tool result get_time, error]\nboom\n\n[tool result get_tide]\n(no output)\n\n"
+            "[user]\nand tomorrow?")
+    assert muse_cli.build_prompt(history) == want
+    evs = run(router(tmp_path), history)
+    assert evs[-1].kind == "done" and seen(tmp_path)["prompt"] == want
+    lone = [Message.assistant("", [ToolCall(id="c9", name="get_time")]), Message.tool([ToolResult.of_text("c9", "9:00")])]
+    assert muse_cli.build_prompt(lone) == "[assistant]\n[tool call get_time] {}\n\n[tool result get_time]\n9:00"
 
 
 def test_tools_are_refused_and_the_router_falls_back(tmp_path):

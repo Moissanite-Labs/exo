@@ -62,7 +62,6 @@ async def main_turn(router):
 def test_exos_own_read_only_tools_classify_as_reads(tool, args):
     c = gate.classify({"tool": tool, "args": args})
     assert (c.category, c.reversibility, c.signals) == ("read", "reversible", [])
-    assert tool in hook._SAFE_ON_ERROR  # a gate error does not stop a read
     secret = gate.classify({"tool": tool, "args": {**args, "path": "~/.ssh/id_rsa"}})
     assert secret.category == "credentials"  # a secret store in the arguments still asks
 

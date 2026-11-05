@@ -104,13 +104,15 @@ def _laya_url() -> str | None:
     if not url:
         from exo.core.models.router import Router
         url = (Router().providers.get("laya") or {}).get("base_url") or LAYA_DEFAULT_URL
-    u = urlparse(url)
-    if u.scheme != "http" or u.hostname not in ("127.0.0.1", "localhost"):
-        return None  # jg accepts http only for loopback
+    if not isinstance(url, str):
+        return None  # a number or a list in the config names no address
     try:
+        u = urlparse(url)
+        if u.scheme != "http" or u.hostname not in ("127.0.0.1", "localhost"):
+            return None  # jg accepts http only for loopback
         with socket.create_connection((u.hostname, u.port or 80), timeout=0.5):
             pass
-    except OSError:
+    except (OSError, ValueError):  # ValueError: a broken host, or a port that is not a number or is over 65535
         return None
     return url.rstrip("/")
 

@@ -98,6 +98,20 @@ def test_bad_input_is_refused_before_any_command():
     assert src.calls == []
 
 
+def test_session_list_limit_stays_between_1_and_500():
+    """exo-desktop #55: only the top was capped, so limit=-1 reached SQL as LIMIT -1, which returns every row."""
+    src = FakeSource({"session.list": {"sessions": []}})
+    c = centre(src)
+    for low in ("-1", "0", "-500"):
+        assert call(c, "GET", "/api/chat/sessions", q={"limit": [low]})[0] == 400, low
+    assert src.calls == []
+    for asked, sent in (("1", 1), ("500", 500), ("9999", 500)):
+        assert call(c, "GET", "/api/chat/sessions", q={"limit": [asked]})[0] == 200
+        assert src.calls[-1].limit == sent, asked
+    assert call(c, "GET", "/api/chat/sessions")[0] == 200   # no limit asked: 100
+    assert src.calls[-1].limit == 100
+
+
 def test_read_only_command_route():
     src = FakeSource({"command.run": {"output": "Next call for thread x"}})
     c = centre(src)

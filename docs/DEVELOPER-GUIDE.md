@@ -32,7 +32,34 @@ to this change), or `MISSING`. A cell stays `MISSING` only when the feature is n
 nothing real to say about it. Do not fill a cell with a vague link to make the gap vanish. The whitepaper is
 batched per wave: each batch is a new version (`vX.Y`), with its own header, changelog line and tag (section 8).
 
+### Source and evidence records
+
+Use the [engineering walkthrough](ENGINEERING-WALKTHROUGH.md) to follow one turn through the code.
+When incorporating a source or changing a credited mechanism, update the [source register](SOURCES.md)
+with the original author, inspected revision, relationship, adaptation, implementation, tests and limits.
+Keep Hermes module revisions in `PROVENANCE.toml`. Do not duplicate them in prose. The register's template
+also applies to other Labs projects in their own repositories. Link their records rather than copying contracts.
+A PR, main merge, downstream integration and live installation are separate states. Synthetic tests establish
+only the behavior they exercise. Benchmark or novelty claims need evidence beyond a component description.
+
 ## 1. Repo layout
+
+The [agent and human work vessel proposal](AGENT-OPERATOR-DESIGN.md) describes
+pending continuity and supervision work. It changes no runtime contract or policy.
+
+**Automatic continuity checkpoints.** `exo.work_checkpoint` derives a bounded
+record index from visible session messages and job metadata. Composition enables
+it by default; it chains existing callbacks and workspace injection, adds no
+model calls or replay, and reconstructs after abrupt exits. Keep it separate from
+manual working notes. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md) for privacy, undo,
+uncertain-effects semantics and acceptance tests.
+
+**Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
+state in `sessions.sqlite`. Composition validates `work_notes` before opening
+runtime resources, then attaches the gated tool, per-session prompt and handoff
+source. Updates compare revisions inside one transaction. Keep note authorship
+as `agent`, preserve session scope, and use existing gate and executor dispatch.
+The adapter and limits are documented in [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
 
 | Path | What lives there |
 |---|---|
@@ -61,11 +88,13 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+**The core budget (D-077, D-083).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
-protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
-with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
+protocol files excluded). The ceiling is off (D-083): the test reports the count against `CORE_FLOOR = 14,813` and
+asserts nothing about lines. Run it with `-s` to see the number. It does assert two step 4 structure counts, which
+ratchet down: `INWARD_IMPORTS_MAX = 39`
+imports of a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. A real
+reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
 its own cap (section 2).
@@ -74,7 +103,7 @@ its own cap (section 2).
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
 
-**Harness composition (D-082).** `exo.harness.resolve` builds a side-effect-free capability plan.
+**Harness composition (D-088).** `exo.harness.resolve` builds a side-effect-free capability plan.
 `exo.compose` selects services and plugins before constructing the runtime. `exo harness show --json`
 explains the configuration without importing plugins. New optional services belong behind composition
 seams, as jobs/delegation factories do. Disabling a feature must remove its tools and resource startup,
@@ -82,7 +111,7 @@ and reject direct execution attempts. Test seat overrides and alternate executor
 Profiles are runtime selection, not an OS sandbox or separate installation distributions.
 See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
 
-**Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+**Plugin runtime binding (D-088).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
 private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
 `exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
 Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
@@ -90,7 +119,7 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
-**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+**Retained tool output (D-085).** `exo.tool_evidence` decorates `TurnContext.build` when
 `tool_output.enabled` is true. It renders copies and expands retained sanitized text through
 the normal registry/executor path. `for_child(context, tools=names)` is an optional context
 method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
@@ -107,6 +136,9 @@ commands. Its collaborators have small interfaces:
 - `engine.approvals` is an `ApprovalDesk` (`src/exo/core/approvals.py`): `ask`, `listing`, `respond` and
   `announce_resolved`, one `Pending` record per open request. Code that needs a human answer calls
   `engine.approvals.ask(...)`. A test that fakes an open request puts a `Pending` in `engine.approvals.open`.
+- Peer discovery rejects non-object JSON and non-integer (including boolean) pids before constructing
+  presence records. `Directory.scan(prune=False)` leaves rejected files in place; normal scans prune them.
+  Unknown signed fields remain in `Directory.entry`'s original document for signature verification.
 - `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
@@ -232,7 +264,9 @@ Then do the next three steps.
 
 **Classify it in the gate.** The gate decides allow, log, ask or deny by category. Add the tool to `TOOLS` in
 `src/exo/gate.py`, mapped to a category such as `read`, `local_write`, `shell`, `delegate`, `credentials`,
-`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow.
+`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow,
+also when the gate reads a known word in its camelCase name (`mcp__fs__writeFile`): the unsplit name is still read
+as `unknown` beside it, and any reading counts.
 If the tool sends something outward, its category must be one the gate treats as outward, so approvals bind to the
 exact text (`docs/GATE.md`).
 
@@ -244,6 +278,10 @@ never puts it in a command line.
 **Document and test it.** Add a row to `docs/TOOLS.md`. Add a test in `tests/core/tools/`. If it is a read, add it to
 the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCKED_TOOLS` in
 `src/exo/core/agents/delegate.py`.
+
+The registered `grep` and `glob` handlers use `exo.search_worker.run_search`, which owns a child process and
+enforces timeout and cancellation after the gate and executor. Their synchronous functions are worker
+implementation details. Call tools through the registry so those bounds and the executor policy apply.
 
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
@@ -260,8 +298,15 @@ default for each key), `tags`. Look at `plugins/exo-command/plugin.yaml` for a f
 
 Plugin folders are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`; installed `exo.plugins` entry points
 also load. To use the repo's plugins during development, set `EXO_PLUGIN_DIRS` to its `plugins/` folder.
+A tool call that writes into `$EXO_HOME/plugins`, or into any of the other folders Exo loads code from (the venv,
+Hermes' plugin home, the source copy and every folder `$EXO_PLUGIN_DIRS` names; #459, `docs/GATE.md` "The store is
+credentials"), asks the principal every time, so do not copy a plugin there to try it and use a different venv than
+`${EXO_VENV:-$EXO_HOME/venv}` for private experiments; loose `EXO_PLUGIN_DIRS` while you edit instead.
 A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
 leaves nothing behind.
+A folder plugin imports as `exo_plugins.<name>`, with each character that is not a letter, digit or `_` made `_`.
+So `a-b` and `a_b` would share one module, and the second would replace the first's code. The second to load is
+refused instead, with an error that names both (exo-desktop #52). Give one of them another name.
 
 What `ctx` offers (`src/exo/core/plugins.py`):
 
@@ -280,15 +325,19 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
 `on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
-`turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
-reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
-`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
+`turn_id`, `author` (who started the turn, D-040: `principal` or `principal:<label>`, `local`, `peer:<name>`,
+`bus:<seat>`, `job`, `schedule`, `delegate`, `system`; empty from an older caller), `risk` and `cwd`, the
+session's working folder from which relative paths in `args` resolve (the gate reads them there, #209). Each
+callback gets only the keywords it declares, or all of them when it takes `**kwargs`, so a key added later does
+not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
-`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`). A call whose arguments did not parse as
+a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
+did not parse").
 
-**Dependencies and cleanup (D-082).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
+**Dependencies and cleanup (D-088).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
 The loader orders selected dependencies first and blocks missing, failed or cyclic dependencies before
 importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
 available only after import and is checked before registration. Pair resources created in `register`
@@ -340,7 +389,29 @@ like the memory hooks. After `session.undo` the core calls `on_session_switch(se
 summaries=)` with every message left in the thread and `{tree key: [ids of the summary nodes still stored]}`. Drop
 anything kept from the undone turns (D-041), including the text of each `on_compacted` node that is gone (its
 `node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
-that may quote them.
+that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
+notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
+`on_host_undo(session)`, records the undo with `exo.host_undo.pend(session, window)`, and those of the earlier
+turns of `/undo N` go in the next `select_context` of that session, from its `conversation_messages`, by
+`exo.host_undo.take(session)`: the record waits under the session, not under one engine, so the turn resolves it
+in whichever agent the host built then (#389, #580). A compression move carries the record into the child with
+`exo.host_undo.move(old, new)`. A memory provider used beside exo-context in exo-memory's place can do the same. A
+listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
+`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it. A host with no
+agent left reports `exo.host_undo.report(session)` itself, which reaches the engines still registered for the
+session (#580). A host that reports no undo at all, such as Hermes's messaging gateway, is covered when it sends
+its whole transcript as `conversation_messages` and the turn's message as `incoming_message`. The first such turn
+of a session in a new engine drops a pin whose message the transcript no longer holds, when the transcript is the
+one noted last with its tail cut at or before the pin's lead (#537). A host that trims the start of its transcript
+drops nothing that way, unless the rows left read word for word like the session's first rows (one that leaves the
+turn's message out has one more exception, below). One that edits an earlier user row keeps the pins after it. One
+that leaves the turn's message out of `conversation_messages` keeps a pin first said in the last turn before an
+undo, as no transcript held the pin's message to note its lead. It also keeps every pin when the next turn's message
+repeats the last user row an undo left and no user or summary row comes before that row. After a trim of the start,
+a message that repeats the last user row can drop pins instead: the engine takes that row for the turn's message and
+checks only the rows before it, so the pins after those rows go when they read word for word like the session's
+first rows. A host that keeps its engine across an undo must report it: once that engine runs a turn after the undo,
+no later engine drops the pins.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
@@ -359,6 +430,10 @@ It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it an
 is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
 a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
 open the final name for writing: a symlink planted at either name turns the write into a write to another file.
+To change the process umask for a while, use `with exo.core.private.umask(mask):`, not `os.umask`. It holds the
+lock the `mode=None` probe takes, so the two never undo each other (#317). Do not await or yield inside the block.
+The lock is not reentrant, so a second block on the same thread would wait forever (#563). To make a socket under
+a mask, bind it inside the block and start the server on it after the block, as `HttpServer.start_unix` does.
 
 ## 5. Add a seat
 
@@ -415,25 +490,26 @@ runs and CI never run it.
 
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+Rules that tests enforce: the protocol caps, the core line budget (a reported count over a floor, no ceiling; explained below), the
 TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
 
-**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
-lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
-generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
-`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
-left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+**The core line budget (D-077, D-083).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`)
+counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and
+`src/exo/upstream.py`, generated files excluded. The ceiling is off: the test records `CORE_FLOOR = 14,813`, prints
+the count and its distance from the floor, and asserts nothing about lines. Run it with `-s` or `-rP` to see the
+count and the largest counted files. It does assert the two step 4 structure caps. The rules are in
+`docs/ENGINE-SPLIT.md` "Budget policy":
 
-- Fixes and features land inside the headroom with no ceremony.
+- Fixes and features land on their own merits. No headroom note, no waiting for a reduction.
 - A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
   its post-merge count in the same PR. The floor never goes up.
-- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
-  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
-- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- A count that climbs far past the floor is a reason to schedule a reduction, never a reason to refuse work.
+- The structure caps are the gate: `INWARD_IMPORTS_MAX` and `PRIVATE_STATE_MAX` only go down. A PR that adds one has
+  to remove another first.
 - Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
   boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
@@ -442,6 +518,15 @@ Check your prose before you commit docs:
     python3 skills/clean-writing/scripts/check-prose.py docs/YOUR-FILE.md
 
 ### Checking a gate change against main
+
+Gate-related pull requests into `main` run `gate-preflight.yml`: the gate plugin suite and **main's
+copy** of `scripts/gate_diff.py` against the composed PR tree (trusted at the PR base revision), with
+the JSON differential retained as an artifact. Pull requests into long-lived integration branches
+such as `feat/core-plugin-bridge` may run the merge-aware `scripts/gate_diff_pr.py` from a trusted
+PR-base worktree instead (four gate trees, pinned bootstrap when the base predates that script; see
+D-038 amendment 2026-11-04). A nonzero comparator result fails that job. Hosted execution and branch-protection enforcement remain separate:
+maintainers must make `never-looser` a required check to enforce it at merge. Reviewers still inspect docs and
+explain every intentional lowering; this workflow does not waive the docs rule.
 
 A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so (D-038,
 amendment of 2026-10-22). `scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and
@@ -529,9 +614,16 @@ lines get the same generated forms as the harvested ones.
 - `--only-corpus` runs the `--corpus` items, the compound forms of their simple lines, and each line under one other
   shell tool name and key. It skips the harvest, the seeds, the lines and calls of the tables, the posts, the folder
   rows and the calls of the other tools.
-- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the lines and calls of the
-  tables, the posts, the compound forms, the other shell tool names and keys, the folder rows and the calls of the
-  other tools.
+- `--no-variants` runs only the `--corpus` items, the harvest and the six budget lines (#551, below). It skips the
+  seeds, the lines and calls of the tables, the posts, the compound forms, the other shell tool names and keys, the
+  folder rows and the calls of the other tools.
+
+The budget lines (`BUDGET_LINES`, #551) are long lines no test line reaches: 70 `cd`s into store folders (past the 64
+`_exo_relative` resolves), a store folder 62 deep with 1,600 names, the stress tests' `_NEAR_CAP` line, two `<( )`
+of 400 names each (each under `_EXO_PARTS` alone, past it together), and four brace words of 1,000 forms and a fifth
+for `cat` and `touch` (past `_BRACE_BUDGET`). Each asks on main only because its budget is spent, so a head that
+fails open past a budget is lowered on it. A test checks that main reaches each budget and allows the line once the
+budget is lifted; when a budget moves, resize its line.
 
 Neither reads the gate's tables for lines, so neither names a table it cannot read.
 
@@ -551,7 +643,21 @@ one main hid shows nothing. A text the head lists fewer times than main does is 
 while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
 violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
 grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
-hook's answer to an error: ask, or allow for a read tool.
+hook's answer to an error: ask, a read tool too (D-084).
+At the same outcome below deny a pair is also lower when the head loses one of the hook's checks after `decide`
+that depend only on the call and the decision (#551), each run with the tree's own gate: `no_grant` (the once rule),
+`body_unseen` (a post body the gate did not see), `binds_exact` (an approval bound to the exact call) and
+`reserved_elsewhere` (a reserved hit on another part than the line's own category and target, which keeps a standing
+grant from covering the call; the hook's #471 branch that also checks the line read as before, `c.before`, is not
+modelled). These are the script's `FLAGS`. Each is compared on its own, at every outcome below deny, so a head that
+drops one while another that also refuses grants stays still counts as lower: strict, and on the cautious side. The
+summary counts each one lost. A check a tree's gate does not have is not held; one
+that raises sends the hook to its error card, so the pair counts as that error. The card is once-only, so a head
+pair that is one loses none of these checks and no reserved hit. The script marks such a pair with `error_card` in
+its flags, which no gate decision can carry, so a decision whose rule is `"error"` is compared like any other. An
+outcome other than allow, log, ask or deny (`"Ask"`, `"block"`) is one the hook runs (when the decision model gives
+a verdict, `tighten_only` raises on it and the hook gives its error card): it ranks as allow in the head and as ask in the base,
+and the summary counts such pairs on each side.
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
@@ -565,8 +671,8 @@ Exit 2 also follows a run with nothing lower when a tree holds a gate table in a
 summary lists each such table with the reason, as `INCOMPLETE`. Keep the table a literal, or read the change and
 name the table in `--accept-unread TOOLS,...` to accept the missing lines. A lowered pair still exits 1.
 
-**What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
-and a line in its decision amendment:
+**What the check leaves out.** It runs `classify`, `decide` and the hook's `FLAGS` checks above, nothing else of the
+hook, so a change to any of these needs its own tests and a line in its decision amendment:
 
 - Session folders. The hook passes `classify` the session's folder (#209). Only the corpus's own `"cwd"` values and
   the folder rows run here. The rows cover what main reads from a folder today: a relative name that lands in a
@@ -582,8 +688,9 @@ and a line in its decision amendment:
   contents, links and folders a real HOME has do not run.
 - Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
   `DIVAN_*` names). Both trees run without them.
-- The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
-  executor, a policy file changed mid-session, and the decision model.
+- The hook steps after `decide` other than the `FLAGS`: which standing grants exist and match, the body files the hook
+  reads into a post, who may answer, the registry risk floor, the required executor, observe and bypass, a policy
+  file changed mid-session, errors past `decide`, and the decision model.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
@@ -591,6 +698,72 @@ and a line in its decision amendment:
 then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+A newer push to a pull request cancels the pull request's older `ci` and `gate preflight` runs (a `concurrency`
+group per pull request, #907); each push to main keeps its own run.
+The gate-diff process-tree tests, including the nohup test, require `/proc/self/cmdline` and skip without it.
+The cleanup signal-handler test does not need `/proc` and still runs where SIGHUP is available.
+
+**Timing and browser tests on hosted runners.** The hosted runners, the macOS ones most of all, are slow and
+shared. A test that passes on your machine can fail there for reasons that have nothing to do with the code. Write
+these tests so that only the defect they guard against can fail them:
+
+- A loaded runner can keep a process waiting for a CPU for half a second or more. Keep a wall-clock bound well
+  above what the code needs, and keep the test's own setup out of the timed part.
+  `tests/core/tools/test_search_worker.py` bounds the whole call at 3 s for a 1 s search limit. It builds the tool
+  registry before it starts the clock: the first build imports the built-in tools, and inside the timed part it took
+  the call past 3 s beside 8 to 10 busy loops. The test also bounds the event loop's largest gap between 10 ms ticks
+  at 0.5 s, half what a search holding the loop would cost (#907). That bound is a compromise between catching the
+  defect and allowing for a runner's stalls, not a bound well above them: one macOS CI run measured a 0.5625 s gap.
+  A stall of the event loop that uses no CPU (a blocking sleep, read or wait) shows only in wall time.
+- Check order with an event, not a clock. Where a test checks that a call returns before some work ends, hold the
+  work on a file or an event the test controls. `tests/core/test_jobs.py` holds its background job until the test
+  makes a file. Its start test then needs a time limit only to stop a hang. Its old 0.3 s bound failed 10 to 18 of
+  20 runs on one CPU beside a busy loop of higher priority.
+- Give such a hold an end of its own. A failed test can exit before it lets the work go, and a job's wall limit is a
+  timer in the test process, so it ends with that process. The jobs start test's loop gives up by itself in under a
+  minute.
+- Wait for the event the test reads, not an earlier sign of it. A job's row says done before its done event goes
+  out, so a test that waits for the row and then reads the events can still see the job running (#1098).
+- Where a test checks how much work a call does, time it in CPU time (`time.process_time()`). Time spent waiting
+  for a CPU then does not count. A full garbage collection still counts, in CPU time and wall time alike: it runs
+  inside the call that allocates the object that sets it off. A probe for #1098 that grew the heap between calls
+  measured one at 0.46 s of a 0.57 s call.
+- So time such a call again when it is over its bound, at most three times, as
+  `tests/security/test_gate_cd_stores.py` does. One pause then fails no test, and a slowdown that lasts still fails
+  every try.
+- In a browser test, wait for a condition rather than for a fixed time, and wait for the page, not only the DOM
+  node you asked for. In `plugins/exo-command/tests/browser.py`:
+  - A failed Chrome startup says whether Chrome exited, with its exit code, or timed out. It reports only fixed
+    stderr categories and never prints the raw browser output. A category names a failure message, so the D-Bus
+    errors and the sandbox warning that a healthy Linux start logs are not reported as a cause.
+  - The first Chrome start in a test run gets 90 s to write `DevToolsActivePort`. Later starts get 20 s. On a fresh
+    hosted runner the first start reads the browser from a cold disk, and the two hosted startup timeouts on record
+    were each a job's first start (#907). The 90 s ends once a start reaches DevTools, or once one 90 s wait runs out.
+  - A Chrome start that fails (it exits, before or after it writes `DevToolsActivePort`, never writes it, or does not
+    answer one of its first DevTools calls within 90 s) is closed, and Chrome starts once more with a fresh profile
+    before any test code runs. Any other error is raised at once. A second failed start fails the test and names
+    both. Hosted macOS has twice left a first call unanswered (#907).
+  - A start that works after a failed one emits a `ChromeStartWarning` that names the failure. Pytest lists it in its
+    warnings summary, so the stall still shows in a CI log.
+  - Once a whole `Browser()` has failed both starts, later ones start Chrome once, until a start works again. A
+    Chrome that never writes `DevToolsActivePort` costs the first test 90 + 20 s and each later test 20 s. One that
+    writes it and never answers costs the first test two 90 s waits and each later test one.
+  - `reload()` loads the page again after the test writes `localStorage`. A second `goto()` to the same link
+    changes only the part after `#`, so the old view stays and answers queries until the app replaces it later.
+    `eval("location.reload()")` has a related gap: a `wait()` right after it can still be answered by the old page,
+    and the next read then lands on the new one before its scripts have run.
+  - `resize(width, height)` returns after the page has handled the new size. Layout that a media query's change
+    event sets comes one frame after the resize.
+  - `settle()` waits until the event stream has caught up and every request the page made is answered. Call it
+    before reading a scroll position, an element or a request count that start-up could still change: each
+    catch-up redraws the transcript.
+- A longer timeout is fine where a test waits for a condition. A bound the test asserts stays as it is unless it was
+  wrong for what the test checks.
+- Before you change what a test measures, run the old and the new test against stand-ins for the defect it guards
+  against (for example a wrapper that blocks or works on the event loop). The new one must fail every stand-in the
+  old one failed.
+- Reproduce on Linux under load: run the test in a loop beside a few busy-loop processes, both from the plugin
+  folder and with `pytest plugins`, as CI runs them.
 
 **Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
 Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
@@ -612,6 +785,9 @@ and must be fixed. Resolved errors also fail until their stale entries are remov
     uv run --frozen --all-extras python scripts/check_types.py --update
 
 Review and commit the smaller baseline. `--update` refuses new errors and never expands it. CI never writes it.
+When a local name changes meaning, use a fresh name rather than widening its type. Read-only
+environment parameters accept `Mapping[str, str]`; bind the selected environment to a new local
+instead of assigning `os.environ` back into an optional dictionary parameter (#710).
 `--initialize` creates a first baseline only when the file is absent, for a separately reviewed migration of the
 compiler or check scope. The helper refuses missing dependencies, mismatched settings and malformed or fatal
 compiler output. It uses no disk cache. `--root PATH --baseline PATH` can check another checkout without changing
@@ -665,6 +841,8 @@ example with `git filter-repo`), then publish.
 Fields: Decision, Why, Rejected, Revisit if. Add the entry in the same commit as the change. A number that is reserved but not written (D-027 today) has no
 heading, and the map says so.
 
+**Repository routing (D-089).** Shared code has one implementation PR in Exo. Native shell and packaging work belongs in Exo Desktop. The fork receives batches of merged Exo commits through reviewed sync PRs. See [Repository workflow](REPOSITORY-WORKFLOW.md) for existing pairs, alpha carries, verification, and proposed guidance on GitHub stacks, issue plans and media evidence.
+
 **Branch and merge.**
 
 1. One branch and one pull request per change. A trivial doc or script sync may share one.
@@ -675,6 +853,24 @@ heading, and the map says so.
    repository: no internal names, no paths from your machine, no keys.
 6. A reviewer reads the diff, runs the suite, and merges. Merge your own pull request only where you hold merge
    rights.
+
+**Changelog merges (#842).** `.gitattributes` gives `CHANGELOG.md` git's union merge driver. Two branches that each
+add a bullet in the same place merge without a conflict: both bullets stay, the checked-out branch's first.
+`DECISIONS.md` and `docs/DOCS-MAP.md` keep the normal driver, so two branches that take the same `D-NNN` or edit the
+same map row still conflict.
+
+- Git reads the attribute from the branch you have checked out. A branch cut before it landed still conflicts when
+  it merges `main`. Run `echo 'CHANGELOG.md merge=union' >> "$(git rev-parse --git-common-dir)/info/attributes"`
+  once in your clone, and every branch and worktree there gets it. (In a linked worktree `.git` is a file, so
+  `.git/info/attributes` fails.) A `git rebase main` or a cherry-pick onto `main` needs no step: it replays onto a
+  tree that already has the attribute.
+- Union only decides the lines both sides changed: it keeps both versions, ours first, where git would stop with a
+  conflict. A change that only one side made, a deletion included, applies as in any merge.
+- Union does not keep an entry under its heading. Git takes two changes a few lines apart as one hunk. So when
+  both sides add under `### Fixed` and under the `### Added` just below it, one side's fix can land under `### Added`,
+  and the lines between the two changes appear twice. `tests/test_merge_attributes.py` fails when a version section
+  holds a bullet twice or a `###` heading with nothing under it. Where each entry sits is yours to check: read the
+  merged `[Unreleased]` section before you push.
 
 Private data and secrets never go in the repo. The principal store is separate from this repository.
 
@@ -687,7 +883,9 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). Four thin
 1. Merge the work. Pick the next version: MINOR for a milestone, PATCH for fixes only.
 2. Bump the number in `pyproject.toml` and the files that VERSIONING section 1 lists (`src/exo/__init__.py`,
    `clients/tui/pyproject.toml`, `plugins/*/plugin.yaml`, `plugins/exo-command/exo_command/__init__.py`, `uv.lock`).
-3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading.
+3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading. The union driver
+   (#842) gives no conflict when an open PR's entry sits where the new heading goes, so that entry lands in the
+   released section. After a cut, each open PR that merges `main` checks which heading its entries are under.
 4. Run the root suite and the plugin suites. `tests/test_versioning.py` fails if the version files or the changelog drift.
 5. After the merge, sign the tag on main with `git tag -s exo-vX.Y.Z -m "one-line summary"` and push the tag.
 
@@ -794,7 +992,9 @@ res.choice, res.probabilities, res.source, res.route, res.confidence
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
-  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`.
+  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`. The engine
+  closes `ctx.router` when it closes. A script closes the router it built with `await router.aclose()` on the loop
+  that made the calls: the transports keep their HTTP clients open between calls (`docs/PROVIDERS.md` "Connections").
 - Wrap the call. It raises `DecisionError` when every route fails. `error.retryable` says whether trying later can
   help. Keep a safe default, as `exo-gate` does: on failure or after a timeout it keeps the rule outcome.
 - **A decision model may only tighten a gate (D-015).** `tighten_only(current, proposed)` returns the stricter of two
@@ -838,7 +1038,8 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 - **Limits** (`Limits` in `delegate.py`): depth 1 (flat), 10 tasks per call, 4 running children at once, 24 tool
   rounds, 200,000 tokens and 900 seconds per child. Cancelling the parent's tool call interrupts every child.
 - **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
-  ever read the English form.
+  ever read the English form. In code, pin the signer's key: `exo.wire.verify(line, sig, trusted_pub)` returns
+  False without one, because the key a signature carries proves nothing (D-016 amendment).
 - **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
   lives in `src/exo/subagents.py`. Through this built-in only the principal may act: `command()` calls `steer` and
   `stop` without `by`, so the parent-session path (`by=<parent session id>`, which speaks as `delegate`, D-040) is
@@ -965,10 +1166,15 @@ holds it as `engine.scheduler`. An engine built without composition has none, an
   `resume` or `run_now`, with `when` (cron or `every 30m`), `prompt`, `title`, `seat`, `tier` and `deliver`. The web
   Schedule page calls it through `POST /api/schedule` (`plugins/exo-command/exo_command/api.py`). There is no TUI
   command and no agent tool for it. The name `cronjob_manage` is only in the gate's category table and the
-  subagent blocked list.
+  subagent blocked list. Every action except `list` requires a live principal caller at
+  `handle_schedule_edit` (called by `Scheduler.edit`). In-process client tests pass `caller="principal:tui"`
+  to `Dispatcher`. A local, channel or seat caller cannot mutate jobs. Direct `Scheduler.add`, `pause`,
+  `remove` and `launch` methods are trusted internal APIs, used by the timer and unit tests, not transport entry points.
 - **Run.** Each run is an ordinary turn (D-041) in a fresh session of kind `scheduled`: the same context tree, memory
   provider, soul refresh and hooks, with the job's model tier, a narrowed toolset and an unattended-job prompt. It
-  reports through `task.updated` and a `notice`. The gate still applies, so an approval can stall a run.
+  reports through `task.updated` and a `notice`. The run freezes its available, non-blocked tool names before
+  starting and checks each call against that set before `engine.run_tool`. Tools added later are unavailable
+  to that run. The gate and executor still apply to allowed names, so an approval can stall a run.
 - Jobs live in `$EXO_HOME/schedule.sqlite`. A one-shot engine, such as a test, does not run the timer, so drive
   `Scheduler` directly in tests. Set `schedule` to `false` in `config.json` to turn it off.
 
@@ -1051,3 +1257,39 @@ belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
 `exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
 store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
+
+`exo improve --offline` (D-096) is a storeless CLI example in
+`src/exo/improvement/offline.py`: use the existing lazy registration path without
+`STORE_CMDS` or the common principal flags. Its workspace guard reads only the
+recorded root list through `store.explicit_roots()` and checks the same resolved
+root snapshot for working and export paths; do not construct a store or load its
+contents. Boundary diagnostics identify configuration keys or environment settings,
+not private path values. Fixture JSON cannot select imports or callbacks. Preserve
+editor/evaluator separation and the disjoint held-out gate when changing the
+trusted adapters. See `docs/integrations/HARNESS2.md`; run `tests/eval`,
+`tests/test_cli_lazy.py` and `tests/docs` after a change.
+
+A new path refusal in that command raises `BoundaryError`, so it prints its own
+line instead of the fixture line. Compare paths with `_at_or_below`. It folds
+letter case as D-087 does for the gate, and Unicode form too.
+
+### Web composer draft ownership
+
+`plugins/exo-command/exo_command/static/chat.js` owns a module-local draft map keyed by session ID, with a
+null key before the first conversation is created. A successful creation transfers ownership to its real
+session ID. Capture selection on input/navigation and restore only when switching the composer owner.
+Pending sends are per session; failure reconciliation compares the draft revision before restoring text.
+Mount listeners update a remounted chat when an older request finishes. Never persist prompt text to browser
+storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
+without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
+thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Public history preparation
+
+Before sharing repository history, follow `docs/PUBLIC-HISTORY-CLEANUP.md`. The read-only
+`scripts/audit_public_history.py` reports counts for the historical paths in #49 without printing
+matched content. It does not rewrite or push history. The runbook separates private rehearsal,
+independent verification, final remote-ref approval and retained-copy review.
+Ordinary clones have local coverage only; overall completeness requires a fresh full mirror
+verified with `--verify-remote origin`. Literal checks include object contents, historical paths
+and ref names, with counts reported separately.

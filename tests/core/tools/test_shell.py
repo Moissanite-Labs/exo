@@ -50,6 +50,7 @@ def test_timeout_kills_child_process_group(tmp_path):
 def test_timeout_message_via_tool(run):
     res = run("bash", command="echo start; sleep 30", timeout=0.3)
     assert "start" in res.text() and "timed out" in res.text() and res.text().endswith("[exit 124]")
+    assert res.is_error
 
 
 def test_cancel_interrupts(tmp_path):
@@ -187,3 +188,47 @@ def test_pipeline_wrapper_keeps_command_semantics(run):
     assert t.endswith("[exit 7]")
     assert "syntax error" in run("bash", command="echo (").text()
     assert "[exit 0]" in run("bash", command="trap 'echo bye' EXIT; true | true").text()
+
+
+@pytest.mark.parametrize("code", [0, 1, 7, 124, 130])
+def test_shell_exit_code_sets_structured_result_without_losing_output(run, code):
+    result = run("bash", command=f"printf 'synthetic output'; exit {code}")
+    assert result.text() == f"synthetic output\n[exit {code}]"
+    assert result.is_error is (code != 0)
+    assert result.call_id.startswith("c")
+
+
+def test_failed_write_shaped_command_does_not_count_as_file_progress(run, tmp_path):
+    from exo.core.trace import _changes_files
+
+    args = {"command": "false && touch nonexistent"}
+    result = run("bash", **args)
+    assert not (tmp_path / "nonexistent").exists()
+    assert result.text() == "(no output)\n[exit 1]"
+    assert not _changes_files("bash", args, result.is_error)
+
+
+def test_zero_exit_pipeline_note_is_still_a_success(run):
+    result = run("bash", command="false | cat")
+    assert "pipeline stage 1 exited 1" in result.text()
+    assert result.text().endswith("[exit 0]")
+    assert not result.is_error
+
+
+def test_failed_command_keeps_capped_output_and_exit_status(run):
+    result = run("bash", command="printf 'HEAD\\n'; seq 1 10000; printf 'TAIL\\n'; exit 7")
+    assert result.text().startswith("HEAD\n") and result.text().endswith("TAIL\n[exit 7]")
+    assert "chars cut" in result.text() and len(result.text()) < 31000
+    assert result.is_error
+
+
+def test_shell_interruption_sets_error_without_changing_its_text(reg, tmp_path):
+    from exo.core.tools import ToolContext
+    from exo.core.types import ToolCall
+
+    cancel = threading.Event()
+    cancel.set()
+    result = reg.call_sync(ToolCall(id="cancelled", name="bash", arguments={"command": "sleep 30"}),
+                           ToolContext(cwd=str(tmp_path), cancel=cancel))
+    assert result.call_id == "cancelled" and result.is_error
+    assert "[Command interrupted]" in result.text() and result.text().endswith("[exit 130]")

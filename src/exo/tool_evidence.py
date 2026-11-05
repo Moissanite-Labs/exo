@@ -1,4 +1,4 @@
-"""Optional retained tool-output views over the existing session transcript (D-084).
+"""Optional retained tool-output views over the existing session transcript (D-085).
 
 The transcript and emitted results remain authoritative. No output archive, worker,
 database or cache is created. Only session ownership/boundary metadata is added.
@@ -99,9 +99,11 @@ class Evidence:
             return
         if META in self.store.get_meta(session):
             return
+
         def initialize(meta: dict[str, Any]) -> None:
             if META not in meta:
                 meta[META] = {"principal": self.principal, "agent": self.agent, "since": self.store.last_seq(session)}
+
         self.store.update_meta(session, initialize)
 
     def _boundary(self, session: str) -> int | None:

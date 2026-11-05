@@ -8,7 +8,9 @@ additively (new optional fields with defaults). Ask the lead before changing any
 
 - `ContentPart`: type `text/image/reasoning`, text = "", data? (base64), mime?, url?, signature?
   (opaque reasoning token, send back unchanged). Helper `ContentPart.of_text(s)`.
-- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON).
+- `ToolCall`: id, name, arguments: dict = {} (already parsed JSON). Arguments that did not parse as a JSON object
+  arrive as `BadArguments`, an empty dict whose `error` says why. The registry answers that call with an error
+  result and runs no hook and no tool (exo-desktop #52, `docs/TOOLS.md` "Arguments that did not parse").
 - `ToolResult`: call_id, content: list[ContentPart] = [], is_error = False. Helpers `of_text()`, `.text()`.
 - `Message`: role `system/user/assistant/tool`, content: list[ContentPart] = [], tool_calls: list[ToolCall]
   = [], tool_results: list[ToolResult] = [], id?, meta: dict = {} (never sent to a provider).
@@ -24,6 +26,13 @@ additively (new optional fields with defaults). Ask the lead before changing any
   retryable = False, status? (HTTP code), retry_after? (seconds, from the provider).
 - `Provider` (runtime-checkable Protocol): `name: str`;
   `stream(messages, tools, **opts) -> AsyncIterator[ProviderEvent]` (an async generator).
+
+Reasoning levels: the `reasoning` opt (one of the common opts below) is Exo's level, `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max` or `ultra`. Each transport sends only what its API takes, since a 400 ends the call
+with no fallback (exo-desktop #52). OpenAI-compatible transports send `max` and `ultra` as `xhigh`, the top of
+OpenAI's and OpenRouter's scale, and leave out a level they do not know. Anthropic models that take a thinking
+budget get one of at least 1,024 tokens and below `max_tokens`. With a `max_tokens` of 1,024 or less there is no
+room, so thinking stays off.
 
 Provider contract: deltas arrive as `text` / `reasoning`; tool calls arrive whole (`tool_call`, the
 transport assembles argument deltas); `usage` may repeat, last wins; the stream ends with exactly one
@@ -72,7 +81,12 @@ Envelopes:
   body is read or any stream opens. Each of the three must be ASCII digits up to 2^63 - 1, SQLite's largest
   integer (#264). Leading zeros are allowed. A word, a sign, a decimal point or a larger value is a 400. A
   length over 8 MB, within that bound, is 413. An empty `Last-Event-ID` counts as none. A number inside a
-  command body still gets a typed `Response`, as the `events.subscribe` case above does.
+  command body still gets a typed `Response`, as the `events.subscribe` case above does. The first command
+  starts the core's runtime (the provider readiness probe when no main role is configured, then the MCP
+  servers). A start that raises is that command's error, `internal` unless classified, and the next command
+  starts again. It does after a cancelled start too (exo-desktop #14), and after a start that failed once its
+  only command was cancelled (exo-desktop #2). An MCP server that fails does not fail the start: it is recorded
+  in its status and skipped.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is
@@ -96,6 +110,9 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `session.create` SessionCreate: title = "", seat?, model?, cwd?
 - `session.list` SessionList: limit = 50, seat?
 - `session.get` SessionGet: session
+  Its queued `steers` list contains message IDs. `Loop.steer` assigns a missing ID only after the running turn
+  accepts the message, preserving a supplied ID. Snapshot, cancellation and delivered transcript use that same
+  identity. Refusal leaves the message and queue unchanged.
 - `session.fork` SessionFork: session, at_message?, title = ""
 - `session.resume` SessionResume: session. It closes a tool round a crash left open. While a turn is running in
   the session it only reads, so a second window never writes into a live tool call
@@ -116,6 +133,10 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
   subscriber 4,096 unread events behind (`MAX_LAG` in `exo.server.engine`) has stalled: the core ends its stream
   after the last event it read, and the client resumes with `since` and misses nothing (D-079). In process, the
   terminal window and stdio subscribe again on their own, and their stream ends only when the core shuts down.
+  A stream replays its backlog from the event log 1,000 events at a time, up to the newest event when it
+  subscribed, then goes live, so a client far behind costs the core one page, not its whole gap (#254).
+  A page the log cannot read ends the stream. Over stdio the client then gets an `internal` error `Response`
+  with the subscribe's id, after the events before that page.
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
 - `config.get` ConfigGet: key? (None = whole config)
 - `config.set` ConfigSet: key, value: Any
@@ -123,7 +144,8 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `models.set` ModelsSet: model, role = "main", session? (None = default)
 - `tools.list` ToolsList: session?
 - `skills.list` SkillsList: no fields
-- `tasks.list` TasksList: session?
+- `tasks.list` TasksList: session?, active = false (true returns only queued and running tasks, which the
+  terminal's delegated approval cue asks for, D-045)
 - `seat.list` SeatList: no fields
 - `taste.list` TasteList: no fields
 - `taste.edit` TasteEdit: action `add/update/remove`, rule_id?, text = ""

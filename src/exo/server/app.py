@@ -15,8 +15,7 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
 process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
-``local`` for everything else, including stdio and TCP.
-"""
+``local`` for everything else, including stdio and TCP."""
 
 from __future__ import annotations
 
@@ -24,15 +23,17 @@ import asyncio
 import hmac
 import json
 import os
+import socket as _socket
 import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit
 
+from exo.core.private import umask
 from exo.core.types import to_dict
 from exo.protocol import schema as s
 from exo import principal as pr
-from exo.server.engine import Closed, CommandFailed, Engine, Hub
+from exo.server.engine import Closed, CommandFailed, Engine, Hub, Subscription
 
 SERVER_CAPABILITIES = ["sse", "replay", "stdio"]  # hello adds "heartbeat" only on a transport that pings
 HEARTBEAT = 15.0
@@ -69,13 +70,19 @@ class Dispatcher:
 
     async def dispatch(self, raw: str | bytes, caller: str | None = None,
                        heartbeat: float | None = None) -> tuple[s.Command | None, s.Response]:
-        try:
-            cmd = s.Command.from_json(raw)
-        except s.ProtocolError as exc:
-            return None, _fail(_raw_id(raw), exc.code, exc.message)
-        except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
-            return None, _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
+        cmd = self.decode(raw)
+        if isinstance(cmd, s.Response):
+            return None, cmd
         return cmd, await self.run(cmd, caller, heartbeat)
+
+    def decode(self, raw: str | bytes) -> s.Command | s.Response:
+        """The command in ``raw``, or the typed failure to send back for it."""
+        try:
+            return s.Command.from_json(raw)
+        except s.ProtocolError as exc:
+            return _fail(_raw_id(raw), exc.code, exc.message)
+        except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
+            return _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
 
     async def run(self, cmd: s.Command, caller: str | None = None, heartbeat: float | None = None) -> s.Response:
         """``heartbeat``: seconds between the transport's ``: ping`` comments, for ``hello``; None where it sends
@@ -180,35 +187,32 @@ class HttpServer:
         """Bind the Unix socket as its one owner: probe, unlink and bind run under an exclusive ``flock`` on
         ``<path>.lock``, which this server keeps until ``close``. ``claimed`` runs once the lock is held and the
         socket is not another server's, before the socket is replaced (the pid file is written there)."""
+        if self._lock_fd is not None: raise SocketBusy(f"this server already holds {self._unix_path}")  # noqa: E701
         path = Path(path)
-        if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
-            raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
-                             "Use a shorter EXO_HOME.")
+        if (n := len(os.fsencode(str(path)))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
+            raise ValueError(f"socket path too long ({n} bytes, max 103): {path}. Use a shorter EXO_HOME.")
         from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._lock_fd = _take_start_lock(path)
-        self._unix_path = path
+        sock = _socket.socket(_socket.AF_UNIX)
         try:
+            self._lock_fd, self._unix_path = _take_start_lock(path), path
             if probe(path) == "alive":
                 raise SocketBusy(f"another server is listening on {path}; stop it, or give this one its own --socket")
             if claimed is not None:
                 claimed()
-            if path.exists():
-                path.unlink()
+            path.unlink(missing_ok=True)
             if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
                 self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
-            old = os.umask(0o177)
-            try:
-                self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
-            except BaseException:
-                if self._principal_token:
-                    pr.revoke(path, self._principal_token)
-                    self._principal_token = None
-                raise
-            finally:
-                os.umask(old)
+            with umask(0o177):  # bind only: an await in here let two starts on one loop leave the mask at 0177 (#563)
+                sock.bind(str(path))
             os.chmod(path, 0o600)
+            self._server = await asyncio.start_unix_server(self._accept_client, sock=sock)
         except BaseException:
+            asyncio.get_running_loop().remove_reader(sock)  # a cancel in the start's last pass finds it on the loop
+            sock.close()
+            if self._principal_token:
+                pr.revoke(path, self._principal_token)
+                self._principal_token = None
             self._release_start_lock(unlink_socket=False)
             raise
 
@@ -371,37 +375,53 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
     feed: asyncio.Task | None = None
     cursor: dict[str, Any] = {}  # last seq written and session filter of the active feed
 
-    async def pump(since: int, session: str | None) -> None:
-        cursor.update(seq=since, session=session)
-        while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
-            sub = dispatcher.hub.subscribe(cursor["seq"], session)
-            try:
+    async def pump(sub: Subscription) -> None:
+        try:
+            while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
                 async for ev in sub:
                     write(ev.to_json())
                     cursor["seq"] = ev.seq
-            finally:
-                sub.close()
+                if not dispatcher.hub.closed:
+                    sub = dispatcher.hub.subscribe(cursor["seq"], sub.session)
+        except Exception as exc:  # a replay page the log cannot read ends the feed with a typed reply, not silence
+            write(_fail(cursor["id"], "internal", f"{type(exc).__name__}: {exc}").to_json())
+            cursor.clear()  # nothing to flush at EOF
+        finally:
+            sub.close()
 
     try:
         while (line := await lines()) is not None:
             if not line.strip():
                 continue
-            cmd, resp = await dispatcher.dispatch(line, caller=pr.LOCAL)
-            if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
+            cmd = dispatcher.decode(line)
+            if isinstance(cmd, s.Command) and isinstance(cmd.body, s.EventsSubscribe):
+                # The feed reads its replay a page at a time. The one-shot reply would decode it whole first (#254).
+                try:
+                    sub = dispatcher.hub.subscribe(cmd.body.since, cmd.body.session)
+                except Exception as exc:  # a since the log cannot read (past SQLite's 64 bits) gets a typed reply
+                    write(_fail(cmd.id, "internal", f"{type(exc).__name__}: {exc}").to_json())
+                    continue
                 if feed:
                     feed.cancel()
-                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()})
-                write(resp.to_json())
-                feed = asyncio.create_task(pump(cmd.body.since, cmd.body.session))
+                try:
+                    write(s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()}).to_json())
+                except BaseException:  # a client gone before the reply leaves no queue in the hub to fill
+                    sub.close()
+                    raise
+                cursor.update(seq=sub.last, session=sub.session, id=cmd.id)
+                feed = asyncio.create_task(pump(sub))
                 await asyncio.sleep(0)  # start the replay before the next command
                 continue
-            write(resp.to_json())
+            write((cmd if isinstance(cmd, s.Response) else await dispatcher.run(cmd, pr.LOCAL)).to_json())
     finally:
-        if feed:
+        if feed and cursor:
             feed.cancel()
             # Flush events already published but not yet written, so a piped client sees them.
-            for ev in dispatcher.hub.since(cursor.get("seq", 0), cursor.get("session")):
-                write(ev.to_json())
+            try:
+                for ev in dispatcher.hub.replay(cursor["seq"], cursor["session"]):
+                    write(ev.to_json())
+            except Exception as exc:  # a page the log cannot read: the same typed reply as in the feed
+                write(_fail(cursor["id"], "internal", f"{type(exc).__name__}: {exc}").to_json())
 
 
 async def serve_stdio(dispatcher: Dispatcher) -> None:

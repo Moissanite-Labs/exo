@@ -98,15 +98,21 @@ and `note` events of type `consolidate_pending`. Then:
 - Each correction (`edit`, `reject`, `should_have_been`) and each ruling becomes a **proposal** in positive form,
   "The principal wants Y, not X, because Z", with its evidence, domain, confidence, and a preference pair.
 - **Rule of three:** an instruction given in three or more utterances with no belief that encodes it gets a proposal.
+  A rejected belief that agrees counts as encoding it, so repeating a rejected lesson in chat proposes nothing.
   Your live turns (role `user`) and the messages `exo ingest` imported as yours (role `principal`) both count. Only
   your own authors count (D-040): a Hermes brief of doubtful authorship (`hermes:unverified-user`), a peer's turn or
   an import's summary (`secondary`) never does.
-- **Reinforcement:** a new event that agrees with a known belief reinforces it. Weight decays by half life unless
-  reinforced.
-- **Conflict:** an event that opposes a belief goes through the conflict rule. The default,
+- **Reinforcement:** a new correction or ruling that agrees with an active belief (proposed, held or accepted)
+  reinforces it. Only active beliefs are matched, so a rejected belief is never reinforced and never hides an active
+  one; a correction or ruling that agrees only with a rejected belief becomes a new proposal (#770, #861). Weight
+  decays by half life unless reinforced.
+- **Conflict:** an event that opposes an active belief goes through the conflict rule. The default,
   `newer_wins_unless_guarded`, lets the newer one win unless the old belief guards something irreversible or
   public. In that case it raises a numbered `question` and holds the proposal until an `answer` arrives. Nothing is
-  overwritten silently.
+  overwritten silently. No client asks that question yet (exo-desktop #54). You decide a held proposal with
+  `exo proposals accept` or `reject`, and that closes its question. An answer you write by hand still works at the
+  next run: `exo log append answer --author principal --ref <question id> --text 2` releases the newer proposal for
+  your review, and `--text 1` rejects it and keeps the older belief.
 
 **Outputs.** `belief_proposed` events, and drafts in `<store>/proposals/`: `<id>.md` (the node as it would be
 written), `<id>.diff` (when it edits a node) and `<id>.json`. Decided drafts move to `proposals/archive/`. Each run

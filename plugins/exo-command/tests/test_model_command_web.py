@@ -105,6 +105,8 @@ def test_paths_and_unknown_words_are_messages_and_core_commands_are_held(page):
         end = time.monotonic() + 10
         while len(src.sent()) <= i and time.monotonic() < end:
             time.sleep(0.05)
+        # Core receipt can precede the HTTP reply. A new submission waits for the pending guard to settle.
+        b.wait("!document.querySelector('.xc-composer .xc-btnrow button').disabled")
     assert src.sent() == lines
 
 
@@ -370,5 +372,27 @@ def test_an_older_core_without_commands_list_is_asked_once():
             assert sent_by(src, 1) == ["/tmp is full"]
             b.eval("new Promise((r) => setTimeout(r, 1500))")   # past the first retry's delay
             assert len(src.of("commands.list")) == 1
+    finally:
+        srv.close()
+
+
+@needs_chrome
+def test_a_failed_calls_line_reads_the_attempts_chat_hands_over():
+    """#855: a failure before any output is recorded as "all routes for 'main' failed or are cooling down", and its
+    cause (here a ReadError) is only in the attempts. chat.js hands both to the guide, so the line is the transport
+    one, not the general /trace line."""
+    from test_layout_web import ThreadSrc
+    srv = Served(ThreadSrc(pairs=0))
+    tip = "document.querySelector('.xc-guide')"
+    try:
+        with Browser() as b:
+            b.goto(srv.url()); b.wait("!!document.querySelector('.xc-sess.on')")
+            b.eval("import('/static/bus.js').then(bus=>bus.onState(st=>{window.synced=st.synced;}))")
+            b.wait("window.synced >= 1")
+            srv.call(srv.centre.record, {"seq": 1, "type": "model.call", "session": "s1", "body": {
+                "call_id": "c1", "route": "", "error": "all routes for 'main' failed or are cooling down; next route reopens in 60s",
+                "attempts": [{"route": "p:m", "outcome": "error", "error": "ReadError: ", "ms": 0}]}})
+            b.wait("%s && !%s.hidden && %s.textContent.length > 0" % (tip, tip, tip))
+            assert b.eval(tip + ".textContent").startswith("the model could not be reached: send it again, or /trace")
     finally:
         srv.close()

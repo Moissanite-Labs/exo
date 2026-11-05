@@ -1,0 +1,106 @@
+name: gate preflight
+
+on:
+  pull_request:
+    paths:
+      - src/exo/gate.py
+      - plugins/exo-gate/**
+      - scripts/gate_diff.py
+      - scripts/gate_diff_pr.py
+      - tests/security/test_gate*.py
+      - tests/test_gate_diff*.py
+      - .github/workflows/gate-preflight.yml
+
+permissions:
+  contents: read
+
+# A newer push to the pull request replaces its older run (#907).
+concurrency:
+  group: gate-preflight-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Bootstrap hashes when PR base predates merge-aware preflight (#1147). Update when those files change.
+  GATE_DIFF_BOOTSTRAP_SHA256: c9d05b36860829f7bc454e80c6a9dcbf1556a237f59f7943fa346e36161f4e21
+  GATE_DIFF_PR_BOOTSTRAP_SHA256: d16fff1f8be728e4b5cdcc56d12fb9592366e724b0a46d585215f3dadcc94604
+
+jobs:
+  never-looser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EXO_BUS_URL: http://127.0.0.1:9
+      EXO_BUS_SEAT: builder
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --all-extras --python 3.11
+      - name: Gate plugin acceptance
+        working-directory: plugins/exo-gate
+        run: uv run --project ../.. pytest -q
+      - name: Merge-aware gate preflight (trusted comparator)
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          TRUSTED="$RUNNER_TEMP/gate-pr-base"
+          git worktree add --detach "$TRUSTED" "$BASE_SHA"
+          export GATE_COMPARATOR_ROOT="$TRUSTED"
+          export PYTHONPATH="$TRUSTED"
+          mkdir -p "$TRUSTED/scripts"
+          if [ ! -f "$TRUSTED/scripts/gate_diff.py" ]; then
+            echo "gate-preflight: trusted PR base is missing scripts/gate_diff.py" >&2
+            exit 2
+          fi
+          export GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE"
+          _assert_comparator() {
+            GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" uv run python -c "
+          import os, sys
+          from pathlib import Path
+          root = os.environ['GATE_COMPARATOR_ROOT']
+          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
+          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
+          sys.path.insert(0, root)
+          import scripts.gate_diff as gd
+          assert gd.__file__.startswith(root + os.sep), (gd.__file__, root)
+          "
+          }
+          if ! GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" uv run python -c "
+          import os, sys
+          from pathlib import Path
+          root = os.environ['GATE_COMPARATOR_ROOT']
+          untrusted = Path(os.environ['GATE_UNTRUSTED_REPO']).resolve()
+          sys.path[:] = [p for p in sys.path if Path(p).resolve() != untrusted]
+          sys.path.insert(0, root)
+          import scripts.gate_diff as gd
+          raise SystemExit(0 if hasattr(gd, '_ranks') else 1)
+          "; then
+            echo "gate-preflight: PR base gate_diff.py predates merge-aware API; bootstrap from pinned head copy"
+            git show "$GITHUB_SHA:scripts/gate_diff.py" > "$TRUSTED/scripts/gate_diff.py"
+            echo "${GATE_DIFF_BOOTSTRAP_SHA256}  $TRUSTED/scripts/gate_diff.py" | sha256sum -c -
+          fi
+          COMPARATOR="$TRUSTED/scripts/gate_diff_pr.py"
+          if [ ! -f "$COMPARATOR" ]; then
+            echo "gate-preflight: PR base lacks gate_diff_pr.py; bootstrap from pinned head copy"
+            git show "$GITHUB_SHA:scripts/gate_diff_pr.py" > "$COMPARATOR"
+            echo "${GATE_DIFF_PR_BOOTSTRAP_SHA256}  $COMPARATOR" | sha256sum -c -
+          fi
+          _assert_comparator
+          GATE_COMPARATOR_ROOT="$TRUSTED" GATE_UNTRUSTED_REPO="$GITHUB_WORKSPACE" PYTHONPATH="$TRUSTED" uv run python "$COMPARATOR" \
+            --pr-base "$TRUSTED" \
+            --head "$GITHUB_WORKSPACE" \
+            --git-dir "$GITHUB_WORKSPACE" \
+            --pr-base-ref "$BASE_SHA" \
+            --head-ref "$GITHUB_SHA" \
+            --jobs 2 \
+            --fetch-origin-main \
+            --json gate-diff.json
+      - name: Preserve differential evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-preflight-differential
+          path: gate-diff.json
+          if-no-files-found: warn

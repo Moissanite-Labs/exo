@@ -13,7 +13,7 @@ NODE = shutil.which("node")
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_chat_reconnect_refresh_commands_and_structured_memory(tmp_path):
-    for name in ("chat", "chat_state", "approvals", "markdown"):
+    for name in ("chat", "chat_state", "approvals", "markdown", "desktop_prefs"):
         if name == "approvals" and not (STATIC / "approvals.js").exists():
             continue  # older chat embeds approval handling; newer chat imports the actual controller
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
@@ -40,6 +40,7 @@ export const openPanels=()=>[]; export const lastSeq=()=>seq;
 export function emit(e){seq=e.seq;listener(e);} export function recover(){stateListener({synced:++synced});}
 ''')
     (tmp_path / "panels.mjs").write_text('export const renderPanel=()=>null;')
+    (tmp_path / "permissions.mjs").write_text('export const set=async()=>"",refresh=async()=>({}),current=()=>({}),describe=()=>"";')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";
 export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},ready:()=>globalThis.namesLoaded!==false,
@@ -197,6 +198,31 @@ input.value="/new private extra";await send.attrs.onclick();assert.match(strip.t
 input.value="/context broken";await send.attrs.onclick();assert.match(strip.textContent,/usage: \/context/);
 input.value="/contex help";await send.attrs.onclick();assert.equal(input.value,"/context");
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+// Notices belong to a thread. Only the exact completed call clears a route warning.
+input.value="draft survives";
+let eventSeq=1000;
+const emit=(type,body,session="s1")=>bus.emit({seq:eventSeq++,session,type,body});
+const has=t=>strip.textContent.includes(t);
+emit("notice",{text:"selected general"});assert.ok(has("selected general"));
+emit("notice",{text:"foreign warning",source:"model_route",call_id:"foreign"},"other");
+emit("notice",{text:"unscoped warning"},null);assert.ok(has("selected general"));assert.ok(!has("foreign warning"));
+emit("notice",{text:"route retry",source:"model_route",call_id:"call1"});
+emit("model.call",{call_id:"other-call",route:"fake:x"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x"},"other");assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",error:"failed"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",stop_reason:"interrupted"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x",stop_reason:"end"});assert.ok(!has("route retry"));
+emit("notice",{text:"route retry2",source:"model_route",call_id:"call2"});
+emit("notice",{text:"new general notice"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("new general notice"));emit("turn.completed",{});assert.ok(has("new general notice"));
+emit("error",{message:"persistent command failure"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("persistent command failure"));
+emit("notice",{text:"unfinished route",source:"model_route",call_id:"call3"});
+emit("turn.completed",{},"other");assert.ok(has("unfinished route"));
+emit("turn.completed",{});assert.ok(!has("unfinished route"));
+emit("notice",{text:"legacy general warning",level:"warn"});
+emit("model.call",{route:"fake:x"});emit("turn.completed",{});assert.ok(has("legacy general warning"));
+assert.equal(input.value,"draft survives");
 off();console.log("ok");
 ''')
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)
@@ -243,27 +269,30 @@ console.log("ok");
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_bare_link_guidance_and_fresh_fragment_in_same_tab(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
+    (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
+    (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
 export const api=async()=>{throw Error("bare URL must not make requests");};
 export const redeem=async()=>{throw Error("bare URL must not make requests");};
-export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){}},replaceChildren(...c){this.children=c;}});
+export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){}},setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},replaceChildren(...c){this.children=c;}});
 ''')
     (tmp_path / "bus.mjs").write_text('''export const onState=f=>{globalThis.state=f;f({connected:false});};export const start=async()=>{globalThis.started++;};export const restart=async()=>{globalThis.restarted++;};''')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
+    (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{globalThis.permStarted++;};')
     (tmp_path / "test.mjs").write_text('''
 import assert from "node:assert/strict";
 let stored={};globalThis.sessionStorage={getItem:k=>stored[k],setItem:(k,v)=>stored[k]=v};
 globalThis.location={hash:"",pathname:"/",search:""};globalThis.history={replaceState:(a,b,u)=>{location.hash=u.slice(u.indexOf("#"));}};
-globalThis.started=0;globalThis.restarted=0;globalThis.mounted=0;
+globalThis.started=0;globalThis.restarted=0;globalThis.mounted=0;globalThis.permStarted=0;
 const app={children:[],replaceChildren(...c){this.children=c;}}, handlers={};
 globalThis.document={getElementById:()=>app};globalThis.window={matchMedia:()=>({matches:true}),addEventListener:(t,f)=>handlers[t]=f};
 await import("./app.mjs");
-const main=app.children[1];assert.match(main.children[0].children.join(""),/bare address has no page token/);
-assert.equal(started,0);assert.equal(mounted,0);
+const main=app.children.at(-1);assert.match(main.children[0].children.join(""),/bare address has no page token/);
+assert.equal(started,0);assert.equal(mounted,0);assert.equal(permStarted,0);
 location.hash="#token=fresh%2Dtoken&chat";await handlers.hashchange();
-assert.equal(stored["xc-token"],"fresh-token");assert.equal(location.hash,"#chat");assert.equal(restarted,1);assert.equal(mounted,1);
+assert.equal(stored["xc-token"],"fresh-token");assert.equal(location.hash,"#chat");assert.equal(restarted,1);assert.equal(mounted,1);assert.equal(permStarted,1);
 assert.deepEqual(Object.keys(stored),["xc-token"]); // no permanent storage or extra credentials
 state({denied:true,connected:false});
 const nav=app.children[0], conn=nav.children.at(-1);assert.match(conn.children[1].textContent,/latest complete link/);
