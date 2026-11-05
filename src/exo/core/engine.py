@@ -222,7 +222,7 @@ class CoreRuntime:
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
-        self.loop.system_extra = self._tutorial_line
+        self.loop.system_extra = self._system_extra
         signer = None
         if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
             from exo import crypto
@@ -508,7 +508,7 @@ class CoreRuntime:
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
                                            "jobs": self.jobs, "env_allow": self.env_allow,
-                                           "env_deny": self.env_deny})
+                                           "env_deny": self.env_deny, "github_auth": (str(self.home), self.agent)})
         return await self.registry.call(call, ctx)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
@@ -549,6 +549,8 @@ class CoreRuntime:
 
     async def handle(self, command: s.Command, hub: Hub) -> dict[str, Any]:
         self.hub = hub
+        if isinstance(command.body, s.CommandRun) and command.body.name == 'credentials':
+            return await self._command_run(command.body)
         await self.start()
         method = getattr(self, "_" + command.type.replace(".", "_"), None)
         if method is None:
@@ -802,6 +804,9 @@ class CoreRuntime:
         return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
+        if b.name == 'credentials':
+            from .credentials import command
+            return {"output": await command(self.home, self.agent, b.args, self.env_deny)}
         out = await diagnostics.builtin_command(self, b)
         if out is not diagnostics.MISSING:
             return {"output": out}
@@ -826,6 +831,10 @@ class CoreRuntime:
         return {"active": self.seat.name if self.seat else None, "seats": list_seats(self.home),
                 "mcp": self.mcp.status(),
                 "channels": {n: n in self.channels for n in self._channel_cfg}}
+
+    def _system_extra(self) -> str:
+        from .credentials import catalog_prompt
+        return "\n\n".join(p for p in (self._tutorial_line(), catalog_prompt(self.home, self.agent, self.env_deny)) if p)
 
     def _tutorial_line(self) -> str:
         """D-030: one stable line while tutorial mode is on, appended after the rest of the stable system text.

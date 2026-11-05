@@ -478,7 +478,10 @@ class StatusStrip(Widget):
         def sep() -> None:
             t.append(f"  {DOT}  ", style=rich_style("line2"))
 
-        if d["bypass"]:  # D-065: first, so a narrow window cuts the instruments, never this
+        if d.get("full_session"):
+            t.append("permissions: full for all sessions" if d["full_session"] == "*" else "permissions: full only " + d["full_session"], style=rich_style("accent2", "bold reverse"))
+            sep()
+        elif d["bypass"]:  # D-065: first, so a narrow window cuts the instruments, never this
             t.append("permissions: bypass", style=rich_style("accent2", "bold reverse"))
             if w >= 80:
                 t.append(f" {d['auto']} auto-approved", style=rich_style("accent2"))

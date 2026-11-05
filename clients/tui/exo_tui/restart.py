@@ -73,7 +73,7 @@ def restart_command(session: str | None, env: Mapping[str, str] | None = None,
                     argv: list[str] | None = None) -> list[str]:
     """The command line that resumes ``session``: EXO_RESTART_CMD, else re-exec of argv."""
     effective_env = os.environ if env is None else env
-    base = _without_options(_launch_command(effective_env, argv), ("--session",), ("--resume",))
+    base = _without_options(_launch_command(effective_env, argv), ("--session",), ("--resume", "--full-access"))
     return [*base, "--session", session] if session else [*base, "--resume"]
 
 
@@ -81,7 +81,7 @@ def new_command(cwd: str, env: Mapping[str, str] | None = None, argv: list[str] 
     """Open a fresh session without inheriting a title, resume or permission flag."""
     effective_env = os.environ if env is None else env
     base = _without_options(_launch_command(effective_env, argv), ("--session", "--cwd", "--title"),
-                            ("--resume", "--skip-permissions", "--dangerously-skip-permissions"))
+                            ("--resume", "--skip-permissions", "--dangerously-skip-permissions", "--full-access"))
     # The machine launchers and ``exo resume`` also accept a positional resume subcommand.
     for i, arg in enumerate(base[:-1]):
         if Path(arg).name in ("exo", "exo-canary", "exo-projects") and base[i + 1] == "resume":

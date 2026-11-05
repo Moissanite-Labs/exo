@@ -48,6 +48,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
 from . import api
+from . import credentials as creds
 from . import providers as prov
 from .service import SECTIONS, CommandCentre
 from .source import SourceError, core_message
@@ -341,7 +342,7 @@ class WebServer:
             if method != "POST":
                 return await self._json(writer, 405, {"error": "POST only"})
             return await self._launch(reader, writer, headers)
-        if path == "/api/providers" or path.startswith("/api/providers/"):
+        if path == "/api/credentials" or path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
         if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
             peer = writer.get_extra_info("peername")
@@ -373,7 +374,10 @@ class WebServer:
             if got is None:
                 return
             body = got
-        status, data = await prov.handle(self.centre, method, path, body, self.router_factory)
+        if path == "/api/credentials":
+            status, data = await creds.handle(self.centre, method, body)
+        else:
+            status, data = await prov.handle(self.centre, method, path, body, self.router_factory)
         body.clear()
         return await self._json(writer, status, data)
 
