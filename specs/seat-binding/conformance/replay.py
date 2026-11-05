@@ -170,6 +170,12 @@ def validate_line(obj: object, line_no: int) -> dict:
 
 CLIENT_EVENTS_NEED_BOOT = frozenset({"resume", "client_new"})
 
+DIAGNOSE_POLICY_INVARIANTS = (
+    "NoForeignBeforeCoreLoad",
+    "NewAfterResumeBindsThisCore",
+    "NoSilentRefusal",
+)
+
 
 def validate_trace_events(records: list[dict]) -> None:
     if len(records) < 2:
@@ -413,7 +419,47 @@ def run_tlc(build: Path, jar: Path) -> tuple[int, str, int | None, str | None]:
     return 1, out, step, inv
 
 
-def check_trace(trace_path: Path, jar: Path, display_path: Path | None = None) -> tuple[int, str | None]:
+def diagnose_invariant(
+    jar: Path,
+    build: Path,
+    primary_step: int | None,
+) -> str:
+    """Re-run with Fixed=FALSE; return a policy invariant only if TLC reports it at or before primary_step."""
+    if primary_step is None:
+        return "none"
+    write_cfg(build, False)
+    _code, _out, step, inv = run_tlc(build, jar)
+    if inv not in DIAGNOSE_POLICY_INVARIANTS or step is None:
+        return "none"
+    if step > primary_step:
+        return "none"
+    return inv
+
+
+def format_violation(
+    display: Path,
+    seq: int | str,
+    inv_name: str,
+    diagnose: str | None = None,
+) -> str:
+    rel = display
+    try:
+        rel = display.relative_to(Path.cwd())
+    except ValueError:
+        pass
+    line = f"VIOLATION {rel} seq={seq} invariant={inv_name}"
+    if diagnose is not None:
+        line += f" diagnosed={diagnose}"
+    return line
+
+
+def check_trace(
+    trace_path: Path,
+    jar: Path,
+    display_path: Path | None = None,
+    *,
+    diagnose: bool = False,
+) -> tuple[int, str | None]:
     display = display_path or trace_path
     (ROOT / "build").mkdir(parents=True, exist_ok=True)
     try:
@@ -433,12 +479,10 @@ def check_trace(trace_path: Path, jar: Path, display_path: Path | None = None) -
             return 0, None
         seq = jsonl_seq_for_violation(step, inv)
         inv_name = inv or "Unknown"
-        rel = display
-        try:
-            rel = display.relative_to(Path.cwd())
-        except ValueError:
-            pass
-        return 1, f"VIOLATION {rel} seq={seq} invariant={inv_name}"
+        diagnosed: str | None = None
+        if diagnose:
+            diagnosed = diagnose_invariant(jar, build, step)
+        return 1, format_violation(display, seq, inv_name, diagnosed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -450,6 +494,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_JAR,
         help="path to tla2tools.jar (default: ../tla2tools.jar or TLA2TOOLS_JAR)",
+    )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="on TraceReplay failures, re-run with Fixed=FALSE and append diagnosed=invariant",
     )
     args = parser.parse_args(argv)
 
@@ -477,7 +526,9 @@ def main(argv: list[str] | None = None) -> int:
         code = 0
         msg: str | None = None
         try:
-            code, msg = check_trace(path.resolve(), jar, path)
+            code, msg = check_trace(
+                path.resolve(), jar, path, diagnose=args.diagnose
+            )
         except ValueError as exc:
             code, msg = 2, str(exc)
         if code == 2:

@@ -44,6 +44,9 @@ class AuthError(Exception):
     """Fixed safe messages only; never include upstream response bodies or credential values."""
 
 
+NEED_SECRET_STORE = 'ChatGPT connection needs an available OS secret store.'
+
+
 class Reauthorize(AuthError):
     """An unusable rotating grant, requiring a fresh user sign-in."""
 
@@ -60,7 +63,7 @@ class SecretStore:
 
     def _check(self):
         if not self.available():
-            raise AuthError('ChatGPT connection needs an available OS secret store.')
+            raise AuthError(NEED_SECRET_STORE)
 
     def get(self, name):
         self._check()
@@ -246,7 +249,7 @@ class Service:
         _jwt()
         with self.mutex, self._locked():
             if not self.store.available():
-                raise AuthError('ChatGPT connection needs an available OS secret store.')
+                raise AuthError(NEED_SECRET_STORE)
             self._cancel()
             meta = self._meta()
             previous = meta['profiles'].get(profile) if profile else meta.get('incomplete')

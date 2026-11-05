@@ -2,21 +2,17 @@ name: gate preflight
 
 on:
   pull_request:
-    paths:
-      - src/exo/gate.py
-      - plugins/exo-gate/**
-      - scripts/gate_diff.py
-      - tests/security/test_gate*.py
-      - tests/test_gate_diff*.py
-      - .github/workflows/gate-preflight.yml
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
-# A newer push to the pull request replaces its older run (#907).
+# pull_request: one active run per PR; newer commits cancel the old run (#907).
+# merge_group: key by ref so queue entries do not cancel each other.
 concurrency:
-  group: gate-preflight-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: gate-preflight-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   never-looser:
@@ -25,22 +21,57 @@ jobs:
     env:
       EXO_BUS_URL: http://127.0.0.1:9
       EXO_BUS_SEAT: builder
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # merge_group.base_sha..HEAD is the queued merge tree (over-inclusive is fine).
+      - name: Detect gate-relevant changes
+        id: detect
+        run: |
+          set -euo pipefail
+          DETECTOR="$RUNNER_TEMP/gate_preflight_relevant.py"
+          if ! git cat-file -e "$BASE_SHA:scripts/gate_preflight_relevant.py" 2>/dev/null; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base has no gate_preflight_relevant.py; running full never-looser check (bootstrap)."
+            exit 0
+          fi
+          git show "$BASE_SHA:scripts/gate_preflight_relevant.py" > "$DETECTOR"
+          DETECTOR_OUTPUT="$RUNNER_TEMP/gate-preflight-detect.out"
+          : > "$DETECTOR_OUTPUT"
+          set +e
+          GITHUB_OUTPUT="$DETECTOR_OUTPUT" python3 "$DETECTOR" --base "$BASE_SHA"
+          DETECTOR_RC=$?
+          set -e
+          cat "$DETECTOR_OUTPUT" || true
+          if [ "$DETECTOR_RC" -ne 0 ]; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base detector exited $DETECTOR_RC; running full never-looser check (fail closed)."
+            exit 0
+          fi
+          RUN_FULL=$(grep -E '^run_full=(true|false)$' "$DETECTOR_OUTPUT" | tail -1 | cut -d= -f2 || true)
+          if [ "$RUN_FULL" != "true" ] && [ "$RUN_FULL" != "false" ]; then
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            echo "Base detector did not emit run_full=true/false; running full never-looser check (fail closed)."
+            exit 0
+          fi
+          echo "run_full=$RUN_FULL" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v5
+        if: steps.detect.outputs.run_full == 'true'
       - run: uv sync --frozen --all-extras --python 3.11
+        if: steps.detect.outputs.run_full == 'true'
       - name: Gate plugin acceptance
+        if: steps.detect.outputs.run_full == 'true'
         working-directory: plugins/exo-gate
         run: uv run --project ../.. pytest -q
       - name: Compare base with the composed PR tree using the base comparator
+        if: steps.detect.outputs.run_full == 'true'
         run: |
           git worktree add --detach "$RUNNER_TEMP/gate-base" "$BASE_SHA"
           uv run python "$RUNNER_TEMP/gate-base/scripts/gate_diff.py" --base "$RUNNER_TEMP/gate-base" --head "$GITHUB_WORKSPACE" --json gate-diff.json
       - name: Preserve differential evidence
-        if: always()
+        if: always() && steps.detect.outputs.run_full == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: gate-preflight-differential

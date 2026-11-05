@@ -244,6 +244,9 @@ class SessionStore:
             raise ValueError(f"unknown thread kind {kind!r}")
         db.execute("INSERT INTO sessions (id, title, seat, model, cwd, parent, fork_seq, created, updated, agent, kind)"
                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
+        from exo.core.seat_binding_conformance import maybe_note_session_row
+
+        maybe_note_session_row(seat=seat, session_id=sid)
         return sid
 
     def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:
