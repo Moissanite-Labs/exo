@@ -267,7 +267,8 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   It returns to the newest item in either saved layout. Incoming text preserves the reader's position;
   readers already at the newest item continue following it. So does the redraw each time the event stream catches
   up, on load and after a reconnect, when the page reads the conversation again. Before, that redraw moved the
-  reader back to the newest item. The transcript is keyboard focusable.
+  reader back to the newest item. Approval cards opening or closing also preserve that reading position in both
+  layouts, including cards already pending on load. The transcript is keyboard focusable.
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed

@@ -568,7 +568,8 @@ export function mount(root) {
 
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
-    approvalView.draw(mine);
+    // Cards resize the transcript viewport. Judge following before that geometry changes (#1012).
+    keepReading(() => approvalView.draw(mine));
   }
 
   function gaugeRow(label, n, max, hot) {
