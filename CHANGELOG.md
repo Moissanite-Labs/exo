@@ -15,6 +15,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Gate preflight (#1151 follow-up, D-038 amendment): never-looser runs when a pull request changes a file that
+  changes the gate's code or data as Python loads it, not only `src/exo/gate.py`. These were outside the list:
+  `src/exo/__init__.py`, `src/exo/store.py` and `src/exo/core/models/catalog.toml`, a package, extension module or
+  cached `.pyc` that Python imports in place of one of them, `.gitattributes`, and `src/` and `clients/tui/` outside
+  their packages. A change there skipped the comparator and the check passed. A name git quotes (non-ASCII, a tab, a
+  newline, a quote) no longer skips the check. The comparator stops (exit 2) when a tree's gate loads from a package
+  or an extension module in place of `src/exo/gate.py`, or from a `gate.py` that links to another file (#1162).
 - `exo trace` names up to three unpriced routes, including child turns, with the config key for trace estimates
   and counts remaining routes. When a spend contract is missing, the refusal points to `docs/MODEL-SPEND.md`.
   An estimate does not pin a spend contract or extend audited native ceilings. Admission and accounting are

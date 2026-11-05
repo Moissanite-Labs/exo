@@ -2,7 +2,6 @@
 # spec conformance check can be trusted. On pull_request, GitHub executes the
 # PR branch's own workflow YAML, so mandatory code-owner review is the guard.
 # Any of @ahrazzle, @orda-aska, or @zero-aska other than the PR author may approve.
-# Some listed paths arrive with pending PRs #1151 and #1153.
 
 /.github/CODEOWNERS @ahrazzle @orda-aska @zero-aska
 /.github/workflows/ci.yml @ahrazzle @orda-aska @zero-aska
@@ -10,7 +9,26 @@
 /.github/workflows/spec-conformance.yml @ahrazzle @orda-aska @zero-aska
 /scripts/gate_diff*.py @ahrazzle @orda-aska @zero-aska
 /scripts/gate_preflight_relevant.py @ahrazzle @orda-aska @zero-aska
-/src/exo/gate.py @ahrazzle @orda-aska @zero-aska
+# The files that change the gate's code or data as Python loads it (scripts/gate_preflight_relevant.py lists the
+# same paths). The comparator puts src/ first on the path, so a module there outside the package is imported in
+# place of a standard library one. The editable install lists src/ and clients/tui/, so a sitecustomize.py in either
+# runs at start-up. The /src/exo/ and /clients/tui/exo_tui/ lines have no owner, which takes the packages back out
+# (the last matching line wins).
+/src/ @ahrazzle @orda-aska @zero-aska
+/src/exo/
+/clients/tui/ @ahrazzle @orda-aska @zero-aska
+/clients/tui/exo_tui/
+# gate.py, __init__.py and store.py, each with what Python imports in its place: a package or an extension module of
+# the same name, or a cached .pyc. And what changes their bytes on checkout: a .gitattributes line.
+/src/exo/gate* @ahrazzle @orda-aska @zero-aska
+/src/exo/gate*/ @ahrazzle @orda-aska @zero-aska
+/src/exo/__init__* @ahrazzle @orda-aska @zero-aska
+/src/exo/store* @ahrazzle @orda-aska @zero-aska
+/src/exo/store*/ @ahrazzle @orda-aska @zero-aska
+/src/exo/__pycache__/ @ahrazzle @orda-aska @zero-aska
+/src/exo/**/__pycache__/ @ahrazzle @orda-aska @zero-aska
+/src/exo/core/models/catalog.toml @ahrazzle @orda-aska @zero-aska
+.gitattributes @ahrazzle @orda-aska @zero-aska
 /src/exo/core/seat_binding_conformance.py @ahrazzle @orda-aska @zero-aska
 /tests/test_seat_binding_conformance_traces.py @ahrazzle @orda-aska @zero-aska
 /tests/conftest.py @ahrazzle @orda-aska @zero-aska
