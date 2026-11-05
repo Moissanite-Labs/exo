@@ -1,6 +1,6 @@
 # Swarm profile composition
 
-`exo.core.group_composition.GroupComposition` is a synchronous `EngineFactory` for
+`exo.group_composition.GroupComposition` is a synchronous `EngineFactory` for
 `GroupHost`: `Callable[[SavedGroup], Mapping[str, CoreEngine]]`. It builds one distinct real
 `CoreEngine` per group member.
 
@@ -36,6 +36,8 @@ environment are consulted for membership decisions.
   cleared only for engines whose close succeeded, so a failed `aclose()` can be retried.
   Construction is synchronous, so no nested event loops are ever run; cleanup only happens
   in `aclose()`.
+  An exception raised inside a CoreEngine constructor before it returns cannot
+  supply an engine reference for this composition to retain.
 
 ## Limitations
 
@@ -45,16 +47,40 @@ environment are consulted for membership decisions.
   is bound exactly, but the composition deliberately does not attempt to discover or load
   per-seat plugins. Wire those at a higher layer (or extend the factory) if a group needs
   them.
+- **Tools fail closed.** With no approval-gate hook, built-in tool calls are
+  blocked too. Required-executor mode cannot be satisfied by this empty-plugin
+  composition and refuses startup. No permission or executor bypass is added.
+- **Environment and saved keys remain an open integration question.** This layer
+  currently copies `env` into a dictionary; omitted/`None` becomes `{}`. It passes
+  an explicit dictionary to each CoreEngine, unlike ordinary `env=None` behavior:
+  process provider variables/PATH are not inherited through that mapping, and
+  the router's saved-key/keychain lookup is disabled even if the caller supplies
+  a copy of the process environment. Some core setup still reads process
+  environment directly, so this is not environment isolation. This recovery
+  preserves that behavior; the existing review's requested environment contract
+  must be decided before claiming live provider compatibility.
+- **Explicit cleanup before reuse.** GroupHost does not call this factory's
+  `aclose()` in this layer, either after adapter rejection or after a completed
+  group. Retained engines keep their writer locks. A subsequent start is refused
+  (the repaired host reports fixed `HostError("engine factory failed")`) until
+  the trusted caller awaits cleanup. Do not close engines while member work is
+  still active: stop/settle it first. Host-owned cleanup is separate work in #1005;
+  this layer adds no cleanup ownership or retry policy.
+- **A running owner can conflict with a member.** If an existing owner engine on
+  the same home holds the writer lock for a member profile, composition refuses
+  that profile with a writer conflict. It never borrows or takes over that engine.
 
 ## Example
 
 ```python
 from exo.core import seats
-from exo.core.group_composition import GroupComposition
+from exo.group_composition import GroupComposition
 
 mapping = {p: seats.parse({"seat": {"name": p}}) for p in ("lead", "one", "two")}
 comp = GroupComposition(mapping, owner="host", home=home, models=models, cwd=cwd, env={})
-engines = comp(saved_group)      # GroupHost passes this as its engine_factory
-...
-await comp.aclose()
+try:
+    engines = comp(saved_group)  # Or supply comp as GroupHost's engine_factory.
+    ...                         # Stop and settle any member work before closing.
+finally:
+    await comp.aclose()          # Also required after a partial construction failure.
 ```
