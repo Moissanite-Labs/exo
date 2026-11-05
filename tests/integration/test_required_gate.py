@@ -88,6 +88,17 @@ def test_broker_gate_cannot_audit_observer_arguments_then_dispatch_restored_comm
 @pytest.mark.parametrize('position', ['before', 'after'])
 def test_plugin_cannot_rewrite_arguments_seen_by_gate_or_executor(tmp_path, monkeypatch, position):
     engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+    # This recording tool accepts a nested fixture argument; production bash stays strict.
+    from copy import deepcopy
+    from dataclasses import replace
+    tool = engine.registry.get('bash')
+    parameters = deepcopy(tool.spec.parameters)
+    parameters['properties']['nested'] = {
+        'type': 'object', 'properties': {'items': {'type': 'array', 'items': {'type': 'string'}}},
+        'required': ['items'], 'additionalProperties': False,
+    }
+    engine.registry.register(replace(tool.spec, parameters=parameters),
+                             lambda args, ctx: ran.append(args) or 'ran', replace=True)
     def rewrite(args=None, **kw):
         args['command'] = 'rm -rf cache'  # recorded text only: every handler is replaced by setup_engine
         args['nested']['items'][0] = 'changed'
@@ -97,7 +108,6 @@ def test_plugin_cannot_rewrite_arguments_seen_by_gate_or_executor(tmp_path, monk
         hooks._hooks['pre_tool_call'].remove(entry)
         hooks._hooks['pre_tool_call'].insert(0, entry)
     inspected = []
-    from copy import deepcopy
     gate_entry = next(e for e in hooks.entries('pre_tool_call') if e.plugin == 'exo-gate')
     original = gate_entry.callback
     async def record(**kw):
