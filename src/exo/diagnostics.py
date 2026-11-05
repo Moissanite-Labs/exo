@@ -216,7 +216,7 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         from exo import subagents
         return await subagents.command(eng, b)
     if b.name == "group":  # swarm human commands: list, inspect, send, observe (docs/SWARM-COMMANDS.md)
-        from exo.core import group_commands
+        from exo import group_commands
         return await group_commands.command(eng, b)
     if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
         if not b.session:
