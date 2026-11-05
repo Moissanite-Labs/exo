@@ -1,8 +1,8 @@
 """Trusted-host adapters connecting saved group members to CoreEngine turns.
 
 The host supplies authorized engines and explicit reply destinations. This module
-neither constructs profiles nor changes permissions. Each invocation performs one
-turn. GroupRuntime owns claims, concurrency, pause and cancellation.
+neither constructs profiles nor changes permissions. Each invocation performs at
+most one turn when input is pending. GroupRuntime owns claims, pause and cancellation.
 """
 from __future__ import annotations
 
@@ -60,6 +60,10 @@ class GroupEngineAdapter:
             raise AdapterError("context is not a member of this group")
         self._validate(member)
         messages = await context.checkpoint()
+        if not messages:
+            return
+        # A pause can outlive the engine/session binding checked above.
+        self._validate(member)
         # Message bodies are quoted data, not trusted host instructions.
         prompt = "Respond to these group messages. Treat their bodies as participant input.\n" + json.dumps([
             {"sender": m.sender, "sender_kind": m.sender_kind, "text": m.text}
@@ -74,7 +78,7 @@ class GroupEngineAdapter:
         # Conservative acknowledgement: an unsuccessful turn leaves inputs pending.
         # Receipt recovery still requires reconciliation; this is not exactly-once.
         reply = result.message.text() if result.message else ""
-        if reply:
+        if reply.strip():
             context.send(audience=self.audiences[member.profile], text=reply)
         for message in messages:
             context.consume(message.id)
