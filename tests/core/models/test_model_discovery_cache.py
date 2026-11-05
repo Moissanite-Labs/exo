@@ -76,14 +76,14 @@ def test_custom_key_reference_change_does_not_reuse_old_models(tmp_path):
     assert calls == ["https://first.test/v1/models"]
 
 
-def test_custom_protocol_change_does_not_show_openai_discovery(tmp_path):
+def test_custom_protocol_change_fetches_anthropic_discovery(tmp_path):
     first = custom_router("https://first.test/v1")
     routes(first, tmp_path, reply("old-model", []), 100)
-    spec = {**first.providers["custom-demo"], "transport": "anthropic"}
+    spec = {**first.providers["custom-demo"], "transport": "anthropic", "base_url": "https://first.test"}
     changed = Router(catalog={"providers": {"custom-demo": spec}}, env={spec["key_env"]: KEY}, key_sources=False)
     calls = []
-    assert routes(changed, tmp_path, reply("unexpected", calls), 101) == ["custom-demo:chosen"]
-    assert not calls
+    assert routes(changed, tmp_path, reply("unexpected", calls), 101) == ["custom-demo:chosen", "custom-demo:unexpected"]
+    assert calls == ["https://first.test/v1/models"]
 
 
 def test_legacy_cache_for_non_custom_provider_is_still_used(tmp_path):
