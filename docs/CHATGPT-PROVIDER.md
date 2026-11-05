@@ -22,6 +22,13 @@ Each registration has its own issued client ID and verified identity. Registrati
 when their email addresses match. Adding or reconnecting an account leaves the active connection in place
 until the new sign-in is validated. Cancel a pending sign-in to keep the current connection.
 
+With no saved registration, Providers shows **Continue with ChatGPT**. Once registrations are saved, each row
+offers **Reconnect this account**, which refreshes that registration and does not add a new one. The row
+marked active stays labelled. A successful reconnect of an inactive registration makes it active only when
+ChatGPT plan usage is enabled. **Add another connection** is a separate action. It creates a new registration,
+and the new connection becomes active only if the sign-in completes with plan usage enabled. The previous
+registration stays saved and can be reconnected from its row.
+
 The model list comes from the selected account. Models that account cannot use are not offered as
 subscription routes. A new connection does not choose a model or change a saved role automatically.
 
