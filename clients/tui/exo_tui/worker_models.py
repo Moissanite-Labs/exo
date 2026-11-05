@@ -39,6 +39,8 @@ class WorkerModelsScreen(ModalScreen):
             yield Label("Worker models")
             yield Static("Routes in order, separated by commas. First is preferred. "
                          "Leave a tier empty to inherit its fallback roles.")
+            yield Static("Scout uses fast; builder and verifier use standard; critic uses deep. "
+                         "The parent can request another tier for a task.")
             for tier in TIERS:
                 yield Label(tier.capitalize())
                 yield Input(placeholder="provider:model, provider:fallback", id=f"worker-{tier}", disabled=True)

@@ -23,6 +23,7 @@ export function workerModels(root) {
   root.replaceChildren(h("section", { class: "xc-workers", "aria-label": "Worker models" },
     h("h2", null, "Worker models"),
     h("p", null, "Choose models for fast, standard and deep work. Leave a tier empty to inherit its fallback roles."),
+    h("p", null, "Scout uses fast; builder and verifier use standard; critic uses deep. The parent can request another tier for a task."),
     h("form", { onsubmit: submit }, rows, h("div", { class: "xc-prov-def-act" }, save, reload)), catalog, effective, status));
 
   function lock(value) {
