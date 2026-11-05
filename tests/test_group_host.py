@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from exo.core.group_engine_adapter import AdapterError
 from exo.core.group_execution import GroupExecutions
 from exo.core.group_host import GroupHost, HostError
 from exo.core.groups import GroupStore
@@ -107,7 +106,7 @@ def test_owner_mismatch_denies_every_operation(room):
 
 async def run_start(host, group_id):
     host.start(group_id, audiences=AUDIENCES)
-    await host.wait(group_id)
+    await asyncio.wait_for(host.wait(group_id), timeout=5)
 
 
 def test_unknown_group_and_unknown_profile_controls(room):
@@ -196,7 +195,7 @@ def test_failed_factory_leaves_no_running_work(room):
         raise RuntimeError("factory refused")
 
     refusing = GroupHost(groups, owner="host", known_profiles=PROFILES, engine_factory=broken)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(HostError, match="^engine factory failed$"):
         asyncio.run(run_start(refusing, group.id))
     # No runtime, no claim: fixing the inputs allows the single real start.
     snap = host.status(group.id)
@@ -224,8 +223,11 @@ def test_failed_factory_leaves_no_running_work(room):
 
         partial = GroupHost(groups2, owner="host", known_profiles=PROFILES,
                             engine_factory=incomplete)
-        with pytest.raises(HostError):
-            asyncio.run(partial.start(group2.id, audiences=AUDIENCES))
+        async def partial_start():
+            with pytest.raises(HostError, match="one engine and audience"):
+                partial.start(group2.id, audiences=AUDIENCES)
+
+        asyncio.run(partial_start())
         assert groups2.get(group2.id, owner="host") is not None
         assert GroupExecutions(groups2).get(group2.id, owner="host") is None
     finally:
@@ -300,7 +302,7 @@ def test_failed_turn_leaves_inputs_pending_without_retry(room):
                       engine_factory=bad_engines)
 
     async def scenario():
-        note = host2.send(group.id, audience=["two"], text="question")
+        note = host2.send(group.id, audience=PROFILES, text="question")
         host2.start(group.id, audiences=AUDIENCES)
         result = {s.profile: s.state for s in await host2.wait(group.id)}
         assert set(result.values()) == {"failed"}
@@ -313,10 +315,206 @@ def test_failed_turn_leaves_inputs_pending_without_retry(room):
 def test_invalid_audience_rejected_before_claim(room):
     _, groups, host, _ = room
     group = create(host)
-    with pytest.raises((HostError, AdapterError)):
-        asyncio.run(host.start(group.id,
-                               audiences={"lead": ["one"], "one": ["lead"], "two": ["one"]}))
+    async def invalid_start():
+        with pytest.raises(HostError, match="worker must target conductor"):
+            host.start(group.id,
+                       audiences={"lead": ["one"], "one": ["lead"], "two": ["one"]})
+
+    asyncio.run(invalid_start())
     snap = host.status(group.id)
     assert snap["receipt"] is None and snap["reconciliation_required"] is False
     assert {s.state for s in snap["members"]} == {"idle"}
     assert GroupExecutions(groups).get(group.id, owner="host") is None
+
+
+@pytest.mark.parametrize("settled", [False, True])
+def test_existing_receipt_rejects_before_factory(room, settled):
+    _, groups, host, _ = room
+    group = create(host)
+    executions = GroupExecutions(groups)
+    receipt = executions.claim(group.id, owner="host")
+    if settled:
+        executions.finish(group.id, owner="host", execution_id=receipt.id,
+                          members={p: "completed" for p in PROFILES})
+    expected = executions.get(group.id, owner="host")
+    calls = []
+
+    def factory(g):
+        calls.append(g.id)
+        raise AssertionError("existing receipts must not construct engines")
+
+    fresh = GroupHost(groups, owner="host", known_profiles=PROFILES, engine_factory=factory)
+
+    async def scenario():
+        with pytest.raises(HostError, match="already claimed"):
+            fresh.start(group.id, audiences=AUDIENCES)
+        assert fresh.status(group.id)["local_runtime"] is False
+
+    asyncio.run(scenario())
+    assert not calls
+    assert executions.get(group.id, owner="host") == expected
+
+
+@pytest.mark.parametrize("error", [ValueError, RuntimeError, TypeError])
+def test_factory_errors_have_fixed_message_and_no_claim(room, error):
+    _, groups, host, _ = room
+    group = create(host)
+
+    def factory(g):
+        raise error("factory implementation detail")
+
+    broken = GroupHost(groups, owner="host", known_profiles=PROFILES, engine_factory=factory)
+
+    async def scenario():
+        with pytest.raises(HostError, match="^engine factory failed$"):
+            broken.start(group.id, audiences=AUDIENCES)
+        assert broken.status(group.id)["local_runtime"] is False
+        assert GroupExecutions(groups).get(group.id, owner="host") is None
+
+    asyncio.run(scenario())
+    asyncio.run(run_start(host, group.id))
+
+
+def test_start_outside_loop_rejects_before_factory_and_claim(room):
+    _, groups, host, factory = room
+    group = create(host)
+    calls = []
+
+    def counting(g):
+        calls.append(g.id)
+        return factory(g)
+
+    fresh = GroupHost(groups, owner="host", known_profiles=PROFILES, engine_factory=counting)
+    with pytest.raises(HostError, match="running event loop"):
+        fresh.start(group.id, audiences=AUDIENCES)
+    assert not calls
+    assert GroupExecutions(groups).get(group.id, owner="host") is None
+    assert fresh.status(group.id)["local_runtime"] is False
+    asyncio.run(run_start(fresh, group.id))
+    assert calls == [group.id]
+
+
+def test_invalid_factory_result_has_fixed_message(room):
+    _, groups, host, _ = room
+    group = create(host)
+    broken = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                       engine_factory=lambda g: [object()])
+
+    async def scenario():
+        with pytest.raises(HostError, match="^engine factory failed$"):
+            broken.start(group.id, audiences=AUDIENCES)
+        assert GroupExecutions(groups).get(group.id, owner="host") is None
+        assert broken.status(group.id)["local_runtime"] is False
+
+    asyncio.run(scenario())
+
+
+def test_partial_start_failure_keeps_claim_without_cleanup_policy(room, monkeypatch):
+    from exo.core.group_runner import GroupRunner
+
+    _, groups, host, _ = room
+    group = create(host)
+
+    def fail_start(runner):
+        raise RuntimeError("task setup failed")
+
+    monkeypatch.setattr(GroupRunner, "start", fail_start)
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="task setup failed"):
+            host.start(group.id, audiences=AUDIENCES)
+        snapshot = host.status(group.id)
+        assert snapshot["receipt"].state == "active"
+        assert snapshot["reconciliation_required"] is True
+        assert snapshot["local_runtime"] is False
+        assert {s.state for s in snapshot["members"]} == {"unknown"}
+        with pytest.raises(HostError, match="already claimed"):
+            host.start(group.id, audiences=AUDIENCES)
+
+    asyncio.run(scenario())
+
+
+def test_claim_race_after_preflight_still_rejects_duplicate(tmp_path):
+    """A second connection claims inside the first factory: preflight is not a lock."""
+    path = tmp_path / "groups.sqlite"
+    first_store, second_store = SessionStore(path), SessionStore(path)
+    try:
+        first_groups, second_groups = GroupStore(first_store), GroupStore(second_store)
+        calls = []
+
+        def engines(g, store):
+            calls.append(store)
+            return {m.profile: SimpleNamespace(agent=m.profile, store=store, run_turn=ack_turn)
+                    for m in g.members}
+
+        second = GroupHost(second_groups, owner="host", known_profiles=PROFILES,
+                           engine_factory=lambda g: engines(g, second_store))
+
+        def racing(g):
+            second.start(g.id, audiences=AUDIENCES)
+            return engines(g, first_store)
+
+        first = GroupHost(first_groups, owner="host", known_profiles=PROFILES,
+                          engine_factory=racing)
+        group = create(first)
+
+        async def scenario():
+            with pytest.raises(HostError, match="already claimed"):
+                first.start(group.id, audiences=AUDIENCES)
+            receipt = second.status(group.id)["receipt"]
+            assert first.status(group.id)["local_runtime"] is False
+            assert first.status(group.id)["reconciliation_required"] is True
+            await asyncio.wait_for(second.wait(group.id), timeout=5)
+            assert first.status(group.id)["receipt"].id == receipt.id
+            assert {s.state for s in first.status(group.id)["members"]} == {"completed"}
+
+        asyncio.run(scenario())
+        assert calls == [second_store, first_store]
+        assert len(first_store._q("SELECT * FROM swarm_executions")) == 1
+    finally:
+        first_store.close()
+        second_store.close()
+
+
+def test_other_live_host_is_unknown_and_pause_does_not_suspend_turn(room):
+    _, groups, host, factory = room
+    group = create(host)
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def blocked(command):
+            entered.set()
+            await release.wait()
+            return await ack_turn(command)
+
+        def running_engines(g):
+            engines = factory(g)
+            engines["two"].run_turn = blocked
+            return engines
+
+        live = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                         engine_factory=running_engines)
+        observer = GroupHost(groups, owner="host", known_profiles=PROFILES,
+                             engine_factory=factory)
+        live.send(group.id, audience=["two"], text="question")
+        live.start(group.id, audiences=AUDIENCES)
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            snapshot = observer.status(group.id)
+            assert snapshot["reconciliation_required"] is True
+            assert snapshot["local_runtime"] is False
+            assert {s.state for s in snapshot["members"]} == {"unknown"}
+            for _ in range(2):
+                live.pause(group.id, profile="two")
+                assert states(live, group.id)["two"] == "pausing"
+            release.set()  # No resume: an in-flight turn is not suspended by pause.
+            result = await asyncio.wait_for(live.wait(group.id), timeout=5)
+            assert {s.state for s in result} == {"completed"}
+            assert observer.status(group.id)["reconciliation_required"] is False
+        finally:
+            release.set()
+            live.stop(group.id)
+            await asyncio.wait_for(live.wait(group.id), timeout=5)
+
+    asyncio.run(scenario())
