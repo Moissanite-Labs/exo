@@ -725,7 +725,7 @@ def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
     lines.append("~ = derived from timestamps (session recorded before model.call events); "
                  "cost = estimate from catalog prices, + = some calls unpriced or short (a route hit its spend "
                  "limit), unknown = no price")
-    unpriced = sorted({c.route or c.requested for t in turns for c in t.calls
+    unpriced = sorted({c.route or c.requested for t in turns for x in t.everything() for c in x.calls
                        if c.spent and c.cost_usd is None} - {""})
     lines += [price_hint(ref) for ref in unpriced[:3]]
     if len(unpriced) > 3:

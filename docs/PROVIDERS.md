@@ -382,8 +382,7 @@ each question.
 
 ### Prices
 
-The catalog prices only the routes whose list prices are known (the Anthropic models today). A route with
-no entry runs normally; its cost reads `unknown` in `exo trace`, never `$0` (D-032). Set or override a price
+A route without a trace price reads `unknown` in `exo trace`, never `$0` (D-032). Set or override an estimate
 in config.json under `models.models`, keyed by `provider:model`, in USD per million tokens:
 
     {"models": {"models": {"provider:model": {"input": 0.28, "output": 0.42, "cache_read": 0.028}}}}
@@ -392,9 +391,9 @@ The numbers above are an example, not a quote: use the provider's published list
 `cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
 price added later applies to new calls only, so a session recorded before it keeps `unknown`.
 
-A route with no price is also outside the model-spend journal. Turning that on refuses the route at its
-first call with "no pinned model-spend contract", and the refusal names the same config key, because the
-journal may only spend against a price the principal pinned.
+These values affect trace estimates only. They do not supply `models.spend.routes` contracts or extend the
+audited native ceilings. Spend refusals point to `docs/MODEL-SPEND.md`, which describes the principal-owned
+policy and protected-policy source. Adding an estimate does not lift a refusal.
 
 ## Roles
 
