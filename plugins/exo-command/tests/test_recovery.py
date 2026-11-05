@@ -93,3 +93,109 @@ def test_a_cursor_from_an_older_core_epoch_resets_explicitly():
         assert gap == {"since": 100, "reset": True} and events[0]["seq"] == 3
         assert [b.since for b in src.calls] == [100, 0]
     asyncio.run(go())
+
+
+def test_fresh_page_before_bootstrap_uses_recent_ring_not_entire_log():
+    async def go():
+        class Source(FakeSource):
+            async def call(self, body):
+                raise AssertionError('fresh page must not request durable replay from zero')
+        c = centre(Source())
+        assert await c.replay_events(0) == ([], None)  # panel snapshot raced bootstrap
+        c.record(ev(594690, 'notice', {'text': 'recent'}))
+        events, gap = await c.replay_events(0)
+        assert [e['seq'] for e in events] == [594690] and gap is None
+    asyncio.run(go())
+
+
+def test_slow_replay_applies_backpressure_and_keeps_health_responsive():
+    async def go():
+        c = centre(FakeSource())
+        # A lazy sequence also verifies the producer cannot run ahead of drain.
+        produced = 0
+        def replay():
+            nonlocal produced
+            for n in range(10000):
+                produced += 1
+                yield ev(n + 1, 'notice', {'text': 'x' * 1024})
+        async def replay_events(since, session):
+            return replay(), None
+        c.replay_events = replay_events
+        web = WebServer(c, token='t0k')
+        port = await web.start('127.0.0.1', 0)
+        blocked = asyncio.Event()
+        class SlowWriter:
+            def write(self, data):
+                pass
+            async def drain(self):
+                blocked.set()
+                await asyncio.Event().wait()  # browser stopped consuming
+        task = asyncio.create_task(web._events(SlowWriter(), 0, None))
+        try:
+            await asyncio.wait_for(blocked.wait(), 1)
+            assert produced == 1  # not the whole replay in the socket buffer
+            code, body = await asyncio.wait_for(http(port, 'GET', '/api/health'), 1)
+            assert code == 200 and json.loads(body)['ok']
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert not c._event_subs  # disconnect/cancel releases the subscriber
+        finally:
+            task.cancel()
+            await web.close()
+    asyncio.run(go())
+
+
+def test_default_browser_stream_does_not_read_historical_log_or_block_core():
+    """A pre-bootstrap cursor can reach SSE after the recent ring has filled."""
+    from exo.protocol.client import Client
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+    from exo.server.engine import Hub, MemoryLog
+
+    async def go(history):
+        class HistoricalLog(MemoryLog):
+            def last_seq(self):
+                return history + len(self._events)
+
+            def read(self, since, session=None):
+                raise AssertionError('a fresh browser must not scan durable history')
+
+        hub = Hub(HistoricalLog())
+        disp = Dispatcher(EchoEngine(), hub)
+        source = DispatcherSource(disp)
+        sid = (await source.call(s.SessionCreate()))['session']['id']
+        c = centre(source)
+        # The page fetched panels at cursor zero, then bootstrap filled the ring.
+        c.record(ev(hub.head(), 'notice', {'text': 'recent'}))
+        core = HttpServer(disp, token='test-core')
+        core_port = await core.start_tcp('127.0.0.1', 0)
+        web = WebServer(c, token='t0k')
+        port = await web.start('127.0.0.1', 0)
+        writer = None
+        try:
+            reader, writer = await asyncio.open_connection('127.0.0.1', port)
+            writer.write(f'GET /api/events?token=t0k HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
+            await writer.drain()
+            await asyncio.wait_for(reader.readuntil(b'\n\n'), 1)
+            frame = await asyncio.wait_for(reader.readuntil(b'\n\n'), 1)
+            assert json.loads(frame.split(b'data: ', 1)[1])['seq'] == hub.head()
+            assert (await asyncio.wait_for(reader.readuntil(b'\n\n'), 1)).startswith(b'event: synced')
+            # Another protocol client and the browser's interrupt stay usable while SSE is open.
+            async with Client(url=f'http://127.0.0.1:{core_port}', token='test-core') as client:
+                reply = await asyncio.wait_for(client.send(s.Hello(client='second-client')), 1)
+                assert reply.ok and reply.result['seq'] == hub.head()
+            code, _ = await asyncio.wait_for(http(port, 'POST', f'/api/chat/sessions/{sid}/interrupt'), 1)
+            assert code == 200
+        finally:
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+            await web.close()
+            await core.close()
+            assert not c._event_subs
+
+    for history in (10, 2_550_000):
+        asyncio.run(go(history))
