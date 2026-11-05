@@ -31,6 +31,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 
 | Feature | Technical doc | User guide | Developer guide | Whitepaper |
 |---|---|---|---|---|
+| Stable prompt prefixes for prompt-cache reuse (principal-approved design principle, no decision ID assigned yet) | `docs/ARCHITECTURE.md` "Stable prompt prefixes (design principle)", `docs/MEMORY-MODEL.md` | n/a (no user behavior change) | n/a (no extension step changed) | n/a (batched later, if at all) |
 | Engineering walkthrough and source/adaptation records | `docs/ENGINEERING-WALKTHROUGH.md`, `docs/SOURCES.md`, `PROVENANCE.toml` | n/a (no user behavior change) | The docs rule: source and evidence records | n/a (reading route; no new capability claim) |
 | Agent and human work vessel (PROPOSAL, pending) | `docs/AGENT-OPERATOR-DESIGN.md` | n/a (proposal only) | §1 proposal pointer | n/a (proposal only) |
 | D-086 Optional session working notes (In progress) | `docs/WORK-NOTEBOOK.md`, `docs/evidence/work-notebook-gate-2026-10-23.json` | §1 "Saved working notes" | §1 "Session working notes" | MISSING (next batch) |

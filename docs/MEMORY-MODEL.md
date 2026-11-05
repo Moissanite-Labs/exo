@@ -101,6 +101,7 @@ Each model call is built fresh, in this order:
    unstored message just before the turn's user message, so it never piles up in the thread. Before, it
    sat in the system message and changed every turn, which broke the cache for the whole prompt; now the
    prefix up to the previous turn stays cached.
+   This follows the design principle in [Stable prompt prefixes](ARCHITECTURE.md#stable-prompt-prefixes-design-principle).
 
 A private thread's entries never enter the agent tree, so the agent's frontier says nothing about them. A private
 thread therefore keeps a summary tree of its own over its own messages, as a subagent thread does (key: its
