@@ -57,7 +57,7 @@ jobs:
       EXO_BUS_SEAT: builder
       EXO_NATIVE_KEYCHAIN_TEST: ${{ matrix.os == 'macos-latest' && '1' || '' }}
       # Nightly schedule stays serial; pull_request, merge_group, and push to main use xdist.
-      PYTEST_PARALLEL: ${{ github.event_name == 'schedule' && '' || '-n auto' }}
+      PYTEST_PARALLEL: ${{ github.event_name != 'schedule' && '-n auto' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
