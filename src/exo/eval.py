@@ -511,7 +511,8 @@ def build_replays(ledger, cutoff: str | None = None, principals: Iterable[str] |
       edit, should_have_been   gold is the better version the principal gave
       answer            gold is the answer to the asked question
       ruling            gold is the rule, given the principal message that led to it
-    Rejections carry no better version, so they are skipped. `cutoff` keeps events at or before that timestamp.
+    Rejections and corrections whose gold repeats their question are skipped. Marked placeholder targets are
+    evidence of a missing answer, not rejected agent text. `cutoff` keeps events at or before that timestamp.
     Only the principal's own events count (D-040; `principals`, default `provenance.principal_names()`): a verdict
     the agent reported with exo_should_have_been, or a peer's message, is never a gold answer or a question."""
     who = set(principals) if principals is not None else set(provenance.principal_names())
@@ -542,7 +543,8 @@ def build_replays(ledger, cutoff: str | None = None, principals: Iterable[str] |
                 tb = target.get("body") or {}
                 ttext = next((tb[k] for k in ("text", "content") if isinstance(tb.get(k), str)), "")
                 # Feedback that found no answer backfills its target with a placeholder, not the agent's words.
-                if tb.get("source") == "learn_backfill" and "answer" in b and not b["answer"]:
+                if (tb.get("placeholder") is True
+                        or (tb.get("source") == "learn_backfill" and "answer" in b and not b["answer"])):
                     ttext = ""
             context = b.get("context") or last_user.get(sess, "")
             verdict = b.get("verdict")
@@ -551,6 +553,8 @@ def build_replays(ledger, cutoff: str | None = None, principals: Iterable[str] |
                 gold = ttext or b.get("answer") or ""
             elif verdict in ("edit", "should_have_been"):
                 gold = better
+                if gold == context:
+                    continue
             else:
                 continue
             if context and gold:

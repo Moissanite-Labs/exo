@@ -154,6 +154,36 @@ def test_build_replays_reads_ingested_principal_rows(led):
     assert r["verdict"] == "ruling" and r["question"] == "Going forward keep it short"
 
 
+@pytest.mark.parametrize("verdict", ["edit", "should_have_been"])
+def test_replay_skips_self_answering_corrections_in_existing_ledgers(led, verdict):
+    correction = "Important correction: use a table, NOT bullet lists."
+    led.append("utterance", {"text": correction, "role": "user"}, "principal", session="s")
+    target = led.append("utterance", {"text": "old unmarked stand-in", "role": "assistant",
+                                      "source": "learn_backfill"}, "agent", session="s")
+    led.append("verdict", {"verdict": verdict, "target": target["id"], "text": correction},
+               "principal", session="s")
+    assert E.build_replays(led) == []
+
+
+@pytest.mark.parametrize("placeholder", [False, True])
+def test_replay_omits_marked_placeholder_but_keeps_valid_correction(led, placeholder):
+    target = led.append("utterance", {"text": "literal stand-in wording", "role": "assistant",
+                                      "source": "learn_backfill", "placeholder": placeholder}, "agent", session="s")
+    led.append("verdict", {"verdict": "edit", "target": target["id"], "context": "Write a status",
+                           "chosen": "Status: ready"}, "principal", session="s")
+    (item,) = E.build_replays(led)
+    assert item["question"] == "Write a status" and item["gold"] == "Status: ready"
+    assert item["rejected"] == ("" if placeholder else "literal stand-in wording")
+
+
+def test_equal_question_and_accepted_answer_is_preserved(led):
+    target = led.append("utterance", {"text": "echo", "role": "assistant"}, "agent", session="s")
+    led.append("verdict", {"verdict": "accept", "target": target["id"], "context": "echo"},
+               "principal", session="s")
+    (item,) = E.build_replays(led)
+    assert item["question"] == item["gold"] == "echo"
+
+
 def test_split_has_a_fixed_held_out_sample():
     pool = items(50)
     a = E.split(pool)

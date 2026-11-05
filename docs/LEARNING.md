@@ -124,6 +124,10 @@ helps.
 The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
 your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's
 `exo_should_have_been` report, or a peer's message, is never a gold answer or a question.
+An edit or should-have-been whose gold repeats its question is omitted from replays. Missing agent replies
+remain recorded as marked stand-ins for audit, but their placeholder text is not a rejected answer.
+Existing unmarked feedback stand-ins with an explicit empty answer remain excluded. Older chat stand-ins
+cannot be identified by wording alone; their self-answering corrections are still omitted.
 
 The incumbent's scores are cached in `<store>/eval/incumbent.json`. They are scored again when the incumbent's rules
 or skills change, or when anything else that moves a score changes: an eval case (its text, not only its id), the
