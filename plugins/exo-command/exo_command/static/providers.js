@@ -3,6 +3,7 @@
 // A key value only ever lives in the password field. It is read once to build the request body, the field is
 // cleared at once (also on error), and it is never logged, stored, put in a URL, or shown again.
 import { h, api, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
+import { workerModels } from "./worker_models.js";
 
 const STORE_TEXT = {
   keychain: "the macOS Keychain",
@@ -26,10 +27,15 @@ function chip(r) {
 
 export function mount(root) {
   const body = h("div", { class: "xc-prov" });
+  const workers = h("div", { class: "xc-prov" });
   const connection = h("section", { class: "xc-prov-connect", "aria-label": "ChatGPT subscription connection" });
   const counts = h("div", { class: "xc-phead-read" });
+  const workerShortcut = h("button", { class: "xc-btn", type: "button", onclick: () => {
+    workers.scrollIntoView({ block: "start" });
+    workers.querySelector("input")?.focus({ preventScroll: true });
+  } }, "Worker models");
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
-    lede: "Where model keys live, which providers answer, and the model the main role uses.", aside: counts }), connection, body));
+    lede: "Where model keys live, which providers answer, and the models for main and worker tasks.", aside: h("div", null, workerShortcut, counts) }), connection, body, workers));
   let alive = true, authTimer = null, authBusy = false, authState = null;
 
   function drawChatGPT(message = "") {
@@ -81,6 +87,7 @@ export function mount(root) {
   }
 
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
+  const closeWorkers = workerModels(workers);
   let data = null, models = null, modelsError = null, err = "", picked = "";
   let custom = [], customError = "", editing = null;
   let layout = null;
@@ -344,5 +351,5 @@ export function mount(root) {
   draw();
   load();
   refreshChatGPT();
-  return () => { alive = false; if (authTimer) clearTimeout(authTimer); };
+  return () => { alive = false; if (authTimer) clearTimeout(authTimer); closeWorkers(); };
 }
