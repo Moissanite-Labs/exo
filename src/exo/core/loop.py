@@ -92,7 +92,7 @@ class Loop:
                  context: Any = None, memory: Any = None,
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
-                 model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
+                 model: str | None = None, max_iterations: int = 0, max_retries: int = 3,
                  retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None,
                  wrap_up: bool = True):
         self.store = store
@@ -106,6 +106,8 @@ class Loop:
         self.run_tool = run_tool
         self.system_prompt = system_prompt
         self.model = model
+        if type(max_iterations) is not int or max_iterations < 0:
+            raise ValueError("max_iterations must be a non-negative integer (0 means unlimited)")
         self.max_iterations = max_iterations
         self.wrap_up = wrap_up  # at the round cap, one tool-less call to report progress and what remains
         self.max_retries = max_retries
@@ -320,7 +322,10 @@ class Loop:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
         author = provenance.author_of(user)  # who the turn is for; a steer takes over (#598)
-        for _ in range(self.max_iterations):
+        round_index = 0
+        while self.max_iterations == 0 or round_index < self.max_iterations:
+            _ = round_index
+            round_index += 1
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)

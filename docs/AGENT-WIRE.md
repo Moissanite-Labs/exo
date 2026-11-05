@@ -242,7 +242,7 @@ memory, bus, delegation and kanban toolsets. The parent can narrow further with 
 tool outside its list gets an error result.
 
 **Limits** (config `delegation` in `config.json`; defaults in brackets): depth [1, flat, as in Hermes],
-tasks per call [10, Hermes's default], concurrent children per depth level [4], tool rounds per child [24],
+tasks per call [10, Hermes's default], concurrent children per depth level [4], tool rounds per child [0, unlimited],
 tokens per child [200,000], wall time per child [900 s], summary length [6,000 characters]. A separate
 slot pool per depth level means a parent waiting on its children can never starve them of slots. The token
 budget counts what the child's calls newly process: uncached input, cache writes and output. Cache reads do not
@@ -351,7 +351,7 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
   The upstream format and the vendored validator are kept, so pure upstream packets still work and Exo's
   additions can go upstream.
 - **Calls made by the agent (reversible):** delegation is flat by default (depth 1, Hermes's default); 10
-  tasks per call; 4 concurrent children per depth level; 24 tool rounds, 200,000 tokens and 900 s per child;
+  tasks per call; 4 concurrent children per depth level; unlimited tool rounds, 200,000 tokens and 900 s per child;
   scouts and critics get low-risk tools only; the child prompt and blocked-tool list are lifted from Hermes
   with provenance.
 - **Rejected:** models writing or reading dense lines (more tokens than terse English, plus a legend, plus an

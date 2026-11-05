@@ -1167,7 +1167,7 @@ alone.
 
 Limits and edge cases:
 
-- **Iteration cap.** At most 24 tool rounds per turn by default. A turn that reaches the cap ends with a
+- **Iteration cap.** Tool rounds are unlimited by default. A positive configured limit bounds a turn. A turn that reaches the cap ends with a
   short report (done, still open, next step) from one more model call with tool use off, instead of a
   dangling tool round (#92, #93).
 - **Retries.** A retryable model error is retried up to 3 times with exponential backoff, but only while
@@ -1191,7 +1191,7 @@ A subagent is a child thread on the same core, started by the `delegate` tool wi
 tasks. It runs on the same router, tools and gate, so every approval and hook applies to a child's calls
 exactly as to the parent's. A child never gains a tool its parent lacks, and tools that need a person (ask,
 clarify, send a message, schedule a job, open a panel) are blocked for it. Limits, by default: one level of
-nesting, 10 tasks per call, 4 children at once per level, 24 tool rounds, 200,000 tokens and 15 minutes per
+nesting, 10 tasks per call, 4 children at once per level, unlimited tool rounds, 200,000 tokens and 15 minutes per
 child. Each level has its own pool of slots, so a parent waiting on its children can never starve them.
 Interrupting the parent cancels every child below it. The parent gets back a *receipt* in plain English:
 outcome, what was done, the model that ran it, and why it failed if it did.
