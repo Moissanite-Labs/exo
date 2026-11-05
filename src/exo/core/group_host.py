@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sqlite3
 from dataclasses import dataclass
-from typing import Callable, Collection, Mapping
+from typing import TYPE_CHECKING, Callable, Collection, Mapping
 
 from exo.core.group_conversation import (DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_TURNS,
                                          ConversationWake, GroupConversationAdapter)
@@ -46,6 +47,9 @@ from exo.core.group_messages import GroupMessage, GroupMessages
 from exo.core.group_runner import MemberStatus
 from exo.core.group_runtime import GroupRuntime, validate_max_concurrent
 from exo.core.groups import GroupStore, SavedGroup
+
+if TYPE_CHECKING:  # annotations only; the plan branch imports these lazily
+    from exo.core.group_task_contract import HostGrants, ValidatedPlan
 
 # Trusted host hook: returns one authorized, distinct engine per member profile.
 # The factory decides binding; this layer only validates membership coverage.
@@ -167,7 +171,9 @@ class GroupHost:
               knowledge: bool = False,
               max_items: int = DEFAULT_MAX_ITEMS,
               max_chars: int = DEFAULT_MAX_CHARS,
-              max_concurrent: int | None = None) -> tuple:
+              max_concurrent: int | None = None,
+              plan: "ValidatedPlan | None" = None,
+              grants: "HostGrants | None" = None) -> tuple:
         """Bind authorized engines and claim one durable execution. No retry.
 
         Stored membership is re-validated against the injected profile set
@@ -226,6 +232,48 @@ class GroupHost:
         if unknown:
             raise HostError("group members outside the injected profile set: "
                             + ", ".join(sorted(unknown)))
+        if plan is not None or grants is not None:
+            # Plan-execution opt-in (docs/SWARM-PLAN-EXECUTION.md). Every
+            # refusal below happens after the host's own ownership/membership
+            # gate and BEFORE the engine factory is invoked and before any
+            # durable claim exists, so a refused plan leaves no engine and no
+            # receipt. With ``plan`` and ``grants`` both ``None`` this branch
+            # is not entered and the one-shot/conversation paths below are
+            # byte-identical to before.
+            from exo.core.group_engine_adapter import AdapterError
+            from exo.core.group_plan_execution import PlanExecutionError, PlanExecutions, start_plan
+            from exo.core.group_task_contract import ContractError, HostGrants
+            if plan is None:
+                raise HostError("grants are only accepted with a plan")
+            if not isinstance(grants, HostGrants):
+                raise HostError("a plan run requires HostGrants built by the host")
+            if conversation is not None:
+                raise HostError("a plan run is not a conversation start; do not pass conversation")
+            if audiences is not None:
+                raise HostError("audiences are derived from the plan; do not pass them")
+            if grants.owner != self._owner or plan.owner != self._owner:
+                raise HostError("plan and grants owner must be this host's owner")
+            if plan.group_id != group_id:
+                raise HostError("plan is bound to a different group")
+            if not grants.profiles <= self._profiles:
+                raise HostError("plan grants exceed the injected profile set")
+            try:
+                plan_bound = validate_max_concurrent(max_concurrent, len(group.members))
+            except ValueError as e:
+                raise HostError(str(e)) from e
+            plan_reader = GroupKnowledge(self._groups) if knowledge else None
+            try:
+                runtime = start_plan(self, group_id, plan=plan, grants=grants,
+                                     executions=PlanExecutions(self._groups),
+                                     max_concurrent=plan_bound, knowledge=plan_reader,
+                                     bounds=bounds)
+            except (PlanExecutionError, ContractError, AdapterError, ValueError, sqlite3.Error) as e:
+                refused = HostError(f"plan execution refused: {e}")
+                for note in getattr(e, "__notes__", ()):
+                    refused.add_note(note)  # keep secondary cleanup failures visible
+                raise refused from e
+            self._runtimes[group_id] = runtime
+            return runtime.status()
         # Opt-in only: the reader is built here on this host's own store, so
         # no caller-provided object or foreign database can be injected. It is
         # constructed once per start and shared read-only by every member.
