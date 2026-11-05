@@ -44,18 +44,24 @@ export function mount(root) {
     const storeOk = !(d && d.store_available === false);
     const storeNote = storeOk ? "" : (NEED_SECRET_STORE + " Install secret-tool (Linux Secret Service) or use the macOS Keychain. ChatGPT tokens are not stored in ~/.config/exo/keys.env; use that file for API-key providers instead (see docs/PROVIDERS.md).");
     const note = message || storeNote || (d && d.dependency_available === false ? "Install Exo’s chatgpt extra in the core runtime before signing in." : "") || (d && d.message) || (d && d.available ? "Using ChatGPT plan when a chatgpt model is selected." : "Connect your ChatGPT subscription separately from API keys and CLI logins.");
-    const button = (label, action, profile) => h("button", { class: "xc-btn", type: "button", disabled: authBusy || !storeOk,
+    const button = (label, action, profile, primary = false) => h("button", { class: primary ? "xc-btn xc-primary" : "xc-btn", type: "button", disabled: authBusy || !storeOk,
       onclick: () => chatGPT(action, profile) }, label);
+    const profiles = (d && d.profiles) || [];
+    const saved = profiles.length > 0;
+    // Saved registrations: Reconnect (action=start WITH profile) is the default and refreshes that account's own registration.
+    // Add another connection (action=start WITHOUT profile) makes a new registration; with none saved this is plain first sign-in.
     connection.replaceChildren(h("div", null, h("h2", null, "ChatGPT subscription"),
       h("p", { role: "status" }, note),
       h("p", null, "Connecting does not change your default model or enable paid API fallback."),
-      button("Continue with ChatGPT", "start"),
-      d && d.pending ? button("Cancel sign-in", "cancel") : null,
-      h("a", { class: "xc-btn", href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer" }, "Manage ChatGPT usage"),
-      ...((d && d.profiles) || []).map((p) => h("div", { class: "xc-prow" },
+      saved ? h("p", null, "Reconnect refreshes sign-in for a saved ChatGPT registration. It keeps that registration and does not add a new one.") : null,
+      ...profiles.map((p) => h("div", { class: "xc-prow" },
         h("span", null, (p.email || "ChatGPT account") + " · registration " + p.client_id.slice(-8) +
           (d.active === p.profile ? " · active" : "") + (p.plan_enabled ? "" : " · plan usage not enabled")),
-        button("Sign in to this account", "start", p.profile), button("Disconnect", "disconnect", p.profile)))));
+        button("Reconnect this account", "start", p.profile, d.active === p.profile || profiles.length === 1), button("Disconnect", "disconnect", p.profile))),
+      saved ? h("p", null, "Add another connection creates a separate registration. If it completes with ChatGPT plan usage enabled, the new connection becomes active; your previous registration stays saved.") : null,
+      saved ? button("Add another connection", "start") : button("Continue with ChatGPT", "start", undefined, true),
+      d && d.pending ? button("Cancel sign-in", "cancel") : null,
+      h("a", { class: "xc-btn", href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer" }, "Manage ChatGPT usage")));
   }
 
   async function refreshChatGPT() {

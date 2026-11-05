@@ -83,8 +83,11 @@ which always asks you and never gets a standing grant (D-033). Keys are write-on
 
 ## Use a ChatGPT subscription (`chatgpt`)
 
-In Providers, choose **Continue with ChatGPT** and complete the browser sign-in. Select a connected
-account, then one of its available models. **Manage usage** opens your ChatGPT usage settings. The
+In Providers, choose **Continue with ChatGPT** and complete the browser sign-in. With saved connections, use
+**Reconnect this account** to refresh one. A successful reconnect of an inactive connection makes it active
+only when ChatGPT plan usage is enabled. **Add another connection** creates a new one. It becomes active only
+when ChatGPT plan usage is enabled. Select a connected account, then one of its available models.
+**Manage usage** opens your ChatGPT usage settings. The
 connection stores and refreshes its own credentials, without reading a Codex or Hermes login.
 
 ChatGPT plan usage and `openai` API-key billing are separate. A turn selected for subscription access
