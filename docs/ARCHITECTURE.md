@@ -89,6 +89,59 @@ interruption budget), `agents/` (the principal's own named agents and charters),
 - **Corrections (P5, P6).** A verdict event (accept / edit / reject / should-have-been) is the highest-
   weight event. Consolidation writes it as "wants Y, not X, because Z" the same day and proposes the edit.
 
+### Stable prompt prefixes (design principle)
+
+Exo keeps the start of each model request stable, so a provider's prompt cache can reuse it. Many providers
+cache by prefix: the request is matched from its first byte or token onward. A change early in the request can
+cost the reuse of everything after it. How much is lost depends on the provider's cache granularity, routing,
+scope and time to live, so this is a goal to design for, not a guarantee.
+
+The principal approved this as an overall design principle. No `DECISIONS.md` entry carries it yet, and this
+section does not claim one.
+
+**Rules.**
+
+- Build instructions, tool definitions and tool schemas in a deterministic order, and serialize them the same
+  way every time (key order, spacing, list order). Sort anything that comes from a set, a directory listing or a
+  registry.
+- Put stable content early and volatile content late, where authority and meaning allow it. The pack (T2) and
+  fixed instructions come before per-turn recall, notes and the user's message.
+- Keep session ids, app ids, trace ids, request ids, timestamps and random values out of early model-visible
+  text unless the model needs them to do its job. Where the transport supports it, send them as headers or other
+  request metadata instead.
+- When a change to early content is needed, make it deliberately and rarely, not as a side effect of a routine
+  event.
+
+**What overrides it.** Security, account separation, current permissions and correctness come first.
+A permission change, a different account or a different principal must change the request, even when that
+costs a cache hit. Never reuse or share a prefix across accounts or principals to save tokens. Never keep stale
+instructions or a stale tool list because they are cached. Never hide a fact the model must see to act
+correctly.
+
+**What this does not claim.** A smaller request is not the same as a cache hit. A cache hit is not the same as
+a lower charge, and money charged to an API key is not the same as use counted against a subscription plan.
+Report each from its own evidence. Do not infer a cache miss, or a cause for one, from a change in the request
+alone. For example, no current record shows that the authentication switch added an identifier to the prompt
+or caused a miss. Measure first.
+
+**Review and test checklist.** A change that touches prompt assembly, tool schemas, memory injection, headers
+or provider adapters shows:
+
+1. The request bytes, or the token prefix, are identical across two requests that differ only in irrelevant
+   metadata: session id, trace id, timestamp, request id, or the order a registry was filled in.
+2. The prefix does change, as intended, when permissions, the tool set, the account or the principal's context
+   change. A test that proves reuse needs a twin that proves this invalidation.
+3. Tool and schema serialization is deterministic across processes, not only within one.
+4. Where the provider reports cached tokens (`Usage.cache_read_tokens`, `Usage.cache_write_tokens`), the
+   expected reuse appears in a real or recorded response. Where it does not, say reuse was not measured.
+5. Payload size, cached-token counts, money charged and plan usage are reported as separate numbers, with the
+   provider, model and time of measurement.
+
+Existing practice that follows this: context notes are stored so the next call sees the same bytes, per-turn
+recall goes in an unstored message after the stable prefix, and providers that key caching on a conversation id
+get one id per agent (see `docs/MEMORY-MODEL.md`). Usage counters are defined in `docs/CORE-V2-INTERFACES.md`
+and `docs/MODEL-SPEND.md`.
+
 ## 4. Sessions and context management
 - **Session** = Hermes session; every turn mirrored to the ledger with session id and lineage.
 - **Compaction** (exo-context): before compressing, extract rulings, corrections, open decisions and live
