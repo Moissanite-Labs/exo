@@ -14,6 +14,7 @@ deliberately out of scope for this slice.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Callable, Collection, Mapping
 
 from exo.core.group_engine_adapter import GroupEngineAdapter
@@ -96,7 +97,11 @@ class GroupHost:
         never inferred from stored metadata. A factory failure or invalid
         audience leaves no runtime and no durable claim, so the caller may fix
         inputs and start once. A partial start failure after the claim still
-        blocks retry by design (GroupExecutions).
+        blocks retry by design (GroupExecutions). Existing receipts and a missing
+        running event loop are rejected before constructing engines. The receipt
+        preflight is only an optimization: the atomic runtime claim is the guard.
+        Factories remain responsible for resources returned on a failed start;
+        this layer has no engine cleanup hook or automatic retry policy.
         """
         group = self._group(group_id)
         if group_id in self._runtimes:
@@ -105,7 +110,16 @@ class GroupHost:
         if unknown:
             raise HostError("group members outside the injected profile set: "
                             + ", ".join(sorted(unknown)))
-        engines = dict(self._factory(group) or {})
+        if GroupExecutions(self._groups).get(group.id, owner=self._owner) is not None:
+            raise HostError("group execution already claimed; inspect its receipt")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            raise HostError("group start requires a running event loop") from None
+        try:
+            engines = dict(self._factory(group) or {})
+        except Exception:
+            raise HostError("engine factory failed") from None
         try:
             adapter = GroupEngineAdapter(group, engines, audiences=audiences)
             runtime = GroupRuntime(self._messages, group.id, owner=self._owner,
@@ -124,9 +138,11 @@ class GroupHost:
         ``"idle"`` when no claim exists), ``receipt`` (the durable
         ``ExecutionReceipt`` or ``None``) and ``reconciliation_required``. With
         no local runtime there is no claimed liveness: an active receipt means
-        a prior process claimed execution and may still hold it, so
-        ``reconciliation_required`` is set and no start may be attempted until
-        the receipt is reconciled. The receipt is never a liveness probe.
+        another host object (including one in this process) or a prior process
+        claimed execution and may still hold it, so ``reconciliation_required``
+        is set. No retry or reconciliation mechanism is provided here, and even
+        a settled receipt blocks another start. The receipt is never a liveness
+        probe; ``local_runtime`` means an object exists, not that work is live.
         """
         group = self._group(group_id)
         runtime = self._runtimes.get(group_id)
