@@ -6,8 +6,9 @@ group's owner and full membership are validated against that mapping BEFORE anyt
 constructed. Construction is synchronous (GroupHost's EngineFactory is a plain Callable);
 cleanup is async via aclose(). Failures fail closed: partial engines are retained for
 aclose(), never retried, and another member's writer claim is never taken over. A composition
-is single-use: after the first call (success or failure) it rejects further calls until
-aclose() completes, and a failed aclose() retains the failed engines so it can be retried.
+rejects further calls while engines are retained after construction or a partial failure.
+Validation failures retain nothing. A failed aclose() retains the failed engines so it can
+be retried. The trusted caller owns cleanup after both failed and completed host runs.
 """
 from __future__ import annotations
 

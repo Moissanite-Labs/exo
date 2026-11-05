@@ -6,7 +6,8 @@ import pytest
 
 from exo.application import CoreEngine
 from exo.core import seats
-from exo.core.group_composition import CompositionError, GroupComposition
+from exo.group_composition import CompositionError, GroupComposition
+from exo.core.group_host import GroupHost, HostError
 from exo.core.groups import GroupStore
 from exo.core.plugins import PluginManager
 from exo.core.sessions import SessionStore
@@ -64,7 +65,7 @@ def test_unauthorized_member_rejected_before_construction(comp):
 
 def test_mapping_is_exact(comp):
     with pytest.raises(CompositionError, match="does not match"):
-        comp(profiles=["lead"], **{}) if False else GroupComposition(
+        GroupComposition(
             {"lead": seat("scout")}, owner="host", home="h")
     with pytest.raises(CompositionError, match="not bound to a Seat"):
         GroupComposition({"lead": "scout"}, owner="host", home="h")
@@ -93,9 +94,10 @@ def test_duplicate_members_rejected(comp):
     group = make_group()
     dup = group.__class__(group.id, group.owner, group.mode, group.conductor,
                           (group.members[0], group.members[0]), group.created)
+    c = comp()
     with pytest.raises(CompositionError, match="duplicate"):
-        comp()(dup)
-    assert comp().engines == {}
+        c(dup)
+    assert c.engines == {}
 
 
 def test_claim_conflict_fails_closed_and_aclose_cleans_up(comp, tmp_path):
@@ -149,3 +151,92 @@ def test_aclose_retains_failed_engines_for_retry(comp, monkeypatch):
     asyncio.run(c.aclose())  # retry of the retained failure now succeeds
     assert c.engines == {}
     assert engines["one"]._writer is None
+
+
+def test_validation_failure_does_not_require_cleanup_before_valid_call(comp):
+    c = comp()
+    with pytest.raises(CompositionError, match="belongs"):
+        c(make_group(owner="other"))
+    assert c.engines == {}
+    assert set(c(make_group())) == set(PROFILES)
+
+
+def test_host_failure_and_completion_require_explicit_composition_cleanup(comp, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    store = SessionStore(home / "sessions.sqlite")
+    c = comp()
+    host = GroupHost(GroupStore(store), owner="host", known_profiles=PROFILES, engine_factory=c)
+    group = host.create(mode="conductor", members=PROFILES, conductor="lead")
+    valid = {"lead": ["one"], "one": ["lead"], "two": ["lead"]}
+
+    async def scenario():
+        try:
+            with pytest.raises(HostError, match="conductor must target one worker"):
+                host.start(group.id, audiences={**valid, "lead": ["one", "two"]})
+            retained = c.engines
+            assert set(retained) == set(PROFILES)
+            assert host.status(group.id)["receipt"] is None
+            assert host.status(group.id)["local_runtime"] is False
+            assert all(e._writer is not None for e in retained.values())
+            with pytest.raises(HostError, match="^engine factory failed$"):
+                host.start(group.id, audiences=valid)
+            assert c.engines == retained
+            # Explicit trusted caller cleanup; GroupHost does not own it in this layer.
+            await c.aclose()
+            assert c.engines == {}
+            host.send(group.id, audience=PROFILES, text="question")
+            host.start(group.id, audiences=valid)
+            assert {s.state for s in await asyncio.wait_for(host.wait(group.id), 5)} == {"completed"}
+            assert host.status(group.id)["receipt"].state == "settled"
+            for member in group.members:
+                assert c.engines[member.profile].store.messages(member.session)
+            assert all(e._writer is not None for e in c.engines.values())
+            second = host.create(mode="conductor", members=PROFILES, conductor="lead")
+            with pytest.raises(HostError, match="^engine factory failed$"):
+                host.start(second.id, audiences=valid)
+            assert host.status(second.id)["receipt"] is None
+            await c.aclose()
+            host.start(second.id, audiences=valid)
+            await asyncio.wait_for(host.wait(second.id), 5)
+        finally:
+            for saved in host.groups.listing(owner="host"):
+                if host.status(saved.id)["local_runtime"]:
+                    host.stop(saved.id)
+                    await asyncio.wait_for(host.wait(saved.id), 5)
+            await c.aclose()
+
+    try:
+        asyncio.run(asyncio.wait_for(scenario(), 15))
+    finally:
+        store.close()
+
+
+def test_empty_plugins_block_builtin_tools(comp):
+    from exo.core.tools.registry import Block, ToolContext
+    from exo.core.types import ToolCall, ToolSpec
+
+    c = comp()
+    engines = c(make_group())
+
+    async def scenario():
+        engine = engines["lead"]
+        assert not engine.plugins.hooks.has("pre_tool_call")
+        result = await engine._pre_hook(ToolCall(id="one", name="read_file", arguments={}),
+                                        ToolSpec(name="read_file", description="", parameters={}),
+                                        ToolContext())
+        assert isinstance(result, Block)
+        assert "No tool approval gate is available" in result.reason
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+
+
+def test_required_executor_fails_closed_without_retained_engine(comp, monkeypatch):
+    from exo.core.tools.executor import ExecutorConfigurationError
+
+    monkeypatch.setenv("EXO_TOOL_EXECUTOR_REQUIRED", "1")
+    c = comp()
+    with pytest.raises(CompositionError, match="composition failed") as error:
+        c(make_group())
+    assert isinstance(error.value.__cause__, ExecutorConfigurationError)
+    assert c.engines == {}
