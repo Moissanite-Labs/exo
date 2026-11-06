@@ -530,7 +530,7 @@ class ExoApp(App):
             except Exception:
                 self.memory = ""
             if self.resume and not self.session:
-                rows = (await self.client.call(s.SessionList(limit=50, seat=self.seat)))["sessions"]
+                rows = (await self.client.call(s.SessionList(limit=50, seat=self.launch_seat)))["sessions"]
                 # a thread, not a child's log, with something in it: every launch opens one, used or not
                 rows = [r for r in rows if r.get("kind") != "subagent" and r.get("message_count")]
                 self.session = rows[0]["id"] if rows else None
@@ -786,7 +786,7 @@ class ExoApp(App):
         elif isinstance(b, s.SessionUpdated):
             if b.session.id == self.session:
                 self.model = self.model or b.session.model or ""
-                self.seat = self.seat or b.session.seat
+                self.seat = b.session.seat or self.launch_seat
         elif isinstance(b, s.Notice):
             self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text, "warn" if b.level == "warn" else "note")
         elif isinstance(b, s.Error):
@@ -949,7 +949,7 @@ class ExoApp(App):
         info = got["session"]
         self.set_session_cwd(info.get("cwd"))
         self.busy = info.get("status") == "live"  # a turn already running there: LIVE, steer, ctrl+c stops it
-        self.seat = self.seat or info.get("seat")
+        self.seat = info.get("seat") or self.launch_seat  # the label shown is the open thread's seat
         self.model = info.get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(info)
@@ -961,7 +961,7 @@ class ExoApp(App):
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         from exo.core.seat_binding_conformance import maybe_note_resume
 
-        maybe_note_resume(sid, session_seat=info.get("seat"))
+        maybe_note_resume(sid, session_seat=info.get("seat"), display_seat=self.seat or "")
         await self.restore_approvals()  # a request that waited before this window showed the thread (D-045)
         self.refresh_status()
 
@@ -980,8 +980,8 @@ class ExoApp(App):
         from exo.protocol.client import ClientError
         from exo.core.seat_binding_conformance import client_new_begin, client_new_end, maybe_note_client_new
 
-        # Send the seat this window was started with. self.seat is also a display label, and load_session
-        # fills it from a resumed thread, including one that belongs to another seat in this home.
+        # Send the seat this window was started with. self.seat is the display label of the open thread, so
+        # after a resume it can name another seat in this home.
         joined: str | None = None
         client_new_begin()
         try:
@@ -1006,10 +1006,12 @@ class ExoApp(App):
             client_new_end()
         await self.leave_thread()
         self.session = got["session"]["id"]
+        self.seat = got["session"].get("seat") or self.launch_seat  # the core's seat when this window joined it
         maybe_note_client_new(
             self.session,
             session_seat=got["session"].get("seat"),
             joined=joined,
+            display_seat=self.seat or "",
         )
         self.draw_delegated_approvals()
         self.set_session_cwd(got["session"].get("cwd"))

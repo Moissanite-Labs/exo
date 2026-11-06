@@ -16,7 +16,7 @@ One JSON object per line (JSONL). Each line is one step; `state` is the **observ
 | `params` | action arguments | per event |
 | `state.core_seat` | `coreSeat` | after `CoreEngine` start / `load_seat` |
 | `state.client_launch_seat` | `clientLaunch` | `ExoApp.__init__` / `client_boot` |
-| `state.client_display_seat` | `clientDisplay` | after resume or boot (`app.py`) |
+| `state.client_display_seat` | `clientDisplay` | the label the window shows (`ExoApp.seat`): the launch seat at boot, then the value the resume and `/new` hooks in `app.py` pass as `display_seat` |
 | `state.client_session` | `clientSession` | active thread id |
 | `state.sessions[]` | `liveSessions`, `foreignSessions`, `sessionSeat` | `SessionStore` / resume / create |
 | `state.last_outcome` | `lastOutcome` | create / resume / `/new` handlers |

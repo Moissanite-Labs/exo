@@ -126,11 +126,15 @@ class SeatBindingRecorder:
             self.client_display_seat = launch_seat
         self._emit("client_boot", "client", {"launch_seat": launch_seat})
 
-    def note_resume(self, session_id: str, *, session_seat: str | None) -> None:
+    def note_resume(self, session_id: str, *, session_seat: str | None, display_seat: str | None = None) -> None:
         tid = self.id_map.get(session_id) or self.trace_id(session_id)
         self.client_session = tid
         seat_name = session_seat or self.session_seats.get(tid, "")
-        if self.client_display_seat is None:
+        if display_seat is not None:
+            # The label the client actually shows, so replay checks the code rather than a copy of the model.
+            self.client_display_seat = display_seat or None
+        elif self.fixed or self.client_display_seat is None:
+            # Fixed: the label is the open thread's seat (#1146). Pre-fix: the first label seen stays.
             self.client_display_seat = seat_name or None
         if self.core_seat and seat_name and seat_name != self.core_seat:
             self.resumed_other_seat = True
@@ -145,11 +149,16 @@ class SeatBindingRecorder:
         *,
         session_seat: str | None,
         joined: str | None = None,
+        display_seat: str | None = None,
     ) -> None:
         tid = self.trace_id(session_id)
         self.live_ids.add(tid)
         if session_seat:
             self.session_seats[tid] = session_seat
+        if display_seat is not None:
+            self.client_display_seat = display_seat or None
+        elif self.fixed and session_seat:
+            self.client_display_seat = session_seat
         self.client_session = tid
         self.from_client_new = True
         if joined is not None:
@@ -238,14 +247,16 @@ def maybe_note_client_boot(launch_seat: str | None) -> None:
         _active.note_client_boot(launch_seat)
 
 
-def maybe_note_resume(session_id: str, *, session_seat: str | None) -> None:
+def maybe_note_resume(session_id: str, *, session_seat: str | None, display_seat: str | None = None) -> None:
     if _active is not None:
-        _active.note_resume(session_id, session_seat=session_seat)
+        _active.note_resume(session_id, session_seat=session_seat, display_seat=display_seat)
 
 
-def maybe_note_client_new(session_id: str, *, session_seat: str | None, joined: str | None = None) -> None:
+def maybe_note_client_new(
+    session_id: str, *, session_seat: str | None, joined: str | None = None, display_seat: str | None = None
+) -> None:
     if _active is not None:
-        _active.note_client_new(session_id, session_seat=session_seat, joined=joined)
+        _active.note_client_new(session_id, session_seat=session_seat, joined=joined, display_seat=display_seat)
 
 
 def client_new_begin() -> None:
