@@ -21,7 +21,7 @@ TRACE_TLA = ROOT / "TraceSeatBinding.tla"
 TRACES_DIR = ROOT / "traces"
 
 TLA2TOOLS_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar"
-TLA2TOOLS_SHA256 = "654aa50197faa48fa0136b41257270de6469d29ef323e7822ead59d2be43ce10"
+TLA2TOOLS_SHA256 = "8bc07d8686b7e40bbc289a5744324865526b1c107f7f21571a937b488dbbfe03"
 DEFAULT_JAR = SPECS / "tla2tools.jar"
 
 
