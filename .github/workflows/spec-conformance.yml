@@ -31,7 +31,7 @@ jobs:
         id: tla-cache
         with:
           path: specs/seat-binding/tla2tools.jar
-          key: tla2tools-v1.8.0-e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
+          key: tla2tools-v1.8.0-7a0a1e90628ebff2e3e8733375f8b684fa59504d2e02bddc4cb51a7679bb7e04
 
       - name: Download tla2tools.jar
         if: steps.tla-cache.outputs.cache-hit != 'true'
@@ -41,12 +41,12 @@ jobs:
           mkdir -p specs/seat-binding
           curl -fsSL -o "$JAR" \
             https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-          echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
+          echo "7a0a1e90628ebff2e3e8733375f8b684fa59504d2e02bddc4cb51a7679bb7e04  $JAR" | sha256sum -c -
 
       - name: Verify cached tla2tools.jar
         if: steps.tla-cache.outputs.cache-hit == 'true'
         run: |
-          echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  specs/seat-binding/tla2tools.jar" | sha256sum -c -
+          echo "7a0a1e90628ebff2e3e8733375f8b684fa59504d2e02bddc4cb51a7679bb7e04  specs/seat-binding/tla2tools.jar" | sha256sum -c -
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
