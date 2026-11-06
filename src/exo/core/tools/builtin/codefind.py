@@ -257,7 +257,10 @@ DESCRIPTION = (
     "Ask what code does and get back relevant files with verbatim excerpts, using jevgrep (Jev decision "
     "model). Use it for unfamiliar code and behavior questions ('where is X decided', 'how does Y work') "
     "across many files. When the symbol or path is known, use grep or read_file instead; they are faster. "
-    "Read-only. Slow (about 10-60 s) and sends eligible source to the backend, so ask one precise question. "
+    "Read-only, but may send source to a hosted, paid backend. Do not use for offline, no-network or "
+    "no-paid-discovery tasks; use grep and read_file instead. On billing/payment (HTTP 402), authentication "
+    "or backend availability failure, use grep and read_file rather than repeating the failed call. "
+    "Slow (about 10-60 s), so ask one precise question. "
     "Treat the output as reading leads, not proof: open the files to confirm. The first line names the "
     "backend that answered. Output is paged; pass page=2 for more.")
 

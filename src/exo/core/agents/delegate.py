@@ -53,8 +53,12 @@ CHILD_PROMPT = (
     "Keep your final summary tight: lead with outcomes, prefer bullet points over paragraphs, and don't replay your "
     "whole process. Your response is returned to the parent agent as a summary, and overlong summaries crowd out the "
     "parent's context window.")
-CODE_FIND_NOTE = ("\n\nScouts and verifiers: use `code_find` to learn unfamiliar code or answer a behavior question across "
-                  "files; use grep or read_file when you already know the symbol or path.")
+CODE_FIND_NOTE = ("\n\nUse code_find for unfamiliar code across many files only when the task permits network and paid discovery. "
+                  "It may send source to a hosted, paid backend. For offline, no-network or no-paid-discovery tasks, "
+                  "use grep and read_file instead. Task constraints take precedence over this search guidance. "
+                  "Also use grep or read_file for known symbols or paths. If code_find fails because of billing, "
+                  "payment (HTTP 402), authentication or backend availability, switch to grep and read_file; "
+                  "do not repeat the same failed discovery call or attempt to repair billing or credentials.")
 ORCHESTRATOR_NOTE = (
     "\n\nYou may use the `delegate` tool to run independent subtasks in parallel. Do not re-delegate your whole "
     "task to one worker. Coordinate your workers' results; you are responsible for the final summary.")
