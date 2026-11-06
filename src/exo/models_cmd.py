@@ -40,8 +40,8 @@ def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
     spec = router.providers.get(provider)
     if spec is None:
         raise ValueError(f'unknown provider {provider!r}')
-    if spec.get('transport', 'openai') not in ('openai', 'responses'):
-        raise ValueError(f'provider {provider!r} has no OpenAI-style /models endpoint')
+    if spec.get('transport', 'openai') not in ('openai', 'responses', 'anthropic'):
+        raise ValueError(f'provider {provider!r} has no supported /models endpoint')
     subscription = spec.get('auth') == 'chatgpt'
     auth = router.provider_auth.get(provider)
     scope_fn = auth[2] if auth is not None and len(auth) > 2 else None
@@ -58,10 +58,17 @@ def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
         envs = [envs] if isinstance(envs, str) else list(envs)
         key = next((k for e in envs if (k := router._key(e))), None)
         headers = {**({'authorization': f'Bearer {key}'} if key else {}), **(spec.get('headers') or {})}
+        if spec.get('transport') == 'anthropic':
+            from .core.models.anthropic import API_VERSION
+            headers = {**(spec.get('headers') or {}), 'anthropic-version': API_VERSION}
+            if key:
+                headers['x-api-key'] = key
     if get is None:
         import httpx
         get = httpx.get
     try:
+        if spec.get('transport') == 'anthropic':
+            return _anthropic_catalog(spec['base_url'], headers, get)
         resp = get(spec['base_url'].rstrip('/') + '/models', headers=headers, timeout=20.0)
         resp.raise_for_status()
         data = resp.json()
@@ -79,6 +86,33 @@ def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
                       key=lambda item: item['id'])
     except Exception as exc:
         raise ValueError(f'{provider}: could not list models ({type(exc).__name__})') from None
+
+
+def _anthropic_catalog(base_url: str, headers: dict, get: Callable[..., Any]) -> list[dict]:
+    """Follow opaque cursors on the configured endpoint, never provider-supplied URLs."""
+    from urllib.parse import urlencode
+    endpoint = base_url.rstrip('/') + '/v1/models'
+    rows: dict[str, dict] = {}
+    seen: set[str] = set()
+    url = endpoint
+    for _ in range(100):
+        resp = get(url, headers=headers, timeout=20.0)
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict) or not isinstance(data.get('data'), list):
+            raise ValueError('Invalid model catalog')
+        for item in data['data']:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not item['id']:
+                raise ValueError('Invalid model entry')
+            rows[item['id']] = {'id': item['id']}
+        if not data.get('has_more', False):
+            return sorted(rows.values(), key=lambda row: row['id'])
+        cursor = data.get('last_id')
+        if not isinstance(cursor, str) or not cursor or cursor in seen:
+            raise ValueError('Invalid model pagination')
+        seen.add(cursor)
+        url = endpoint + '?' + urlencode({'after_id': cursor})
+    raise ValueError('Model pagination limit exceeded')
 
 
 def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | None = None) -> list[str]:
@@ -124,7 +158,7 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
             continue
-        if (spec.get('transport', 'openai') not in ('openai', 'responses') or spec.get('local') or st.get('key') != 'yes'
+        if (spec.get('transport', 'openai') not in ('openai', 'responses', 'anthropic') or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
         f = cache_dir / f'{name}.json'
