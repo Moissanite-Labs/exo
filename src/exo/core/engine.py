@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import logging
 import os
 import threading
 import time
@@ -29,7 +30,7 @@ from exo.core import agentlog
 from exo.core.context import AgentContext, ContextTree, DefaultCompressor, TurnContext, apply_selection as _apply_selection  # noqa: F401 - legacy named export
 from exo.core.hooks import maybe_await
 from exo.core.findings import Findings
-from exo.core.loop import Loop
+from exo.core.loop import Loop, TurnResult
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router, merge_provider
@@ -45,6 +46,7 @@ from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
 from exo.core.slots import NotConfigured
 from exo.core.skills import SkillIndex, register_skill_tool
+from exo.core import continuation
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
@@ -55,6 +57,7 @@ from exo.core.types import ToolCall, ToolResult, ToolSpec, to_dict
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
 
+log = logging.getLogger(__name__)
 _MISSING = object()
 TUTORIAL_LINE = (
     "The user is new to Exo and has tutorial mode on. When an Exo concept they may not know comes up (memory "
@@ -202,6 +205,14 @@ class CoreRuntime:
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
+        # Agent-requested continuation (exo_end_turn): the harness wakes the session; process-local, never a subagent
+        self.continuations = continuation.Continuations(
+            self._continue_turn, lambda sid: self.loop.state(sid).running,
+            notify=lambda sid, text: log.info("continuation %s: %s", sid, text))
+        continuation.register(
+            self.registry, self.continuations,
+            allowed=lambda sid: sid not in self.agents.loops
+            and not ((sc := getattr(self, "scheduler", None)) is not None and sid in sc.loops))
         self._peer_target = EngineTarget(self)  # peers, bus and job notices reach sessions through it
         self.peers = attach_peers(self) if attach_peers else None  # D-026: exo.peers.PeerService, from exo.compose
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
@@ -336,6 +347,7 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        self.continuations.close()  # no continuation wake starts a turn while the engine closes
         self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
@@ -441,6 +453,7 @@ class CoreRuntime:
             if not isinstance(verdict, dict):
                 continue
             if verdict.get("action") == "block":
+                self.continuations.note_denied(ctx.session or "", str(ctx.meta.get("turn_id") or ""))
                 return Block(str(verdict.get("message") or "blocked by a plugin"))
             if verdict.get("action") == "approve":
                 key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
@@ -463,6 +476,7 @@ class CoreRuntime:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
                         self.approvals.always.add(key)
                 elif decision != "allow":
+                    self.continuations.note_denied(ctx.session or "", str(ctx.meta.get("turn_id") or ""))
                     return Block("the user denied this call")
         return None
 
@@ -652,6 +666,10 @@ class CoreRuntime:
         """Start a turn in the background (a peer woke an idle session)."""
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
+    async def _continue_turn(self, session: str, text: str, meta: dict[str, Any]) -> None:
+        """A harness continuation wake (exo_end_turn): a new turn, author system, origin harness (not the user)."""
+        self._spawn_turn(s.TurnSend(session=session, text=text), meta)
+
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
         task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
@@ -664,11 +682,30 @@ class CoreRuntime:
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
-        await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+        main = loop is None  # continuation wakes belong to the engine's own loop, not a scheduler run
+        guard = None
+        if main:
+            if not self.continuations.live(b.session, meta):
+                return None  # a wake voided by Stop / a human turn / close after it fired: no hooks, no turn
+            if meta.get("origin") == continuation.ORIGIN:  # only wakes are fenced; other turns run unchanged
+                guard = lambda: self.continuations.live(b.session, meta)  # noqa: E731 - rechecked under the lock
+            self.continuations.turn_started(b.session, meta)
+        owner_token = continuation.TURN_GENERATION.set(
+            (b.session, self.continuations.generation(b.session)) if main else None)
+        result: Any = None
         try:
-            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
-                                                 meta=meta)
+            await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+            kw: dict[str, Any] = {"guard": guard} if guard is not None else {}
+            result = await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
+                                                    meta=meta, **kw)
+            return result
         finally:
+            if main:
+                if isinstance(result, TurnResult):
+                    self.continuations.turn_ended(b.session, result.turn_id, result.stop_reason, result.error)
+                else:  # raised or no turn ran: drop any request rather than wake on an unknown outcome
+                    self.continuations.cancel(b.session)
+            continuation.TURN_GENERATION.reset(owner_token)
             await hooks.afire("on_turn_end", session_id=b.session)
 
     # ------------------------------------------------------------ peers (D-026)
@@ -712,6 +749,7 @@ class CoreRuntime:
 
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
+        self.continuations.cancel(b.session)  # an explicit stop also drops a pending continuation wake
         return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session)
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
