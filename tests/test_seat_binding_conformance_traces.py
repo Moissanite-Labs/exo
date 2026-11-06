@@ -62,11 +62,7 @@ def test_emit_new_after_resuming_another_seat(trace_dir):
         try:
             bare = _engine(home, trace_dir, None)
             try:
-                response = await Dispatcher(bare).run(
-                    s.Command.of(s.SessionCreate(seat="scout", title="scout work"))
-                )
-                assert response.ok, response.error
-                scout_id = response.result["session"]["id"]
+                scout_id = bare.store.create_session(agent="worker", seat="scout", title="scout work").id
             finally:
                 await bare.close()
 
