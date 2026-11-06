@@ -13,7 +13,10 @@ by the wiring that owns this engine. This module never constructs the host,
 engines or profiles and never reads configuration to build one. With no
 injected host, or a host whose owner differs from ``eng.agent``, every
 lifecycle operation fails closed (``forbidden``): the injected host must be
-scoped to this seat or the command cannot use it.
+scoped to this seat or the command cannot use it. ``send`` is the exception: it
+routes through the injected host (so a running conversation is woken) only
+when that host is this seat's and wraps this engine's own store, and otherwise
+uses the direct owner-scoped persist.
 """
 from __future__ import annotations
 
@@ -148,10 +151,44 @@ def _op_send(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     try:
         if audience is None:
             audience = [m.profile for m in group.members]
-        msg = _messages(eng).send_human(group_id, owner=eng.agent, audience=audience, text=text)
-    except ValueError as e:
+        host = _send_host(eng)
+        if host is not None:
+            # Same-seat, same-store host: it persists then wakes a running conversation.
+            msg = host.send(group_id, audience=audience, text=text)
+        else:
+            msg = _messages(eng).send_human(group_id, owner=eng.agent, audience=audience, text=text)
+    except ValueError as e:  # HostError is a ValueError, so host refusals take the same path
         raise _bad(str(e))
     return _show([msg])["messages"][0]
+
+
+def _send_host(eng: CoreRuntime) -> GroupHost | None:
+    """The injected host only when it is provably this seat's and this engine's database.
+
+    The store is matched by database path, as ``compose._validate_group_host`` does (it
+    never compares identity): real composition opens the engine's and the host's
+    ``SessionStore`` separately over the same ``sessions.sqlite``. ``:memory:`` is never a
+    shared path, so only the very same store object matches there.
+
+    Unlike lifecycle commands, send has a safe direct path, so an absent or
+    incompatible host (other owner, other store, not a GroupHost) is never
+    called and never fails the send: it falls back to the owner-scoped direct
+    persist. Compatibility confers no new authority; it only adds the wake.
+    """
+    host = getattr(eng, "_group_host", None)
+    if not isinstance(host, GroupHost):
+        return None
+    owner = getattr(host, "owner", None)
+    if not isinstance(owner, str) or owner != eng.agent:
+        return None
+    sessions = getattr(getattr(host, "_groups", None), "sessions", None)
+    if sessions is None:
+        return None
+    if sessions is not eng.store:
+        path, own = getattr(sessions, "path", None), getattr(eng.store, "path", None)
+        if not isinstance(path, str) or path != own or path == ":memory:":
+            return None
+    return host
 
 
 def _op_observe(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
