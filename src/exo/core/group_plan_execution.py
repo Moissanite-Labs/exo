@@ -65,10 +65,21 @@ TRUNCATED = "…[truncated]"
 TASK_STATES = frozenset({"pending", "running", "completed", "failed", "stopped"})
 TERMINAL = frozenset({"completed", "failed", "stopped"})
 DEFAULT_MAX_CHARS = 16_000
+# Durable (opt-in) pause polling: the pause lives in the database, so there is no event to await.
+ADMIT_POLL_START = 0.05  # seconds before the first retry while durably paused
+ADMIT_POLL_CAP = 1.0     # the retry delay doubles up to this cap
+CONTROL_MAX_LAPS = 8     # bounded read + compare-and-set attempts per durable control
 
 
 class PlanExecutionError(RuntimeError):
     """A plan that must not (or can no longer) be executed. Raised BEFORE any engine turn."""
+
+
+class DurableControlError(ValueError):
+    """A durable pause/stop/resume record was not written. The message is sanitized (class name only).
+
+    A ``ValueError`` so the host maps it to ``HostError`` like every other control refusal.
+    """
 
 
 class _TasksNotCompleted(Exception):
@@ -285,6 +296,10 @@ class PlanExecutions:
     def plan_state(self, plan_id: str, *, group_id: str, owner: str) -> str:
         return self._plan_row(plan_id, group_id, owner)["state"]
 
+    def execution_id(self, plan_id: str, *, group_id: str, owner: str) -> str:
+        """The execution id stored for this plan (read-only; owner and group are re-checked)."""
+        return self._plan_row(plan_id, group_id, owner)["execution_id"]
+
     def finish(self, *, plan_id: str, group_id: str, owner: str, states: Mapping[str, str]) -> None:
         self._plan_row(plan_id, group_id, owner)
         stamp = now_ts()
@@ -332,7 +347,7 @@ class PlanAdapter:
 
     def __init__(self, plan: ValidatedPlan, grants: HostGrants, binding: GroupEngineAdapter,
                  executions: PlanExecutions, *, execution_id: str, gate: PlanGate | None = None,
-                 max_chars: int = DEFAULT_MAX_CHARS) -> None:
+                 max_chars: int = DEFAULT_MAX_CHARS, ledger: Any = None) -> None:
         if binding.group.id != plan.group_id or binding.group.owner != plan.owner:
             raise PlanExecutionError("binding does not match the plan's group and owner")
         if not {t.profile for t in plan.tasks} <= set(binding.engines):
@@ -345,6 +360,7 @@ class PlanAdapter:
         self.executions = executions
         self.execution_id = execution_id
         self.max_chars = max_chars
+        self.ledger = ledger  # an AttemptLedger (opt-in durable dispatch) or None
         self._gate = gate if gate is not None else PlanGate(plan)
         self._results: dict[str, str] = {}
         self._entered: set[str] = set()
@@ -369,10 +385,70 @@ class PlanAdapter:
                              owner=self.plan.owner, state=state, max_chars=self.max_chars, **kw)
 
     def _finalize(self, task: TaskContract, state: str, **kw: Any) -> None:
+        """Commit the legacy row FIRST, then publish the gate. Never publish "completed" uncommitted."""
+        gate_state = state
         try:
             self._mark(task, state, **kw)
+        except BaseException:
+            if state == "completed":
+                gate_state = "failed"  # dependents must not run on an uncommitted dependency
+            self._results.pop(task.task_id, None)
+            raise
         finally:
-            self._gate.settle(task.task_id, state)
+            self._gate.settle(task.task_id, gate_state)  # always settles: no hung waiters
+
+    def fail_unstarted(self, reason: str) -> None:
+        """Settle every task as failed after a durable startup failure; the identity row REMAINS.
+
+        Every row is attempted independently. The plan row is settled only when every task row
+        is terminal, so a partial failure stays visible ("running") and blocks restart.
+        """
+        first: Exception | None = None
+        for task in self.plan.tasks:
+            try:
+                self._mark(task, "failed", error=reason)
+            except Exception as exc:
+                if first is None:
+                    first = exc
+        if first is not None:
+            raise first
+        rows = self.executions.tasks(self.plan.plan_id, group_id=self.plan.group_id, owner=self.plan.owner)
+        self.executions.finish(plan_id=self.plan.plan_id, group_id=self.plan.group_id,
+                               owner=self.plan.owner, states={r.task_id: r.state for r in rows})
+
+    # -- durable dispatch (opt-in; legacy rows stay the only terminal authority) ---------------
+    def _scope(self) -> Any:
+        from exo.core.group_attempt_ledger import Scope
+        return Scope(self.plan.group_id, self.plan.owner, self.plan.plan_id, self.execution_id)
+
+    def _key(self, task: TaskContract) -> Any:
+        from exo.core.group_attempt_ledger import TaskKey
+        from exo.core.group_supervision import TaskIdentity
+        return TaskKey(self._scope(), TaskIdentity(self.plan.plan_id, task.task_id, task.profile))
+
+    def _verdict(self, key: Any) -> str:
+        """Classify a denied admission from a fresh snapshot. Fixed words only."""
+        try:
+            snap = self.ledger.read(key)
+        except Exception:
+            return "unavailable"
+        if snap.stop_requested:
+            return "stopped"
+        if snap.reconciliation_required or snap.latest_attempt in ("uncertain", "dispatch_intent"):
+            return "needs_inspection"
+        if snap.paused and snap.latest_attempt in (None, "reserved"):
+            return "paused"
+        return "needs_inspection" if snap.latest_attempt is not None else "refused"
+
+    def _settle_verdict(self, task: TaskContract, verdict: str) -> None:
+        if verdict == "stopped":
+            self._finalize(task, "stopped")
+        elif verdict == "needs_inspection":
+            self._finalize(task, "failed", error="needs inspection: durable attempt not admissible")
+        elif verdict == "unavailable":
+            self._finalize(task, "failed", error="durable admission unavailable")
+        else:
+            self._finalize(task, "failed", error="durable admission refused")
 
     def _claim_check(self, profile: str) -> Callable[[], None]:
         """Re-check this member's claim after every dependency wait, before any turn begins.
@@ -531,6 +607,9 @@ class PlanAdapter:
             except Exception:
                 self._finalize(task, "failed", error="group knowledge snapshot unavailable")
                 return
+        if self.ledger is not None:
+            await self._execute_durable(task, context, prompt)
+            return
         try:
             # The row turns "running" only once the runtime granted the slot: running means a turn began.
             async with context.turn_slot():
@@ -549,6 +628,10 @@ class PlanAdapter:
         except Exception:
             self._finalize(task, "failed", error="engine turn failed")
             return
+        self._conclude(task, result)
+
+    def _conclude(self, task: TaskContract, result: Any) -> None:
+        """Map a returned turn to the legacy terminal row. No ledger call: these are normal outcomes."""
         if result.stop_reason == "interrupted":
             self._finalize(task, "stopped")
             raise asyncio.CancelledError
@@ -556,8 +639,96 @@ class PlanAdapter:
             self._finalize(task, "failed", error="engine turn did not complete")
             return
         reply = result.message.text() if result.message else ""
-        self._results[task.task_id] = _bound(reply, self.max_chars)
         self._finalize(task, "completed", result=reply)
+        # Only after the commit; no await between the gate settle and this assignment.
+        self._results[task.task_id] = _bound(reply, self.max_chars)
+
+    async def _execute_durable(self, task: TaskContract, context: MemberContext, prompt: str) -> None:
+        """Admit (outside any permit), authorize again, record dispatch intent, mark running, run.
+
+        Authorization precedes both the reservation and the dispatch intent. ``mark_dispatch`` must
+        return True (a replay or a denial after intent never reruns the engine). ``mark_uncertain``
+        is called only when ``run_turn`` raised, before the legacy terminal write.
+        """
+        from exo.core.group_attempt_ledger import AdmissionDenied
+        ledger, ex, tid = self.ledger, self.execution_id, task.task_id
+        engine = self.binding.engines[task.profile]
+        member = context.member
+        key = self._key(task)
+        recheck = self._claim_check(task.profile)
+        fence = None
+        delay = ADMIT_POLL_START
+        while True:
+            if fence is None:
+                try:
+                    fence = ledger.reserve_initial(key, holder_id=f"{ex}:{tid}",
+                                                   request_id=f"reserve:{ex}:{tid}").fence
+                except AdmissionDenied:
+                    verdict = self._verdict(key)
+                    if verdict != "paused":
+                        self._settle_verdict(task, verdict)
+                        return
+                except Exception:
+                    self._finalize(task, "failed", error="durable admission unavailable")
+                    return
+            if fence is not None:
+                paused = False
+                raised = False
+                result = None
+                try:
+                    async with context.turn_slot():
+                        try:
+                            authorize_task(task, self.grants, engines=self.binding.engines)
+                        except PlanExecutionError:
+                            self._finalize(task, "failed", error="authorization revoked before the turn")
+                            return
+                        first = None
+                        try:
+                            first = ledger.mark_dispatch(fence, request_id=f"dispatch:{ex}:{tid}")
+                        except AdmissionDenied:
+                            verdict = self._verdict(key)
+                            if verdict == "paused":
+                                paused = True
+                            else:
+                                self._settle_verdict(task, verdict)
+                                return
+                        except Exception:
+                            self._finalize(task, "failed", error="durable dispatch unavailable")
+                            return
+                        if not paused:
+                            if first is not True:
+                                self._finalize(task, "failed",
+                                               error="needs inspection: dispatch already recorded")
+                                return
+                            self._mark(task, "running")
+                            try:
+                                result = await engine.run_turn(s.TurnSend(session=member.session, text=prompt))
+                            except Exception:
+                                raised = True
+                except asyncio.CancelledError:
+                    self._finalize(task, "stopped")
+                    raise
+                except PlanExecutionError:
+                    raise
+                except Exception:
+                    self._finalize(task, "failed", error="engine turn failed")
+                    return
+                if not paused:
+                    break
+            # Durably paused: no permit is held. Bounded, cancellable, awaited wait; same fence.
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, ADMIT_POLL_CAP)
+            await context.checkpoint()
+            recheck(context)
+        if raised:
+            # Evidence before the terminal write, while the legacy row is still "running".
+            try:
+                ledger.mark_uncertain(fence, reason="dispatch_outcome_unknown", request_id=f"unc:{ex}:{tid}")
+            except Exception:
+                pass  # evidence only: never masks the primary outcome (a replay is StaleFence)
+            self._finalize(task, "failed", error="engine turn failed")
+            return
+        self._conclude(task, result)
 
     def _maybe_finish(self) -> None:
         if len(self._profiles_done) < len(self.binding.group.members):
@@ -582,8 +753,80 @@ class _PlanRuntime(GroupRuntime):
         super().__init__(*args, adapters=plan_adapter.adapters(), **kwargs)
         self._plan_adapter = plan_adapter
         self._cleanup_error: Exception | None = None
+        self._ledger = plan_adapter.ledger
+        self._control_errors: dict[str, str] = {}
+
+    # -- durable controls (opt-in). Pause is reversible; stop is sticky and is never un-set. ----
+    @property
+    def control_error(self) -> str | None:
+        """Sanitized text of the last UNCLEARED durable-control failure, or ``None``."""
+        return next(iter(self._control_errors.values()), None)
+
+    def _control_targets(self, profile: str | None) -> list[tuple[str | None, Any]]:
+        self._targets(profile)  # unknown member raises ValueError BEFORE any ledger write
+        plan = self._plan_adapter.plan
+        if profile is None:
+            return [(None, self._plan_adapter._key(plan.tasks[0]))]
+        return [(t.task_id, self._plan_adapter._key(t)) for t in plan.tasks if t.profile == profile]
+
+    def _durable_control(self, targets: list[tuple[str | None, Any]], op: str, **flags: bool) -> None:
+        """Bounded read + compare-and-set per target. Namespaced, revision-bearing request ids."""
+        from exo.core.group_attempt_ledger import StaleFence
+        adapter = self._plan_adapter
+        ex = adapter.execution_id
+        for task_id, key in targets:
+            for _ in range(CONTROL_MAX_LAPS):
+                snap = self._ledger.read(key)
+                expected = snap.plan_revision if task_id is None else snap.task_revision
+                scope_id = "plan" if task_id is None else f"task:{task_id}"
+                try:
+                    self._ledger.set_control(adapter._scope(), task_id=task_id, expected_revision=expected,
+                                             request_id=f"ctl:{ex}:{scope_id}:{op}:r{expected}", **flags)
+                    break
+                except StaleFence:
+                    continue
+            else:
+                raise DurableControlError("revision contention")
+
+    def _try_durable(self, targets: list[tuple[str | None, Any]], op: str, **flags: bool) -> str | None:
+        """Run one durable control. Returns a sanitized failure text, or ``None`` on success.
+
+        Only ``Exception`` is caught (never ``BaseException``). A success clears the stored error.
+        """
+        try:
+            self._durable_control(targets, op, **flags)
+        except Exception as exc:
+            text = f"durable record NOT written ({type(exc).__name__})"
+            self._control_errors[op] = text
+            return text
+        self._control_errors.pop(op, None)
+        return None
+
+    def pause(self, profile: str | None = None) -> None:
+        if self._ledger is None:
+            return super().pause(profile)
+        failure = self._try_durable(self._control_targets(profile), "pause", paused=True)
+        super().pause(profile)  # the safe direction always executes
+        if failure:
+            raise DurableControlError(f"pause requested locally and applied; {failure}")
+
+    def resume(self, profile: str | None = None) -> None:
+        if self._ledger is None:
+            return super().resume(profile)
+        failure = self._try_durable(self._control_targets(profile), "resume", paused=False)
+        if failure:  # the unsafe direction needs durable success: the runtime stays paused
+            raise DurableControlError(f"resume NOT applied, still paused; {failure}")
+        super().resume(profile)
 
     def stop(self, profile: str | None = None) -> None:
+        if self._ledger is None:
+            return self._stop_local(profile)
+        failure = self._try_durable(self._control_targets(profile), "stop", stopped=True)
+        self._stop_local(profile)  # the safe direction always executes
+        if failure:
+            raise DurableControlError(f"stop requested locally (cancellation requested); {failure}")
+
+    def _stop_local(self, profile: str | None) -> None:
         # The base runtime validates the target and requests cancellation first. Host ownership
         # checks remain unchanged; durable writes below also re-check the plan's owner.
         super().stop(profile)
@@ -632,7 +875,7 @@ def _note(error: BaseException, text: str) -> None:
 def start_plan(host: "GroupHost", group_id: str, *, plan: ValidatedPlan, grants: HostGrants,
                executions: PlanExecutions | None = None, max_concurrent: int | None = None,
                knowledge: GroupKnowledge | None = None,
-               bounds: tuple[int, int] | None = None) -> GroupRuntime:
+               bounds: tuple[int, int] | None = None, ledger: Any = None) -> GroupRuntime:
     """Thin entry used by ``GroupHost.start(plan=...)``; it is not a second host.
 
     Pure authorization precedes a committed SQLite reservation; factory allocation follows it
@@ -653,13 +896,23 @@ def start_plan(host: "GroupHost", group_id: str, *, plan: ValidatedPlan, grants:
     except sqlite3.Error as exc:
         raise PlanExecutionError(f"plan reservation failed: {exc}") from exc
     runtime: GroupRuntime | None = None
+    adapter: PlanAdapter | None = None
+    ledger_entered = False
     try:
         engines = dict(host._factory(group) or {})
         binding = GroupEngineAdapter(group, engines, audiences=host._audiences_for(group),
                                      knowledge=knowledge, **extra)
-        adapter = PlanAdapter(plan, grants, binding, executions, execution_id=execution_id)
+        adapter = PlanAdapter(plan, grants, binding, executions, execution_id=execution_id, ledger=ledger)
         runtime = _PlanRuntime(host._messages, group.id, owner=host.owner,
                                plan_adapter=adapter, max_concurrent=bound)
+        if ledger is not None:
+            from exo.core.group_attempt_ledger import Scope
+            from exo.core.group_supervision import SupervisionPolicy, TaskIdentity
+            ledger_entered = True  # from here an ambiguous failure must never discard the identity row
+            ledger.initialize(
+                Scope(group.id, host.owner, plan.plan_id, execution_id), plan_digest=plan_digest(plan),
+                tasks=tuple(TaskIdentity(plan.plan_id, t.task_id, t.profile) for t in plan.tasks),
+                policy=SupervisionPolicy(max_retries=0), request_id=f"init:{execution_id}")
         runtime.start()
     except BaseException as exc:
         if runtime is not None and runtime._runner._started:
@@ -674,6 +927,15 @@ def start_plan(host: "GroupHost", group_id: str, *, plan: ValidatedPlan, grants:
             pending = getattr(runtime, "cleanup_error", None)
             if pending is not None:
                 _note(exc, f"runtime cleanup also failed (task rows may stay pending): {_describe(pending)}")
+            raise
+        if ledger_entered and adapter is not None:
+            # Ledger rows may exist: discarding the legacy rows would orphan them and let a later
+            # flag-off start run without durable controls. Settle the rows as failed instead; the
+            # identity row stays, so the plan id is burned for BOTH flag settings.
+            try:
+                adapter.fail_unstarted("durable startup failed")
+            except Exception as cleanup:
+                _note(exc, f"durable startup cleanup also failed (plan id stays blocked): {_describe(cleanup)}")
             raise
         # Nothing ran. Free the plan id only while every task is pending. A cleanup failure must
         # never replace the setup error that the caller needs to see.

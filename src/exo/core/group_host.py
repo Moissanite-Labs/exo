@@ -173,7 +173,8 @@ class GroupHost:
               max_chars: int = DEFAULT_MAX_CHARS,
               max_concurrent: int | None = None,
               plan: "ValidatedPlan | None" = None,
-              grants: "HostGrants | None" = None) -> tuple:
+              grants: "HostGrants | None" = None,
+              durable_attempts: bool = False) -> tuple:
         """Bind authorized engines and claim one durable execution. No retry.
 
         Stored membership is re-validated against the injected profile set
@@ -225,6 +226,12 @@ class GroupHost:
             bounds = GroupKnowledge.bounds(max_items, max_chars)
         except ValueError as e:
             raise HostError(f"knowledge context bounds rejected: {e}") from e
+        # Opt-in durable dispatch (docs/SWARM-DURABLE-DISPATCH.md): an exact bool, and only for a
+        # plan start. Evaluated for every start, before the factory or any claim.
+        if type(durable_attempts) is not bool:
+            raise HostError("durable_attempts must be a bool")
+        if durable_attempts and plan is None:
+            raise HostError("durable_attempts requires a plan")
         group = self._group(group_id)
         if group_id in self._runtimes:
             raise HostError("group execution already started in this process")
@@ -262,11 +269,15 @@ class GroupHost:
             except ValueError as e:
                 raise HostError(str(e)) from e
             plan_reader = GroupKnowledge(self._groups) if knowledge else None
+            ledger = None
+            if durable_attempts:
+                from exo.core.group_attempt_ledger import AttemptLedger
+                ledger = AttemptLedger(self._groups)  # the constructor creates nothing
             try:
                 runtime = start_plan(self, group_id, plan=plan, grants=grants,
                                      executions=PlanExecutions(self._groups),
                                      max_concurrent=plan_bound, knowledge=plan_reader,
-                                     bounds=bounds)
+                                     bounds=bounds, ledger=ledger)
             except (PlanExecutionError, ContractError, AdapterError, ValueError, sqlite3.Error) as e:
                 refused = HostError(f"plan execution refused: {e}")
                 for note in getattr(e, "__notes__", ()):
