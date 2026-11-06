@@ -157,6 +157,7 @@ class JobManager:
         self._tasks: set[asyncio.Task] = set()
         self._order, self._pool = asyncio.Lock(), ThreadPoolExecutor(1, "exo-notice")  # its own: tools never hold it
         self.recovered = False
+        self._waiters: dict[str, set[asyncio.Future]] = {}
 
     # ---------------------------------------------------------------- start
 
@@ -286,7 +287,38 @@ class JobManager:
         else:
             state, detail = ("done", note) if code == 0 else ("failed", "")
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
+        self._wake_waiters(h.id)
         self._spawn(self._announce(h, state, code, ended, detail))
+
+    def _wake_waiters(self, job_id: str) -> None:
+        for future in self._waiters.pop(job_id, ()):
+            if not future.done():
+                future.set_result(None)
+
+    async def wait(self, job_id: str, timeout: float = 30) -> tuple[dict[str, Any], bool]:
+        """Wait for one owned job's durable terminal state, without polling or affecting its lifetime."""
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 60:
+            raise ToolError("timeout must be a finite number greater than 0 and at most 60 seconds")
+        row = self.get(job_id)  # applies the same agent ownership check as job_output
+        if row["state"] != ACTIVE:
+            return row, False
+        future = asyncio.get_running_loop().create_future()
+        # No await between reading state and registering: _finish/recover run on this same event loop.
+        self._waiters.setdefault(job_id, set()).add(future)
+        expired = False
+        try:
+            try:
+                await asyncio.wait_for(future, timeout)
+            except TimeoutError:
+                expired = True
+            row = self.get(job_id)
+            return row, expired and row["state"] == ACTIVE
+        finally:
+            remaining = self._waiters.get(job_id)
+            if remaining is not None:
+                remaining.discard(future)
+                if not remaining:
+                    self._waiters.pop(job_id, None)
 
     def _spawn(self, coro: Any) -> None:
         self._tasks.add(task := asyncio.ensure_future(coro))  # close() waits for these
@@ -374,6 +406,7 @@ class JobManager:
                 masked_note(h.side)  # removes the side file, as _finish would
                 self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
                                 (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
+                self._wake_waiters(h.id)
                 self.e.hub.publish(self._body(h.id, "killed", h.command, h.proc.returncode, h.started, None,
                                               "stopped when exod shut down"), h.session)
             await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
@@ -397,6 +430,7 @@ class JobManager:
             now = time.time()
             detail = f"exod restarted while it ran; its process (pid {r['pid']}) may still be running and was not touched"
             self.e.store._q("UPDATE jobs SET state='lost', ended=?, detail=? WHERE id=?", (now, detail, r["id"]))
+            self._wake_waiters(r["id"])
             lost.append(r["id"])
             sid = r["session"]
             self.e.hub.publish(self._body(r["id"], "lost", r["command"], None, r["started"], now, detail, r["log"]), sid)
@@ -447,10 +481,18 @@ JOB_KILL = ToolSpec(
                  "Stopping a turn never stops a job; this is the only way to stop one early."),
     parameters={"type": "object", "required": ["id"], "properties": {
         "id": {"type": "string", "description": "A running job's id from `jobs`."}}})
+JOB_WAIT = ToolSpec(
+    name="job_wait", toolset="shell", risk="low",
+    description=("Wait without polling for one of your background shell jobs to finish. Returns immediately for "
+                 "a terminal job, otherwise waits at most timeout seconds (default 30, maximum 60). A timeout "
+                 "or interrupted wait leaves the job running. Use job_output for its output."),
+    parameters={"type": "object", "required": ["id"], "properties": {
+        "id": {"type": "string", "description": "A job id from jobs or a background bash result."},
+        "timeout": {"type": "number", "description": "Seconds to wait, greater than zero and at most 60."}}})
 
 
 def attach(engine: "CoreEngine", cfg: dict[str, Any] | None) -> JobManager:
-    """Make the engine job-aware: the manager, and the jobs, job_output and job_kill tools. ``bash`` finds the
+    """Make the engine job-aware: the manager and its listing, output, kill and wait tools. ``bash`` finds the
     manager in ``ctx.meta['jobs']`` (set by ``CoreEngine.run_tool``)."""
     mgr = JobManager(engine, cfg)
 
@@ -495,7 +537,13 @@ def attach(engine: "CoreEngine", cfg: dict[str, Any] | None) -> JobManager:
         return (f"job {row['id']} stopped (was running {fmt_elapsed(_elapsed(row['started'], None))})." if ok
                 else f"job {row['id']} had just ended on its own.")
 
+    async def wait(args: dict[str, Any], ctx: ToolContext) -> str:
+        row, expired = await mgr.wait(str(args.get("id") or ""), args.get("timeout", 30))
+        code = "-" if row["exit_code"] is None else str(row["exit_code"])
+        return f"job {row['id']}: {row['state']}, exit {code}" + ("; wait timed out, job still running" if expired else "")
+
     engine.registry.register(JOBS, listing, replace=True)
     engine.registry.register(JOB_OUTPUT, output, replace=True)
     engine.registry.register(JOB_KILL, kill, replace=True)
+    engine.registry.register(JOB_WAIT, wait, replace=True)
     return mgr
