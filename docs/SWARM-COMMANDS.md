@@ -21,6 +21,7 @@ The argument is one JSON object after the subcommand name:
 /group pause {"id": "<group>", "member": "one"}
 /group resume {"id": "<group>"}
 /group stop {"id": "<group>"}
+/group plan_status {"id": "<group>", "plan_id": "<64 hex>", "limit": 100}
 /group knowledge_publish {"id": "<group>", "key": "plan", "text": "...", "sources": ["session:s-1"], "expected_revision": 0}
 /group knowledge_read {"id": "<group>", "member": "lead", "key": "plan"}
 /group knowledge_list {"id": "<group>", "member": "lead", "limit": 100}
@@ -52,6 +53,24 @@ The argument is one JSON object after the subcommand name:
 - `pause` / `resume` / `stop` — group-wide or member-scoped hooks via
   `member`; `stop` is immediate, not graceful. Host rejections surface
   as `bad_request` with the host's reason.
+- `plan_status`: read-only view of one durable plan run: the plan state and
+  each task's profile, attempt, state, timestamps, result and error. It needs
+  no injected host and writes nothing: on a database that has no plan tables it
+  refuses and creates none. `plan_id` must be 64 lowercase hex characters, the
+  value `validate_plan` returns. An unknown group, an unknown plan, a plan in
+  another group and a plan owned by another seat all give the same refusal
+  (`not_found: no such plan`). Result and error are untrusted engine output.
+  All result and error text in one response shares a 32000-character budget.
+  Each task gets an equal share of it. Its error is capped at the smaller of
+  256 characters and a quarter of the share, and its result gets the rest of
+  the share up to 4000 characters. `result_truncated` and `error_truncated`
+  flag every clip. The budget counts text only: the JSON keys, escaping and the
+  metadata come on top. Task id and profile are at most 64 characters each by
+  the plan contract, state is a fixed word and the timestamps are ISO strings,
+  so metadata stays finite and is never clipped. `limit` (1 to 200, default
+  100) caps the task rows; `task_count`, `tasks_returned` and `tasks_truncated`
+  report any omission. It starts nothing
+  and grants nothing. No client or desktop path calls it yet.
 
 ## Shared knowledge (M02–M04)
 

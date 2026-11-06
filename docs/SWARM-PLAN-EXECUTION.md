@@ -59,6 +59,18 @@ Run the commands in the last section. No test here uses a real model or a real `
 
 This layer executes one validated plan on an already launched group. It is not the whole swarm. It does not plan, decompose tasks, pick models, retry, recover after a crash, enforce a filesystem sandbox, or verify output. Each of those would need separate work and separate evidence.
 
+## Reading plan state through `/group plan_status`
+
+The `/group plan_status` command reads `PlanExecutions.plan_state` and `tasks` for the principal's own
+seat and needs no host. It first uses the read-only `started` probe, so a database with no plan tables
+is refused without creating them. Unknown, foreign-group and foreign-owner plans return one identical
+refusal. Results and errors come back as clipped untrusted text with truncation flags. All of that text
+shares one 32000-character budget per response, and the serialized JSON and metadata come on top. The task
+list is capped by an explicit `limit` that is reported, never silent. Plan state and task rows come from
+separate reads that share no transaction, so a mid-run snapshot can mix moments. Offline tests with the
+fake provider cover settled,
+running, failed and stopped plans. Starting a plan from a client is not implemented.
+
 ## Host controls and inspection
 
 Use `host.pause(group.id, profile="checker")`, `host.resume(group.id,
