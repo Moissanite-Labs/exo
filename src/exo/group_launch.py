@@ -194,7 +194,7 @@ class GroupLaunch:
 
     def start(self, *, conversation: ConversationOptions | None = None,
               max_concurrent: int | None = None,
-              plan=None, grants=None) -> tuple:
+              plan=None, grants=None, durable_attempts: bool = False) -> tuple:
         """Bind the member engines via the host factory and start the run once.
 
         The default (``conversation=None``) is the one-shot ``GroupEngineAdapter``
@@ -215,6 +215,12 @@ class GroupLaunch:
         and its ``HostError`` propagates unchanged. With both ``None`` the legacy
         calls below are unchanged.
 
+        ``durable_attempts`` is an exact-``bool`` opt-in (default ``False``) for the
+        host's durable attempt-ledger dispatch (docs/SWARM-DURABLE-DISPATCH.md). Any
+        non-``bool`` value, or ``True`` without a plan, raises ``LaunchError`` before
+        the host is called. It is forwarded as ``durable_attempts=True`` only when
+        true; when false the host call is exactly what it was without this parameter.
+
         ``max_concurrent`` is an explicit turn-concurrency bound forwarded to
         ``GroupHost.start`` for both start kinds: ``None`` (the default)
         preserves full member concurrency; a strict ``int`` in ``1..member
@@ -224,6 +230,10 @@ class GroupLaunch:
         the more specific declaration and wins when set; the start-level
         ``max_concurrent`` is the fallback.
         """
+        if type(durable_attempts) is not bool:
+            raise LaunchError("durable_attempts must be a bool")
+        if durable_attempts and plan is None:
+            raise LaunchError("durable_attempts requires a plan")
         if plan is not None or grants is not None:
             if plan is None or grants is None:
                 raise LaunchError("a plan start requires both plan and grants")
@@ -234,8 +244,9 @@ class GroupLaunch:
                 raise LaunchError("plan must be a ValidatedPlan")
             if not isinstance(grants, HostGrants):
                 raise LaunchError("grants must be HostGrants built by the host")
+            extra = {"durable_attempts": True} if durable_attempts else {}
             return self.host.start(self.group.id, plan=plan, grants=grants,
-                                   max_concurrent=max_concurrent)
+                                   max_concurrent=max_concurrent, **extra)
         if conversation is None:
             return self.host.start(self.group.id,
                                    audiences=_audiences_for(self.group),
