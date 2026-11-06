@@ -209,6 +209,8 @@ class CoreRuntime:
         self.continuations = continuation.Continuations(
             self._continue_turn, lambda sid: self.loop.state(sid).running,
             notify=lambda sid, text: log.info("continuation %s: %s", sid, text))
+        self.continuations.receipt_allowed = lambda sid: (
+            not self.approvals.open and not self.jobs.target.closed and self.jobs.target.cfg.wake is not False)
         continuation.register(
             self.registry, self.continuations,
             allowed=lambda sid: sid not in self.agents.loops
@@ -656,6 +658,7 @@ class CoreRuntime:
             b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
+            self.continuations.turn_started(b.session, meta)
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
@@ -688,7 +691,11 @@ class CoreRuntime:
             if not self.continuations.live(b.session, meta):
                 return None  # a wake voided by Stop / a human turn / close after it fired: no hooks, no turn
             if meta.get("origin") == continuation.ORIGIN:  # only wakes are fenced; other turns run unchanged
-                guard = lambda: self.continuations.live(b.session, meta)  # noqa: E731 - rechecked under the lock
+                def guard() -> bool:
+                    live = self.continuations.live(b.session, meta)
+                    if live and meta.get("delegate_receipt_wake"):
+                        self.continuations.receipts_entered(b.session)
+                    return live
             self.continuations.turn_started(b.session, meta)
         owner_token = continuation.TURN_GENERATION.set(
             (b.session, self.continuations.generation(b.session)) if main else None)
