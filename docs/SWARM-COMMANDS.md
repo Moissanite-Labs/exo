@@ -71,6 +71,27 @@ The argument is one JSON object after the subcommand name:
   100) caps the task rows; `task_count`, `tasks_returned` and `tasks_truncated`
   report any omission. It starts nothing
   and grants nothing. No client or desktop path calls it yet.
+  The response also carries two additive fields. `liveness.status` is
+  `settled` when the plan state is `settled` and `unknown` for every other
+  state, including `running`: the command reads no host or process evidence, so
+  it never says whether a runner is gone. `liveness.reconcile_hint` is a fixed
+  sentence. A running plan may be live in another process. Do not restart the
+  same plan id and do not mark it terminal. No tool reconciles a running plan.
+  `settled` means only that the plan row is terminal. It does not prove that every
+  task outcome is known: read `reconcile_counts.uncertain` as well.
+  `reconcile_counts` tallies the per-task `reconcile` labels over all tasks, not
+  only the `limit` page, and each task is counted once:
+  `in_flight_or_lost` (`in_flight_or_lost`), `uncertain`
+  (`terminal_outcome_uncertain`, `needs_inspection`,
+  `needs_inspection_intent_not_started`), `never_started` (`not_admitted`,
+  `reserved`) and `terminal` (`settled`). `unlabelled` counts tasks with no
+  durable ledger record (a legacy plan with no ledger), so the five numbers add
+  up to `task_count`. If any ledger row cannot be read, `durable.status` is
+  `unavailable` and `reconcile_counts` is `null`: no count is given, and a
+  missing count never means zero. Tasks that were read keep their `reconcile`
+  label. The counts need the ledger row of every task, not only the `limit`
+  page, so the cost of one call grows linearly with the plan's task count. The
+  command writes nothing and creates no table.
 
 ## Shared knowledge (M02–M04)
 
