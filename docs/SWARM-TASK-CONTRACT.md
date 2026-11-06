@@ -2,7 +2,8 @@
 
 This module is a checker for task plans. It takes a plan written by a model and the permissions the
 host allows, and says whether the plan is acceptable. This document says what the module decides and
-what it does **not** do. It covers the checker only. No runtime is claimed.
+what it does **not** do. It covers the checker only. Running a validated plan is covered in
+`docs/SWARM-PLAN-EXECUTION.md`.
 
 - Module: `src/exo/core/group_task_contract.py` (496 lines)
 - Tests: `tests/test_group_task_contract.py` (418 lines, 25 test functions)
@@ -16,12 +17,11 @@ It returns an immutable, topologically ordered `ValidatedPlan`, or raises `Contr
 (message form `"<rule> <task_id|plan>: <reason>"`).
 
 It **builds, schedules, persists, routes and approves nothing**. It produces a value.
-A value executes nothing. There is no code path from `validate_plan` to execution. The
-module has no runtime call sites anywhere in the tree (grep for `group_task_contract`,
-`validate_plan` and `ValidatedPlan` outside the module, its test and this document returns zero rows).
-Nothing connects it to `GroupHost`. As written, `GroupHost.start` takes no `plan` or `grants`
-parameter, and this module does not change that. This layer is a standalone checker. A caller would
-have to add the wiring, and nothing here supplies it.
+A value executes nothing. `validate_plan` itself starts nothing. A separate caller must pass the
+result to `GroupHost.start(group_id, plan=..., grants=...)`, which runs it through
+`src/exo/core/group_plan_execution.py` (see `docs/SWARM-PLAN-EXECUTION.md`). Other modules import
+this one: `group_host.py`, `group_plan_execution.py` and `group_launch.py`. This module does not
+call any of them.
 
 The module makes no file, network, database or clock calls. Importing it still loads other `exo`
 modules, because it imports `RouteConfig` from `exo.core.agents.route_config`. That import also
@@ -163,6 +163,14 @@ API notes, checked against the module:
 
 ## 4. Lexical scopes, not a sandbox
 
+`role` and `write_scopes` are contract checks and prompt instructions. The plan executor copies
+them into the task prompt text. They are not per-task tool authority and they do not confine the
+filesystem. The task's engine receives only the session and the prompt text, and the tool context
+has no field for the task's scopes. Each member's engine, gate and executor authority is unchanged
+by the plan. An executor that the host installed may enforce its own policy, but the built-in plan
+dispatch does not bind task scopes to it. See "Task role and scopes" in
+`docs/SWARM-PLAN-EXECUTION.md`.
+
 Paths are an **absolute canonical POSIX lexical contract**: no `\`, NUL or control chars, no
 `//`, no `.`/`..` components, no trailing `/` (except `/`), `normpath`-stable. Containment is
 component-boundary (`/a/bc` is NOT within `/a/b`). A write root of exactly `/` is refused.
@@ -188,9 +196,11 @@ a persisted checkpoint. Nothing here writes or reserves state.
 - No secret-content detection. Unknown structural keys are refused, but `goal` and `acceptance`
   text is not inspected for secret-looking strings. The credential boundary is enforced by the
   runtime and environment, not by this validator.
-- No runtime call sites exist. Nothing in this module can start, schedule or complete swarm
-  execution. Using it from `GroupHost` would need new code that does not exist here.
-- `HostGrants` is defined in this module. It needs no other new code, and no change to `RouteConfig`.
+- Nothing in this module can start, schedule or complete swarm execution. The executor in
+  `group_plan_execution.py` does that. It has no retries and no crash recovery. Its opt-in durable
+  attempt records are described in `docs/SWARM-DURABLE-DISPATCH.md`. The plan itself carries none
+  of this.
+- `HostGrants` is defined in this module. It needs no change to `RouteConfig`.
 
 ## 7. Size note
 

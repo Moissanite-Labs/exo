@@ -1,11 +1,23 @@
-# Durable initial attempts — isolated, default-off slice
+# Durable initial attempts: the ledger and its opt-in use
 
-**Not runtime recovery or execution authorization.** Nothing imports this adapter
-from the executor, registers it with a host, constructs an engine, starts a group,
-or enables retries. `AttemptLedger(groups)` performs no database work. Existing
-runtime behavior is unchanged. Explicit `initialize` is the only schema creator.
-Do not initialize this ledger on a plan concurrently used by a legacy dispatcher:
-legacy execution does not honor these fences or controls.
+**Not crash recovery, retries, or execution authorization.** The ledger is
+connected to plan execution only when a caller passes `durable_attempts=True` to
+`GroupHost.start` (or the launch wrapper) together with a plan. The default is
+`False`, and then no `swarm_supervision_*` table is created. See
+`docs/SWARM-DURABLE-DISPATCH.md` for how the opt-in path runs. This page
+describes the ledger itself.
+
+- `AttemptLedger(groups)` performs no database work. Explicit `initialize` is the
+  only schema creator, and the opt-in start path calls it.
+- The ledger never retries and never recovers a crashed run. Each task gets one
+  attempt.
+- The ledger does not record how a task ended. The legacy plan and task rows
+  stay the only terminal record. They are the authority for the final state.
+- If startup fails once ledger initialization has begun, the unstarted task rows are
+  marked `failed` and the plan settles. That plan id is used up for a later start
+  with the flag on or off.
+- Do not initialize this ledger on a plan that a legacy (flag-off) run is already
+  using. The legacy path does not honor these fences or controls.
 
 ## Implemented contract
 
@@ -88,24 +100,26 @@ a crash between intent and engine call cannot safely prove no effects. A host
 must explicitly mark uncertainty using the original current fence; reopen alone
 neither marks nor resumes it.
 
-Future integration must separately solve authenticated host controls, the durable
-group claim, authoritative grants/spend admission, and engine/tool effect fencing.
-SQLite cannot revoke an already issued external call. Runtime stop ordering,
-cleanup, and atomically updating the logical legacy task with a ledger outcome
-before notifying dependency gates remain outside this slice. The live legacy
-executor must not coexist on the same plan. There is no exactly-once effects,
-recovery, cancellation, lease or dependency-gate guarantee here.
+The opt-in integration does not solve authenticated host controls, the durable
+group claim, authoritative grants/spend admission, or engine/tool effect fencing.
+SQLite cannot revoke an already issued external call. The ledger itself does not
+update the legacy task row with an outcome. In the opt-in path the plan executor
+writes the terminal state to the legacy row before it tells dependent tasks. A
+flag-off run must not coexist on the same plan. There is no exactly-once effects,
+recovery, cancellation or lease guarantee here.
 
 ## Offline validation
 
 `tests/test_group_attempt_ledger.py` uses on-disk temporary sessions databases,
 independent connections and synthetic legacy pending rows; no engine/model calls.
+The opt-in path through the host has its own tests in
+`tests/test_group_plan_durable_attempts.py`.
 It covers constructor/read default-off behavior, lazy/concurrent initialization,
 reservation/dispatch races, same-request replay, control races and sticky stop,
 reopen, immutable identities, stale/forged fences, uncertain receipts, schema
 rejection, refusal to adopt legacy work, and callback-fault rollback. It does not
-claim real process-kill/power-loss, external engine fencing or runtime integration
-coverage.
+claim real process-kill/power-loss or external engine fencing coverage. Host
+integration is covered only by the separate opt-in test file named above.
 
 ```sh
 EXO_NO_KEYCHAIN=1 PYTHONPATH=src:tests python -m pytest -p no:randomly \
