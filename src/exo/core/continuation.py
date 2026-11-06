@@ -152,6 +152,19 @@ class Continuations:
         st.request = None  # a turn queued behind the running one voids that turn's request (the human takes over)
         self._cancel_timer(st)
 
+    def steer_entered(self, session: str, meta: dict[str, Any]) -> None:
+        """New rounds may own work only after consuming the current principal steer.
+
+        Rebind this task's context, never contexts already copied into tool workers or
+        background children. A Stop or later takeover makes the steer's fence stale.
+        """
+        generation = meta.get("continuation_steer_gen")
+        owner = TURN_GENERATION.get()
+        if (owner is not None and owner[0] == session and meta.get("author") == provenance.PRINCIPAL
+                and type(generation) is int and generation == self._st(session).gen
+                and not self.closed):
+            TURN_GENERATION.set((session, generation))
+
     # ------------------------------------------------------------ after a turn
 
     def turn_ended(self, session: str, turn_id: str, stop_reason: str, error: str | None = None) -> str:

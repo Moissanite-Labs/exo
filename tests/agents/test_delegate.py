@@ -400,3 +400,72 @@ def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
     assert "queued" in tool_text(eng, sid).lower()
     eng.agents.__init__(eng)  # a restart keeps the remote task queued
     assert eng.agents.list(sid)[0]["status"] == "queued"
+
+
+def test_budget_failure_does_not_start_higher_tier_attempt(tmp_path):
+    """A higher-tier route must not silently give an exhausted task a fresh token budget."""
+    rules = [("CHILD", [tool_turn("glob", {"pattern": "*.none"})])]
+    eng, fake = engine(tmp_path, rules, max_tokens=1)
+    # Distinct refs ensure this tests the budget guard, not same-model suppression.
+    eng.agents.route = lambda tier: (fake, "fake:" + tier)
+
+    async def run():
+        sid = (await eng.loop.create_session(title="parent")).id
+        brief = eng.agents._brief(sid, 0, {"goal": "CHILD", "tier": "fast"}, str(tmp_path))
+        receipt = await eng.agents._attempts(sid, brief)
+        assert receipt.status == "failed" and receipt.error_code == "budget"
+        assert receipt.brief == brief.id and receipt.tier == "fast" and receipt.escalated == 0
+        assert receipt.input_tokens + receipt.output_tokens > brief.max_tokens
+        assert len(eng.agents.list()) == 1
+        assert [e.body.status for e in task_events(eng)] == ["queued", "running", "failed"]
+        assert len(fake.calls) == 1
+        await eng.close()
+
+    asyncio.run(run())
+
+
+def test_non_budget_failure_still_escalates(tmp_path):
+    from exo.core.types import ProviderEvent
+
+    class Fail:
+        async def stream(self, *args, **kwargs):
+            yield ProviderEvent(kind="error", error="retry me", retryable=False)
+
+    eng, fake = engine(tmp_path, [("CHILD", ["recovered"])])
+    eng.agents.route = lambda tier: (Fail(), "fake:fast") if tier == "fast" else (fake, "fake:standard")
+
+    async def run():
+        sid = (await eng.loop.create_session(title="parent")).id
+        brief = eng.agents._brief(sid, 0, {"goal": "CHILD", "tier": "fast"}, str(tmp_path))
+        receipt = await eng.agents._attempts(sid, brief)
+        assert receipt.status == "done" and receipt.escalated == 1
+        assert receipt.tier == "standard" and receipt.brief != brief.id
+        assert len(eng.agents.list()) == 2
+        await eng.close()
+
+    asyncio.run(run())
+
+
+def test_offline_child_gets_constraint_aware_discovery_guidance(tmp_path, monkeypatch):
+    """Actual parent/child prompts must not direct offline workers to paid discovery."""
+    from exo.core.tools.builtin import codefind
+
+    monkeypatch.setattr(codefind, "_available", lambda: True)
+    rules = [("PARENT", [tool_turn("delegate", {
+        "goal": "CHILD-OFFLINE inspect unfamiliar behavior", "role": "scout",
+        "context": "Offline; no-network; no-paid-discovery. Use local files only.",
+        "accept": "Report local evidence",
+    }), "parent done"]), ("CHILD-OFFLINE", ["Local evidence only."])]
+    eng, fake = engine(tmp_path, rules)
+    asyncio.run(parent_turn(eng, "PARENT go"))
+    child = next(call for call in fake.calls if "CHILD-OFFLINE" in call["user"])
+    assert "code_find" in child["tools"]
+    assert "Offline; no-network; no-paid-discovery" in child["user"]
+    for prompt in (eng.loop.system_prompt, child["system"]):
+        assert "only when the task permits network and paid discovery" in prompt
+        assert "Task constraints take precedence" in prompt
+        assert "HTTP 402" in prompt
+        assert "do not repeat the same failed discovery call" in prompt
+    spec = next(spec for spec in eng.registry.specs() if spec.name == "code_find")
+    assert "Do not use for offline, no-network" in spec.description
+    assert "hosted, paid backend" in spec.description

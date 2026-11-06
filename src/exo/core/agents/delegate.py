@@ -63,8 +63,12 @@ CHILD_PROMPT = (
     "Keep your final summary tight: lead with outcomes, prefer bullet points over paragraphs, and don't replay your "
     "whole process. Your response is returned to the parent agent as a summary, and overlong summaries crowd out the "
     "parent's context window.")
-CODE_FIND_NOTE = ("\n\nScouts and verifiers: use `code_find` to learn unfamiliar code or answer a behavior question across "
-                  "files; use grep or read_file when you already know the symbol or path.")
+CODE_FIND_NOTE = ("\n\nUse code_find for unfamiliar code across many files only when the task permits network and paid discovery. "
+                  "It may send source to a hosted, paid backend. For offline, no-network or no-paid-discovery tasks, "
+                  "use grep and read_file instead. Task constraints take precedence over this search guidance. "
+                  "Also use grep or read_file for known symbols or paths. If code_find fails because of billing, "
+                  "payment (HTTP 402), authentication or backend availability, switch to grep and read_file; "
+                  "do not repeat the same failed discovery call or attempt to repair billing or credentials.")
 ORCHESTRATOR_NOTE = (
     "\n\nYou may use the `delegate` tool to run independent subtasks in parallel. Do not re-delegate your whole "
     "task to one worker. Coordinate your workers' results; you are responsible for the final summary.")
@@ -103,7 +107,7 @@ SPEC = ToolSpec(
                  "`goal`, or several independent ones in `tasks` to run them in parallel. Use it for work that "
                  "would flood your context or that splits into independent parts, not for one or two tool calls. "
                  "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
-                 "is retried once one tier up. By default the call waits for every task; with `background` it "
+                 "without exhausting its token budget is retried once one tier up. By default the call waits for every task; with `background` it "
                  "returns the task ids at once and each receipt arrives later as a notice, resuming this session "
                  "even with a connected UI unless stopped or blocked by operator wake policy or approvals. Stop a background task "
                  "with `subagent stop <task_id>`."),
@@ -440,9 +444,9 @@ class Delegator:
         return e.router.provider(tier), route.ref
 
     async def _attempts(self, parent: str, b: Brief) -> Receipt:
-        """Run a child; if it failed (not cancelled), retry once one tier up when allowed and it changes the model."""
+        """Retry a failed child one tier up, except when it exhausted its resource budget."""
         r = await self.run(parent, b)
-        if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
+        if r.status != "failed" or r.error_code == "budget" or not self.escalate_on_fail or b.tier not in TIERS:
             return r
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
         if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:

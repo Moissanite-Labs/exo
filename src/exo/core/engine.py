@@ -63,8 +63,12 @@ TUTORIAL_LINE = (
     "The user is new to Exo and has tutorial mode on. When an Exo concept they may not know comes up (memory "
     "and the summary tree, threads, the approval gate, steering, model routes, peers, trace, findings), explain "
     "it in one plain sentence the first time, then carry on. Do not lecture or repeat it.")
-CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions across many files; use grep or read_file "
-                  "when you already know the symbol or path.")
+CODE_FIND_LINE = ("Use code_find for unfamiliar code across many files only when the task permits network and paid discovery. "
+                  "It may send source to a hosted, paid backend. For offline, no-network or no-paid-discovery tasks, "
+                  "use grep and read_file instead. Task constraints take precedence over this search guidance. "
+                  "Also use grep or read_file for known symbols or paths. If code_find fails because of billing, "
+                  "payment (HTTP 402), authentication or backend availability, switch to grep and read_file; "
+                  "do not repeat the same failed discovery call or attempt to repair billing or credentials.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
 
@@ -233,6 +237,7 @@ class CoreRuntime:
                          context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        self.loop.on_steer = self.continuations.steer_entered
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._system_extra
@@ -661,6 +666,7 @@ class CoreRuntime:
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             self.continuations.turn_started(b.session, meta)
+            meta["continuation_steer_gen"] = self.continuations.generation(b.session)
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}

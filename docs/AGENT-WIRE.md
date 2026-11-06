@@ -289,9 +289,10 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
   open research synthesis, hard cross-file debugging. When unsure, take the cheaper tier.
 - **No upgrade.** A child never runs above its parent's tier, unless `delegation.allow_upgrade = true`
   (default false). The parent's tier is the main model's tier if the catalog knows it, else deep.
-- **Escalate once.** If a child fails (not cancelled) and `delegation.escalate_on_fail` is true (default),
-  it runs again one tier up, within the cap above. A retry is skipped when the next tier resolves to the same
-  model. Both attempts are separate tasks with their own receipts.
+- **Escalate once.** If a child fails and `delegation.escalate_on_fail` is true (default), it runs again
+  one tier up, within the cap above. Cancellation and token-budget exhaustion do not trigger a retry. A retry is skipped when the next tier resolves to the same
+  model. Token-budget exhaustion returns the original failed receipt without starting another attempt.
+  Both attempts are separate tasks with their own receipts.
 - **On the wire.** The brief carries `tier` (opcode 108). The receipt carries `route` (opcode 116: tier,
   resolved model, escalated 0 or 1), and the English form adds a `Model:` line. `task.updated` detail shows
   it. Packets without these fields still decode, with empty tier and model.
