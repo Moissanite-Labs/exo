@@ -31,6 +31,8 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/tasks/<task>/stop              command.run subagent stop
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
+  /api/swarm/...                           every path whose first two segments are api, swarm goes to swarm_api.dispatch
+                                           (its routes, validation and error replies live there); nothing else does
 """
 from __future__ import annotations
 
@@ -42,6 +44,7 @@ from typing import Any, Dict, Optional, Tuple
 from exo import complete as cm
 from exo.protocol import schema as s
 
+from . import swarm_api
 from .source import TOKEN_REFUSED, SourceError, core_message
 
 MAX_TEXT = 50_000
@@ -107,6 +110,8 @@ async def dispatch(centre, method: str, path: str, q: Dict[str, Any], body: Dict
     parts = [p for p in path.split("/") if p]            # ["api", ...]
     if len(parts) < 2 or parts[0] != "api":
         return None
+    if parts[1] == "swarm":          # exactly the segment "swarm": /api/swarmx and /api/chat/swarm stay on _route
+        return await swarm_api.dispatch(centre, method, path, q, body)
     handler = _route(method, parts[1:], "/".join(parts[1:]))
     if handler is None:
         return None
