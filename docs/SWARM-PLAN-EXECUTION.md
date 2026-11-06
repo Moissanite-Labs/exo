@@ -131,3 +131,8 @@ EXO_NO_KEYCHAIN=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests \
 Not covered: process-crash injection, plan-specific queued-turn concurrency, and
 authorization revocation during a queued turn. Multi-process coverage is limited to the
 plan reservation preceding the factory.
+
+## Durable dispatch (opt-in)
+
+See `docs/SWARM-DURABLE-DISPATCH.md`: `GroupHost.start(durable_attempts=True)` records each task attempt in
+the attempt ledger (no retries); default off, existing behavior unchanged.

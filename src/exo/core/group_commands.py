@@ -468,6 +468,50 @@ def _plan_refusal() -> CommandFailed:
     return CommandFailed("not_found", "no such plan")
 
 
+_RECONCILE_TERMINAL = frozenset({"completed", "failed", "stopped"})
+
+
+def _reconcile_label(legacy: str, attempt: str | None, uncertain: bool) -> str:
+    """Fixed-word label from the legacy state (terminal authority) and the ledger's latest attempt."""
+    if legacy in _RECONCILE_TERMINAL:
+        if uncertain or attempt == "uncertain":
+            return "terminal_outcome_uncertain"
+        return "settled"  # a ledger intent after a committed terminal row is normal, not an anomaly
+    if legacy == "pending":
+        return {None: "not_admitted", "reserved": "reserved",
+                "dispatch_intent": "needs_inspection_intent_not_started"}.get(attempt, "needs_inspection")
+    if legacy == "running":
+        if attempt == "dispatch_intent":
+            return "in_flight_or_lost"
+        return "needs_inspection"
+    return "needs_inspection"
+
+
+def _durable_view(eng: CoreRuntime, plans: PlanExecutions, group_id: str, plan_id: str, shown: list) -> tuple:
+    """Read-only durable join for the shown rows. Never writes, never raises, never creates schema."""
+    from exo.core.group_attempt_ledger import (
+        AdmissionDenied, AttemptLedger, IdentityConflict, Scope, TaskKey)
+    from exo.core.group_supervision import TaskIdentity
+    none = ({"status": "none"}, [None] * len(shown))
+    try:
+        ledger = AttemptLedger(_groups(eng))
+        scope = Scope(group_id, eng.agent, plan_id,
+                      plans.execution_id(plan_id, group_id=group_id, owner=eng.agent))
+        snaps = []
+        for r in shown:
+            snaps.append(ledger.read(TaskKey(scope, TaskIdentity(plan_id, r.task_id, r.profile))))
+    except (AdmissionDenied, IdentityConflict):
+        return none
+    except Exception:  # noqa: BLE001 - the ledger must never fail the read-only command
+        return {"status": "unavailable"}, [None] * len(shown)
+    if not snaps:
+        return none
+    first = snaps[0]
+    plan_level = {"status": "durable", "stop_requested": first.stop_requested,
+                  "paused": first.paused, "plan_revision": first.plan_revision}
+    return plan_level, snaps
+
+
 def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     """Read-only, owner-scoped view of one plan's durable task state. No host, no writes, no schema."""
     unknown = set(args) - {"id", "plan_id", "limit"}
@@ -501,8 +545,9 @@ def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     # Result plus error text allowed per task.
     share = _AGGREGATE_CHARS // max(1, len(shown))
     error_cap = min(_ERROR_CHARS, share // 4)
+    durable, snaps = _durable_view(eng, plans, group_id, plan_id, shown)
     tasks = []
-    for r in shown:
+    for r, snap in zip(shown, snaps):
         error, error_cut = _clip(r.error, error_cap)
         result, result_cut = _clip(
             r.result, min(_RESULT_CHARS, share - len(error or ""))
@@ -519,12 +564,20 @@ def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
                 "result_truncated": result_cut,
                 "error": error,
                 "error_truncated": error_cut,
+                "durable": (
+                    {"status": durable["status"]} if snap is None else
+                    {"status": "durable", "stop_requested": snap.stop_requested, "paused": snap.paused,
+                     "reconciliation_required": snap.reconciliation_required,
+                     "latest_attempt": snap.latest_attempt, "epoch": snap.epoch}),
+                **({} if snap is None else {"reconcile": _reconcile_label(
+                    r.state, snap.latest_attempt, snap.reconciliation_required)}),
             }
         )
     return {
         "id": group_id,
         "plan_id": plan_id,
         "state": state,
+        "durable": durable,
         "tasks": tasks,
         "task_count": len(rows),
         "tasks_returned": len(tasks),
