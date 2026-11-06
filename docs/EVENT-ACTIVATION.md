@@ -404,7 +404,7 @@ Defaults, each overridable per trigger in `limits`. They are starting values, no
 | Runs per hour | 6 | events are held and counted. The next run sees the count |
 | Runs per day | 40 | the trigger pauses until the next UTC day, with one notice |
 | Concurrent trigger runs per seat | 1, queue of 10 | the oldest queued batch is merged into the next |
-| Tool rounds per run | 24 (the loop's `max_iterations`) | the run stops with a notice |
+| Tool rounds per run | Unlimited by default (`max_iterations=0`) | a positive cap stops the run with a notice |
 | Wall clock per run | 15 minutes, not counting a wait for an approval | the run is interrupted, with a notice |
 | Tokens per run | 50,000 | the run is stopped, as the delegator stops a child that passes its token limit |
 | Tokens per trigger per day | 400,000 | the trigger pauses until the next UTC day, with one notice |
