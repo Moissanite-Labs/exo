@@ -744,3 +744,57 @@ def test_clipboard_helpers_fall_back_and_osc52_receipt_is_not_claimed(tmp_path, 
         await pilot.pause()
         assert "via OSC52; clipboard receipt cannot be verified" in app.transcript_text()
     run(tmp_path, sc)
+
+
+def test_reasoning_stream_and_completed_history_keep_full_text(tmp_path):
+    from exo.core.types import ContentPart, Message, to_dict
+
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.5)
+        app.clear_transcript()
+        reasoning = "first line\n" + "full reasoning " * 2000 + "last line"
+        for i, piece in enumerate((reasoning[:100], reasoning[100:])):
+            app.handle(s.Event(seq=i, type="reasoning.delta",
+                               body=s.ReasoningDelta(message_id="reasoned", text=piece)))
+        await pilot.pause(0.2)
+        blocks = [b for b in app.transcript.children if isinstance(b, Block)]
+        assert len(blocks) == 1 and blocks[0].kind == "reasoning" and blocks[0].text == reasoning
+        assert blocks[0].shown is not None
+        app.handle(s.Event(seq=3, type="message.delta",
+                           body=s.MessageDelta(message_id="reasoned", text="answer")))
+        message = Message(id="reasoned", role="assistant", content=[
+            ContentPart(type="reasoning", text=reasoning, signature="private signature"),
+            ContentPart(type="text", text="answer")])
+        app.handle(s.Event(seq=4, type="message.completed", body=s.MessageCompleted(message=message)))
+        await pilot.pause(0.2)
+        blocks = [b for b in app.transcript.children if isinstance(b, Block)]
+        assert [(b.kind, b.text) for b in blocks] == [("reasoning", reasoning), ("assistant", "answer")]
+        assert app.last_answer == ("reasoned", "answer")
+        assert not app.reasoning_blocks
+        entries = app.history_entries([to_dict(message)])
+        assert entries == [("block", "reasoning", reasoning), ("block", "assistant", "answer")]
+        app.clear_transcript()
+        app.render_history([to_dict(message)])
+        await pilot.pause(0.2)
+        assert [(b.kind, b.text) for b in app.transcript.children if isinstance(b, Block)] == [
+            ("reasoning", reasoning), ("assistant", "answer")]
+        app.clear_transcript()
+        app.handle(s.Event(seq=5, type="message.completed", body=s.MessageCompleted(message=message)))
+        await pilot.pause(0.2)
+        assert [(b.kind, b.text) for b in app.transcript.children if isinstance(b, Block)] == [
+            ("reasoning", reasoning), ("assistant", "answer")]
+        app.clear_transcript()
+        app.handle(s.Event(seq=6, type="message.delta",
+                           body=s.MessageDelta(message_id="reasoned", text="answer")))
+        await pilot.pause(0.1)
+        app.handle(s.Event(seq=7, type="message.completed", body=s.MessageCompleted(message=message)))
+        await pilot.pause(0.2)
+        assert [(b.kind, b.text) for b in app.transcript.children if isinstance(b, Block)] == [
+            ("reasoning", reasoning), ("assistant", "answer")]
+        hidden = {"id": "hidden", "role": "assistant", "meta": {"note": True},
+                  "content": [{"type": "reasoning", "text": "context only"}]}
+        opaque = {"id": "opaque", "role": "assistant", "content": [
+            {"type": "reasoning", "data": "private data", "signature": "private signature"}]}
+        assert app.history_entries([hidden, opaque]) == []
+
+    run(tmp_path, sc)
