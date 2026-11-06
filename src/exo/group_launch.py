@@ -193,7 +193,8 @@ class GroupLaunch:
         return self.host._closed  # noqa: SLF001 - same-package launcher
 
     def start(self, *, conversation: ConversationOptions | None = None,
-              max_concurrent: int | None = None) -> tuple:
+              max_concurrent: int | None = None,
+              plan=None, grants=None) -> tuple:
         """Bind the member engines via the host factory and start the run once.
 
         The default (``conversation=None``) is the one-shot ``GroupEngineAdapter``
@@ -204,6 +205,16 @@ class GroupLaunch:
         rejects caller-supplied audiences for a conversation start). Bounds are
         validated by the host before the factory is invoked or any claim exists.
 
+        ``plan`` and ``grants`` are the explicit trusted-Python plan opt-in
+        (docs/SWARM-LAUNCH.md): when either is supplied both are required, must be a
+        ``ValidatedPlan`` and a host-built ``HostGrants``, and ``conversation`` must
+        not be passed. They are forwarded to ``GroupHost.start`` as-is, with
+        ``max_concurrent`` and *without* ``audiences``. Grants are never created,
+        defaulted or widened here; the host alone checks owner, group, profile set,
+        plan digest and per-task authority before the factory or any durable claim,
+        and its ``HostError`` propagates unchanged. With both ``None`` the legacy
+        calls below are unchanged.
+
         ``max_concurrent`` is an explicit turn-concurrency bound forwarded to
         ``GroupHost.start`` for both start kinds: ``None`` (the default)
         preserves full member concurrency; a strict ``int`` in ``1..member
@@ -213,6 +224,18 @@ class GroupLaunch:
         the more specific declaration and wins when set; the start-level
         ``max_concurrent`` is the fallback.
         """
+        if plan is not None or grants is not None:
+            if plan is None or grants is None:
+                raise LaunchError("a plan start requires both plan and grants")
+            if conversation is not None:
+                raise LaunchError("a plan start is not a conversation start; do not pass conversation")
+            from exo.core.group_task_contract import HostGrants, ValidatedPlan
+            if not isinstance(plan, ValidatedPlan):
+                raise LaunchError("plan must be a ValidatedPlan")
+            if not isinstance(grants, HostGrants):
+                raise LaunchError("grants must be HostGrants built by the host")
+            return self.host.start(self.group.id, plan=plan, grants=grants,
+                                   max_concurrent=max_concurrent)
         if conversation is None:
             return self.host.start(self.group.id,
                                    audiences=_audiences_for(self.group),

@@ -70,3 +70,25 @@ to start the bounded reactive conversation instead (the options are forwarded to
 the host without `audiences`, which the host derives from the stored mode).
 `LaunchError` marks any launch input or close failure; underlying failures chain
 from it.
+
+## Plan start (trusted Python only)
+
+`launch.start(plan=ValidatedPlan, grants=HostGrants, max_concurrent=None)` starts a
+validated task plan through the existing `GroupHost.start(plan=, grants=)` path
+(see `docs/SWARM-PLAN-EXECUTION.md`). It is an opt-in keyword pair on the same
+method; `start()` and `start(conversation=…)` are unchanged.
+
+- Both arguments are required together; one without the other, a non-`ValidatedPlan`
+  plan, non-`HostGrants` grants, or any `conversation` raise `LaunchError` before the
+  host is called (nothing is allocated). The wrapper imports the types lazily.
+- The call is forwarded as `host.start(group.id, plan=, grants=, max_concurrent=)`
+  with **no** `audiences` (the host rejects them for a plan run).
+- The wrapper never builds, defaults, widens or validates authority in `grants`. The
+  host checks owner, group, injected profile set, plan digest and per-task authority
+  before the engine factory runs or any durable claim exists; its `HostError`
+  propagates unchanged (not wrapped in `LaunchError`).
+
+Limits: this is a Python API for a trusted caller that already holds a host-built
+`HostGrants`. It is not a protocol/client command, not a sandbox, and adds no new
+authority; it does not create plans or grants, and one start per group per process
+still applies.
