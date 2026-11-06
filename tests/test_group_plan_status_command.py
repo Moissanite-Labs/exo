@@ -364,3 +364,250 @@ def test_never_planned_database_refuses_and_creates_no_plan_tables(
     )
     assert tables == set()
     assert first == second == REFUSAL
+
+
+# -- liveness diagnosis: read-only, on-disk sqlite, no engine -----------------------------------------
+PLAN = "ab" * 32
+LIVE_TABLES = ("swarm_plans", "swarm_plan_tasks", "swarm_supervision_plans", "swarm_supervision_tasks",
+               "swarm_supervision_attempts", "swarm_supervision_requests")
+
+
+class Room:
+    def __init__(self, tmp_path, *, tasks=(), durable=False, plan_state="running"):
+        from exo.core.group_attempt_ledger import AttemptLedger, Scope, TaskKey
+        from exo.core.group_plan_execution import PlanExecutions
+        from exo.core.group_supervision import TaskIdentity
+        from exo.core.groups import GroupStore
+        from exo.core.sessions import SessionStore
+        self.store = SessionStore(tmp_path / "sessions.sqlite")
+        groups = GroupStore(self.store)
+        self.gid = groups.create(owner="host", mode="socratic", members=["one", "two"],
+                                 known_profiles=["one", "two"]).id
+        self.keys = {}
+        if tasks:
+            PlanExecutions(groups)._ensure_schema()
+            self.store._q("INSERT INTO swarm_plans(plan_id,group_id,owner,execution_id,state,created)"
+                          " VALUES (?,?,'host','execution',?,'fixture')", (PLAN, self.gid, plan_state))
+            for tid in tasks:
+                self.store._q("INSERT INTO swarm_plan_tasks(plan_id,task_id,attempt,group_id,profile,state)"
+                              " VALUES (?,?,1,?,'one','pending')", (PLAN, tid, self.gid))
+            scope = Scope(self.gid, "host", PLAN, "execution")
+            self.keys = {t: TaskKey(scope, TaskIdentity(PLAN, t, "one")) for t in tasks}
+            self.ledger = AttemptLedger(groups)
+            if durable:
+                self.ledger.initialize(scope, plan_digest="d", request_id="init",
+                                       tasks=tuple(k.identity for k in self.keys.values()))
+
+    def legacy(self, tid, state):
+        self.store._q("UPDATE swarm_plan_tasks SET state=? WHERE task_id=?", (state, tid))
+
+    def settle(self):
+        self.store._q("UPDATE swarm_plans SET state='settled'")
+
+    def advance(self, tid, *, dispatch=False, uncertain=False):
+        res = self.ledger.reserve_initial(self.keys[tid], holder_id="h", request_id=f"r-{tid}")
+        if dispatch or uncertain:
+            self.ledger.mark_dispatch(res.fence, request_id=f"d-{tid}")
+        if uncertain:
+            self.ledger.mark_uncertain(res.fence, reason="owner_lost", request_id=f"u-{tid}")
+
+    def snapshot(self):
+        names = [r[0] for r in self.store._q("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        out = {"master": [tuple(r) for r in self.store._q("SELECT type,name,sql FROM sqlite_master ORDER BY name")]}
+        for n in names:
+            if n in LIVE_TABLES:
+                out[n] = [tuple(r) for r in self.store._q(f"SELECT * FROM {n} ORDER BY 1,2")]
+        return out
+
+    def ask(self, **over):
+        eng = SimpleNamespace(agent="host", store=self.store)
+        body = json.dumps({"id": self.gid, "plan_id": PLAN, **over})
+
+        async def go():
+            token = principal.CALLER.set(principal.Caller("principal"))
+            try:
+                return await group_commands.command(eng, SimpleNamespace(args=f"plan_status {body}"))
+            finally:
+                principal.CALLER.reset(token)
+        return asyncio.run(go())
+
+
+@pytest.fixture
+def room_factory(tmp_path):
+    made = []
+
+    def make(**kw):
+        made.append(Room(tmp_path, **kw))
+        return made[-1]
+    yield make
+    for r in made:
+        r.store.close()
+
+
+def test_running_plan_without_ledger_is_unknown_and_unlabelled(room_factory):
+    room = room_factory(tasks=("a", "b"))
+    room.legacy("a", "running")
+    before = room.snapshot()
+    out = room.ask()
+    assert room.snapshot() == before
+    assert out["state"] == "running" and out["liveness"]["status"] == "unknown"
+    assert out["durable"] == {"status": "none"}
+    assert out["reconcile_counts"] == {"in_flight_or_lost": 0, "uncertain": 0, "never_started": 0,
+                                       "terminal": 0, "unlabelled": 2}
+    assert all("reconcile" not in t for t in out["tasks"])  # legacy per-task shape is unchanged
+    hint = out["liveness"]["reconcile_hint"]
+    assert "another process" in hint and "Do not restart" in hint and "terminal" in hint
+    assert "No tool reconciles" in hint
+
+
+def test_durable_counts_cover_every_label_once(room_factory):
+    room = room_factory(tasks=("t1", "t2", "t3", "t4", "t5", "t6", "t7"), durable=True)
+    room.advance("t2")                                  # reserved, pending -> never_started
+    room.advance("t3", dispatch=True)                   # running + intent -> in_flight_or_lost
+    room.legacy("t3", "running")
+    room.advance("t4", dispatch=True)                   # pending + intent -> uncertain (inspect)
+    room.advance("t5", uncertain=True)                  # completed + uncertain -> uncertain
+    room.legacy("t5", "completed")
+    room.advance("t6", dispatch=True)                   # completed + intent -> terminal
+    room.legacy("t6", "completed")
+    room.advance("t7", uncertain=True)                  # running + uncertain -> uncertain
+    room.legacy("t7", "running")
+    before = room.snapshot()
+    out = room.ask()
+    assert room.snapshot() == before
+    counts = out["reconcile_counts"]
+    assert counts == {"in_flight_or_lost": 1, "uncertain": 3, "never_started": 2, "terminal": 1,
+                      "unlabelled": 0}
+    assert sum(counts.values()) == out["task_count"] == 7
+    labels = {t["task_id"]: t["reconcile"] for t in out["tasks"]}
+    assert labels["t1"] == "not_admitted" and labels["t2"] == "reserved"
+    assert labels["t3"] == "in_flight_or_lost" and labels["t6"] == "settled"
+    assert out["state"] == "running" and out["liveness"]["status"] == "unknown"
+
+
+def test_settled_plan_reports_settled(room_factory):
+    room = room_factory(tasks=("a",), plan_state="settled")
+    room.legacy("a", "completed")
+    before = room.snapshot()
+    out = room.ask()
+    assert room.snapshot() == before
+    assert out["liveness"]["status"] == "settled" and out["state"] == "settled"
+    assert out["reconcile_counts"]["unlabelled"] == 1
+
+
+def test_counts_cover_all_tasks_when_limit_truncates(room_factory):
+    names = tuple(f"t{i}" for i in range(6))
+    room = room_factory(tasks=names, durable=True)
+    for n in names[3:]:
+        room.advance(n, dispatch=True)
+        room.legacy(n, "running")
+    out = room.ask(limit=1)
+    assert out["tasks_returned"] == 1 and out["tasks_truncated"] is True and out["task_count"] == 6
+    assert out["reconcile_counts"] == {"in_flight_or_lost": 3, "uncertain": 0, "never_started": 3,
+                                       "terminal": 0, "unlabelled": 0}
+
+
+def test_unknown_state_fails_closed_and_wording_is_neutral(room_factory):
+    room = room_factory(tasks=("a",), plan_state="mystery")
+    out = room.ask()
+    assert out["liveness"]["status"] == "unknown"
+    text = json.dumps(out["liveness"]).lower()
+    for word in ("orphan", "dead", "safe to", "inactive", "takeover"):
+        assert word not in text
+
+
+def test_refusal_on_database_without_plan_tables_writes_nothing(room_factory):
+    room = room_factory()
+    before = room.snapshot()
+    with pytest.raises(CommandFailed) as err:
+        room.ask()
+    assert str(err.value) == REFUSAL
+    assert room.snapshot() == before
+    assert not {"swarm_plans", "swarm_supervision_plans"} & set(before)
+
+
+def test_missing_ledger_row_outside_page_nulls_counts_not_zeroes(room_factory):
+    room = room_factory(tasks=("a", "b", "c"), durable=True)
+    room.advance("a", uncertain=True)
+    room.legacy("a", "completed")
+    room.settle()
+    room.store._q("DELETE FROM swarm_supervision_tasks WHERE task_id='c'")  # fixture damage, not via the command
+    before = room.snapshot()
+    out = room.ask(limit=1)
+    assert room.snapshot() == before
+    assert out["tasks_returned"] == 1 and out["task_count"] == 3 and out["tasks_truncated"] is True
+    assert out["durable"] == {"status": "unavailable"}
+    assert out["reconcile_counts"] is None  # not {"unlabelled": 3} and not a hidden uncertain=0
+    assert out["liveness"]["status"] == "settled"
+    assert out["tasks"][0]["reconcile"] == "terminal_outcome_uncertain"  # readable task keeps its label
+    # the damaged task is on the page when it is asked for: still no counts, no label for it
+    full = room.ask()
+    assert full["reconcile_counts"] is None
+    assert "reconcile" not in {t["task_id"]: t for t in full["tasks"]}["c"]
+
+
+def test_unexpected_ledger_exception_nulls_counts_and_stays_read_only(room_factory, monkeypatch):
+    from exo.core.group_attempt_ledger import AttemptLedger
+
+    def boom(self, key):
+        raise RuntimeError("disk gone")
+    room = room_factory(tasks=("a", "b"), durable=True)
+    before = room.snapshot()
+    monkeypatch.setattr(AttemptLedger, "read", boom)
+    out = room.ask()
+    assert room.snapshot() == before
+    assert out["durable"] == {"status": "unavailable"}
+    assert out["reconcile_counts"] is None
+    assert [t["task_id"] for t in out["tasks"]] == ["a", "b"]
+    assert all("reconcile" not in t for t in out["tasks"])
+
+
+def test_absent_ledger_is_legacy_not_unreadable(room_factory):
+    room = room_factory(tasks=("a", "b"))
+    out = room.ask(limit=1)
+    assert out["durable"] == {"status": "none"}
+    assert out["reconcile_counts"] == {"in_flight_or_lost": 0, "uncertain": 0, "never_started": 0,
+                                       "terminal": 0, "unlabelled": 2}
+
+
+def test_settled_plan_with_uncertain_task_is_not_reported_clean(room_factory):
+    room = room_factory(tasks=("a", "b"), durable=True)
+    room.advance("a", uncertain=True)
+    room.legacy("a", "completed")
+    room.advance("b", dispatch=True)
+    room.legacy("b", "completed")
+    room.settle()
+    before = room.snapshot()
+    out = room.ask()
+    assert room.snapshot() == before
+    assert out["liveness"]["status"] == "settled"
+    assert out["reconcile_counts"]["uncertain"] == 1 and out["reconcile_counts"]["terminal"] == 1
+    assert "not that every task outcome is known" in out["liveness"]["reconcile_hint"]
+
+
+_MISMATCH_CASES = {
+    "M1_execution_id": ("UPDATE swarm_supervision_plans SET execution_id='other-exec'", False, False),
+    "M2_owner": ("UPDATE swarm_supervision_plans SET owner='someone-else'", False, False),
+    "M3_group_id": ("UPDATE swarm_supervision_plans SET group_id='other-grp'", False, False),
+    "M4_missing_plan_row": ("DELETE FROM swarm_supervision_plans", True, False),
+    "M5_settled_execution_id": ("UPDATE swarm_supervision_plans SET execution_id='x'", False, True),
+}
+
+
+@pytest.mark.parametrize("sql,fk_off,settled", list(_MISMATCH_CASES.values()), ids=list(_MISMATCH_CASES))
+def test_ledger_mismatch_is_unavailable_never_legacy_none(room_factory, sql, fk_off, settled):
+    room = room_factory(tasks=("a", "b", "c"), durable=True)
+    room.advance("a", uncertain=True)
+    if fk_off:
+        room.store._q("PRAGMA foreign_keys=OFF")
+    room.store._q(sql)  # deliberate fixture corruption, not via the command
+    if settled:
+        room.settle()
+    before = room.snapshot()
+    assert before["swarm_supervision_tasks"]  # the uncertain task's ledger rows still exist
+    out = room.ask()
+    assert room.snapshot() == before  # read-only after corruption
+    assert out["durable"] == {"status": "unavailable"}
+    assert out["reconcile_counts"] is None
+    assert all("reconcile" not in t for t in out["tasks"])
+    assert out["liveness"]["status"] == ("settled" if settled else "unknown")

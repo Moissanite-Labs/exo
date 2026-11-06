@@ -524,23 +524,82 @@ def _reconcile_label(legacy: str, attempt: str | None, uncertain: bool) -> str:
     return "needs_inspection"
 
 
+# Each task lands in exactly one bucket. A task with no ledger record has no label and is counted apart.
+_RECONCILE_BUCKET = {
+    "in_flight_or_lost": "in_flight_or_lost",
+    "terminal_outcome_uncertain": "uncertain",
+    "needs_inspection": "uncertain",
+    "needs_inspection_intent_not_started": "uncertain",
+    "not_admitted": "never_started",
+    "reserved": "never_started",
+    "settled": "terminal",
+}
+
+# The only refusal that proves no ledger exists: no supervision tables at all (legacy plan).
+# "ledger execution mismatch" is NOT absence: it is raised for a missing OR a mismatched supervision plan row,
+# so it stays a failed read (unavailable, null counts) rather than a claim that no record exists.
+_LEDGER_ABSENT = ("ledger not initialized",)
+
+_LIVENESS_HINT = (
+    "A running plan may be live in another process. This command has no liveness evidence. "
+    "Do not restart this plan id and do not mark it terminal. No tool reconciles a running plan. "
+    "Settled means only that the plan row is terminal, not that every task outcome is known."
+)
+
+
+def _liveness(plan_state: str) -> dict[str, str]:
+    """Only a settled plan is known. Every other state, running included, stays unknown."""
+    return {"status": "settled" if plan_state == "settled" else "unknown", "reconcile_hint": _LIVENESS_HINT}
+
+
+def _reconcile_counts(rows: Any, snaps: Any, durable: dict[str, Any]) -> dict[str, int] | None:
+    """Counts of the existing reconcile labels over every task, not only the page shown.
+
+    None when the ledger could not be read: the counts would be invented, so none are given."""
+    if durable.get("status") not in ("durable", "none"):
+        return None
+    counts = {"in_flight_or_lost": 0, "uncertain": 0, "never_started": 0, "terminal": 0, "unlabelled": 0}
+    for r, snap in zip(rows, snaps):
+        if snap is None:
+            counts["unlabelled"] += 1
+        else:
+            label = _reconcile_label(r.state, snap.latest_attempt, snap.reconciliation_required)
+            counts[_RECONCILE_BUCKET.get(label, "uncertain")] += 1
+    return counts
+
+
 def _durable_view(eng: CoreRuntime, plans: PlanExecutions, group_id: str, plan_id: str, shown: list) -> tuple:
     """Read-only durable join for the shown rows. Never writes, never raises, never creates schema."""
     from exo.core.group_attempt_ledger import (
         AdmissionDenied, AttemptLedger, IdentityConflict, Scope, TaskKey)
     from exo.core.group_supervision import TaskIdentity
     none = ({"status": "none"}, [None] * len(shown))
+    unavailable = ({"status": "unavailable"}, [None] * len(shown))
     try:
         ledger = AttemptLedger(_groups(eng))
         scope = Scope(group_id, eng.agent, plan_id,
                       plans.execution_id(plan_id, group_id=group_id, owner=eng.agent))
-        snaps = []
-        for r in shown:
-            snaps.append(ledger.read(TaskKey(scope, TaskIdentity(plan_id, r.task_id, r.profile))))
-    except (AdmissionDenied, IdentityConflict):
-        return none
     except Exception:  # noqa: BLE001 - the ledger must never fail the read-only command
-        return {"status": "unavailable"}, [None] * len(shown)
+        return unavailable
+    snaps: list = []
+    absent = failed = 0
+    for r in shown:
+        try:
+            snaps.append(ledger.read(TaskKey(scope, TaskIdentity(plan_id, r.task_id, r.profile))))
+        except (AdmissionDenied, IdentityConflict) as exc:
+            snaps.append(None)
+            # Only a plan-level miss means no ledger was ever made for this plan. Any other refusal is a failed read.
+            if str(exc) in _LEDGER_ABSENT:
+                absent += 1
+            else:
+                failed += 1
+        except Exception:  # noqa: BLE001 - the ledger must never fail the read-only command
+            snaps.append(None)
+            failed += 1
+    if failed or (absent and absent != len(snaps)):
+        return {"status": "unavailable"}, snaps  # unreadable: per-task labels kept only where they were read
+    if absent:
+        return none
     if not snaps:
         return none
     first = snaps[0]
@@ -582,7 +641,8 @@ def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     # Result plus error text allowed per task.
     share = _AGGREGATE_CHARS // max(1, len(shown))
     error_cap = min(_ERROR_CHARS, share // 4)
-    durable, snaps = _durable_view(eng, plans, group_id, plan_id, shown)
+    durable, all_snaps = _durable_view(eng, plans, group_id, plan_id, rows)
+    snaps = all_snaps[:len(shown)]
     tasks = []
     for r, snap in zip(shown, snaps):
         error, error_cut = _clip(r.error, error_cap)
@@ -615,6 +675,8 @@ def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
         "plan_id": plan_id,
         "state": state,
         "durable": durable,
+        "liveness": _liveness(state),
+        "reconcile_counts": _reconcile_counts(rows, all_snaps, durable),
         "tasks": tasks,
         "task_count": len(rows),
         "tasks_returned": len(tasks),
