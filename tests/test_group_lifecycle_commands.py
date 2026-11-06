@@ -175,7 +175,25 @@ def test_start_conversation_host_rejection_is_bad_request(eng):
     # unknown top-level keys, including features outside this slice
     _start('{"max_turns": 3, "idle_timeout": 60}', ', "plan": {}'),
     _start('{"max_turns": 3, "idle_timeout": 60}', ', "grants": {}'),
-    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": true'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "max_items": 1'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "max_chars": 100'),
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": true, "plan": {}}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": true, "grants": {}}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": true, "max_items": 1}',
+    # knowledge is an exact bool; everything else is refused before the host
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": 1'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": 0'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": "true"'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": null'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": {}'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": []'),
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": 1.0}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": "false"}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": null}',
+    # knowledge does not relax exactly-one audiences/conversation
+    'start {"id": "g-1", "knowledge": true}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "knowledge": true, '
+    '"conversation": {"max_turns": 3, "idle_timeout": 60}}',
     _start('{"max_turns": 3, "idle_timeout": 60}', ', "owner": "other"'),
     # unknown nested keys
     _start('{"max_turns": 3, "idle_timeout": 60, "knowledge": true}'),
@@ -313,3 +331,52 @@ def test_no_authority_from_message_text(eng):
     out = run(eng, 'pause {"id": "g-1"}')
     assert out["paused"] is True
     assert eng._group_host.owner == "one"
+
+
+AUD = {"lead": ["one"], "one": ["lead"]}
+CONV = '{"max_turns": 3, "idle_timeout": 60}'
+
+
+def test_start_knowledge_true_forwards_flag_only_both_forms(eng):
+    run(eng, 'start {"id": "g-1", "audiences": {"lead": ["one"], "one": ["lead"]}, "knowledge": true}')
+    run(eng, _start(CONV, ', "knowledge": true'))
+    assert eng._group_host.calls == [
+        ("start", ("g-1",), {"audiences": AUD, "knowledge": True}),
+        ("start", ("g-1",), {"conversation": ConversationOptions(3, 60, None), "knowledge": True})]
+    for _, _, kw in eng._group_host.calls:
+        assert set(kw) <= {"audiences", "conversation", "knowledge"}   # no caps, plan or grants
+
+
+def test_start_knowledge_omitted_or_false_is_legacy_call(eng):
+    run(eng, ARGS["start"])
+    run(eng, 'start {"id": "g-1", "audiences": {"lead": ["one"], "one": ["lead"]}, "knowledge": false}')
+    run(eng, _start(CONV))
+    run(eng, _start(CONV, ', "knowledge": false'))
+    assert eng._group_host.calls == [
+        ("start", ("g-1",), {"audiences": AUD}),
+        ("start", ("g-1",), {"audiences": AUD}),
+        ("start", ("g-1",), {"conversation": ConversationOptions(3, 60, None)}),
+        ("start", ("g-1",), {"conversation": ConversationOptions(3, 60, None)})]
+
+
+def test_start_knowledge_true_keeps_principal_and_host_gates():
+    args = _start(CONV, ', "knowledge": true')
+    engine = SimpleNamespace(agent="one", _group_host=FakeHost(owner="one"))
+    for who in ("local", "channel"):
+        with pytest.raises(CommandFailed) as e:
+            run(engine, args, who)
+        assert e.value.code == "forbidden"
+    assert engine._group_host.calls == []
+    for host in (None, FakeHost(owner="other")):
+        engine = SimpleNamespace(agent="one", _group_host=host)
+        with pytest.raises(CommandFailed) as e:
+            run(engine, args)
+        assert e.value.code == "forbidden"
+        assert host is None or host.calls == []
+
+
+def test_start_knowledge_host_rejection_is_bad_request(eng):
+    eng._group_host.errors = {"start": "knowledge must be an explicit boolean opt-in"}
+    with pytest.raises(CommandFailed) as e:
+        run(eng, _start(CONV, ', "knowledge": true'))
+    assert e.value.code == "bad_request"
