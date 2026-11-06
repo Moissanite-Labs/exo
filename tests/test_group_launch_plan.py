@@ -123,3 +123,111 @@ def test_valid_plan_through_launch_start_completes_on_real_engines(home, tmp_pat
     assert provider.marks == ["MARK-BUILD", "MARK-CHECK"]
     assert {st.profile: st.state for st in statuses} == {"builder": "completed", "checker": "completed"}
     assert rig.launch.closed
+
+
+# -- durable_attempts: exact-bool opt-in, forwarded only when true ------------------------------------
+def test_durable_false_keeps_plan_call_kwargs_exact(home, tmp_path, monkeypatch):  # noqa: F811
+    async def body(rig, provider):
+        calls = record_host_start(rig, monkeypatch)
+        rig.launch.start(plan=rig.plan, grants=rig.grants, durable_attempts=False)
+        rig.launch.start(plan=rig.plan, grants=rig.grants)
+        rig.launch.start(durable_attempts=False)
+        return calls
+
+    rig, _, calls = scenario(home, tmp_path, monkeypatch, body)
+    assert set(calls[0][1]) == {"plan", "grants", "max_concurrent"} == set(calls[1][1])   # no durable key
+    assert set(calls[2][1]) == {"audiences", "max_concurrent"}
+
+
+@pytest.mark.parametrize("max_concurrent", [None, 1])
+def test_durable_true_forwards_flag_and_same_objects(home, tmp_path, monkeypatch, max_concurrent):  # noqa: F811
+    async def body(rig, provider):
+        calls = record_host_start(rig, monkeypatch)
+        out = rig.launch.start(plan=rig.plan, grants=rig.grants, max_concurrent=max_concurrent,
+                               durable_attempts=True)
+        return calls, out
+
+    rig, _, (calls, out) = scenario(home, tmp_path, monkeypatch, body)
+    assert out == ("started",) and len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == (rig.gid,)
+    assert kwargs == {"plan": rig.plan, "grants": rig.grants, "max_concurrent": max_concurrent,
+                      "durable_attempts": True}                 # no audiences
+    assert kwargs["plan"] is rig.plan and kwargs["grants"] is rig.grants
+    assert kwargs["durable_attempts"] is True
+
+
+def supervision_tables(rig):
+    return {r[0] for r in rig.launch.store._q(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'swarm_supervision%'")}
+
+
+@pytest.mark.parametrize("bad", [1, 0, "yes", None, 1.0, ()])
+@pytest.mark.parametrize("with_plan", [True, False])
+def test_durable_nonbool_refused_before_host(home, tmp_path, monkeypatch, bad, with_plan):  # noqa: F811
+    async def body(rig, provider):
+        calls = record_host_start(rig, monkeypatch)
+        kw = dict(plan=rig.plan, grants=rig.grants) if with_plan else {}
+        with pytest.raises(LaunchError, match="durable_attempts must be a bool"):
+            rig.launch.start(durable_attempts=bad, **kw)
+        return calls, dict(rig.launch.members), supervision_tables(rig)
+
+    rig, provider, (calls, members, tables) = scenario(home, tmp_path, monkeypatch, body)
+    assert calls == [] and members == {} and tables == set() and provider.seen == []
+
+
+@pytest.mark.parametrize("case", ["no_plan", "conversation", "grants_only"])
+def test_durable_true_without_plan_refused_before_host(home, tmp_path, monkeypatch, case):  # noqa: F811
+    async def body(rig, provider):
+        calls = record_host_start(rig, monkeypatch)
+        kw = {"no_plan": {},
+              "conversation": dict(conversation=ConversationOptions(max_turns=2, idle_timeout=1.0)),
+              "grants_only": dict(grants=rig.grants)}[case]
+        with pytest.raises(LaunchError, match="durable_attempts requires a plan"):
+            rig.launch.start(durable_attempts=True, **kw)
+        return calls, dict(rig.launch.members), supervision_tables(rig)
+
+    rig, provider, (calls, members, tables) = scenario(home, tmp_path, monkeypatch, body)
+    assert calls == [] and members == {} and tables == set() and provider.seen == []
+
+
+def test_durable_true_still_runs_existing_plan_checks(home, tmp_path, monkeypatch):  # noqa: F811
+    async def body(rig, provider):
+        calls = record_host_start(rig, monkeypatch)
+        for kw in (dict(plan=rig.plan), dict(plan=rig.plan, grants=object()),
+                   dict(plan=rig.plan, grants=rig.grants,
+                        conversation=ConversationOptions(max_turns=2, idle_timeout=1.0))):
+            with pytest.raises(LaunchError):
+                rig.launch.start(durable_attempts=True, **kw)
+        return calls
+
+    _, _, calls = scenario(home, tmp_path, monkeypatch, body)
+    assert calls == []
+
+
+def test_durable_host_refusal_propagates_and_leaves_no_claim(home, tmp_path, monkeypatch):  # noqa: F811
+    async def body(rig, provider):
+        grants = make_grants(rig.launch, tmp_path, owner="mallory")
+        with pytest.raises(HostError) as info:
+            rig.launch.start(plan=rig.plan, grants=grants, durable_attempts=True)
+        assert not isinstance(info.value, LaunchError)
+        return dict(rig.launch.members), rig.plan_tables(), supervision_tables(rig), \
+            rig.host.status(rig.gid)["receipt"]
+
+    rig, provider, (members, tables, sup, receipt) = scenario(home, tmp_path, monkeypatch, body)
+    assert members == {} and tables == set() and sup == set() and receipt is None and provider.seen == []
+
+
+@pytest.mark.parametrize("durable", [True, False])
+def test_real_engine_durable_flag_controls_ledger_tables(home, tmp_path, monkeypatch, durable):  # noqa: F811
+    async def body(rig, provider):
+        import asyncio
+        rig.launch.start(plan=rig.plan, grants=rig.grants, durable_attempts=durable)
+        await asyncio.wait_for(rig.launch.wait(), BOUND)
+        return rig.states(), rig.plan_state(), supervision_tables(rig)
+
+    rig, provider, (states, plan_state, tables) = scenario(home, tmp_path, monkeypatch, body)
+    assert states == {"build": "completed", "check": "completed"} and plan_state == "settled"
+    assert provider.marks == ["MARK-BUILD", "MARK-CHECK"]
+    assert (len(tables) > 0) is durable
+    assert rig.launch.closed

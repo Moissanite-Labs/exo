@@ -88,6 +88,25 @@ method; `start()` and `start(conversation=…)` are unchanged.
   before the engine factory runs or any durable claim exists; its `HostError`
   propagates unchanged (not wrapped in `LaunchError`).
 
+### Durable attempts (opt-in)
+
+`launch.start(plan=, grants=, durable_attempts=True)` asks the host for its durable
+attempt-ledger dispatch (see `docs/SWARM-DURABLE-DISPATCH.md`). The default is
+`False`.
+
+- `durable_attempts` must be exactly `True` or `False`. Any other value (`1`, `0`,
+  `"yes"`, `None`) raises `LaunchError`. `True` without a plan also raises
+  `LaunchError`. Both happen before the host is called, so nothing is allocated.
+- The keyword is forwarded to `host.start` only when true. With `False` or no
+  argument, the host call is the same as without this parameter.
+- The existing checks on `plan`, `grants` and `conversation` still apply. The host's
+  `HostError` still propagates unchanged.
+- The wrapper adds no grants, retries, ledger schema or defaults.
+
+This needs a core with the durable host option. The attempt ledger stores no terminal
+result, and the legacy plan and task rows remain the sole terminal authority. The host
+does not retry or recover after a crash, and a failed startup still uses up the plan id.
+
 Limits: this is a Python API for a trusted caller that already holds a host-built
 `HostGrants`. It is not a protocol/client command, not a sandbox, and adds no new
 authority; it does not create plans or grants, and one start per group per process
