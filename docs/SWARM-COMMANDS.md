@@ -18,6 +18,7 @@ The argument is one JSON object after the subcommand name:
 /group create {"mode": "conductor", "members": ["lead", "one"], "conductor": "lead"}
 /group start {"id": "<group>", "audiences": {"lead": ["one"], "one": ["lead"]}}
 /group start {"id": "<group>", "conversation": {"max_turns": 10, "idle_timeout": 60, "max_concurrent": 2}}
+/group start {"id": "<group>", "audiences": {"lead": ["one"], "one": ["lead"]}, "knowledge": true}
 /group status {"id": "<group>"}
 /group pause {"id": "<group>", "member": "one"}
 /group resume {"id": "<group>"}
@@ -52,8 +53,8 @@ The argument is one JSON object after the subcommand name:
   `max_turns` (an exact integer, 1 to 10000), `idle_timeout` (a finite number
   greater than 0 and at most 86400, in seconds) and optional `max_concurrent`
   (an integer, at least 1). Booleans are not numbers, and unknown keys at either
-  level fail, including `plan`, `grants` and `knowledge`: this command does not
-  start plans or pass knowledge. It calls the injected host's
+  level fail, including `plan` and `grants`, and a `knowledge` key inside
+  `conversation`: this command does not start plans. It calls the injected host's
   `start(<id>, conversation=...)` with no `audiences`; the host derives the
   fixed audiences from the stored group mode, rejects `max_concurrent` above the
   member count before it builds engines or claims anything, and binds the reactive
@@ -61,6 +62,20 @@ The argument is one JSON object after the subcommand name:
   rejection is `bad_request`. This adds no engines, grants or permissions and
   no recovery of an earlier claim: it is the same start through the same
   injected, owner-matched host, and the same principal gate applies.
+  `knowledge` is an optional top-level field of either form. It must be exactly
+  `true` or `false` and defaults to `false`; any other value, including `1`,
+  `"true"` and `null`, is `bad_request` before the host is called. Only `true`
+  is forwarded, as `start(..., knowledge=True)`; omitted or `false` makes the
+  same host call as before. It uses the host's existing opt-in with the host's
+  default caps (this command exposes no `max_items` or `max_chars`; they fail as
+  unknown fields). Each member turn then carries a bounded snapshot of the
+  owner-published knowledge for that group, placed after the participant
+  messages as quoted JSON and framed as untrusted reference data, not
+  instructions. The host reads the snapshot at the start of each turn, so a
+  conversation turn sees the latest revision published by then and only that
+  revision. This grants no permissions and does not publish anything.
+  Use `knowledge_publish` for that. The command does not claim that knowledge is
+  supported on any other launch path.
 - `status` — the host snapshot: per-member state, the durable receipt or
   `null`, whether the runtime is active in this process and whether
   reconciliation is required (active claim, no local runtime). An active

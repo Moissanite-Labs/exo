@@ -328,7 +328,7 @@ def _conversation(raw: Any) -> ConversationOptions:
 
 
 def _op_start(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
-    unknown = set(args) - {"id", "audiences", "conversation"}
+    unknown = set(args) - {"id", "audiences", "conversation", "knowledge"}
     if unknown:
         raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
     if "id" not in args:
@@ -336,10 +336,15 @@ def _op_start(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     group_id = _group_id(args)
     if ("audiences" in args) == ("conversation" in args):
         raise _bad("start takes exactly one of audiences or conversation")
+    knowledge = args.get("knowledge", False)
+    if type(knowledge) is not bool:
+        raise _bad("knowledge must be a boolean")
     if "conversation" in args:
         call: dict[str, Any] = {"conversation": _conversation(args["conversation"])}
     else:
         call = {"audiences": _audiences(args)}
+    if knowledge:
+        call["knowledge"] = True      # host default caps; never forwarded when false or omitted
     try:
         statuses = _host(eng).start(group_id, **call)
     except HostError as e:
