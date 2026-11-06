@@ -226,15 +226,22 @@ def raise_nofile_limit(cap: int = 10240) -> int | None:
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
                 emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = (),
-                env_deny: Iterable[str] = ()) -> tuple[int, str, str]:
+                env_deny: Iterable[str] = (), github_auth: tuple[str, str] | None = None,
+                *, redact_output: bool = True) -> tuple[int, str, str]:
     """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
 
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
-    stdout and stderr are merged in arrival order.
+    stdout and stderr are merged in arrival order. Bound credentials are redacted by default;
+    the Registry-owned handler defers final-output redaction to its strict result boundary.
     """
     side_fd, side_path = open_side()
     try:
         env = tool_env(allow=env_allow, deny=env_deny)
+        if github_auth:
+            from exo.core.github_auth import child_env
+            env = child_env(env, *github_auth, deny=env_deny, cwd=str(cwd))
+            from exo.core.credentials import child_env as credential_env
+            env = credential_env(env, *github_auth, consumer="bash", deny=env_deny)
         proc = subprocess.Popen(
             wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL, pass_fds=(side_fd,),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=env)
@@ -277,7 +284,11 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     note = masked_note(side_path)
     if note and status == "ok":
         out.add("\n" + note)
-    return code, out.render(), status
+    rendered = out.render()
+    if redact_output and github_auth:
+        from exo.core.models.keys import redact_secrets
+        rendered = redact_secrets(rendered)
+    return code, rendered, status
 
 
 def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
@@ -312,7 +323,8 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str | ToolResult:
     code, output, status = run_command(args["command"], str(cwd), timeout,
                                        cancel=ctx.cancel, emit=ctx.emit,
                                        env_allow=ctx.meta.get("env_allow") or (),
-                                       env_deny=ctx.meta.get("env_deny") or ())
+                                       env_deny=ctx.meta.get("env_deny") or (),
+                                       github_auth=ctx.meta.get("github_auth"), redact_output=False)
     output = output.rstrip("\n")
     if status == "timeout":
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"
@@ -337,4 +349,4 @@ def register(reg: Registry) -> None:
                  "background": {"type": "boolean", "description": "Run as a background job and return a job id at "
                                 "once. `timeout` then means the job's wall limit (default and maximum set by the "
                                 "seat, 2 h)."}},
-              "required": ["command"]}, risk="high", toolset="shell")(bash)
+              "required": ["command"], "additionalProperties": False}, risk="high", toolset="shell")(bash)

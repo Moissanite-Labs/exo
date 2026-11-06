@@ -859,9 +859,9 @@ export function mount(root) {
       input.value = ""; help.sent(text);
       const mode = command.args === "status" ? "" : command.args;
       try {
-        const out = mode ? await permissions.set(mode) : permissions.describe(await permissions.refresh());
+        const out = mode ? await permissions.set(["full", "full all"].includes(mode) ? "full" : mode, mode === "full all" ? "all" : current) : permissions.describe(await permissions.refresh());
         push({ kind: "report", id: "rep" + Date.now(), title: "permissions", text: typeof out === "string" ? out : permissions.describe(permissions.current()) });
-      } catch (e) { fail(e); }
+      } catch (e) { if (["full", "full all"].includes(mode) && !input.value) input.value = text; fail(e); }
       return;
     }
     const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;

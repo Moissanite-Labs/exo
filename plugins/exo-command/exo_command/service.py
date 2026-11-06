@@ -170,6 +170,11 @@ class CommandCentre:
 
     async def replay_events(self, since: int, session: Optional[str] = None):
         """The ring is a cache; an expired cursor resumes from the core's durable event log."""
+        # Zero is a fresh page, not a request to download the entire durable
+        # log. It can arrive before bootstrap publishes its first cursor.
+        # Sessions and open panels have their own snapshot/history routes.
+        if since == 0 and session is None:
+            return self.events_since(0), None
         gap = bool((self.ring and since < self.ring[0]["seq"] - 1) or since > self._ring_seq)
         if not gap:
             return self.events_since(since, session), None
