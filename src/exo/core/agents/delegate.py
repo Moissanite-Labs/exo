@@ -89,7 +89,7 @@ SPEC = ToolSpec(
                  "`goal`, or several independent ones in `tasks` to run them in parallel. Use it for work that "
                  "would flood your context or that splits into independent parts, not for one or two tool calls. "
                  "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
-                 "is retried once one tier up."),
+                 "without exhausting its token budget is retried once one tier up."),
     parameters={"type": "object", "properties": {
         **_ITEM, "tasks": {"type": "array", "items": {"type": "object", "properties": _ITEM, "required": ["goal"]},
                            "description": "Several independent tasks, run in parallel."}}})
@@ -254,9 +254,9 @@ class Delegator:
         return e.router.provider(tier), route.ref
 
     async def _attempts(self, parent: str, b: Brief) -> Receipt:
-        """Run a child; if it failed (not cancelled), retry once one tier up when allowed and it changes the model."""
+        """Retry a failed child one tier up, except when it exhausted its resource budget."""
         r = await self.run(parent, b)
-        if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
+        if r.status != "failed" or r.error_code == "budget" or not self.escalate_on_fail or b.tier not in TIERS:
             return r
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
         if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:
