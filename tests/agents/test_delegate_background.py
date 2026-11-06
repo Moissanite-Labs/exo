@@ -31,7 +31,8 @@ class Keyed:
         users = [i for i, m in enumerate(messages) if m.role == "user"]
         text = messages[users[-1]].text() if users else ""
         step = sum(1 for m in messages[users[-1] + 1:] if m.role == "assistant") if users else 0
-        self.calls.append({"user": text, "tools": sorted(t.name for t in tools)})
+        self.calls.append({"user": text, "tools": sorted(t.name for t in tools),
+                           "context": [m.text() for m in messages]})
         spec = "fallback"
         for key, steps in self.rules:
             if key in text:
@@ -117,7 +118,7 @@ def test_background_returns_at_once_and_its_notice_lands_in_the_parents_session(
 
         # 4. the parent model reads it: woken on its own (idle, no client watching) or with the next turn
         await eng.loop.send(sid, "SECOND go")
-        assert any("[delegate notice" in c["user"] for c in eng.loop.provider.calls)
+        assert any(any("[delegate notice" in text for text in c["context"]) for c in eng.loop.provider.calls)
 
     asyncio.run(main())
 

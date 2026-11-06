@@ -7,8 +7,8 @@ When that turn ends cleanly (stop reason ``end``) the harness, not a fake user, 
 * ``wake_after`` - wake after N seconds (a timer fallback for waits on something outside the turn).
 * ``followup_pending`` - recorded and reported only. It never wakes the session and never publishes anything.
 
-``workers_pending`` is not offered: this slice does not verify the worker registry, and a toggle the harness
-cannot check is not trusted (next step: count running child tasks from the Delegator before honouring it).
+``workers_pending`` is not offered: models cannot assert worker state. The harness tracks actual background
+delegate launches instead and coalesces their completion receipts into generation-owned resume turns.
 
 Safety rules:
 
@@ -18,7 +18,7 @@ Safety rules:
   or a turn in which a tool was denied cancels the pending wake. Nothing restarts after those.
 * A user / principal turn cancels any pending wake (the human takes over).
 * Consecutive harness wakes are capped (``max_chain``) so a model that asks forever cannot loop forever.
-* A turn that asks for nothing schedules nothing: no idle wake after all is clear.
+* A turn that asks for nothing schedules no polling wake. A real owned delegate completion can resume it.
 
 Process-local MVP: pending wakes live in memory only. A restart of the core forgets them (documented, not
 persisted; the session store has no safe scheduled-event mechanism to reuse without inventing one).
@@ -48,7 +48,7 @@ END_TURN = ToolSpec(
                  "(no user message is needed). wake_after: seconds to wait before the harness wakes you (use it while "
                  "waiting on something that finishes later). followup_pending: you owe the user a follow-up; this is "
                  "only recorded, it never wakes you and never sends anything. Call it once, near the end of the turn. "
-                 "A stop from the user, a denied tool or an error cancels the wake. Without this call nothing wakes you."),
+                 "A stop from the user, a denied tool or an error cancels the wake. Background tasks you started can also resume you when their receipts arrive."),
     parameters={"type": "object", "properties": {
         "continue_now": {"type": "boolean", "description": "Wake this session again right after this turn."},
         "wake_after": {"type": "integer", "minimum": 1, "maximum": MAX_WAKE_AFTER,
@@ -65,6 +65,7 @@ class Request:
     followup_pending: bool = False
     reason: str = ""
     generation: int | None = None
+    receipt: bool = False
 
     @property
     def wakes(self) -> bool:
@@ -78,6 +79,9 @@ class _Session:
     chain: int = 0                   # consecutive harness wakes since the last non-harness turn
     denied: set[str] = field(default_factory=set)  # turn ids in which a tool was denied
     followup: str = ""               # last recorded follow-up reason (report only)
+    receipt_waking: bool = False
+    delegates: dict[str, int] = field(default_factory=dict)
+    receipts: set[str] = field(default_factory=set)
     gen: int = 0                     # fence: bumped by stop / human turn / close; a fired wake of an older gen is void
 
 
@@ -98,6 +102,7 @@ class Continuations:
         self.max_chain = max_chain
         self._s: dict[str, _Session] = {}
         self.closed = False
+        self.receipt_allowed: Callable[[str], bool] = lambda session: True
 
     def _st(self, session: str) -> _Session:
         return self._s.setdefault(session, _Session())
@@ -120,7 +125,7 @@ class Continuations:
             raise ToolError("choose continue_now or wake_after, not both")
         reason = str(args.get("reason") or "").strip()[:300]
         req = Request(turn_id=turn_id, continue_now=cont, wake_after=wait, followup_pending=follow, reason=reason,
-                      generation=generation)
+                      generation=self._st(session).gen if generation is None else generation)
         self._st(session).request = req  # a second call in the same turn replaces the first (coalesced)
         if req.wakes:
             when = "right after this turn" if cont else f"{wait}s after this turn"
@@ -142,6 +147,8 @@ class Continuations:
         st = self._st(session)
         st.gen += 1  # a wake that already fired (waiting for hooks or the session lock) is void now
         st.chain = 0
+        st.receipts.clear()
+        st.receipt_waking = False
         st.request = None  # a turn queued behind the running one voids that turn's request (the human takes over)
         self._cancel_timer(st)
 
@@ -150,16 +157,24 @@ class Continuations:
     def turn_ended(self, session: str, turn_id: str, stop_reason: str, error: str | None = None) -> str:
         """Apply the turn's request. Returns what was decided (for the receipt and tests)."""
         st = self._st(session)
+        st.receipt_waking = False
         req, st.request = st.request, None
         denied = turn_id in st.denied
         st.denied.discard(turn_id)
+        if stop_reason != "end" or error or denied:
+            st.receipts.clear()
+            st.delegates.clear()
         if req is None or req.turn_id != turn_id:
+            if st.receipts:
+                return self._resume_receipts(session)
             return "none"
         if req.generation is not None and req.generation != st.gen:
             return "cancelled:takeover"
         if req.followup_pending:
             st.followup = req.reason or "follow-up pending"
             self.notify(session, f"follow-up pending (recorded only): {st.followup}")
+        if st.receipts and stop_reason == "end" and not error and not denied:
+            return self._resume_receipts(session)
         if not req.wakes:
             return "followup" if req.followup_pending else "none"
         if self.closed:
@@ -189,19 +204,26 @@ class Continuations:
             return
         if st.timer is asyncio.current_task():
             st.timer = None
-        if self.closed:
+        if self.closed or req.generation != st.gen:
+            return
+        if req.receipt and not self.receipt_allowed(session):
+            st.receipts.clear()
             return
         if self.is_running(session):  # never a parallel turn; the running turn can ask again
             self.notify(session, "continuation dropped: a turn is already running")
             return
-        st.chain += 1
-        kind = "continue_now" if req.continue_now else f"wake_after={req.wake_after}s"
+        if req.receipt:
+            st.receipt_waking = True
+            st.receipts.clear()
+        else:
+            st.chain += 1
+        kind = "delegate receipts ready" if req.receipt else "continue_now" if req.continue_now else f"wake_after={req.wake_after}s"
         text = (f"[harness continuation wake: {kind}; requested by you in turn {req.turn_id}"
                 + (f"; your note: {req.reason}" if req.reason else "")
                 + ". This is not a user message. Check real state before acting; call exo_end_turn again only if "
                   "more work remains.]")
         meta = {"author": provenance.SYSTEM, "origin": ORIGIN, "continuation_of": req.turn_id,
-                "continuation_gen": st.gen}
+                "continuation_gen": req.generation, "delegate_receipt_wake": req.receipt}
         await self.start(session, text, meta)
 
     # ------------------------------------------------------------ stop
@@ -218,11 +240,45 @@ class Continuations:
         st = self._s.get(session)
         if st is None:
             return False
+        st.receipts.clear()
+        st.receipt_waking = False
         had = st.request is not None and st.request.wakes
         st.gen += 1  # also voids a wake that fired already but has not started its turn yet
         st.request = None
         st.chain = 0
         return self._cancel_timer(st) or had
+
+    def delegate_started(self, session: str, task: str) -> None:
+        """Only tasks actually launched by this parent earn a single completion wake."""
+        st = self._st(session)
+        owner = TURN_GENERATION.get()
+        generation = owner[1] if owner is not None and owner[0] == session else st.gen
+        if generation == st.gen and not self.closed:
+            st.delegates[task] = generation
+
+    def delegate_finished(self, session: str, task: str, *, queued: bool) -> bool:
+        st = self._st(session)
+        generation = st.delegates.pop(task, None)
+        if self.closed or generation != st.gen or not queued or not self.receipt_allowed(session):
+            return False
+        st.receipts.add(task)
+        if not self.is_running(session) and not st.receipt_waking:
+            self._resume_receipts(session)
+        return True
+
+    def receipts_entered(self, session: str) -> None:
+        """Receipts queued while hooks ran are included in this turn too."""
+        self._st(session).receipts.clear()
+
+    def _resume_receipts(self, session: str) -> str:
+        st = self._st(session)
+        if self.closed or not self.receipt_allowed(session):
+            st.receipts.clear()
+            return "blocked"
+        self._cancel_timer(st)
+        req = Request(turn_id="delegate", generation=st.gen, receipt=True)
+        st.timer = asyncio.ensure_future(self._fire(session, 0, req))
+        return "scheduled"
 
     def live(self, session: str, meta: dict[str, Any] | None) -> bool:
         """May this turn run? Always True for a turn not started by a wake. A wake is live only while no stop,
@@ -231,7 +287,8 @@ class Continuations:
         if meta.get("origin") != ORIGIN:
             return True
         st = self._s.get(session)
-        return (not self.closed and st is not None and meta.get("continuation_gen") == st.gen)
+        return (not self.closed and st is not None and meta.get("continuation_gen") == st.gen
+                and (not meta.get("delegate_receipt_wake") or self.receipt_allowed(session)))
 
     def generation(self, session: str) -> int:
         """Capture ownership before a turn yields to hooks or the session lock."""
