@@ -10,7 +10,13 @@ Models only ever read the English form (docs/AGENT-WIRE.md section 3).
 
 Limits: depth (flat by default), children per call, concurrent children per depth level,
 tool rounds, tokens and wall time per child. Cancelling the parent's tool call interrupts
-every child, which cancels their own children in turn.
+every child, which cancels their own children in turn. A background task is the one exception:
+its parent's call has already returned, so only an explicit stop (``subagent stop <task_id>``),
+the child's own limits or engine shutdown stops it.
+
+A call may run its tasks in the background instead (opt-in, ``background: true``): it returns each task id at once,
+the run stays tracked in the same ``tasks`` table and ``Delegator`` dicts, and its receipt reaches the parent on the
+existing ingress notice path. The default call still waits for every child.
 
 Only the child prompt wording and the blocked-tool list are lifted from Hermes; the rest is new.
 """
@@ -18,21 +24,25 @@ Only the child prompt wording and the blocked-tool list are lifted from Hermes; 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
 from dataclasses import dataclass, fields, replace
-from typing import Any
+from typing import Any, List
 
 from exo.core.context import DefaultCompressor, TreeContext
+from exo.core.ingress import Ingress, IngressPath
 from exo.core.loop import Loop
 from exo.core.models.router import TIERS
+from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ToolCall, ToolResult, ToolSpec, Usage
 from exo.protocol import schema as s
 from exo.wire import Brief, Receipt, encode, render, sign
 from exo.wire.grammar import SYM
+from exo.wire.packets import decode_any
 
 ROLES = ("builder", "scout", "verifier", "critic")
 READ_ONLY = {"scout", "critic"}  # low-risk tools only
@@ -81,6 +91,10 @@ _ITEM = {
                             "(architecture, open research synthesis, hard cross-file debugging). Prefer the cheaper "
                             "tier when unsure. Default by role: scout fast, builder and verifier standard, critic "
                             "deep. A child never runs above your own tier."},
+    "background": {"type": "boolean",
+                   "description": "Optional: start the task and return at once with its task id; its receipt arrives "
+                                  "later as a notice in this session. Use it when you have other work to do meanwhile. "
+                                  "Set it on every task in a call, or on none."},
 }
 SPEC = ToolSpec(
     name="delegate", toolset="delegation", risk="low",
@@ -89,7 +103,9 @@ SPEC = ToolSpec(
                  "`goal`, or several independent ones in `tasks` to run them in parallel. Use it for work that "
                  "would flood your context or that splits into independent parts, not for one or two tool calls. "
                  "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
-                 "is retried once one tier up."),
+                 "is retried once one tier up. By default the call waits for every task; with `background` it "
+                 "returns the task ids at once and each receipt arrives later as a notice. Stop a background task "
+                 "with `subagent stop <task_id>`."),
     parameters={"type": "object", "properties": {
         **_ITEM, "tasks": {"type": "array", "items": {"type": "object", "properties": _ITEM, "required": ["goal"]},
                            "description": "Several independent tasks, run in parallel."}}})
@@ -128,6 +144,56 @@ class _Bus:
         return ev
 
 
+class _Notices(EngineTarget):
+    """A finished background task reaches its parent on the ingress notice path, not on a second runtime (class a).
+
+    One ``Ingress`` per receipt, delivered by the rules a job notice already uses: steered into a running turn at its
+    next tool round, queued for the next turn, or a wake only when no client is watching and nothing waits on an
+    approval, under the operator's ``jobs.wake`` setting. The message is the harness's own (``local``), so the consent
+    check skips it, and its author is ``delegate``: a child's words never arrive as the principal's.
+    """
+
+    def __init__(self, engine: Any) -> None:
+        super().__init__(engine)
+        self.engine = engine
+        self.path = IngressPath(self, lambda ing: ("auto", "a delegated task this agent started"))
+
+    def can_wake(self, session: str) -> bool:
+        """The operator's job wake rule (``jobs.wake``, or no client on the stream when unset; never after shutdown)
+        and never over a held approval gate: a background notice starts a turn by exactly the rules a job notice does."""
+        e = self.engine
+        return bool(e.jobs.target.can_wake(session)) and not e.approvals.open
+
+    def _meta(self, ing: Ingress) -> dict[str, Any]:
+        return {"author": "delegate",
+                "delegate": {"task_id": ing.meta.get("task_id"), "state": ing.meta.get("state"), "msg_id": ing.id}}
+
+    def _message(self, ing: Ingress) -> Any:
+        """The receipt as the parent reads it: its own tagged block, never the peer frame (docs/AGENT-WIRE.md 3)."""
+        msg = super()._message(ing)
+        msg.content = [type(msg.content[0]).of_text(ing.body)]
+        return msg
+
+    async def wake(self, session: str, ing: Ingress) -> None:
+        """A woken turn reads the same plain block as a queued or steered one, never the generic peer frame."""
+        self.e.start_turn(session, ing.body, self._meta(ing))
+
+    async def send(self, parent: str, r: Receipt, asked: str = "") -> None:
+        """``asked`` is the id the parent was given; an escalation retry runs under a new id, so both are named."""
+        if not parent:
+            return
+        asked = asked or r.brief
+        retried = f" (retried one tier up as task {r.brief})" if asked != r.brief else ""
+        body = (f"[delegate notice | task {asked} | {r.status}]\n"
+                f"task {asked}{retried} finished {r.status}: a {r.role} subagent, {r.duration_ms / 1000:.1f} s, "
+                f"{r.tool_calls} tool calls" + (f", files {', '.join(r.files)}" if r.files else "") + ".\n"
+                + (f"error: {r.error}\n" if r.error else "") + (r.summary.strip() or "(no summary)") + "\n"
+                f"(subagent open {r.brief} for its whole conversation)\n"
+                "[end of delegate notice: a subagent you started has finished; this is its result, not the user]")
+        await self.path.submit(Ingress("delegate", "harness", "local", body, session=parent, id=new_id("dn"),
+                                       meta={"local": True, "task_id": r.brief, "state": r.status}))
+
+
 class Delegator:
     def __init__(self, engine: Any, config: dict[str, Any] | None = None, signer: Any = None,
                  bus: Any = None) -> None:
@@ -144,6 +210,9 @@ class Delegator:
         self.over: set[str] = set()           # children stopped for their token budget
         self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
+        self.active: dict[str, str] = {}  # advertised background id -> current attempt id
+        self.bg: dict[str, asyncio.Task] = {}  # background task id -> the run that will finish it
+        self.notices = _Notices(engine)         # completions reach the parent on the harness's existing notice path
         engine.store._q(TABLE)
 
     def fail_stale(self) -> None:
@@ -195,6 +264,15 @@ class Delegator:
                 and getattr(self.engine.executor, "supports_remote_delegation", False) is not True):
             raise ToolError("Required tool executor does not support remote delegation")
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
+        want = [it.get("background") is True for it in items]
+        if args.get("background") is True:  # one call, one mode: every task waits, or none does
+            want = [True] * len(items)
+        if any(want):
+            if not all(want):
+                raise ToolError("background is set on some tasks and not others; set it on every task or on none.")
+            if any(it.get("seat") for it in items):
+                raise ToolError("a task for another seat is already queued; background does not apply to it.")
+            return self._background(parent, briefs)
         runs = [asyncio.ensure_future(self._remote(parent, b, str(it["seat"])) if it.get("seat")
                                       else self._attempts(parent, b)) for b, it in zip(briefs, items)]
         try:
@@ -207,6 +285,94 @@ class Delegator:
         n = len(briefs)
         return "\n\n".join((f"Task {i + 1} of {n}: {b.goal[:100]}\n" if n > 1 else "") + render(r)
                            for i, (b, r) in enumerate(zip(briefs, receipts)))
+
+    def _background(self, parent: str, briefs: List[Brief]) -> str:
+        """Start each task on this runtime and return at once with its task id (class a, opt-in).
+
+        Nothing else changes: the same rows in the ``tasks`` table, the same depth cap, tools, tier, semaphores,
+        spend check, approvals and receipt. The run outlives the parent's tool call on purpose. An explicit stop
+        reaches it (``cancel``, ``subagent stop <task_id>``), even before it starts, as do the child's own limits;
+        cancelling the parent's tool call cannot, because that call has already returned. The runs live in this
+        process only; shutdown cancels and awaits them before closing their store."""
+        b: Brief
+        for b in briefs:
+            t = asyncio.ensure_future(self._finish(parent, b))
+            self.bg[b.id] = t
+            self.active[b.id] = b.id
+            def forget(f: asyncio.Future, k: str = b.id) -> None:
+                self._forget(k, f)
+            t.add_done_callback(forget)
+        n = len(briefs)
+        return "\n\n".join(
+            (f"Task {i + 1} of {n}: {b.goal[:100]}\n" if n > 1 else "")
+            + f"Started task {b.id}. It runs in the background; you can keep working. Its receipt arrives in this "
+              "session as a notice when it finishes." for i, b in enumerate(briefs))
+
+    async def cancel(self, task_id: str, who: str = "") -> bool:
+        """Stop a background task by its id, wherever it is: one still waiting for a concurrency slot is cancelled
+        before it starts a child, and a running one takes ``run``'s own cancelled path. The cancelled receipt is
+        announced from here, since the run that was just cancelled cannot await its own notice."""
+        root = next((k for k, active in self.active.items() if task_id in (k, active)), task_id)
+        current = self.active.get(root, task_id)
+        t = self.bg.get(root)
+        if t is None or t.done():
+            return False
+        if who:
+            self.marks.setdefault(current, []).append(f"stopped by {who}")
+        t.cancel()
+        with contextlib.suppress(BaseException):
+            await t  # run's finally has written the cancelled receipt and its row by the time this returns
+        rows = self.engine.store._q("SELECT parent, receipt FROM tasks WHERE id=?", (current,))
+        r = decode_any(rows[0]["receipt"])[0] if rows and rows[0]["receipt"] else None
+        if rows and rows[0]["parent"] and isinstance(r, Receipt):
+            with contextlib.suppress(Exception):
+                await self.notices.send(rows[0]["parent"], r, asked=root)
+        return True
+
+    def background_active(self, task_id: str) -> bool:
+        return any(task_id in (root, current) and root in self.bg and not self.bg[root].done()
+                   for root, current in self.active.items())
+
+    async def close(self) -> None:
+        """Drain background children while their providers and store are still available."""
+        tasks = list(self.bg.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _finish(self, parent: str, b: Brief) -> None:
+        """A background run, then its notice. ``run`` has already written the receipt and the ``task.updated``
+        events, so a notice that cannot be delivered loses nothing."""
+        try:
+            r = await self._attempts(parent, b)
+        except asyncio.CancelledError:
+            raise  # an explicit stop: ``cancel`` announces the cancelled receipt this task cannot await
+        except Exception as exc:  # routing or setup: the sync path would have raised this at the caller
+            r = self._broken(parent, b, exc)
+        with contextlib.suppress(Exception):
+            await self.notices.send(parent, r, asked=b.id)
+
+    def _broken(self, parent: str, b: Brief, exc: Exception) -> Receipt:
+        """The failed row, event and receipt for a background run that could not even start. Nothing vanishes."""
+        db, why = self.engine.store, f"{type(exc).__name__}: {exc}"[:400]
+        r = Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status="failed", role=b.role, tier=b.tier,
+                    error_code="error", error=why, summary=f"The task could not start: {why}")
+        rl = encode(r)
+        with contextlib.suppress(Exception):
+            db._q("INSERT OR IGNORE INTO tasks (id, parent, child, depth, title, status, brief, created, updated) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (b.id, parent or None, None, b.depth, b.goal[:80], "queued",
+                                                encode(b), s.now_ts(), s.now_ts()))
+            db._q("UPDATE tasks SET status='failed', receipt=?, sig=?, updated=? WHERE id=? AND status IN "
+                  "('queued','running')", (rl, json.dumps(sign(rl, self.signer)) if self.signer is not None else None,
+                                           s.now_ts(), b.id))  # a row ``run`` already wrote keeps its own receipt
+        self._emit(parent, b, "failed", None, rl)
+        return r
+
+    def _forget(self, task_id: str, fut: asyncio.Future) -> None:
+        self.bg.pop(task_id, None)
+        self.active.pop(task_id, None)
+        with contextlib.suppress(BaseException):
+            fut.exception()  # consumed here: the receipt is already stored and announced
 
     async def _remote(self, parent: str, b: Brief, seat: str) -> Receipt:
         """Send the brief to another seat as a signed bus message and record the task as queued. The remote
@@ -261,7 +427,10 @@ class Delegator:
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
         if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:
             return r
-        return await self.run(parent, replace(b, id=new_id("k"), tier=nxt), escalated=True)
+        retry = replace(b, id=new_id("k"), tier=nxt)
+        if b.id in self.bg:
+            self.active[b.id] = retry.id
+        return await self.run(parent, retry, escalated=True)
 
     def _brief(self, parent: str, depth: int, it: dict[str, Any], cwd: str) -> Brief:
         role = it.get("role") or "builder"
@@ -331,6 +500,8 @@ class Delegator:
             return await asyncio.wait_for(turn, 5)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             turn.cancel()
+            with contextlib.suppress(BaseException):
+                await turn
             return None
 
     async def run(self, parent: str, b: Brief, escalated: bool = False) -> Receipt:
@@ -373,7 +544,8 @@ class Delegator:
             self._emit(parent, b, r.status, sid or None, rl)
             if sid:
                 db.lock(sid, r.status)  # a finished child takes no new turns
-                await self._roll_up(parent, sid, loop, model)
+                with contextlib.suppress(Exception, asyncio.CancelledError):  # a cancelled run still cleans up
+                    await self._roll_up(parent, sid, loop, model)
             self.loops.pop(sid, None)
             self.tiers.pop(sid, None)
             self.over.discard(sid)
@@ -418,7 +590,8 @@ class Delegator:
         cap = self.limits.max_summary_chars
         if len(text) > cap:
             text = text[:cap] + f" [cut {len(text) - cap} chars]"
-        text += "".join(f"\n[{m}]" for m in self.marks.pop(sid, []))
+        text += "".join(f"\n[{m}]" for m in self.marks.pop(sid, []) + self.marks.pop(b.id, []))  # b.id: a stop
+        # that came before the child started had no session to key the note on
         total = loop.state(sid).total if loop is not None and sid else Usage()
         return Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status=status, role=b.role, summary=text,
                        input_tokens=total.input_tokens + total.cache_write_tokens, output_tokens=total.output_tokens,
