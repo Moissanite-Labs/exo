@@ -44,6 +44,11 @@ A model's request is subordinate to the harness, not an unconditional next turn:
   turn cannot rearm it.
 - Human/non-continuation input takes over: it clears the request, cancels the
   timer, resets the chain, and invalidates the old generation.
+- A principal steer also fences workers and requests from the earlier rounds.
+  Once the running turn consumes that steer, subsequent rounds acquire the
+  current generation and can request continuation or launch owned background
+  work. Already-running workers retain their old fence. A Stop or newer takeover
+  before consumption prevents an old steer from restoring ownership.
 - A fired wake is checked before execution and again under the session lock.
   Stop or takeover that wins before that locked start prevents a new wake
   message/turn; it is not merely a best-effort timer cancellation.

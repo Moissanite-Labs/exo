@@ -233,6 +233,7 @@ class CoreRuntime:
                          context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        self.loop.on_steer = self.continuations.steer_entered
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._tutorial_line
@@ -656,9 +657,10 @@ class CoreRuntime:
             if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
                 raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
             b.mode = "steer"
-        meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
+        meta: dict[str, Any] = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             self.continuations.turn_started(b.session, meta)
+            meta["continuation_steer_gen"] = self.continuations.generation(b.session)
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
