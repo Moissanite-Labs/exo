@@ -557,7 +557,13 @@ def test_recorded_session_cost_in_exo_trace_tool(tmp_path):
 
     sid = run(go())
     out = eng.trace_text(sid, 5)
-    assert "$210.00" in out and "cache r/w 0/0  unknown" not in out  # the standing line names bus messages (D-040)
+    calls = [e.body for e in types(eng, sid) if isinstance(e.body, s.ModelCall)]
+    assert len(calls) == 1 and calls[0].usage is not None
+    usage = calls[0].usage
+    # At $1 per input token, pricing follows recorded usage rather than prompt wording.
+    expected_cost = float(usage.input_tokens)
+    assert expected_cost > 0 and usage.cost_usd == pytest.approx(expected_cost)
+    assert f"${expected_cost:.2f}" in out and "cache r/w 0/0  unknown" not in out
     assert "calls in turn 1" in out
     plain = engine(tmp_path / "np", [{"match": "go", "steps": ["ok"]}])
     async def go2():
