@@ -26,6 +26,9 @@ await host.wait(group.id)
 - Each member profile gets one loop. The loop runs only that profile's tasks, in the plan's topological order. A member that owns no task still settles as completed.
 - Each task is one engine turn on the engine already bound to `task.profile`. The prompt is `PLAN_PREFIX` followed by one JSON document with `task_id`, `role`, `goal`, `acceptance`, `route`, `write_scopes`, `depends_on` and `dependency_results`. `route` appears only as data inside the prompt. It does not select a model.
 - A reviewer task (role `reviewer`, `verifier` or `critic`) also gets `REVIEW_PREFIX` plus `{"reviewed_task", "reviewed_result"}`. The contract requires an empty write scope, a reviewer-granted profile and a dependency on the reviewed task. `authorize_task` rechecks reviewer-profile grants and empty write scopes before every turn. The task contract validates dependency structure. Read-only here is a contract and prompt constraint, not a tool/filesystem sandbox.
+- `role` and `write_scopes` are checked when the plan is validated and are then written into the prompt as instructions. They are not per-task tool authority and they do not confine the filesystem.
+  `_prompt` copies them into the JSON text. `run_turn` receives only the session and that prompt text. The engine's tool context (`ToolContext`) has no field for a task's role or scopes.
+  Each member's engine, gate and executor authority is the same as it was before the plan started. See "Task role and scopes".
 - Results are bounded engine text, at most 16,000 characters by default including the truncation marker. Later tasks receive them as quoted, untrusted data.
 - If a dependency fails or stops, every task that depends on it fails closed with `dependency <id> failed` or `dependency <id> stopped`, and no engine turn runs for it. Nothing is retried, skipped silently or run speculatively.
 - Once a member has entered its plan adapter, stopping it settles its remaining tasks as `stopped`, not failures of their own. Stopping before a member enters its adapter settles that member's tasks as `stopped` too. See "Lifecycle failure behavior".
@@ -42,17 +45,32 @@ Run the commands in the last section. No test here uses a real model or a real `
 
 ## What this does not claim
 
+- **Role and write scopes are not tool authority.** See "Task role and scopes" below.
 - **Write scopes are lexical, not a sandbox.** `write_scopes` are prefix strings checked against `HostGrants.write_roots` at component boundaries. This layer never opens or resolves a path and enforces nothing on the filesystem. A tool that writes during an engine turn must check authority and resolve the real path itself. A validated plan never authorizes a write. The tests use scopes like `/srv/w/build` that are never touched.
 - No secret detection or scanning.
 - `plan_id` is a content digest anyone can compute. It identifies a plan. It does not prove authority. Authority comes only from `HostGrants`, which are checked before the start and before each turn. Roles and profile names are data and grant nothing.
 - The tests show how prompts and results flow through fake engines. They do not show that a real model does what the task asks.
+
+## Task role and scopes
+
+A task's `role` and `write_scopes` have two uses. They are checked when the plan is validated (`validate_plan`) and again by `authorize_task` before each turn. They are also copied into the prompt as instructions for the model.
+
+They do not do these things:
+
+- They do not grant or limit tools for one task. `PlanAdapter._execute` calls `engine.run_turn(TurnSend(session=..., text=prompt))`. That call carries no task role, scope or grant. `ToolContext` holds `cwd`, `session`, `call_id`, `cancel`, `emit` and `meta`, and nothing from the plan.
+- They do not confine writes to the listed paths. A model that ignores the prompt can still call any tool its engine allows.
+- They do not change the member's engine, gate or executor. `GroupPlugins.executor` and `executor_required` are passed to every member engine unchanged, as they are outside a plan.
+
+Built-in plan dispatch does not bind task scopes to any tool call. An executor that the host installed and trusts may enforce its own policy on tool calls. That policy comes from the executor, not from the plan. A reader should not assume the plan narrows it.
 
 ## Durability and restart limits
 
 - State is stored in two tables, `swarm_plans` and `swarm_plan_tasks`, in the same sessions DB as the group. The tables are created on the first claim or plan read. Preflight rejection of an invalid plan and the duplicate probe create no plan schema. A later claim failure may leave empty plan tables after discarding the unstarted rows.
 - Each task gets exactly one attempt. There is no retry, restart recovery or stale-claim takeover. In-process pause/resume is supported. It is not durable recovery.
 - A plan id can be started only once. A duplicate is refused before any engine is built, and refused again inside the claiming transaction.
+- A startup failure can also use up the plan id. If members already started, the reservation is kept (see "Lifecycle failure behavior"). With `durable_attempts=True`, a failure once ledger initialization has begun marks the unstarted rows `failed` and settles the plan, so the id is refused with the flag on or off. Only a failure before any member started and before ledger initialization began frees the id.
 - If a process crashes mid-run, the plan row stays `running` and its tasks stay `pending` or `running`. That plan id cannot be started again until someone reconciles it out of band. No tool does that reconciliation today.
+- The durable opt-in does not change this. It adds records for a person to inspect. It does not add recovery or retries.
 - In-memory dependency results (the `_results` map) do not survive a restart. Only the stored rows do.
 
 ## Not done
@@ -134,5 +152,9 @@ plan reservation preceding the factory.
 
 ## Durable dispatch (opt-in)
 
-See `docs/SWARM-DURABLE-DISPATCH.md`: `GroupHost.start(durable_attempts=True)` records each task attempt in
-the attempt ledger (no retries); default off, existing behavior unchanged.
+The attempt ledger is connected to this executor, but only when you pass `durable_attempts=True` to `GroupHost.start` together with a plan. It defaults to `False`. See `docs/SWARM-DURABLE-DISPATCH.md` and `docs/SWARM-DURABLE-ATTEMPTS.md`.
+
+- With the flag on, each task records a reservation and a dispatch intent in the ledger before its turn. There are still no retries and no crash recovery. A task that was interrupted after its dispatch intent needs a person to inspect it.
+- The legacy `swarm_plans` and `swarm_plan_tasks` rows stay the only record of how a task ended. The ledger does not hold a terminal result.
+- A startup failure once ledger initialization has begun uses up the plan id, as described above.
+- The flag does not change task role or scope handling. The section "Task role and scopes" applies with it on or off.
