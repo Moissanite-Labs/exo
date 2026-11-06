@@ -111,3 +111,30 @@ Limits: this is a Python API for a trusted caller that already holds a host-buil
 `HostGrants`. It is not a protocol/client command, not a sandbox, and adds no new
 authority; it does not create plans or grants, and one start per group per process
 still applies.
+
+## Knowledge (opt-in)
+
+`launch.start(knowledge=True)` exposes the host's existing `GroupHost.start(knowledge=True)`
+opt-in (see `docs/SWARM-KNOWLEDGE.md`): each member turn also receives a bounded snapshot of the
+group's owner-published knowledge as quoted, untrusted reference data, at the host's default caps.
+The default is `False`.
+
+Supported forms (all forward `knowledge=True` to the host unchanged):
+
+- `launch.start(knowledge=True)` — one-shot adapter, audiences derived as before.
+- `launch.start(conversation=ConversationOptions(...), knowledge=True)` — reactive conversation.
+- `launch.start(plan=, grants=, knowledge=True)` — plan run; the host already passes the reader to
+  plan execution, so the launcher only forwards the flag (it composes with `durable_attempts=True`
+  and `max_concurrent`).
+
+- `knowledge` must be exactly `True` or `False`. Anything else (`1`, `0`, `"yes"`, `None`)
+  raises `LaunchError` before the host is called, so nothing is allocated or claimed.
+- The keyword is forwarded only when true. With `False` or omitted, the host call is identical to
+  the legacy call without this parameter.
+- Plan, grants and authority handling is unchanged; `HostError` from the host still propagates.
+
+Limits: this is a Python API only. It does not publish knowledge (publishing is the owner's
+`knowledge_publish` command / store API), does not accept `max_items`/`max_chars` (the host's
+default caps apply), and does not add a CLI or protocol flag. Each member turn reads the latest
+published revision at the time of that turn (host behaviour). The snapshot is reference data, not
+authority.

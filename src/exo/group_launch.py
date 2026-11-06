@@ -194,7 +194,8 @@ class GroupLaunch:
 
     def start(self, *, conversation: ConversationOptions | None = None,
               max_concurrent: int | None = None,
-              plan=None, grants=None, durable_attempts: bool = False) -> tuple:
+              plan=None, grants=None, durable_attempts: bool = False,
+              knowledge: bool = False) -> tuple:
         """Bind the member engines via the host factory and start the run once.
 
         The default (``conversation=None``) is the one-shot ``GroupEngineAdapter``
@@ -221,6 +222,16 @@ class GroupLaunch:
         the host is called. It is forwarded as ``durable_attempts=True`` only when
         true; when false the host call is exactly what it was without this parameter.
 
+        ``knowledge`` is an exact-``bool`` opt-in (default ``False``) for the host's
+        existing owner-published knowledge snapshot (docs/SWARM-KNOWLEDGE.md): every
+        member turn then receives the bounded, quoted, untrusted snapshot at the host's
+        default caps. Any non-``bool`` value raises ``LaunchError`` before the host is
+        called, so nothing is allocated or claimed. It is forwarded as
+        ``knowledge=True`` only when true, to the one-shot, conversation and plan paths
+        alike (the host already accepts it for all three); when false or omitted the
+        host call is exactly what it was without this parameter. No snapshot bounds,
+        reader or authority are accepted or built here.
+
         ``max_concurrent`` is an explicit turn-concurrency bound forwarded to
         ``GroupHost.start`` for both start kinds: ``None`` (the default)
         preserves full member concurrency; a strict ``int`` in ``1..member
@@ -230,10 +241,13 @@ class GroupLaunch:
         the more specific declaration and wins when set; the start-level
         ``max_concurrent`` is the fallback.
         """
+        if type(knowledge) is not bool:
+            raise LaunchError("knowledge must be a bool")
         if type(durable_attempts) is not bool:
             raise LaunchError("durable_attempts must be a bool")
         if durable_attempts and plan is None:
             raise LaunchError("durable_attempts requires a plan")
+        know = {"knowledge": True} if knowledge else {}
         if plan is not None or grants is not None:
             if plan is None or grants is None:
                 raise LaunchError("a plan start requires both plan and grants")
@@ -246,15 +260,15 @@ class GroupLaunch:
                 raise LaunchError("grants must be HostGrants built by the host")
             extra = {"durable_attempts": True} if durable_attempts else {}
             return self.host.start(self.group.id, plan=plan, grants=grants,
-                                   max_concurrent=max_concurrent, **extra)
+                                   max_concurrent=max_concurrent, **extra, **know)
         if conversation is None:
             return self.host.start(self.group.id,
                                    audiences=_audiences_for(self.group),
-                                   max_concurrent=max_concurrent)
+                                   max_concurrent=max_concurrent, **know)
         if not isinstance(conversation, ConversationOptions):
             raise LaunchError("conversation must be a ConversationOptions instance or None")
         return self.host.start(self.group.id, conversation=conversation,
-                               max_concurrent=max_concurrent)
+                               max_concurrent=max_concurrent, **know)
 
     async def wait(self) -> tuple:
         """Await the group's settlement."""
