@@ -40,6 +40,8 @@ _PLAN_ID = re.compile(r"[0-9a-f]{64}")  # sha256 hex, as validate_plan produces
 _ID_MAX = 128  # group ids are short. Reject anything longer before a store call.
 _TASKS_LIMIT = 100  # plan_status default number of task rows returned
 _TASKS_MAX = 200  # plan_status maximum number of task rows returned
+_PLANS_LIMIT = 50  # plan_list default number of plans returned
+_PLANS_MAX = 200  # plan_list maximum number of plans returned
 _RESULT_CHARS = 4000  # per-task result cap. It shrinks when many rows share the budget.
 _ERROR_CHARS = 256  # per-task error cap
 _AGGREGATE_CHARS = 32_000  # one budget for all result and error text in a response
@@ -729,9 +731,33 @@ def _op_plan_status(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _op_plan_list(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    """Read-only, owner-scoped, bounded list of one group's plans. No host, no writes, no schema."""
+    unknown = set(args) - {"id", "limit"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    if "id" not in args:
+        raise _bad("missing field(s): id")
+    group_id = _group_id(args)
+    if len(group_id) > _ID_MAX:
+        raise _bad(f"id must be at most {_ID_MAX} characters")
+    limit = _bounded(args["limit"], "limit", 1, _PLANS_MAX) if "limit" in args else _PLANS_LIMIT
+    try:
+        plans, truncated = PlanExecutions(_groups(eng)).list_plans(
+            group_id=group_id, owner=eng.agent, limit=limit)
+    except PlanExecutionError:
+        raise _plan_refusal() from None
+    return {
+        "id": group_id,
+        "plans": [{"plan_id": p.plan_id, "state": p.state, "created": p.created, "finished": p.finished,
+                   "task_count": p.task_count, "tasks_by_state": dict(p.tasks_by_state)} for p in plans],
+        "plans_truncated": truncated,
+    }
+
+
 _OPS.update({"create": _op_create, "start": _op_start, "status": _op_status,
              "pause": _op_pause, "resume": _op_resume, "stop": _op_stop,
-             "plan_status": _op_plan_status})
+             "plan_status": _op_plan_status, "plan_list": _op_plan_list})
 
 
 async def command(eng: CoreRuntime, b) -> Any:
@@ -742,7 +768,7 @@ async def command(eng: CoreRuntime, b) -> Any:
     if fn is None:
         raise CommandFailed("bad_request",
                             "usage: /group <list|inspect|send|observe|create|start|"
-                            "status|pause|resume|stop|plan_status|"
+                            "status|pause|resume|stop|plan_status|plan_list|"
                             "knowledge_publish|knowledge_read|knowledge_list|"
                             "knowledge_history> '<json>'")
     return fn(eng, _args(rest))
