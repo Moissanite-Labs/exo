@@ -104,7 +104,8 @@ SPEC = ToolSpec(
                  "would flood your context or that splits into independent parts, not for one or two tool calls. "
                  "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
                  "is retried once one tier up. By default the call waits for every task; with `background` it "
-                 "returns the task ids at once and each receipt arrives later as a notice. Stop a background task "
+                 "returns the task ids at once and each receipt arrives later as a notice, resuming this session "
+                 "even with a connected UI unless stopped or blocked by operator wake policy or approvals. Stop a background task "
                  "with `subagent stop <task_id>`."),
     parameters={"type": "object", "properties": {
         **_ITEM, "tasks": {"type": "array", "items": {"type": "object", "properties": _ITEM, "required": ["goal"]},
@@ -151,22 +152,32 @@ class _Bus:
 class _Notices(EngineTarget):
     """A finished background task reaches its parent on the ingress notice path, not on a second runtime (class a).
 
-    One ``Ingress`` per receipt, delivered by the rules a job notice already uses: steered into a running turn at its
-    next tool round, queued for the next turn, or a wake only when no client is watching and nothing waits on an
-    approval, under the operator's ``jobs.wake`` setting. The message is the harness's own (``local``), so the consent
+    One ``Ingress`` per receipt, steered into an accepting turn or queued. An actual background task
+    started by this parent can resume it through the generation-fenced continuation path, even while a client
+    watches. Explicit ``jobs.wake=false`` and open approvals block that resumption. The message is the harness's own (``local``), so the consent
     check skips it, and its author is ``delegate``: a child's words never arrive as the principal's.
     """
 
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
         self.engine = engine
+        self.sent: set[tuple[str, str]] = set()
         self.path = IngressPath(self, lambda ing: ("auto", "a delegated task this agent started"))
 
     def can_wake(self, session: str) -> bool:
-        """The operator's job wake rule (``jobs.wake``, or no client on the stream when unset; never after shutdown)
-        and never over a held approval gate: a background notice starts a turn by exactly the rules a job notice does."""
+        # All delegate wakes use the generation-fenced continuation path, including headless sessions.
+        return False
+
+    async def steer(self, session: str, ing: Ingress) -> bool:
+        delivered = await super().steer(session, ing)
+        if delivered:
+            self.engine.continuations.delegate_finished(session, str(ing.meta.get("task_id", "")), queued=False)
+        return delivered
+
+    async def queue(self, session: str, ing: Ingress) -> None:
+        await super().queue(session, ing)
         e = self.engine
-        return bool(e.jobs.target.can_wake(session)) and not e.approvals.open
+        e.continuations.delegate_finished(session, str(ing.meta.get("task_id", "")), queued=ing.meta.get("state") != "cancelled")
 
     def _meta(self, ing: Ingress) -> dict[str, Any]:
         return {"author": "delegate",
@@ -179,13 +190,17 @@ class _Notices(EngineTarget):
         return msg
 
     async def wake(self, session: str, ing: Ingress) -> None:
-        """A woken turn reads the same plain block as a queued or steered one, never the generic peer frame."""
-        self.e.start_turn(session, ing.body, self._meta(ing))
+        """Even direct callers use the queued, generation-fenced receipt path."""
+        await self.queue(session, ing)
 
     async def send(self, parent: str, r: Receipt, asked: str = "") -> None:
         """``asked`` is the id the parent was given; an escalation retry runs under a new id, so both are named."""
         if not parent:
             return
+        key = (parent, r.id)
+        if key in self.sent:
+            return
+        self.sent.add(key)
         asked = asked or r.brief
         retried = f" (retried one tier up as task {r.brief})" if asked != r.brief else ""
         body = (f"[delegate notice | task {asked} | {r.status}]\n"
@@ -195,7 +210,7 @@ class _Notices(EngineTarget):
                 f"(subagent open {r.brief} for its whole conversation)\n"
                 "[end of delegate notice: a subagent you started has finished; this is its result, not the user]")
         await self.path.submit(Ingress("delegate", "harness", "local", body, session=parent, id=new_id("dn"),
-                                       meta={"local": True, "task_id": r.brief, "state": r.status}))
+                                       meta={"local": True, "task_id": asked, "state": r.status}))
 
 
 class Delegator:
@@ -300,6 +315,7 @@ class Delegator:
         process only; shutdown cancels and awaits them before closing their store."""
         b: Brief
         for b in briefs:
+            self.engine.continuations.delegate_started(parent, b.id)
             t = asyncio.ensure_future(self._finish(parent, b))
             self.bg[b.id] = t
             self.active[b.id] = b.id
