@@ -289,3 +289,86 @@ def test_non_main_models_do_not_discover_continuation_tool(tmp_path, owner):
         finally:
             await engine.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("author", ["principal:tui", None])
+def test_principal_steer_drops_the_requested_wake(tmp_path, author):
+    async def run():
+        engine, sid = await setup(tmp_path)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def pause(tool_name, **kw):
+            if tool_name == "exo_end_turn":
+                entered.set()
+                await release.wait()
+        engine.plugins.hooks.register("post_tool_call", pause)
+        task = asyncio.create_task(begin(engine, sid))
+        try:
+            await entered.wait()
+            assert engine.continuations._s[sid].request.wakes
+            steer = s.TurnSend(session=sid, text="STOP. Do not continue that work.", mode="steer")
+            if author:
+                reply = await Dispatcher(engine).run(s.Command.of(steer), author)
+            else:  # an internal steer with no principal caller keeps the wake
+                reply = await engine._turn_send(steer)
+            assert "steered" in str(reply)
+            release.set()
+            await task
+            await drain(engine)
+            wakes = [m for m in users(engine, sid) if m.meta.get("origin") == ORIGIN]
+            assert len(wakes) == (0 if author else 1)
+            assert not engine.continuations.pending(sid)
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await engine.close()
+    asyncio.run(run())
+
+
+def test_undo_cancels_the_pending_wake(tmp_path):
+    async def run():
+        engine, sid = await setup(tmp_path, args={"wake_after": 30})
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def sleep(delay):
+            entered.set()
+            await release.wait()
+        engine.continuations.sleep = sleep
+        try:
+            await begin(engine, sid)
+            await entered.wait()
+            assert engine.continuations.pending(sid)
+            await Dispatcher(engine).run(s.Command.of(s.SessionUndo(session=sid)), "principal:tui")
+            assert not engine.continuations.pending(sid)
+            release.set()
+            await drain(engine)
+            assert users(engine, sid) == []
+        finally:
+            release.set()
+            await engine.close()
+    asyncio.run(run())
+
+
+def test_non_principal_turn_does_not_renew_the_wake_budget(tmp_path):
+    async def run():
+        engine = CoreRuntime(tmp_path, {
+            "fake": {"reply": "finished", "rules": [
+                {"match": "", "steps": [{"tool": "exo_end_turn", "args": {"continue_now": True}}, "again"]}]},
+            "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, env={}, cwd=str(tmp_path))
+        engine.plugins.hooks.register("pre_tool_call", lambda **kw: None)
+        engine.continuations.max_chain = 2
+        sid = (await engine.loop.create_session(agent=engine.agent)).id
+        def wakes():
+            return sum(m.meta.get("origin") == ORIGIN for m in users(engine, sid))
+        try:
+            await begin(engine, sid)
+            await until(lambda: wakes() == 2 and not engine._tasks)
+            await drain(engine)
+            await engine.run_turn(s.TurnSend(session=sid, text="job notice"))  # author system, like a job wake
+            await drain(engine)
+            assert wakes() == 2
+            await begin(engine, sid)  # the principal resumes the work
+            await until(lambda: wakes() == 4 and not engine._tasks)
+            await drain(engine)
+            assert wakes() == 4
+        finally:
+            await engine.close()
+    asyncio.run(run())

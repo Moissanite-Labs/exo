@@ -16,7 +16,8 @@ Safety rules:
 * A wake never runs beside a turn: if a turn is running when the timer fires, the wake is dropped.
 * An explicit stop (interrupt), an interrupted turn, an errored turn (spend stop, provider error, a failed turn)
   or a turn in which a tool was denied cancels the pending wake. Nothing restarts after those.
-* A user / principal turn cancels any pending wake (the human takes over).
+* Any turn not started by a wake cancels the pending wake. A principal steer and an undo cancel it too.
+* Only a principal turn resets the wake budget. A peer, bus or job turn does not renew it.
 * Consecutive harness wakes are capped (``max_chain``) so a model that asks forever cannot loop forever.
 * A turn that asks for nothing schedules nothing: no idle wake after all is clear.
 
@@ -31,7 +32,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from exo import provenance
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 from exo.core.types import ToolSpec
 
@@ -75,7 +75,7 @@ class Request:
 class _Session:
     request: Request | None = None   # asked during the running turn, applied at its end
     timer: asyncio.Task | None = None
-    chain: int = 0                   # consecutive harness wakes since the last non-harness turn
+    chain: int = 0                   # harness wakes since the last principal turn
     denied: set[str] = field(default_factory=set)  # turn ids in which a tool was denied
     followup: str = ""               # last recorded follow-up reason (report only)
     gen: int = 0                     # fence: bumped by stop / human turn / close; a fired wake of an older gen is void
@@ -135,13 +135,15 @@ class Continuations:
         """A tool was denied in this turn: its continuation request is void."""
         self._st(session).denied.add(turn_id)
 
-    def turn_started(self, session: str, meta: dict[str, Any] | None) -> None:
-        """Called before every engine turn. A turn not started by a wake (the user typed) cancels pending wakes."""
+    def turn_started(self, session: str, meta: dict[str, Any] | None, *, principal: bool = False) -> None:
+        """Called before every engine turn. A turn not started by a wake cancels pending wakes. Only a principal
+        turn (``principal``, decided by the engine from the turn's author) resets the wake budget."""
         if (meta or {}).get("origin") == ORIGIN:
             return
         st = self._st(session)
         st.gen += 1  # a wake that already fired (waiting for hooks or the session lock) is void now
-        st.chain = 0
+        if principal:
+            st.chain = 0
         st.request = None  # a turn queued behind the running one voids that turn's request (the human takes over)
         self._cancel_timer(st)
 
@@ -173,8 +175,7 @@ class Continuations:
         if st.chain >= self.max_chain:
             self.notify(session, f"continuation stopped after {self.max_chain} harness wakes in a row; "
                                  "a user message resumes the work")
-            st.chain = 0
-            return "capped"
+            return "capped"  # the budget stays spent until a principal turn resets it
         self._cancel_timer(st)  # coalesce: one pending wake per session
         delay = 0 if req.continue_now else float(req.wake_after or 0)
         st.timer = asyncio.ensure_future(self._fire(session, delay, req))
@@ -200,7 +201,8 @@ class Continuations:
                 + (f"; your note: {req.reason}" if req.reason else "")
                 + ". This is not a user message. Check real state before acting; call exo_end_turn again only if "
                   "more work remains.]")
-        meta = {"author": provenance.SYSTEM, "origin": ORIGIN, "continuation_of": req.turn_id,
+        # No author here: run_turn stamps system on a turn without one (keeps this module off provenance).
+        meta = {"origin": ORIGIN, "continuation_of": req.turn_id,
                 "continuation_gen": st.gen}
         await self.start(session, text, meta)
 
@@ -214,14 +216,14 @@ class Continuations:
         return False
 
     def cancel(self, session: str) -> bool:
-        """Explicit stop: drop the pending wake and the running turn's request."""
+        """Stop, principal steer or undo: drop the pending wake and the running turn's request. The wake budget
+        is left alone; only a principal turn resets it."""
         st = self._s.get(session)
         if st is None:
             return False
         had = st.request is not None and st.request.wakes
         st.gen += 1  # also voids a wake that fired already but has not started its turn yet
         st.request = None
-        st.chain = 0
         return self._cancel_timer(st) or had
 
     def live(self, session: str, meta: dict[str, Any] | None) -> bool:

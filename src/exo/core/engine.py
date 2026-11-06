@@ -637,6 +637,7 @@ class CoreRuntime:
     async def _session_undo(self, b: s.SessionUndo) -> dict[str, Any]:
         self._info(b.session)
         removed = self.store.undo(b.session, b.turns)
+        self.continuations.cancel(b.session)  # never wake for a turn that was undone
         if removed and (rewound := getattr(self.loop.context, "rewound", None)):
             rewound(b.session)  # the context plugin drops what it kept from the undone turns (D-041)
         info = self.store.update_session(b.session)
@@ -657,6 +658,8 @@ class CoreRuntime:
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
+            if provenance.is_principal_author(meta["author"]):
+                self.continuations.cancel(b.session)  # the principal steered: drop the turn's requested wake
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
         self._spawn_turn(b, meta)
@@ -689,7 +692,8 @@ class CoreRuntime:
                 return None  # a wake voided by Stop / a human turn / close after it fired: no hooks, no turn
             if meta.get("origin") == continuation.ORIGIN:  # only wakes are fenced; other turns run unchanged
                 guard = lambda: self.continuations.live(b.session, meta)  # noqa: E731 - rechecked under the lock
-            self.continuations.turn_started(b.session, meta)
+            self.continuations.turn_started(b.session, meta,
+                                            principal=provenance.is_principal_author(meta.get("author")))
         owner_token = continuation.TURN_GENERATION.set(
             (b.session, self.continuations.generation(b.session)) if main else None)
         result: Any = None
