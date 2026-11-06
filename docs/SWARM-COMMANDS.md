@@ -17,6 +17,7 @@ The argument is one JSON object after the subcommand name:
 /group observe {"id": "<group>", "member": "lead", "after": 0, "limit": 100}
 /group create {"mode": "conductor", "members": ["lead", "one"], "conductor": "lead"}
 /group start {"id": "<group>", "audiences": {"lead": ["one"], "one": ["lead"]}}
+/group start {"id": "<group>", "conversation": {"max_turns": 10, "idle_timeout": 60, "max_concurrent": 2}}
 /group status {"id": "<group>"}
 /group pause {"id": "<group>", "member": "one"}
 /group resume {"id": "<group>"}
@@ -46,6 +47,20 @@ The argument is one JSON object after the subcommand name:
   and claims one durable execution. A failed start leaves no runtime
   and no durable claim; a partial failure after the claim still blocks
   retry by design.
+  Give exactly one of `audiences` or `conversation`; both or neither is
+  `bad_request`. `conversation` is an explicit opt-in object with
+  `max_turns` (an exact integer, 1 to 10000), `idle_timeout` (a finite number
+  greater than 0 and at most 86400, in seconds) and optional `max_concurrent`
+  (an integer, at least 1). Booleans are not numbers, and unknown keys at either
+  level fail, including `plan`, `grants` and `knowledge`: this command does not
+  start plans or pass knowledge. It calls the injected host's
+  `start(<id>, conversation=...)` with no `audiences`; the host derives the
+  fixed audiences from the stored group mode, rejects `max_concurrent` above the
+  member count before it builds engines or claims anything, and binds the reactive
+  conversation, so a later `send` through the same host wakes it. A host
+  rejection is `bad_request`. This adds no engines, grants or permissions and
+  no recovery of an earlier claim: it is the same start through the same
+  injected, owner-matched host, and the same principal gate applies.
 - `status` — the host snapshot: per-member state, the durable receipt or
   `null`, whether the runtime is active in this process and whether
   reconciliation is required (active claim, no local runtime). An active

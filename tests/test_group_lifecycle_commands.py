@@ -12,7 +12,7 @@ import pytest
 
 from exo import principal
 from exo.core import group_commands
-from exo.core.group_host import HostError
+from exo.core.group_host import ConversationOptions, HostError
 from exo.server.engine import CommandFailed
 
 OPS = ("create", "start", "status", "pause", "resume", "stop")
@@ -46,9 +46,10 @@ class FakeHost:
                                members=[SimpleNamespace(profile=p, session=f"s-{p}")
                                         for p in members])
 
-    def start(self, group_id, *, audiences):
-        self._record("start", group_id, audiences=audiences)
-        return tuple(SimpleNamespace(profile=p, state="queued") for p in audiences)
+    def start(self, group_id, **kw):
+        self._record("start", group_id, **kw)  # exactly the keywords the command forwarded
+        profiles = kw["audiences"] if "audiences" in kw else ("lead", "one")
+        return tuple(SimpleNamespace(profile=p, state="queued") for p in profiles)
 
     def status(self, group_id):
         self._record("status", group_id)
@@ -134,6 +135,105 @@ def test_start_forwards_explicit_audiences(eng):
     assert out["members"] == [{"profile": "lead", "state": "queued"},
                               {"profile": "one", "state": "queued"}]
     assert eng._group_host.calls == [("start", ("g-1",), {"audiences": audiences})]
+
+
+def _start(conversation, extra=""):
+    return f'start {{"id": "g-1", "conversation": {conversation}{extra}}}'
+
+
+def test_start_conversation_forwards_options_only(eng):
+    out = run(eng, _start('{"max_turns": 3, "idle_timeout": 60}'))
+    assert out == {"id": "g-1", "members": [{"profile": "lead", "state": "queued"},
+                                            {"profile": "one", "state": "queued"}]}
+    run(eng, _start('{"max_turns": 10000, "idle_timeout": 0.5, "max_concurrent": 2}'))
+    run(eng, _start('{"max_turns": 1, "idle_timeout": 86400}'))
+    assert eng._group_host.calls == [
+        ("start", ("g-1",), {"conversation": ConversationOptions(3, 60, None)}),
+        ("start", ("g-1",), {"conversation": ConversationOptions(10000, 0.5, 2)}),
+        ("start", ("g-1",), {"conversation": ConversationOptions(1, 86400, None)})]
+    for _, _, kw in eng._group_host.calls:
+        assert set(kw) == {"conversation"}  # no audiences, knowledge, plan or grants keyword
+
+
+def test_start_legacy_audiences_kwargs_exact(eng):
+    run(eng, ARGS["start"])
+    assert eng._group_host.calls == [
+        ("start", ("g-1",), {"audiences": {"lead": ["one"], "one": ["lead"]}})]
+
+
+def test_start_conversation_host_rejection_is_bad_request(eng):
+    eng._group_host.errors = {"start": "max_concurrent must be between 1 and the member count"}
+    with pytest.raises(CommandFailed, match="member count") as e:
+        run(eng, _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": 9}'))
+    assert e.value.code == "bad_request"
+
+
+@pytest.mark.parametrize("args", [
+    # exactly one of audiences/conversation
+    'start {"id": "g-1"}',
+    'start {"id": "g-1", "audiences": {"lead": ["one"]}, "conversation": {"max_turns": 3, "idle_timeout": 60}}',
+    # unknown top-level keys, including features outside this slice
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "plan": {}'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "grants": {}'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "knowledge": true'),
+    _start('{"max_turns": 3, "idle_timeout": 60}', ', "owner": "other"'),
+    # unknown nested keys
+    _start('{"max_turns": 3, "idle_timeout": 60, "knowledge": true}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "audiences": {"lead": ["one"]}}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "plan": 1}'),
+    # shape and missing fields
+    _start('null'), _start('[]'), _start('"x"'), _start('{}'),
+    _start('{"max_turns": 3}'), _start('{"idle_timeout": 60}'),
+    # max_turns: exact int 1..10000, no bool/float/str
+    _start('{"max_turns": 0, "idle_timeout": 60}'),
+    _start('{"max_turns": 10001, "idle_timeout": 60}'),
+    _start('{"max_turns": -1, "idle_timeout": 60}'),
+    _start('{"max_turns": true, "idle_timeout": 60}'),
+    _start('{"max_turns": 3.0, "idle_timeout": 60}'),
+    _start('{"max_turns": "3", "idle_timeout": 60}'),
+    _start('{"max_turns": null, "idle_timeout": 60}'),
+    # idle_timeout: finite number, >0, <=86400, no bool/str
+    _start('{"max_turns": 3, "idle_timeout": 0}'),
+    _start('{"max_turns": 3, "idle_timeout": -1}'),
+    _start('{"max_turns": 3, "idle_timeout": 86401}'),
+    _start('{"max_turns": 3, "idle_timeout": 1e999}'),
+    _start('{"max_turns": 3, "idle_timeout": NaN}'),
+    _start('{"max_turns": 3, "idle_timeout": Infinity}'),
+    _start('{"max_turns": 3, "idle_timeout": true}'),
+    _start('{"max_turns": 3, "idle_timeout": "60"}'),
+    _start('{"max_turns": 3, "idle_timeout": null}'),
+    # max_concurrent: strict int >= 1 (member-count bound is the host's)
+    _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": 0}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": -2}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": true}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": 1.0}'),
+    _start('{"max_turns": 3, "idle_timeout": 60, "max_concurrent": "1"}'),
+    # id
+    'start {"conversation": {"max_turns": 3, "idle_timeout": 60}}',
+    'start {"id": " ", "conversation": {"max_turns": 3, "idle_timeout": 60}}',
+    'start {"id": 5, "conversation": {"max_turns": 3, "idle_timeout": 60}}',
+])
+def test_start_conversation_invalid_rejected_before_host(eng, args):
+    with pytest.raises(CommandFailed) as e:
+        run(eng, args)
+    assert e.value.code == "bad_request"
+    assert eng._group_host.calls == []
+
+
+def test_start_conversation_principal_and_host_gates():
+    args = _start('{"max_turns": 3, "idle_timeout": 60}')
+    engine = SimpleNamespace(agent="one", _group_host=FakeHost(owner="one"))
+    for who in ("local", "channel"):
+        with pytest.raises(CommandFailed) as e:
+            run(engine, args, who)
+        assert e.value.code == "forbidden"
+    assert engine._group_host.calls == []
+    for host in (None, FakeHost(owner="other"), FakeHost(owner=None)):
+        engine = SimpleNamespace(agent="one", _group_host=host)
+        with pytest.raises(CommandFailed) as e:
+            run(engine, args)
+        assert e.value.code == "forbidden"
+        assert host is None or host.calls == []
 
 
 def test_status_shape(eng):

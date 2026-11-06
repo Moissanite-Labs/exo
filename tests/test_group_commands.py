@@ -388,3 +388,53 @@ def test_different_path_host_still_refused(tmp_path):
     finally:
         for st in (*stores, other):
             st.close()
+
+
+# --- real GroupHost + real GroupStore/SessionStore, spy member engines (not a CoreEngine) ---
+
+
+def test_start_conversation_command_then_send_wake_then_stop(eng):
+    """/group start with explicit conversation bounds on a real GroupHost, then send wakes it.
+
+    Member engines are SpyEngine stubs, so this is evidence for the command, host, store and
+    wake path only. It is not evidence about a real engine or a provider."""
+    engine, gid, _ = eng
+    engines = {}
+    host = make_host(engine.store, engines=engines)
+    engine._group_host = host
+
+    async def scenario():
+        started = await arun(engine, f'start {{"id": "{gid}", "conversation": '
+                                     '{"max_turns": 3, "idle_timeout": 60, "max_concurrent": 2}}')
+        assert started["id"] == gid
+        assert sorted(m["profile"] for m in started["members"]) == PROFILES
+        assert gid in host._wakes and gid in host._runtimes
+        event = host._wakes[gid]._events["two"]
+        for _ in range(1000):  # park: member consumed its initial wake (scheduling yields only)
+            if not event.is_set():
+                break
+            await asyncio.sleep(0)
+        else:
+            raise AssertionError("member never idled")
+        sent = await arun(engine, f'send {{"id": "{gid}", "text": "hello", "audience": ["two"]}}')
+        assert event.is_set()  # woken by the command itself; idle_timeout is 60s
+        await asyncio.wait_for(engines["two"].turn_done(1).wait(), 30)
+        assert json.loads(engines["two"].turns[0].text.split("\n", 1)[1]) == [
+            {"sender": "one", "sender_kind": "human", "text": "hello"}]
+        assert [r["id"] for r in rows(engine.store) if r["sender_kind"] == "human"] == [sent["id"]]
+        stopped = await arun(engine, f'stop {{"id": "{gid}"}}')
+        assert stopped == {"id": gid, "stopped": True, "member": None}
+        await asyncio.wait_for(host.wait(gid), 30)
+
+    asyncio.run(scenario())
+
+
+def test_start_conversation_over_member_count_refused_by_host_without_engines(eng):
+    engine, gid, _ = eng
+    engines = {}
+    engine._group_host = host = make_host(engine.store, engines=engines)
+    with pytest.raises(CommandFailed, match="member count") as e:
+        run(engine, f'start {{"id": "{gid}", "conversation": '
+                    '{"max_turns": 3, "idle_timeout": 60, "max_concurrent": 4}}')
+    assert e.value.code == "bad_request"
+    assert engines == {} and gid not in host._runtimes and gid not in host._wakes  # no factory call

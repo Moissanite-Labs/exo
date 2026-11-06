@@ -26,7 +26,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from exo import principal
-from exo.core.group_host import GroupHost, HostError
+from exo.core.group_host import ConversationOptions, GroupHost, HostError
 from exo.core.group_knowledge import GroupKnowledge
 from exo.core.group_messages import GroupMessages
 from exo.core.group_plan_execution import PlanExecutionError, PlanExecutions
@@ -298,11 +298,50 @@ def _status_view(snap: dict[str, Any]) -> dict[str, Any]:
                 "members": dict(receipt.members)}}
 
 
+_CONVERSATION_KEYS = {"max_turns", "idle_timeout", "max_concurrent"}
+
+
+def _conversation(raw: Any) -> ConversationOptions:
+    """Explicit conversation bounds, validated with the host's own rules before any host call.
+
+    Only ``max_turns``, ``idle_timeout`` and optional ``max_concurrent`` are accepted. The
+    audiences are derived by the host from the stored group mode. ``max_concurrent`` is checked
+    here only as a strict int >= 1; the host enforces the member-count upper bound before it
+    invokes the engine factory or makes any claim.
+    """
+    if not isinstance(raw, dict):
+        raise _bad("conversation must be an object")
+    unknown = set(raw) - _CONVERSATION_KEYS
+    if unknown:
+        raise _bad(f"unknown conversation field(s): {', '.join(sorted(unknown))}")
+    missing = [n for n in ("max_turns", "idle_timeout") if n not in raw]
+    if missing:
+        raise _bad(f"missing conversation field(s): {', '.join(missing)}")
+    turns, idle, concurrent = raw["max_turns"], raw["idle_timeout"], raw.get("max_concurrent")
+    if type(turns) is not int or not 1 <= turns <= 10000:
+        raise _bad("conversation max_turns must be an integer between 1 and 10000")
+    if type(idle) not in (int, float) or not 0 < idle <= 86400:  # NaN and inf fail the comparison
+        raise _bad("conversation idle_timeout must be a number greater than 0 and at most 86400")
+    if concurrent is not None and (type(concurrent) is not int or concurrent < 1):
+        raise _bad("conversation max_concurrent must be a positive integer or omitted")
+    return ConversationOptions(max_turns=turns, idle_timeout=idle, max_concurrent=concurrent)
+
+
 def _op_start(eng: CoreRuntime, args: dict[str, Any]) -> dict[str, Any]:
-    _take(args, "id", "audiences")
-    group_id, audiences = _group_id(args), _audiences(args)
+    unknown = set(args) - {"id", "audiences", "conversation"}
+    if unknown:
+        raise _bad(f"unknown field(s): {', '.join(sorted(unknown))}")
+    if "id" not in args:
+        raise _bad("missing field(s): id")
+    group_id = _group_id(args)
+    if ("audiences" in args) == ("conversation" in args):
+        raise _bad("start takes exactly one of audiences or conversation")
+    if "conversation" in args:
+        call: dict[str, Any] = {"conversation": _conversation(args["conversation"])}
+    else:
+        call = {"audiences": _audiences(args)}
     try:
-        statuses = _host(eng).start(group_id, audiences=audiences)
+        statuses = _host(eng).start(group_id, **call)
     except HostError as e:
         raise _bad(str(e))
     return {"id": group_id,
