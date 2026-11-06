@@ -24,6 +24,7 @@ The argument is one JSON object after the subcommand name:
 /group resume {"id": "<group>"}
 /group stop {"id": "<group>"}
 /group plan_status {"id": "<group>", "plan_id": "<64 hex>", "limit": 100}
+/group plan_list {"id": "<group>", "limit": 50}
 /group knowledge_publish {"id": "<group>", "key": "plan", "text": "...", "sources": ["session:s-1"], "expected_revision": 0}
 /group knowledge_read {"id": "<group>", "member": "lead", "key": "plan"}
 /group knowledge_list {"id": "<group>", "member": "lead", "limit": 100}
@@ -122,6 +123,25 @@ The argument is one JSON object after the subcommand name:
   label. The counts need the ledger row of every task, not only the `limit`
   page, so the cost of one call grows linearly with the plan's task count. The
   command writes nothing and creates no table.
+
+- `plan_list`: read-only, bounded list of the plans of one group, so a caller
+  that only has a short plan id from the CLI can find the full 64-hex
+  `plan_id` that `plan_status` needs. Required `id`; optional `limit` (1 to
+  200, default 50). Only `id` and `limit` are accepted. The principal gate and
+  the stored group ownership check run first. An unknown group and a group
+  owned by another seat give the same `not_found: no such plan` refusal as
+  `plan_status`, so neither can be told from the other. A group of your own
+  with no plans gives an empty list. The response is
+  `id`, `plans` and `plans_truncated`. Each plan carries the full `plan_id`,
+  `state`, `created`, `finished`, `task_count` and `tasks_by_state` (a count
+  for each of `pending`, `running`, `completed`, `failed` and `stopped`; a
+  state outside that set is added only if one is stored). Plans are newest
+  first by `created`, then by `plan_id` descending, so equal timestamps give a
+  fixed order. The query reads at most `limit + 1` plan rows and counts tasks
+  only for the plans it returns; `plans_truncated` is true when more plans
+  exist. No task result or error text is returned: use `plan_status` for that.
+  The command writes nothing. If the plan tables do not exist, it returns an
+  empty list and does not create them. It starts nothing and grants nothing.
 
 ## Shared knowledge (M02–M04)
 

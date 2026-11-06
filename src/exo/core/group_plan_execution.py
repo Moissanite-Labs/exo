@@ -87,6 +87,17 @@ class _TasksNotCompleted(Exception):
 
 
 @dataclass(frozen=True)
+class PlanSummary:
+    """One plan row with task counts only: never a task result or error."""
+    plan_id: str
+    state: str
+    created: str
+    finished: str | None
+    task_count: int
+    tasks_by_state: Mapping[str, int]
+
+
+@dataclass(frozen=True)
 class TaskRunState:
     plan_id: str
     task_id: str
@@ -208,6 +219,42 @@ class PlanExecutions:
         if "swarm_plans" not in tables:
             return None
         return bool(self.store._q("SELECT 1 FROM swarm_plans WHERE plan_id=?", (plan_id,)))
+
+    def list_plans(self, *, group_id: str, owner: str, limit: int) -> tuple[tuple[PlanSummary, ...], bool]:
+        """Newest-first plan summaries for one owned group, at most ``limit``, plus a truncation flag.
+
+        Read-only and non-creating: no plan tables means an empty answer and no schema. Group
+        ownership is checked first (``PlanExecutionError`` otherwise). SQL fetches ``limit + 1`` plan
+        rows ordered by ``created`` then ``plan_id`` (both descending, so ties are deterministic) and
+        one grouped count over only those plans. Task result and error columns are never selected.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise PlanExecutionError("limit must be a positive integer")
+        self._own(group_id, owner)
+        tables = {r[0] for r in self.store._q("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "swarm_plans" not in tables:
+            return (), False
+        rows = self.store._q(
+            "SELECT plan_id, state, created, finished FROM swarm_plans WHERE group_id=? AND owner=? "
+            "ORDER BY created DESC, plan_id DESC LIMIT ?", (group_id, owner, limit + 1))
+        truncated = len(rows) > limit
+        rows = rows[:limit]
+        counts: dict[str, dict[str, int]] = {r["plan_id"]: {} for r in rows}
+        if rows and "swarm_plan_tasks" in tables:
+            marks = ",".join("?" * len(rows))
+            for c in self.store._q(
+                    "SELECT plan_id, state, COUNT(*) AS n FROM swarm_plan_tasks WHERE group_id=? "
+                    f"AND plan_id IN ({marks}) GROUP BY plan_id, state",
+                    (group_id, *counts)):
+                counts[c["plan_id"]][c["state"]] = c["n"]
+        out = []
+        for r in rows:
+            by_state = {name: counts[r["plan_id"]].get(name, 0) for name in sorted(TASK_STATES)}
+            for name, n in counts[r["plan_id"]].items():  # an unexpected stored state is reported, not hidden
+                by_state.setdefault(name, n)
+            out.append(PlanSummary(r["plan_id"], r["state"], r["created"], r["finished"],
+                                   sum(by_state.values()), by_state))
+        return tuple(out), truncated
 
     def _own(self, group_id: str, owner: str) -> None:
         if self.groups.get(group_id, owner=owner) is None:
