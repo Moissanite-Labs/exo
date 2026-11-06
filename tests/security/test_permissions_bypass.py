@@ -105,7 +105,7 @@ import httpx
 from exo.protocol import schema as s
 sock = sys.argv[1]
 with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url="http://exod") as c:
-    credential = open(sock[:-len('.sock')] + '.principal.key').read().strip()
+    credential = json.load(open(sock[:-len('.sock')] + '.principal.key'))['token']
     headers = {"X-Exo-Principal": credential, "X-Exo-Client": "tui"}
     body = s.CommandRun(name="permissions", args="bypass")
     print(json.dumps(c.post("/command", content=s.Command.of(body).to_json(), headers=headers).json()))
@@ -129,6 +129,70 @@ with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url="http://exod
             shutil.rmtree(sock_dir)
     r = asyncio.run(main())
     assert not r["ok"] and r["error"]["code"] == "forbidden"
+    assert mode(engine) == "ask"
+
+
+class DetachedToolEscaped(AssertionError):
+    """Only this observed authorization failure is an expected sandbox gap."""
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="Unix fork and peer credentials")
+@pytest.mark.xfail(strict=True, raises=DetachedToolEscaped,
+                   reason="#31: same-user detached tools are not yet sandboxed")
+def test_detached_tool_cannot_use_fixture_principal_credential(engine):
+    """The credential, socket, and policy state all belong to this disposable test engine."""
+    script = r"""
+import json, os, sys, time
+sock = sys.argv[1]
+if os.fork():
+    os._exit(0)
+os.setsid()
+if os.fork():
+    os._exit(0)
+try:
+    deadline = time.monotonic() + 3
+    while os.getppid() != 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if os.getppid() != 1:
+        raise RuntimeError("detach did not reach pid 1; no authorization conclusion")
+    import httpx
+    from exo.protocol import schema as s
+    credential = json.load(open(sock[:-len('.sock')] + '.principal.key'))['token']
+    with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url="http://exod", timeout=3) as c:
+        body = s.CommandRun(name="permissions", args="bypass")
+        response = c.post("/command", content=s.Command.of(body).to_json(),
+                          headers={"X-Exo-Principal": credential, "X-Exo-Client": "test-detached"})
+        print(json.dumps({"detached": True, "response": response.json()}), flush=True)
+except BaseException as exc:
+    print(json.dumps({"probe_error": type(exc).__name__}), flush=True)
+finally:
+    os._exit(0)
+"""
+
+    async def probe():
+        # A short path is needed for macOS sockaddr_un. Never use an installed core socket.
+        with tempfile.TemporaryDirectory(prefix="exo-detach-", dir="/tmp") as directory:
+            sock = Path(directory) / "core.sock"
+            srv = HttpServer(Dispatcher(engine), principal=True)
+            await srv.start_unix(sock)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-c", script, str(sock), stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env={"EXO_HOME": str(engine.home), "EXO_NO_KEYCHAIN": "1", "EXO_NO_SECRET_SERVICE": "1",
+                         "PYTHONPATH": str(REPO / "src")})
+                out, err = await asyncio.wait_for(proc.communicate(), 15)
+                assert proc.returncode == 0, err.decode()
+                result = json.loads(out)
+                assert result.get("detached") is True, result
+                return result["response"]
+            finally:
+                await srv.close()
+
+    response = asyncio.run(probe())
+    if response.get("ok") and mode(engine) == "bypass":
+        raise DetachedToolEscaped("detached fixture tool enabled permissions bypass")
+    assert not response["ok"] and response["error"]["code"] == "forbidden", response
     assert mode(engine) == "ask"
 
 
