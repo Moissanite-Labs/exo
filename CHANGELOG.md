@@ -15,6 +15,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- Seat-binding conformance now pins the re-published tla2tools v1.8.0 jar (#1195). Upstream re-cut the release asset, so the old SHA-256 no longer matched; the new pin was verified against the SHA-1 upstream publishes in the release notes and the release asset size. Hash verification is unchanged.
 - `exo trace` names up to three unpriced routes, including child turns, with the config key for trace estimates
   and counts remaining routes. When a spend contract is missing, the refusal points to `docs/MODEL-SPEND.md`.
   An estimate does not pin a spend contract or extend audited native ceilings. Admission and accounting are
