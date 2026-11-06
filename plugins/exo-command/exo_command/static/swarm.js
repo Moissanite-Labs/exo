@@ -3,6 +3,9 @@
 // id, comes from the server's own list and is checked against the API's id shape. No polling: the transcript moves only
 // on selection, filter change, an explicit Refresh, or once after a send that came back saved.
 // Send means saved to the group log only. Whether a member processed it or was woken is never known here.
+// Controls (Check status, Pause, Resume, Stop) are explicit too: nothing reads status by itself. A 200 on a control means
+// the request was accepted, not that members changed state. An unclear result locks the group's controls until a status
+// read succeeds. Nothing is retried.
 import { h, api } from "./dom.js";
 
 const MAX_TEXT = 50000;        // swarm_api.MAX_TEXT, counted in UTF-16 units here (never fewer than code points)
@@ -14,6 +17,11 @@ const PROFILE = /^[A-Za-z][A-Za-z0-9_.@-]{0,63}$/;
 const BASE = "/api/swarm/groups";
 // A refusal before anything was stored. Every other failure (502, network, odd status) may have been saved.
 const NOT_SAVED = [400, 403, 501];
+// A control refused by the API itself (swarm_api.REFUSALS). Every other failure leaves the outcome unknown.
+const REFUSED = [400, 403, 409, 501];
+const OPS = { pause: "Pause", resume: "Resume", stop: "Stop" };     // the only control paths ever built
+const STATES = ["idle", "queued", "running", "pausing", "paused", "completed", "stopped", "failed", "unknown"];   // swarm_api.STATES
+const WHOLE = "@group";                                            // select value for the whole group. It is never a valid profile
 
 const clip = (s, n) => { s = s == null ? "" : String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const when = (iso) => { const t = Date.parse(iso || ""); return isNaN(t) ? clip(iso, 32) : new Date(t).toLocaleString(); };
@@ -21,6 +29,11 @@ const goodGroup = (g) => !!g && typeof g.id === "string" && GROUP_ID.test(g.id) 
   g.members.every((m) => m && typeof m.profile === "string" && PROFILE.test(m.profile));
 const goodMessage = (m) => !!m && Number.isSafeInteger(m.seq) && m.seq > 0 && typeof m.text === "string" &&
   typeof m.sender === "string" && Array.isArray(m.audience);
+const plain = (s, n) => clip(String(s == null ? "" : s).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim(), n);
+const goodStatus = (d, id) => !!d && d.id === id && Array.isArray(d.members) && d.members.length > 0 &&
+  d.members.every((m) => m && typeof m.profile === "string" && PROFILE.test(m.profile) && STATES.indexOf(m.state) >= 0) &&
+  new Set(d.members.map((m) => m.profile)).size === d.members.length &&
+  typeof d.local_runtime === "boolean" && typeof d.reconciliation_required === "boolean";
 const failText = (e, what) => e && e.status ? clip(e.message, 300) : what + " The server could not be reached.";
 
 export function mount(root) {
@@ -35,12 +48,23 @@ export function mount(root) {
   const audiences = new Map();          // group id -> Set of profile ids ticked
   const results = new Map();            // group id -> {cls, text} from the last send
   let ui = null;                        // the composer's live elements while a group is shown
+  // Controls. ctlBusy and statBusy are single global flags (one request of each kind at a time, whatever group is shown).
+  let ctlBusy = false, statBusy = false;
+  let statGen = 0;                      // bumped when the group changes or on unmount: voids a status read in flight
+  let ctlEpoch = 0;                     // bumped at the start and end of every control request
+  let target = "";                      // "" = none chosen, WHOLE, or a member profile of the shown group
+  let confirming = null;                // {id, target} while Stop waits for Confirm stop or Cancel
+  let status = null, statusErr = "";    // the last good status read for the shown group, and the last status failure
+  const uncertain = new Set();          // group ids whose last control result is unknown: controls stay off until a status read
+  const ctlResults = new Map();         // group id -> {cls, text} from the last control request
+  let cui = null;                       // the control panel's live elements while a group is shown
 
   const listEl = h("div", { class: "xc-sw-list" });
   const headEl = h("div", { class: "xc-sw-head" });
   const filterEl = h("div", { class: "xc-sw-filter" });
   const noteEl = h("div", { class: "xc-sw-notes", role: "status" });
   const logEl = h("div", { class: "xc-sw-log", role: "log", "aria-label": "Group messages", tabindex: "0" });
+  const ctlEl = h("section", { class: "xc-sw-ctl", "aria-label": "Group controls" });
   const sendEl = h("div", { class: "xc-sw-send" });
   const refreshGroups = h("button", { class: "xc-btn", type: "button", onclick: () => loadList() }, "Refresh groups");
   root.replaceChildren(h("div", { class: "xc-sw" },
@@ -48,7 +72,7 @@ export function mount(root) {
       h("p", { class: "xc-sw-lede" }, "Groups of members this seat runs. Read the transcript and send a message to the group log.")),
     h("div", { class: "xc-sw-grid" },
       h("aside", { class: "xc-sw-side", "aria-label": "Groups" }, h("div", { class: "xc-sw-sidehead" }, h("h2", null, "Groups"), refreshGroups), listEl),
-      h("section", { class: "xc-sw-main", "aria-label": "Selected group" }, headEl, filterEl, noteEl, logEl, sendEl))));
+      h("section", { class: "xc-sw-main", "aria-label": "Selected group" }, headEl, filterEl, ctlEl, noteEl, logEl, sendEl))));
 
   // ------------------------------------------------------------ groups
   async function loadList() {
@@ -79,7 +103,8 @@ export function mount(root) {
   }
 
   function clearSel() {
-    selGen++; sel = null; selErr = ""; inspecting = false; member = "";
+    selGen++; statGen++; sel = null; selErr = ""; inspecting = false; member = "";
+    target = ""; confirming = null; status = null; statusErr = ""; cui = null;
     msgs = []; seen = new Set(); cursor = 0; full = false; loadErr = ""; loadingGen = -1; dropped = false; ui = null;
   }
 
@@ -137,6 +162,7 @@ export function mount(root) {
   }
 
   function reset(newMember) {
+    confirming = null;
     selGen++; member = newMember; msgs = []; seen = new Set(); cursor = 0; full = false; loadErr = ""; loadingGen = -1; dropped = false;
     drawMain();
     loadMessages();
@@ -170,12 +196,12 @@ export function mount(root) {
   function drawMain() {
     if (!sel) {
       headEl.replaceChildren(h("div", { class: "xc-sw-empty" }, "Select a group."));
-      filterEl.replaceChildren(); noteEl.replaceChildren(); logEl.replaceChildren(); sendEl.replaceChildren();
+      filterEl.replaceChildren(); ctlEl.replaceChildren(); noteEl.replaceChildren(); logEl.replaceChildren(); sendEl.replaceChildren();
       return;
     }
     if (inspecting || selErr) {
       headEl.replaceChildren(h("h2", { class: "xc-sw-gname" }, sel.id));
-      filterEl.replaceChildren(); sendEl.replaceChildren(); logEl.replaceChildren();
+      filterEl.replaceChildren(); ctlEl.replaceChildren(); sendEl.replaceChildren(); logEl.replaceChildren();
       noteEl.replaceChildren(selErr ? h("div", { class: "xc-error", role: "alert" }, selErr) : h("div", { class: "xc-sw-empty" }, "Loading group..."));
       return;
     }
@@ -187,8 +213,152 @@ export function mount(root) {
       sel.members.map((m) => h("option", { value: m.profile, selected: m.profile === member }, m.profile)));
     const refresh = h("button", { class: "xc-btn", type: "button", onclick: () => loadMessages() }, "Refresh");
     filterEl.replaceChildren(h("label", { class: "xc-sw-lab" }, h("span", null, "Member"), pick), refresh);
+    drawControls();
     drawCompose(refresh);
     drawLog();
+  }
+
+  // ------------------------------------------------------------ controls
+  const targetLabel = (id, t) => t === WHOLE ? "the whole group " + id : "member " + t + " of group " + id;
+
+  function drawControls() {
+    if (!sel) return;
+    const id = sel.id;
+    const pick = h("select", { class: "xc-field", "aria-label": "Control target", onchange: (e) => setTarget(e.target.value) },
+      h("option", { value: "", selected: !target }, "Choose a target"),
+      h("option", { value: WHOLE, selected: target === WHOLE }, "Whole group"),
+      sel.members.map((m) => h("option", { value: m.profile, selected: m.profile === target }, m.profile)));
+    const check = h("button", { class: "xc-btn", type: "button", onclick: () => checkStatus() }, "Check status");
+    const btn = (op) => h("button", { class: "xc-btn", type: "button", onclick: () => (op === "stop" ? askStop() : runControl(op)) }, OPS[op]);
+    const pause = btn("pause"), resume = btn("resume"), stop = btn("stop");
+    cui = { pick, check, pause, resume, stop,
+      confirmEl: h("div", { class: "xc-sw-confirm", role: "group", "aria-label": "Confirm stop" }),
+      hint: h("p", { class: "xc-sw-hint" }),
+      out: h("div", { class: "xc-sw-ctlout", role: "status" }),
+      stateEl: h("div", { class: "xc-sw-state", role: "status" }) };
+    ctlEl.replaceChildren(h("h3", { class: "xc-sw-ctlhead" }, "Controls"),
+      h("p", { class: "xc-sw-hint" }, "Nothing here refreshes by itself. Use Check status to read the current member states."),
+      h("div", { class: "xc-sw-ctlrow" }, check, h("label", { class: "xc-sw-lab" }, h("span", null, "Target"), pick)),
+      h("div", { class: "xc-sw-ctlrow" }, pause, resume, stop),
+      cui.confirmEl, cui.hint, cui.out, cui.stateEl);
+    syncControls();
+  }
+
+  function syncControls() {
+    if (!cui || !sel) return;
+    const id = sel.id, locked = uncertain.has(id), idle = !ctlBusy && !locked, chosen = !!target;
+    cui.check.disabled = statBusy;
+    cui.check.textContent = statBusy ? "Checking status..." : "Check status";
+    cui.pick.disabled = ctlBusy;
+    cui.pause.disabled = cui.resume.disabled = !idle || !chosen;
+    cui.stop.disabled = !idle || !chosen || !!confirming;
+    cui.hint.textContent = ctlBusy ? "A control request is in progress; it is not sent twice."
+      : locked ? "The last request for this group has an unknown result. Controls stay off until Check status succeeds."
+      : chosen ? "" : "Choose a target to turn on Pause, Resume and Stop.";
+    const ask = confirming && confirming.id === id && !ctlBusy ? confirming : null;
+    cui.confirmEl.replaceChildren(...(ask ? [
+      h("p", { class: "xc-sw-warn" }, "Stop " + targetLabel(id, ask.target) + "? This cannot be undone here."),
+      h("div", { class: "xc-sw-ctlrow" },
+        h("button", { class: "xc-btn xc-sw-danger", type: "button", onclick: () => runControl("stop", true) }, "Confirm stop"),
+        h("button", { class: "xc-btn", type: "button", onclick: () => cancelStop() }, "Cancel"))] : []));
+    const r = ctlResults.get(id);
+    cui.out.className = "xc-sw-ctlout" + (r && r.cls ? " " + r.cls : "");
+    cui.out.textContent = r ? r.text : "";
+    drawStatus();
+  }
+
+  function drawStatus() {
+    const kids = [];
+    if (statusErr) kids.push(h("div", { class: "xc-error", role: "alert" }, statusErr));
+    if (status) {
+      if (status.stale) kids.push(h("div", { class: "xc-sw-notice" }, "This status may be out of date. Use Check status to read it again."));
+      if (status.reconciliation) kids.push(h("div", { class: "xc-sw-notice" }, "The server reports that this group needs reconciliation."));
+      kids.push(h("p", { class: "xc-sw-meta" }, "Local runtime: " + (status.local ? "yes" : "no")));
+      kids.push(h("ul", { class: "xc-sw-states", "aria-label": "Member states" }, status.members.map((m) =>
+        h("li", { class: "xc-sw-mstate is-" + m.state }, h("span", { class: "xc-sw-mname" }, m.profile), h("span", { class: "xc-sw-mval" }, m.state)))));
+    }
+    cui.stateEl.replaceChildren(...kids);
+  }
+
+  function setTarget(v) {
+    if (!sel || ctlBusy) { syncControls(); return; }
+    const ok = v === "" || v === WHOLE || sel.members.some((m) => m.profile === v);
+    target = ok ? v : "";
+    confirming = null;
+    syncControls();
+  }
+
+  function askStop() {
+    if (ctlBusy || !sel || !target || uncertain.has(sel.id)) return;
+    confirming = { id: sel.id, target };
+    syncControls();
+  }
+
+  function cancelStop() { confirming = null; syncControls(); }
+
+  async function checkStatus() {
+    if (statBusy || !sel || inspecting || selErr || !GROUP_ID.test(sel.id)) return;
+    const gen = statGen, id = sel.id, epoch = ctlEpoch;
+    statBusy = true; statusErr = "";
+    syncControls();
+    let got = null, err = "";
+    try {
+      const d = await api("GET", BASE + "/" + encodeURIComponent(id) + "/status");
+      if (goodStatus(d, id)) got = { members: d.members.map((m) => ({ profile: m.profile, state: m.state })), local: d.local_runtime, reconciliation: d.reconciliation_required, stale: false };
+      else err = "The status reply was not understood.";
+    } catch (e) {
+      err = e && e.status ? plain(e.message, 300) : "The status could not be read. The server could not be reached.";
+    }
+    statBusy = false;
+    if (!alive) return;
+    if (gen !== statGen || !sel || sel.id !== id) { syncControls(); return; }    // another group is shown now: drop this reply
+    if (got) {
+      status = got;
+      if (epoch === ctlEpoch && !ctlBusy) uncertain.delete(id);          // a control request ran meanwhile: this read may predate it
+      else status.stale = true;
+    } else {
+      statusErr = err;
+      if (status) status.stale = true;
+    }
+    syncControls();
+  }
+
+  async function runControl(op, confirmed) {
+    if (ctlBusy || !sel || !Object.prototype.hasOwnProperty.call(OPS, op)) return;
+    const id = sel.id, t = target;
+    if (!GROUP_ID.test(id) || uncertain.has(id) || !t) return;
+    if (op === "stop" && !(confirmed && confirming && confirming.id === id && confirming.target === t)) return;
+    if (t !== WHOLE && !sel.members.some((m) => m.profile === t)) return;
+    const body = t === WHOLE ? {} : { member: t };
+    const label = targetLabel(id, t), name = OPS[op].toLowerCase();
+    ctlBusy = true; ctlEpoch++; confirming = null;
+    if (status) status.stale = true;
+    ctlResults.set(id, { cls: "", text: "Sending the " + name + " request for " + label + "..." });
+    syncControls();
+    let res, lock = false;
+    try {
+      const d = await api("POST", BASE + "/" + encodeURIComponent(id) + "/" + op, body);
+      if (d && d.id === id && d.action === op && d.accepted === true && (d.member == null ? null : d.member) === (t === WHOLE ? null : t)) {
+        res = { cls: "is-ok", text: "The " + name + " request for " + label + " was accepted. This does not mean members have changed state yet. Use Check status to see the current states." };
+      } else {
+        lock = true;
+        res = { cls: "is-bad", text: "The reply to the " + name + " request for " + label + " was not understood. The result is unknown. Nothing is retried. Use Check status before using the controls again." };
+      }
+    } catch (e) {
+      if (e && REFUSED.indexOf(e.status) >= 0) {
+        res = { cls: "is-bad", text: "The " + name + " request for " + label + " was refused: " + plain(e.message, 300) };
+      } else {
+        lock = true;
+        res = { cls: "is-bad", text: "Could not confirm the " + name + " request for " + label + (e && e.status ? " (HTTP " + e.status + ")" : " (network failure)") +
+          ". It may or may not have been applied. Nothing is retried. Use Check status before using the controls again." };
+      }
+    }
+    ctlBusy = false; ctlEpoch++;
+    if (!alive) return;
+    if (lock) uncertain.add(id);
+    ctlResults.set(id, res);
+    if (status) status.stale = true;
+    if (sel) syncControls();                      // the busy flag is global: always restore whatever group is on screen
   }
 
   // ------------------------------------------------------------ composer
@@ -281,5 +451,5 @@ export function mount(root) {
   drawList();
   drawMain();
   loadList();
-  return () => { alive = false; listGen++; selGen++; };
+  return () => { alive = false; listGen++; selGen++; statGen++; confirming = null; cui = null; };
 }
