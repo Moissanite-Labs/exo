@@ -46,12 +46,21 @@ def test_not_ours_returns_none_and_unknown_paths_are_rejected():
     c = Centre()
     assert run(c, "GET", "/api/chat/sessions") is None
     assert run(c, "GET", "/index.html") is None
-    for path in ("/api/swarm", "/api/swarm/x", "/api/swarm/groups/" + GID + "/stop", "/api/swarm/groups/a/b/c/d",
-                 "/api/swarm/command", "/api/swarm/socket"):
+    for path in ("/api/swarm", "/api/swarm/x", "/api/swarm/groups/" + GID + "/delete", "/api/swarm/groups/a/b/c/d",
+                 "/api/swarm/groups/" + GID + "/stop/now", "/api/swarm/command", "/api/swarm/socket"):
         assert run(c, "GET", path)[0] == 404
     assert run(c, "POST", "/api/swarm/groups")[0] == 405
     assert run(c, "DELETE", "/api/swarm/groups/" + GID)[0] == 405
     assert run(c, "GET", "/api/swarm/groups/" + GID + "/send")[0] == 405
+    for tail in ("send", "pause", "resume", "stop"):
+        assert run(c, "GET", "/api/swarm/groups/%s/%s" % (GID, tail))[0] == 405
+    for tail in ("status", "messages", ""):
+        for method in ("POST", "PUT", "DELETE", "PATCH"):
+            assert run(c, method, ("/api/swarm/groups/%s/%s" % (GID, tail)).rstrip("/"))[0] == 405
+    for tail in ("pause", "resume", "stop"):
+        for method in ("GET", "PUT", "DELETE", "PATCH"):
+            if method != "GET":
+                assert run(c, method, "/api/swarm/groups/%s/%s" % (GID, tail))[0] == 405
     assert c.calls == []
 
 
@@ -190,7 +199,167 @@ def test_list_reply_validation(out):
 
 
 def test_module_has_no_generic_surface():
-    assert set(sw.ROUTES) == {("GET", ()), ("GET", ("<id>",)), ("GET", ("<id>", "messages")), ("POST", ("<id>", "send"))}
+    assert set(sw.ROUTES) == {("GET", ()), ("GET", ("<id>",)), ("GET", ("<id>", "messages")), ("POST", ("<id>", "send")),
+                              ("GET", ("<id>", "status")), ("POST", ("<id>", "pause")), ("POST", ("<id>", "resume")),
+                              ("POST", ("<id>", "stop"))}
     src = open(sw.__file__).read()
     assert src.count("s.CommandRun(") == 1 and src.count('name="group"') == 2   # one call site (+ the docstring)
     assert "getenv" not in src and "environ" not in src and "import socket" not in src
+
+
+# ------------------------------------------------------------------ lifecycle
+OPS = (("pause", "paused"), ("resume", "resumed"), ("stop", "stopped"))
+URL = "/api/swarm/groups/%s/" % GID
+STATUS = {"id": GID, "owner": "kai", "local_runtime": True, "reconciliation_required": False,
+          "members": [{"profile": "lead", "state": "running"}, {"profile": "one", "state": "pausing"}],
+          "receipt": {"id": "gx_1", "state": "active", "created": "2026-01-01T00:00:00Z", "finished": None,
+                      "members": {"lead": "running", "one": "queued"}}}
+
+
+def reply(flag, member=None, gid=GID):
+    return {"id": gid, flag: True, "member": member}
+
+
+def test_status_exact_payload_and_reply():
+    c = Centre(STATUS)
+    assert run(c, "GET", URL + "status") == (200, STATUS)
+    assert sent(c) == "status " + json.dumps({"id": GID})
+    c = Centre(dict(STATUS, receipt=None, local_runtime=False, reconciliation_required=True, extra="x"))
+    st, data = run(c, "GET", URL + "status")
+    assert st == 200 and data["receipt"] is None and data["local_runtime"] is False and "extra" not in data
+    fin = dict(STATUS["receipt"], state="settled", finished="2026-01-01T00:01:00Z", members={"lead": "completed"})
+    assert run(Centre(dict(STATUS, receipt=fin)), "GET", URL + "status")[1]["receipt"] == fin
+
+
+@pytest.mark.parametrize("out", [None, "x", [], {}, dict(STATUS, id="g_other"), dict(STATUS, id=None),
+                                 dict(STATUS, owner=""), dict(STATUS, members=[]), dict(STATUS, members="x"),
+                                 dict(STATUS, members=[{"profile": "lead", "state": "flying"}]),
+                                 dict(STATUS, members=[{"profile": "lead"}]),
+                                 dict(STATUS, members=[{"profile": "bad name", "state": "idle"}]),
+                                 dict(STATUS, members=[{"profile": "a", "state": "idle"}, {"profile": "a", "state": "idle"}]),
+                                 dict(STATUS, local_runtime="true"), dict(STATUS, local_runtime=1),
+                                 dict(STATUS, local_runtime=None), dict(STATUS, reconciliation_required="false"),
+                                 dict(STATUS, reconciliation_required=0), {k: v for k, v in STATUS.items() if k != "receipt"} | {"owner": 5},
+                                 dict(STATUS, receipt="x"), dict(STATUS, receipt={}),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], members=[])),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], members={"lead": "weird"})),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], finished=5)),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], finished="")),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], id="")),
+                                 dict(STATUS, receipt=dict(STATUS["receipt"], created=None))])
+def test_status_reply_validation(out):
+    st, data = run(Centre(out), "GET", URL + "status")
+    assert st == 502 and data == {"error": sw.BAD_REPLY, "code": "bad_reply"}
+
+
+@pytest.mark.parametrize("kw", [{"q": {"member": ["lead"]}}, {"q": {"owner": ["x"]}}, {"body": {"member": "lead"}}])
+def test_status_bad_input_never_reaches_core(kw):
+    c = Centre(STATUS)
+    assert run(c, "GET", URL + "status", **kw)[0] == 400 and c.calls == []
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+def test_control_exact_payloads_group_wide_and_member(op, flag):
+    for body in (None, {}, {"member": None}):
+        c = Centre(reply(flag))
+        st, data = run(c, "POST", URL + op, body=body)
+        assert sent(c) == op + " " + json.dumps({"id": GID})        # no member key at all
+        assert st == 200 and data == {"id": GID, "action": op, "member": None, "accepted": True,
+                                      "settled": "unknown", "note": sw.ACCEPTED_ONLY}
+    c = Centre(reply(flag, "lead"))
+    st, data = run(c, "POST", URL + op, body={"member": "lead"})
+    assert sent(c) == op + " " + json.dumps({"id": GID, "member": "lead"})
+    assert st == 200 and data["member"] == "lead" and data["accepted"] is True and data["settled"] == "unknown"
+    assert "does not mean" in data["note"]
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("body", [{"member": ""}, {"member": "bad name"}, {"member": 5}, {"member": ["lead"]},
+                                  {"member": True}, {"member": "a" * 65}, {"member": "lead", "owner": "x"},
+                                  {"owner": "x"}, {"socket": "/tmp/s"}, {"host": "h"}, {"session": "s_1"},
+                                  {"id": "g_1"}, {"op": "stop"}, {"name": "group"}, {"force": True}, {"all": True}])
+def test_control_bad_body_never_reaches_core(op, flag, body):
+    c = Centre(reply(flag))
+    st, data = run(c, "POST", URL + op, body=body)
+    assert st == 400 and data["code"] == "bad_request" and c.calls == []
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+def test_control_bad_query_id_and_non_object_body_never_reach_core(op, flag):
+    c = Centre(reply(flag))
+    assert run(c, "POST", URL + op, q={"member": ["lead"]})[0] == 400
+    assert run(c, "POST", URL + op, q={"socket": ["/x"]}, body={"member": "lead"})[0] == 400
+    assert asyncio.run(sw.dispatch(c, "POST", URL + op, {}, ["lead"]))[0] == 400
+    assert asyncio.run(sw.dispatch(c, "POST", URL + op, {}, "lead"))[0] == 400
+    for gid in ("a b", "-x", "x" * 129, ".hidden", "g%2F1"):
+        assert run(c, "POST", "/api/swarm/groups/%s/%s" % (gid, op))[0] == 400
+    assert c.calls == []
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("member,out", [
+    (None, reply("x")), (None, {}), (None, None), (None, "ok"), (None, [reply("x")]),
+    (None, {"id": GID, "member": None}), (None, reply("OTHERFLAG")), (None, "FLAGFALSE"), (None, "FLAGSTR"),
+    (None, "FLAGONE"), (None, "WRONGID"), (None, "MEMBERSET"), ("lead", "MEMBERNONE"), ("lead", "MEMBEROTHER"),
+    ("lead", "WRONGID")])
+def test_control_mismatched_or_malformed_reply_is_unknown_outcome(op, flag, member, out):
+    flagged = {"FLAGFALSE": dict(reply(flag), **{flag: False}), "FLAGSTR": dict(reply(flag), **{flag: "true"}),
+               "FLAGONE": dict(reply(flag), **{flag: 1}), "WRONGID": reply(flag, member, gid="g_other"),
+               "MEMBERSET": reply(flag, "lead"), "MEMBERNONE": reply(flag, None), "MEMBEROTHER": reply(flag, "one")}
+    if isinstance(out, str) and out in flagged:
+        out = flagged[out]
+    body = {"member": member} if member else None
+    c = Centre(out)
+    st, data = run(c, "POST", URL + op, body=body)
+    assert st == 502 and data["code"] == "bad_reply" and data["outcome"] == "unknown"
+    assert "accepted" not in data and "not retried automatically" in data["error"] and len(c.calls) == 1
+
+
+def test_control_reply_for_another_op_is_rejected():
+    c = Centre(reply("stopped"))
+    st, data = run(c, "POST", URL + "pause")
+    assert st == 502 and data["outcome"] == "unknown"
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("exc", [SourceError("internal", "boom /tmp/exo.sock"), SourceError("unauthorized", "tok"),
+                                 ConnectionResetError("/tmp/exo.sock"), OSError("secret"), RuntimeError("secret"),
+                                 asyncio.TimeoutError()])
+def test_control_transport_failure_is_sanitized_unknown_and_not_retried(op, flag, exc):
+    c = Centre(fail=exc)
+    st, data = run(c, "POST", URL + op, body={"member": "lead"})
+    assert st == 502 and data["code"] == "unavailable" and data["outcome"] == "unknown"
+    assert "persisted" not in data and "accepted" not in data
+    text = json.dumps(data)
+    assert "/tmp" not in text and "boom" not in text and "secret" not in text.lower() and "tok" not in data["error"].split()
+    assert len(c.calls) == 1                                    # never retried
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("code,status", [("forbidden", 403), ("bad_request", 400), ("not_found", 501),
+                                         ("unsupported", 501), ("unknown_command", 501), ("conflict", 409)])
+def test_control_core_refusals_are_definite_and_static(op, flag, code, status):
+    c = Centre(fail=SourceError(code, "SECRET /tmp/exo.sock token=abc"))
+    st, data = run(c, "POST", URL + op)
+    assert st == status and data["code"] == code and "outcome" not in data and "SECRET" not in json.dumps(data)
+    c = Centre(fail=SourceError(code, "SECRET /tmp/exo.sock"))
+    st, data = run(c, "GET", URL + "status")
+    assert st == status and "SECRET" not in json.dumps(data) and len(c.calls) == 1
+
+
+@pytest.mark.parametrize("exc", [SourceError("internal", "boom /tmp/x"), OSError("secret"), asyncio.TimeoutError()])
+def test_status_transport_failure_is_sanitized_and_not_unknown_outcome(exc):
+    st, data = run(Centre(fail=exc), "GET", URL + "status")
+    assert (st, data) == (502, {"error": sw.UNAVAILABLE, "code": "unavailable"})
+
+
+def test_only_fixed_ops_are_ever_sent():
+    seen = []
+    for op, flag in OPS:
+        c = Centre(reply(flag, "lead"))
+        run(c, "POST", URL + op, body={"member": "lead"})
+        seen.append(sent(c).split(" ", 1)[0])
+    c = Centre(STATUS)
+    run(c, "GET", URL + "status")
+    seen.append(sent(c).split(" ", 1)[0])
+    assert seen == ["pause", "resume", "stop", "status"]

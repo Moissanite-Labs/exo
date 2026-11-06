@@ -12,7 +12,8 @@ from exo_command.config import load_settings
 from exo_command.server import WebServer
 from exo_command.service import CommandCentre
 from test_csp_web import Src as BaseSrc, head
-from test_swarm_api import GID, GROUP, Centre, msg
+from exo_command.source import SourceError
+from test_swarm_api import GID, GROUP, OPS, STATUS, Centre, msg, reply, sent
 
 TOKEN = "page-token-for-tests-0123456789abcdef"
 
@@ -136,6 +137,85 @@ def SourceError_(code, message):
 def _takes_two(cls):
     import inspect
     return len(inspect.signature(cls.__init__).parameters) >= 3
+
+
+# ---------------------------------------------------------------- lifecycle routes through api.dispatch
+LIFE = "/api/swarm/groups/%s/" % GID
+
+
+def test_status_through_api_dispatch_sends_exact_payload_and_forwards_reply():
+    c = Centre(STATUS)
+    assert run(c, "GET", LIFE + "status") == (200, STATUS)
+    assert sent(c) == "status " + json.dumps({"id": GID})
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("member", [None, "lead"])
+def test_control_through_api_dispatch_sends_exact_payload(op, flag, member):
+    c = Centre(reply(flag, member))
+    body = {} if member is None else {"member": member}
+    st, data = run(c, "POST", LIFE + op, None, body)
+    assert st == 200 and data["id"] == GID and data["action"] == op and data["member"] == member
+    assert data["accepted"] is True and data["settled"] == "unknown"
+    payload = {"id": GID} if member is None else {"id": GID, "member": member}
+    assert sent(c) == "%s %s" % (op, json.dumps(payload))
+    assert asyncio.run(swarm_api.dispatch(Centre(reply(flag, member)), "POST", LIFE + op, {}, body)) == (st, data)
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+def test_control_with_null_member_sends_no_member_key(op, flag):
+    c = Centre(reply(flag))
+    assert run(c, "POST", LIFE + op, None, {"member": None})[0] == 200
+    assert sent(c) == "%s %s" % (op, json.dumps({"id": GID}))
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("body", [{"owner": "kai"}, {"member": "lead", "principal": "x"}, {"member": "bad name"},
+                                  {"member": 5}, {"id": "g_other"}, {"socket": "/tmp/s"}])
+def test_control_bad_body_through_api_dispatch_never_reaches_core(op, flag, body):
+    c = Centre(reply(flag))
+    st, data = run(c, "POST", LIFE + op, None, body)
+    assert st == 400 and data["code"] == "bad_request" and c.calls == []
+
+
+@pytest.mark.parametrize("path,method", [(LIFE + "status", "POST"), (LIFE + "pause", "GET"), (LIFE + "resume", "PUT"),
+                                         (LIFE + "stop", "DELETE"), (LIFE + "stop", "PATCH")])
+def test_lifecycle_wrong_method_through_api_dispatch_is_405_without_call(path, method):
+    c = Centre(STATUS)
+    st, data = run(c, method, path)
+    assert st == 405 and data["code"] == "method_not_allowed" and c.calls == []
+
+
+def test_lifecycle_unknown_tail_through_api_dispatch_is_404_without_call():
+    c = Centre(STATUS)
+    for tail in ("start", "stop/now", "Stop"):
+        assert run(c, "POST", LIFE + tail)[0] == 404
+    assert c.calls == []
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+@pytest.mark.parametrize("code,status", [("forbidden", 403), ("conflict", 409), ("bad_request", 400),
+                                         ("unsupported", 501)])
+def test_control_refusals_forwarded_through_api_dispatch_are_definite(op, flag, code, status):
+    c = Centre(fail=SourceError(code, "SECRET /tmp/exo.sock"))
+    st, data = run(c, "POST", LIFE + op)
+    assert st == status and data["code"] == code and "outcome" not in data and "SECRET" not in json.dumps(data)
+    assert len(c.calls) == 1
+
+
+@pytest.mark.parametrize("code,status", [("forbidden", 403), ("conflict", 409)])
+def test_status_refusals_forwarded_through_api_dispatch(code, status):
+    c = Centre(fail=SourceError(code, "SECRET"))
+    st, data = run(c, "GET", LIFE + "status")
+    assert st == status and data["code"] == code and "SECRET" not in json.dumps(data) and len(c.calls) == 1
+
+
+@pytest.mark.parametrize("op,flag", OPS)
+def test_control_failure_and_bad_reply_through_api_dispatch_are_unknown_outcome_not_retried(op, flag):
+    for c in (Centre(fail=OSError("SECRET /x.sock")), Centre(reply(flag, "other")), Centre("junk")):
+        st, data = run(c, "POST", LIFE + op, None, {"member": "lead"})
+        assert st == 502 and data["outcome"] == "unknown" and "SECRET" not in json.dumps(data)
+        assert len(c.calls) == 1
 
 
 # ---------------------------------------------------------------- the server guard is unchanged and runs first
