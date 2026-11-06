@@ -663,7 +663,7 @@ class CoreRuntime:
             if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
                 raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
             b.mode = "steer"
-        meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
+        meta: dict[str, Any] = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             self.continuations.turn_started(b.session, meta)
             meta["continuation_steer_gen"] = self.continuations.generation(b.session)
