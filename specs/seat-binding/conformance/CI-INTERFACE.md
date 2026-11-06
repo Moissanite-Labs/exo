@@ -21,7 +21,7 @@ The blocking CI gate must invoke **`replay.py` directly** (not rely on pytest al
 Pinned release: **tla2tools v1.8.0**
 
 - URL: `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar`
-- SHA-256: `e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf`
+- SHA-256: `654aa50197faa48fa0136b41257270de6469d29ef323e7822ead59d2be43ce10`
 
 Example (from repository root):
 
@@ -29,7 +29,7 @@ Example (from repository root):
 JAR=specs/seat-binding/tla2tools.jar
 curl -fsSL -o "$JAR" \
   https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
+echo "654aa50197faa48fa0136b41257270de6469d29ef323e7822ead59d2be43ce10  $JAR" | sha256sum -c -
 export TLA2TOOLS_JAR="$PWD/$JAR"
 python3 specs/seat-binding/conformance/replay.py specs/seat-binding/conformance/traces/good_new_after_resume.jsonl
 ```
@@ -41,7 +41,7 @@ Local optional install (same pin):
 ```bash
 curl -fsSL -o specs/seat-binding/tla2tools.jar \
   https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-# e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
+# 654aa50197faa48fa0136b41257270de6469d29ef323e7822ead59d2be43ce10
 ```
 
 ## Runtime
