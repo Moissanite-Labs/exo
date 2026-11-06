@@ -392,7 +392,7 @@ def test_untrusted_text_is_only_ever_text(tmp_path):
     run_node(tmp_path, r'''
 const EVIL = '<img src=x onerror=alert(1)><script>alert(2)</script>"><svg/onload=1>';
 const OK_TAGS = new Set(["DIV", "H1", "H2", "P", "HEADER", "ASIDE", "SECTION", "BUTTON", "SPAN", "UL", "LI", "SELECT", "OPTION", "LABEL",
-  "INPUT", "TEXTAREA", "FORM", "FIELDSET", "LEGEND", "ARTICLE", "TIME", "#TEXT"]);
+  "INPUT", "TEXTAREA", "H3", "FORM", "FIELDSET", "LEGEND", "ARTICLE", "TIME", "#TEXT"]);
 const root = new El("div"); const un = mount(root); await flush();
 await answer(/groups$/, 200, { groups: [G("g_1", ["lead"], { mode: EVIL })] });
 click(item(root, "g_1"));
@@ -534,3 +534,368 @@ un();
     obs = [r for r in reqs if "/messages" in r["path"]]
     assert obs[0]["path"].endswith("/messages?after=0&limit=100")
     assert any("after=2&limit=100" in r["path"] for r in obs)
+
+
+# ------------------------------------------------------------------ lifecycle controls
+CTL = r'''
+const bt = (root, label) => byTag(root, "button").find((b) => b.textContent === label);
+const tsel = (root) => byTag(root, "select").find((s) => s.getAttribute("aria-label") === "Control target");
+const pickT = (root, v) => { const s = tsel(root); s.value = v; fire(s, "change"); };
+const st = (members = [["lead", "running"], ["one", "idle"]], extra = {}) => ({ id: "g_1", owner: "kai", local_runtime: true,
+  reconciliation_required: false, members: members.map(([profile, state]) => ({ profile, state })), receipt: null, ...extra });
+const acc = (op, member = null, id = "g_1") => ({ id, action: op, member, accepted: true, settled: "unknown", note: "x" });
+const statusCalls = () => net.calls.filter((c) => /\/status$/.test(c.path));
+const ctlText = (root) => byClass(root, "xc-sw-ctl")[0].textContent;
+const enabled = (root) => ["Pause", "Resume", "Stop"].filter((l) => !bt(root, l).disabled);
+const confirmText = (root) => byClass(root, "xc-sw-confirm")[0].textContent;
+// the status button is relabelled "Checking status..." while a read is pending, so match either label
+const chk = (root) => byTag(root, "button").find((b) => /^Check(ing)? status/.test(b.textContent));
+const group1 = async () => { const ctx = await boot(); await openGroup(ctx, "g_1"); return ctx; };
+'''
+
+
+def run_ctl(tmp_path, body, name="c"):
+    return run_node(tmp_path, CTL + body, name=name)
+
+
+@needs_node
+def test_controls_are_inert_until_asked_and_target_has_no_default(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+const before = net.calls.length;
+await wait(60);
+assert.equal(net.calls.length, before, "no automatic requests");
+assert.equal(statusCalls().length, 0); assert.equal(posts().length, 0);
+const sel = tsel(root);
+const opts = byTag(sel, "option");
+assert.deepEqual(opts.map((o) => o.textContent), ["Choose a target", "Whole group", "lead", "one"]);
+assert.equal(opts[0].getAttribute("selected"), ""); assert.equal(opts[1].getAttribute("selected"), null);
+assert.equal(sel.value, "");
+assert.deepEqual(enabled(root), []);
+assert.equal(bt(root, "Check status").disabled, false);
+// forced clicks on disabled buttons are refused by the code guard too
+for (const l of ["Pause", "Resume", "Stop"]) fire(bt(root, l), "click");
+assert.equal(posts().length, 0); assert.equal(byClass(root, "xc-sw-confirm")[0].children.length, 0);
+pickT(root, "bogus"); assert.deepEqual(enabled(root), []);
+pickT(root, "one"); assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]);
+assert.equal(posts().length, 0);
+unmount();
+''')
+
+
+@needs_node
+def test_check_status_shows_states_notice_busy_and_rejects_bad_replies(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+click(bt(root, "Check status")); click(bt(root, "Checking status...")); await flush();
+assert.equal(statusCalls().length, 1); assert.equal(statusCalls()[0].method, "GET");
+assert.ok(statusCalls()[0].path.endsWith("/api/swarm/groups/g_1/status"));
+assert.equal(statusCalls()[0].body, undefined);
+assert.equal(bt(root, "Checking status...").disabled, true);
+assert.equal(tsel(root).disabled, false, "status busy is separate from the control busy flag");
+await answer(/status$/, 200, st([["lead", "running"], ["one", "pausing"]], { reconciliation_required: true }));
+const t = ctlText(root);
+assert.match(t, /lead\s*running/); assert.match(t, /one\s*pausing/); assert.match(t, /needs reconciliation/);
+assert.match(t, /Local runtime: yes/);
+assert.equal(bt(root, "Check status").disabled, false);
+assert.equal(byClass(root, "xc-sw-notice").length, 1);
+// a clean read shows no reconciliation notice
+click(bt(root, "Check status")); await answer(/status$/, 200, st());
+assert.equal(byClass(root, "xc-sw-notice").length, 0); assert.equal(statusCalls().length, 2);
+// bad replies are refused whole
+const bads = [null, {}, st([["lead", "flying"]]), st([["bad name", "idle"]]), st([["lead", "idle"], ["lead", "idle"]]), st([]),
+  st(undefined, { id: "g_other" }), st(undefined, { local_runtime: "true" }), st(undefined, { reconciliation_required: 0 }),
+  { ...st(), members: "x" }];
+for (const bad of bads) {
+  click(bt(root, "Check status")); await answer(/status$/, 200, bad);
+  assert.match(byClass(root, "xc-error")[0].textContent, /not understood/);
+  // the refused reply never replaces the last good states (lead running, one idle), which are marked out of date
+  assert.deepEqual(byClass(root, "xc-sw-mname").map((e) => e.textContent), ["lead", "one"]);
+  assert.deepEqual(byClass(root, "xc-sw-mval").map((e) => e.textContent), ["running", "idle"]);
+  assert.match(ctlText(root), /out of date/);
+}
+{
+  click(bt(root, "Check status")); await answer(/status$/, 200, st());   // a good read clears the out-of-date mark and the error
+  assert.equal(byClass(root, "xc-error").length, 0); assert.equal(byClass(root, "xc-sw-notice").length, 0);
+}
+// a failed read keeps the last good states but marks them out of date
+click(bt(root, "Check status")); await answer(/status$/, 200, st([["lead", "paused"], ["one", "paused"]]));
+click(bt(root, "Check status")); await answer(/status$/, 500, { error: "<b>boom</b>\u0007" });
+assert.match(byClass(root, "xc-error")[0].textContent, /boom/); assert.match(ctlText(root), /out of date/);
+click(bt(root, "Check status")); await flush(); net.calls.at(-1).fail(); await flush();
+assert.match(byClass(root, "xc-error")[0].textContent, /could not be reached/);
+assert.equal(byTag(root, "b").length, 0);
+unmount();
+''')
+
+
+@needs_node
+def test_status_busy_blocks_forced_duplicate_reads_and_releases_after_completion(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+const before = statusCalls().length;
+fire(chk(root), "click"); await flush();
+assert.equal(statusCalls().length, before + 1);
+assert.equal(chk(root).disabled, true);
+// forced clicks (ignoring the disabled attribute) must not start a second read while the first is pending
+fire(chk(root), "click"); fire(chk(root), "click"); await flush();
+assert.equal(statusCalls().length, before + 1, "no duplicate status request while one is pending");
+await answer(/status$/, 200, st());
+assert.equal(chk(root).disabled, false); assert.equal(chk(root).textContent, "Check status");
+// once finished, the next click is a new request
+fire(chk(root), "click"); await flush();
+assert.equal(statusCalls().length, before + 2, "busy flag released after completion");
+await answer(/status$/, 200, st());
+unmount();
+''')
+
+
+@needs_node
+def test_control_requests_carry_only_the_target_and_200_means_accepted_only(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+const sent = [];
+for (const [op, label, tgt, body, member] of [["pause", "Pause", "@group", {}, null], ["resume", "Resume", "one", { member: "one" }, "one"]]) {
+  pickT(root, tgt); click(bt(root, label)); await flush();
+  const c = posts().at(-1); sent.push(c);
+  assert.equal(c.method, "POST"); assert.ok(c.path.endsWith("/api/swarm/groups/g_1/" + op), c.path);
+  assert.deepEqual(c.body, body); assert.ok(c.body !== null);
+  assert.deepEqual(enabled(root), [], "controls off while pending");
+  assert.equal(tsel(root).disabled, true);
+  assert.equal(bt(root, "Check status").disabled, false, "status can still be read");
+  click(bt(root, label)); click(bt(root, "Stop")); fire(bt(root, label), "click"); await flush();
+  assert.equal(posts().length, sent.length, "no second request while pending");
+  c.reply(200, acc(op, member)); await flush();
+  const t = ctlText(root);
+  assert.match(t, /was accepted/); assert.match(t, /does not mean members have changed state/);
+  assert.ok(!/was (paused|resumed|stopped)/.test(t), "never claims the state changed");
+  assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]); assert.equal(tsel(root).disabled, false);
+}
+assert.equal(statusCalls().length, 0, "no status read after a control");
+// status shown before a control is marked out of date after it
+click(bt(root, "Check status")); await answer(/status$/, 200, st());
+assert.equal(byClass(root, "xc-sw-notice").length, 0);
+pickT(root, "@group"); click(bt(root, "Pause")); await answer(/pause$/, 200, acc("pause"));
+assert.match(ctlText(root), /out of date/);
+// replies that do not match the request are an unknown outcome, not success
+for (const bad of [{ ...acc("pause"), accepted: false }, acc("stop"), acc("pause", "one"), acc("pause", null, "g_other"), { id: "g_1" }, null]) {
+  const r = await group1(); pickT(r.root, "@group"); click(bt(r.root, "Pause")); await answer(/pause$/, 200, bad);
+  assert.match(ctlText(r.root), /unknown/); assert.ok(!/was accepted/.test(ctlText(r.root))); assert.deepEqual(enabled(r.root), []);
+  r.unmount();
+}
+unmount();
+''')
+
+
+@needs_node
+def test_stop_needs_inline_confirmation_that_every_change_clears(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+const confirmBtns = () => byClass(root, "xc-sw-confirm")[0].children.length ? byTag(byClass(root, "xc-sw-confirm")[0], "button") : [];
+pickT(root, "one"); click(bt(root, "Stop"));
+assert.equal(posts().length, 0, "Stop alone sends nothing");
+let c = confirmText(root);
+assert.match(c, /Stop member one of group g_1\?/); assert.match(c, /cannot be undone here/);
+assert.deepEqual(confirmBtns().map((b) => b.textContent), ["Confirm stop", "Cancel"]);
+assert.equal(bt(root, "Stop").disabled, true, "Stop is not clickable twice");
+click(bt(root, "Cancel")); assert.equal(confirmBtns().length, 0); assert.equal(posts().length, 0);
+// whole-group wording
+pickT(root, "@group"); click(bt(root, "Stop")); assert.match(confirmText(root), /Stop the whole group g_1\?/);
+// target change clears
+pickT(root, "lead"); assert.equal(confirmBtns().length, 0);
+// filter change clears
+click(bt(root, "Stop")); assert.equal(confirmBtns().length, 2);
+const filter = byTag(root, "select").find((s) => s.getAttribute("aria-label") !== "Control target");
+filter.value = "one"; fire(filter, "change"); await flush(); assert.equal(confirmBtns().length, 0);
+await answer(/messages/, 200, page([]));
+// the filter change redraws the controls but keeps the chosen target (only a group switch resets it): the "lead" option is
+// marked selected and Pause/Resume/Stop are enabled again, now that the confirmation is gone
+assert.deepEqual(byTag(tsel(root), "option").filter((o) => o.getAttribute("selected") !== null).map((o) => o.value), ["lead"]);
+assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]);
+// refresh (a request) does not leave a stale confirmation either
+click(bt(root, "Stop")); assert.equal(confirmBtns().length, 2);
+// group switch clears, and coming back does not restore it
+click(item(root, "g_2")); await answer(/g_2$/, 200, G("g_2")); await answer(/g_2\/messages/, 200, page([]));
+assert.equal(confirmBtns().length, 0); assert.deepEqual(enabled(root), [], "target resets for the new group");
+click(item(root, "g_1")); await answer(/g_1$/, 200, G("g_1")); await answer(/g_1\/messages/, 200, page([]));
+assert.equal(confirmBtns().length, 0); assert.equal(tsel(root).value, "");
+// confirming sends exactly one stop with the confirmed target, however often it is clicked
+pickT(root, "lead"); click(bt(root, "Stop")); const cf = bt(root, "Confirm stop");
+fire(cf, "click"); fire(cf, "click"); await flush();
+assert.equal(posts().length, 1); assert.deepEqual(posts()[0].body, { member: "lead" }); assert.ok(posts()[0].path.endsWith("/g_1/stop"));
+assert.equal(confirmBtns().length, 0, "confirmation is gone once the request starts");
+assert.deepEqual(enabled(root), []);
+posts()[0].reply(200, acc("stop", "lead")); await flush();
+assert.match(ctlText(root), /stop request for member lead of group g_1 was accepted/);
+// Pause and Resume never ask
+pickT(root, "lead"); click(bt(root, "Pause")); await flush(); assert.equal(posts().length, 2);
+posts()[1].reply(200, acc("pause", "lead")); await flush();
+// a confirmation made, then unmount, cannot send later
+click(bt(root, "Stop")); const stale = bt(root, "Confirm stop"); unmount(); fire(stale, "click"); await flush();
+assert.equal(posts().length, 2, "no request after unmount");
+''')
+
+
+@needs_node
+def test_refusal_is_definite_but_unclear_results_lock_controls_until_status_read(tmp_path):
+    run_ctl(tmp_path, r'''
+const { root, unmount } = await group1();
+// a refusal the API states itself does not lock anything
+pickT(root, "@group"); click(bt(root, "Pause")); await answer(/pause$/, 403, { error: "Not allowed here <i>x</i>", code: "forbidden" });
+assert.match(ctlText(root), /refused: Not allowed here/); assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]);
+assert.equal(byTag(root, "i").length, 0);
+// every unclear outcome locks, is never retried, and says so
+const cases = [["502 unknown", (c) => c.reply(502, { error: "x", code: "unavailable", outcome: "unknown" })],
+               ["network", (c) => c.fail()], ["500", (c) => c.reply(500, { error: "oops" })], ["404", (c) => c.reply(404, { error: "nf" })]];
+for (const [name, fin] of cases) {
+  const r = await group1(); pickT(r.root, "@group");
+  const before = posts().length, statusBefore = statusCalls().length; click(bt(r.root, "Resume")); await flush(); fin(posts().at(-1)); await flush();
+  assert.match(ctlText(r.root), /may or may not have been applied/, name); assert.match(ctlText(r.root), /Nothing is retried/);
+  assert.deepEqual(enabled(r.root), [], name); assert.match(byClass(r.root, "xc-sw-hint").map((e) => e.textContent).join(" "), /unknown result/);
+  for (const l of ["Pause", "Resume", "Stop"]) fire(bt(r.root, l), "click");
+  await wait(40);
+  assert.equal(posts().length, before + 1, "no retry, no forced click gets through: " + name);
+  assert.equal(statusCalls().length, statusBefore, "no automatic status read");
+  // still locked after a failed or unreadable status read
+  click(bt(r.root, "Check status")); await answer(/status$/, 500, { error: "down" }); assert.deepEqual(enabled(r.root), []);
+  click(bt(r.root, "Check status")); await answer(/status$/, 200, { id: "g_1" }); assert.deepEqual(enabled(r.root), []);
+  // other groups are not affected, the lock follows the group
+  click(item(r.root, "g_2")); await answer(/g_2$/, 200, G("g_2")); await answer(/g_2\/messages/, 200, page([]));
+  pickT(r.root, "lead"); assert.deepEqual(enabled(r.root), ["Pause", "Resume", "Stop"]);
+  click(item(r.root, "g_1")); await answer(/g_1$/, 200, G("g_1")); await answer(/g_1\/messages/, 200, page([]));
+  pickT(r.root, "lead"); assert.deepEqual(enabled(r.root), [], "lock survives switching away and back");
+  // an explicit successful read opens it again
+  click(bt(r.root, "Check status")); await answer(/status$/, 200, st());
+  assert.deepEqual(enabled(r.root), ["Pause", "Resume", "Stop"], name);
+  r.unmount();
+}
+// a status read that began before an unclear control result cannot clear the lock
+const r = await group1(); pickT(r.root, "@group");
+click(bt(r.root, "Check status")); await flush();
+click(bt(r.root, "Pause")); await flush(); posts().at(-1).fail(); await flush();
+assert.deepEqual(enabled(r.root), []);
+open_(/status$/)[0].reply(200, st()); await flush();
+assert.deepEqual(enabled(r.root), [], "an old read does not prove the state after the failed request");
+assert.match(ctlText(r.root), /out of date/);
+click(bt(r.root, "Check status")); await answer(/status$/, 200, st()); assert.deepEqual(enabled(r.root), ["Pause", "Resume", "Stop"]);
+r.unmount(); unmount();
+''')
+
+
+@needs_node
+def test_old_responses_cannot_change_the_current_group_or_an_unmounted_view(tmp_path):
+    run_ctl(tmp_path, r'''
+// control pending, user moves to another group: its buttons stay off, then are restored by the finally path
+let ctx = await group1(); let root = ctx.root;
+pickT(root, "@group"); click(bt(root, "Pause")); await flush();
+click(item(root, "g_2")); await answer(/g_2$/, 200, G("g_2")); await answer(/g_2\/messages/, 200, page([]));
+pickT(root, "lead"); assert.deepEqual(enabled(root), [], "single global busy flag");
+assert.equal(tsel(root).disabled, true); assert.equal(posts().length, 1);
+click(bt(root, "Pause")); assert.equal(posts().length, 1);
+assert.ok(!/g_1/.test(ctlText(root)) || !/Sending/.test(ctlText(root)), "other group's progress is not shown here");
+posts()[0].reply(200, acc("pause")); await flush();
+assert.equal(tsel(root).disabled, false);
+pickT(root, "lead");   // the target was reset by the group switch and could not be chosen while the global busy flag was set
+assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"], "restored for the current group"); assert.equal(tsel(root).disabled, false);
+assert.ok(!/was accepted/.test(ctlText(root)), "g_1's result is not shown under g_2");
+click(item(root, "g_1")); await answer(/g_1$/, 200, G("g_1")); await answer(/g_1\/messages/, 200, page([]));
+assert.match(ctlText(root), /pause request for the whole group g_1 was accepted/);
+// failed control for g_1 while g_2 is shown: g_1 locks, g_2 stays usable
+pickT(root, "@group"); click(bt(root, "Pause")); await flush();
+click(item(root, "g_2")); await answer(/g_2$/, 200, G("g_2")); await answer(/g_2\/messages/, 200, page([]));
+posts().at(-1).fail(); await flush(); pickT(root, "one");
+assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]); assert.ok(!/may or may not/.test(ctlText(root)));
+click(item(root, "g_1")); await answer(/g_1$/, 200, G("g_1")); await answer(/g_1\/messages/, 200, page([]));
+assert.match(ctlText(root), /may or may not/); ctx.unmount();
+
+// status read in flight when the group changes: the old reply is dropped
+ctx = await group1(); root = ctx.root;
+click(chk(root)); await flush();
+click(item(root, "g_2")); await answer(/g_2$/, 200, G("g_2")); await answer(/g_2\/messages/, 200, page([]));
+assert.equal(chk(root).disabled, true, "status busy is global too");
+open_(/g_1\/status$/)[0].reply(200, st([["lead", "failed"], ["one", "failed"]], { reconciliation_required: true })); await flush();
+assert.ok(!/failed|reconciliation/.test(ctlText(root))); assert.equal(chk(root).disabled, false);
+click(item(root, "g_1")); await answer(/g_1$/, 200, G("g_1")); await answer(/g_1\/messages/, 200, page([]));
+assert.ok(!/failed|reconciliation/.test(ctlText(root)), "a dropped read is not shown later either");
+ctx.unmount();
+
+// unmount while requests are pending: nothing throws, nothing is drawn
+ctx = await group1(); root = ctx.root;
+pickT(root, "@group"); click(bt(root, "Pause")); click(bt(root, "Check status")); await flush();
+const snap = ctlText(root);
+ctx.unmount();
+posts().at(-1).reply(200, acc("pause")); open_(/status$/)[0].reply(200, st()); await flush(); await flush();
+assert.equal(ctlText(root), snap);
+ctx = await group1(); pickT(ctx.root, "@group"); click(bt(ctx.root, "Pause")); await flush();
+ctx.unmount(); posts().at(-1).fail(); await flush();
+''')
+
+
+@needs_node
+def test_control_text_from_the_server_is_only_text_and_requests_use_only_known_paths(tmp_path):
+    run_ctl(tmp_path, r'''
+const EVIL = '<img src=x onerror=alert(1)><script>alert(2)</script>';
+const { root, unmount } = await boot([G("g_1", ["lead", "one"])]);
+await openGroup({ root }, "g_1");
+click(bt(root, "Check status")); await answer(/status$/, 200, st([["lead", "running"]], { owner: EVIL }));
+pickT(root, "@group"); click(bt(root, "Pause")); await answer(/pause$/, 400, { error: EVIL + "z".repeat(900) });
+assert.ok(ctlText(root).includes("<img src=x")); assert.ok(byClass(root, "xc-sw-ctlout")[0].textContent.length < 500);
+for (const e of walk(root)) { assert.ok(!["IMG", "SCRIPT", "SVG", "IFRAME"].includes(e.tagName), e.tagName);
+  for (const k of Object.keys(e.attrs)) assert.ok(!k.startsWith("on") && k !== "style" && k !== "src" && k !== "href", k); }
+const paths = new Set(net.calls.map((c) => c.method + " " + c.path.replace(/\?.*/, "")));
+for (const p of paths) assert.match(p, /^(GET \/api\/swarm\/groups(\/g_\d(\/(status|messages))?)?|POST \/api\/swarm\/groups\/g_1\/(pause|resume|stop))$/, p);
+unmount();
+''')
+
+
+@needs_node
+def test_ui_accepts_real_api_control_and_status_replies_and_its_requests_are_accepted(tmp_path):
+    base = "/api/swarm/groups/" + GID
+    from test_swarm_api import STATUS
+    fx = {
+        "status": api(Centre(STATUS), "GET", base + "/status")[1],
+        "pause_all": api(Centre({"id": GID, "paused": True, "member": None}), "POST", base + "/pause", None, {})[1],
+        "stop_one": api(Centre({"id": GID, "stopped": True, "member": "lead"}), "POST", base + "/stop", None, {"member": "lead"})[1],
+        "unknown": api(Centre(fail=RuntimeError("secret")), "POST", base + "/resume", None, {})[0:2],
+        "refused": api(Centre(fail=SourceError("forbidden", "secret")), "POST", base + "/pause", None, {})[0:2],
+    }
+    assert fx["pause_all"]["accepted"] is True and fx["unknown"][0] == 502 and fx["refused"][0] == 403
+    (tmp_path / "fx.json").write_text(json.dumps(fx))
+    out = run_ctl(tmp_path, r'''
+const fx = JSON.parse(readFileSync("fx.json", "utf8"));
+const gid = fx.status.id;
+const ctx = await boot([G(gid)]); const root = ctx.root;
+click(item(root, gid)); await answer(new RegExp(gid + "$"), 200, G(gid)); await answer(/messages/, 200, page([]));
+click(bt(root, "Check status")); await answer(/status$/, 200, fx.status);
+assert.match(ctlText(root), /lead\s*running/); assert.match(ctlText(root), /one\s*pausing/);
+pickT(root, "@group"); click(bt(root, "Pause")); await answer(/pause$/, 200, fx.pause_all);
+assert.match(ctlText(root), /was accepted/);
+pickT(root, "lead"); click(bt(root, "Stop")); click(bt(root, "Confirm stop")); await answer(/stop$/, 200, fx.stop_one);
+assert.match(ctlText(root), /stop request for member lead .* was accepted/);
+click(bt(root, "Resume")); await answer(/resume$/, fx.unknown[0], fx.unknown[1]);
+assert.match(ctlText(root), /may or may not/); assert.deepEqual(enabled(root), []);
+click(bt(root, "Check status")); await answer(/status$/, 200, fx.status);
+click(bt(root, "Pause")); await answer(/pause$/, fx.refused[0], fx.refused[1]);
+assert.match(ctlText(root), /refused/); assert.deepEqual(enabled(root), ["Pause", "Resume", "Stop"]);
+writeFileSync("req.json", JSON.stringify(net.calls.map((c) => ({ method: c.method, path: c.path, body: c.body }))));
+ctx.unmount();
+''', name="ctlshapes")
+    assert out.strip() == "OK"
+    reqs = json.loads((tmp_path / "req.json").read_text())
+    centres = {"status": Centre(STATUS), "pause": Centre({"id": GID, "paused": True, "member": None}),
+               "stop": Centre({"id": GID, "stopped": True, "member": "lead"}), "resume": Centre({"id": GID, "resumed": True, "member": "lead"})}
+    seen = []
+    for r in reqs:
+        u = urlsplit(r["path"])
+        tail = u.path.rsplit("/", 1)[1]
+        if tail not in centres:
+            continue
+        member = (r.get("body") or {}).get("member")
+        flag = {"pause": "paused", "stop": "stopped", "resume": "resumed"}.get(tail)
+        c = Centre(STATUS) if tail == "status" else Centre({"id": GID, flag: True, "member": member})
+        status, data = api(c, r["method"], u.path, {}, r.get("body") or {})
+        assert status == 200, (r, status, data)
+        assert len(c.calls) == 1 and isinstance(c.calls[0], s.CommandRun) and c.calls[0].name == "group"
+        seen.append((r["method"], tail, r.get("body")))
+    assert seen == [("GET", "status", None), ("POST", "pause", {}), ("POST", "stop", {"member": "lead"}),
+                    ("POST", "resume", {"member": "lead"}), ("GET", "status", None), ("POST", "pause", {"member": "lead"})]
