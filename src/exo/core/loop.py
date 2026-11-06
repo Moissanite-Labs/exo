@@ -113,6 +113,7 @@ class Loop:
         self.provider_opts = dict(provider_opts or {})
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
+        self.on_steer: Callable[[str, dict[str, Any]], None] | None = None
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self.workspace_extra: Callable[[str | None, str], str] | None = None
@@ -245,6 +246,8 @@ class Loop:
                 st.steer.clear()
                 for m in late:
                     await self._add(session, m, turn_id)
+                    if self.on_steer is not None:
+                        self.on_steer(session, m.meta)
                 await self._rounds(session, turn_id, late[-1], st, result)
         except _Interrupted:
             result.stop_reason = "interrupted"
@@ -286,6 +289,8 @@ class Loop:
         for m in st.steer:
             await self._add(session, m, turn_id)
             out = provenance.author_of(m)
+            if self.on_steer is not None:
+                self.on_steer(session, m.meta)
         st.steer.clear()
         return out
 

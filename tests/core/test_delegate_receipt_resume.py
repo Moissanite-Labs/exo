@@ -244,3 +244,77 @@ def test_receipts_during_session_lock_wait_share_one_wake(tmp_path):
                 lock.release()
             await e.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("stop_after_steer", [False, True])
+def test_consumed_principal_steer_owns_new_background_work(tmp_path, stop_after_steer):
+    """The old tool worker stays fenced; a new round answering the steer owns its children."""
+    from tests.agents.test_delegate_background import engine, tool_turn, until as wait_until
+    from exo.core.continuation import TURN_GENERATION
+
+    async def run():
+        barrier, release, child_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        e = engine(tmp_path, [("PARENT", [tool_turn("exo_end_turn", {"followup_pending": True}), "old"]),
+            ("NEW", [tool_turn("delegate", {"goal": "CHILD verify", "role": "builder", "background": True}),
+                     tool_turn("exo_end_turn", {"followup_pending": True}), "waiting"]),
+            ("CHILD", [child_release, "verified"])])
+        sid = (await e.loop.create_session()).id
+        stale = []
+        async def pause(tool_name, **kw):
+            if tool_name == "exo_end_turn" and not barrier.is_set():
+                barrier.set()
+                await release.wait()
+                e.continuations.delegate_started(sid, "stale-worker")
+                stale.append(TURN_GENERATION.get())
+        e.plugins.hooks.register("post_tool_call", pause)
+        parent = asyncio.create_task(e.run_turn(s.TurnSend(session=sid, text="PARENT"),
+                                               {"author": provenance.PRINCIPAL}))
+        try:
+            await wait_until(barrier.is_set)
+            old_gen = e.continuations.generation(sid)
+            sent = await Dispatcher(e).run(s.Command.of(s.TurnSend(session=sid, text="NEW", mode="steer")),
+                                           "principal:tui")
+            assert sent.ok
+            if stop_after_steer:
+                # Fence the queued steer before it enters context, as an actual Stop does.
+                e.continuations.cancel(sid)
+            release.set()
+            await parent
+            task = next(iter(e.agents.bg))
+            assert stale == [(sid, old_gen)]
+            assert "stale-worker" not in e.continuations._st(sid).delegates
+            assert (task in e.continuations._st(sid).delegates) is (not stop_after_steer)
+            errors = [r.text() for m in e.store.messages(sid) for r in m.tool_results if r.is_error]
+            assert any("continuation cancelled" in t for t in errors) is stop_after_steer
+            child_release.set()
+            await wait_until(lambda: not e.agents.bg)
+            await drain(e)
+            assert len(wakes(e, sid)) == (0 if stop_after_steer else 1)
+        finally:
+            release.set()
+            child_release.set()
+            await parent
+            await e.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("case", ["current", "stale", "delegate", "closed", "unowned", "other_session"])
+def test_steer_rebind_requires_current_principal_fence(case):
+    from exo.core.continuation import Continuations, TURN_GENERATION
+
+    async def start(*args):
+        pass
+
+    c = Continuations(start, lambda sid: False)
+    c.turn_started("parent", {})
+    old = ("other" if case == "other_session" else "parent", 0)
+    token = TURN_GENERATION.set(None if case == "unowned" else old)
+    try:
+        if case == "closed":
+            c.close()
+        c.steer_entered("parent", {"author": "delegate" if case == "delegate" else provenance.PRINCIPAL,
+            "continuation_steer_gen": 0 if case == "stale" else c.generation("parent")})
+        assert TURN_GENERATION.get() == (("parent", 1) if case == "current" else
+                                          None if case == "unowned" else old)
+    finally:
+        TURN_GENERATION.reset(token)
