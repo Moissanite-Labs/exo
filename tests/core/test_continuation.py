@@ -123,7 +123,7 @@ def test_continue_now_schedules_one_harness_wake() -> None:
         assert session == "s"
         assert meta["origin"] == ORIGIN
         assert meta["continuation_of"] == "t1"
-        assert meta["author"] == provenance.SYSTEM
+        assert "author" not in meta  # run_turn stamps system (pinned in test_continuation_engine.py)
         assert "harness continuation wake" in text and "keep digging" in text
         assert h.delays == [0]
         assert h.notes[-1] == "continuation scheduled now"
@@ -230,9 +230,33 @@ def test_chain_cap_stops_a_model_that_asks_forever() -> None:
         assert out == ["scheduled", "scheduled", "capped"]
         assert len(h.calls) == 2
         assert "continuation stopped after 2 harness wakes" in h.notes[-1]
-        assert h.cont._s["s"].chain == 0  # reset, so a user turn resumes the budget
+        assert h.cont._s["s"].chain == 2  # spent until a principal turn resets it
 
     asyncio.run(go())
+
+
+def test_only_a_principal_turn_renews_the_wake_budget() -> None:
+    async def go() -> None:
+        h = Harness(max_chain=2)
+        for i in range(3):
+            h.cont.request("s", f"t{i}", {"continue_now": True})
+            h.cont.turn_ended("s", f"t{i}", "end")
+            await settle()
+        assert len(h.calls) == 2
+        h.cont.turn_started("s", {"author": provenance.SYSTEM})  # a job, peer or bus turn
+        h.cont.request("s", "job", {"continue_now": True})
+        assert h.cont.turn_ended("s", "job", "end") == "capped"
+        h.cont.cancel("s")  # a Stop does not renew the budget either
+        h.cont.request("s", "after-stop", {"continue_now": True})
+        assert h.cont.turn_ended("s", "after-stop", "end") == "capped"
+        h.cont.turn_started("s", {"author": provenance.PRINCIPAL}, principal=True)
+        h.cont.request("s", "human", {"continue_now": True})
+        assert h.cont.turn_ended("s", "human", "end") == "scheduled"
+        await settle()
+        assert len(h.calls) == 3
+
+    asyncio.run(go())
+
 
 
 def test_user_turn_cancels_pending_wake_but_harness_wake_does_not() -> None:
