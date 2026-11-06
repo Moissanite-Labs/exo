@@ -1,4 +1,4 @@
-"""The swarm web API: four fixed routes over the core's ``command.run`` name ``group``. Not wired into ``api.py`` yet.
+"""The swarm web API: eight fixed routes over the core's ``command.run`` name ``group``. ``api.py`` routes ``/api/swarm*`` here.
 
 ``dispatch(centre, method, path, q, body)`` follows the ``api.dispatch`` convention: it returns ``(status, data)``,
 or ``None`` when the path is not under ``/api/swarm`` (so the caller can fall through). Every route validates its
@@ -11,6 +11,10 @@ request, never builds a command name or operation from input, and adds no permis
   GET  /api/swarm/groups/<id>                group inspect
   GET  /api/swarm/groups/<id>/messages       group observe  ?member=&after=&limit=
   POST /api/swarm/groups/<id>/send           group send     {text, audience?}
+  GET  /api/swarm/groups/<id>/status         group status
+  POST /api/swarm/groups/<id>/pause          group pause    {member?}
+  POST /api/swarm/groups/<id>/resume         group resume   {member?}
+  POST /api/swarm/groups/<id>/stop           group stop     {member?}
 
 Unknown paths under /api/swarm answer 404, wrong methods 405, and unknown query or body keys 400.
 
@@ -18,6 +22,12 @@ Send means PERSISTED ONLY. The core stores the message and, if a running convers
 asks it to wake. The reply never says the message was processed, read or that a member was woken, and this module
 does not look at group status before or after sending (that would race and could not prove delivery). A send that
 fails after the request left (transport error, bad reply) says the message MAY have been saved.
+
+pause, resume and stop are fixed operations; ``member`` is the only option (absent means the whole group, sent as no
+member at all). A 200 means the core ACCEPTED the request. It does not mean the members have paused, resumed or
+stopped: execution settles later, so read ``status`` for the real state. If the request left and the outcome is not
+known (transport error, malformed or mismatched reply) the answer is 502 with ``outcome: "unknown"``. This module
+never retries: the caller must read ``status`` first. A refusal the core states itself (403, 400, ...) is definite.
 """
 from __future__ import annotations
 
@@ -48,6 +58,12 @@ PERSISTED_ONLY = ("Saved to the group log only. This does not mean the message w
 BAD_REPLY = "The swarm core returned an unexpected reply."
 UNAVAILABLE = "The swarm core could not be reached or failed."
 SEND_UNKNOWN = " The message may or may not have been saved; check the group log before sending again."
+CONTROL_UNKNOWN = (" The request may or may not have been applied; read the group status before trying again. "
+                   "It is not retried automatically.")
+ACCEPTED_ONLY = ("The request was accepted. This does not mean members have already changed state; "
+                 "read the group status for the settled state.")
+STATES = ("idle", "queued", "running", "pausing", "paused", "completed", "stopped", "failed", "unknown")
+ACTIONS = {"pause": "paused", "resume": "resumed", "stop": "stopped"}   # op -> the core's confirmation flag
 REFUSALS = {
     "forbidden": (403, "Only the principal may use swarm groups."),
     "bad_request": (400, "The swarm core rejected the request (unknown group, invalid audience or invalid fields)."),
@@ -193,6 +209,55 @@ def _message(raw: Any) -> Dict[str, Any]:
             "sender_kind": raw["sender_kind"], "audience": list(aud), "text": text, "created": _str(raw, "created")}
 
 
+def _bool_field(d: Dict[str, Any], key: str) -> bool:
+    v = d.get(key)
+    if not isinstance(v, bool):
+        raise BadReply()
+    return v
+
+
+def _state(raw: Any) -> str:
+    if not isinstance(raw, str) or raw not in STATES:
+        raise BadReply()
+    return raw
+
+
+def _status(raw: Any, gid: str) -> Dict[str, Any]:
+    if not isinstance(raw, dict) or _str(raw, "id") != gid:
+        raise BadReply()
+    members = raw.get("members")
+    if not isinstance(members, list) or not members:
+        raise BadReply()
+    rows = []
+    for m in members:
+        if not isinstance(m, dict):
+            raise BadReply()
+        prof = _str(m, "profile")
+        if not PROFILE.fullmatch(prof):
+            raise BadReply()
+        rows.append({"profile": prof, "state": _state(m.get("state"))})
+    if len({r["profile"] for r in rows}) != len(rows):
+        raise BadReply()
+    rec = raw.get("receipt")
+    receipt = None
+    if rec is not None:
+        if not isinstance(rec, dict) or not isinstance(rec.get("members"), dict):
+            raise BadReply()
+        finished = rec.get("finished")
+        if finished is not None and (not isinstance(finished, str) or not finished):
+            raise BadReply()
+        rmembers = {}
+        for k, v in rec["members"].items():
+            if not isinstance(k, str) or not PROFILE.fullmatch(k):
+                raise BadReply()
+            rmembers[k] = _state(v)
+        receipt = {"id": _str(rec, "id"), "state": _str(rec, "state"), "created": _str(rec, "created"),
+                   "finished": finished, "members": rmembers}
+    return {"id": gid, "owner": _str(raw, "owner"), "members": rows,
+            "local_runtime": _bool_field(raw, "local_runtime"),
+            "reconciliation_required": _bool_field(raw, "reconciliation_required"), "receipt": receipt}
+
+
 # ------------------------------------------------------------------ routes
 async def _list(c, gid, q, body):
     _query(q, ()), _body(body, ())
@@ -260,10 +325,42 @@ async def _send(c, gid, q, body):
     return {"message": msg, "persisted": True, "processed": "unknown", "woken": "unknown", "note": PERSISTED_ONLY}
 
 
+async def _group_status(c, gid, q, body):
+    gid = _group_id(gid)
+    _query(q, ()), _body(body, ())
+    return _status(await _call(c, "status", {"id": gid}), gid)
+
+
+def _control(op: str):
+    flag = ACTIONS[op]
+
+    async def handler(c, gid, q, body):
+        gid = _group_id(gid)
+        _query(q, ())
+        data = _body(body, ("member",))
+        payload: Dict[str, Any] = {"id": gid}
+        member = None
+        if data.get("member") is not None:          # absent or null: the whole group, no member key at all
+            member = payload["member"] = _profile(data["member"], "member")
+        try:
+            out = await _call(c, op, payload)
+            if out.get("id") != gid or out.get(flag) is not True or out.get("member") != member:
+                raise BadReply()
+        except Exception as exc:   # the request left: any failure from here leaves the outcome unknown
+            raise _ControlFailed(exc) from None
+        return {"id": gid, "action": op, "member": member, "accepted": True, "settled": "unknown",
+                "note": ACCEPTED_ONLY}
+    return handler
+
+
 class _SendFailed(Exception):
     def __init__(self, cause: BaseException):
         super().__init__()
         self.cause = cause
+
+
+class _ControlFailed(_SendFailed):
+    pass
 
 
 ROUTES = {
@@ -271,6 +368,10 @@ ROUTES = {
     ("GET", ("<id>",)): _inspect,
     ("GET", ("<id>", "messages")): _observe,
     ("POST", ("<id>", "send")): _send,
+    ("GET", ("<id>", "status")): _group_status,
+    ("POST", ("<id>", "pause")): _control("pause"),
+    ("POST", ("<id>", "resume")): _control("resume"),
+    ("POST", ("<id>", "stop")): _control("stop"),
 }
 
 
@@ -284,7 +385,7 @@ def _route(method: str, rest: List[str]):
     return ROUTES.get((method, shape), False)
 
 
-def error_reply(exc: BaseException, sending: bool = False) -> Reply:
+def error_reply(exc: BaseException, sending: bool = False, controlling: bool = False) -> Reply:
     """A static, sanitized reply. Codes come from a fixed set; messages never carry core or transport text."""
     if isinstance(exc, BadRequest):
         return 400, {"error": str(exc), "code": "bad_request"}
@@ -295,6 +396,9 @@ def error_reply(exc: BaseException, sending: bool = False) -> Reply:
                              "code": "bad_reply" if isinstance(exc, BadReply) else "unavailable"}
     if sending:
         reply["persisted"] = "unknown"
+    if controlling:
+        reply["error"] += CONTROL_UNKNOWN
+        reply["outcome"] = "unknown"
     return 502, reply
 
 
@@ -314,6 +418,7 @@ async def dispatch(centre, method: str, path: str, q: Dict[str, Any], body: Dict
         cause = exc.cause
         if isinstance(cause, SourceError) and cause.code in REFUSALS:
             return error_reply(cause)
-        return error_reply(cause if isinstance(cause, BadReply) else RuntimeError(), sending=True)
+        control = isinstance(exc, _ControlFailed)
+        return error_reply(cause if isinstance(cause, BadReply) else RuntimeError(), sending=not control, controlling=control)
     except Exception as exc:
         return error_reply(exc)
