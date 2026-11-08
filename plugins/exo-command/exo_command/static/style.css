@@ -836,3 +836,12 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-rename-editor label { display: flex; flex-direction: column; gap: 4px; }
 .xc-rename-editor input { min-width: 0; width: 100%; box-sizing: border-box; }
 .xc-rename-error { color: var(--fg-2); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Image input: attached thumbnails above the box, drop highlight on the box. */
+.xc-images { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.xc-images[hidden] { display: none; }
+.xc-image { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); font-size: 12px; }
+.xc-image-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.xc-image-size { color: var(--fg-3, inherit); opacity: 0.7; white-space: nowrap; }
+.xc-image-x { width: 18px; height: 18px; line-height: 16px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
+.xc-inwrap.xc-drop .xc-input { outline: 2px dashed var(--accent); outline-offset: -2px; }

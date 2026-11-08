@@ -7,7 +7,7 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/sessions                  session.list
   POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
   GET  /api/chat/sessions/<id>             session.get           the transcript so far, and the ids of queued steers
-  POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
+  POST /api/chat/sessions/<id>/send        turn.send             {text, mode, images}; images: up to 4 of {mime, data}, 5 MB together
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
@@ -35,16 +35,25 @@ centre's source. A core that does not handle a command yet answers 501.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import os
 import re
 from typing import Any, Dict, Optional, Tuple
 
 from exo import complete as cm
+from exo.core.types import ContentPart
 from exo.protocol import schema as s
 
 from .source import TOKEN_REFUSED, SourceError, core_message
 
 MAX_TEXT = 50_000
+MAX_IMAGES = 4
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# All images in one send together. The core caps a /command body at 8 MiB (server/app.py MAX_BODY), and base64
+# adds a third, so 5 MiB raw plus text fits; 4 x 5 MiB would reach the core as a 413.
+MAX_IMAGES_TOTAL = 5 * 1024 * 1024
+IMAGE_MIMES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
 READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
@@ -171,10 +180,47 @@ async def _transcript(c, p, q, body):
             "seq": since}
 
 
+def _images(body: Dict[str, Any]) -> list:
+    """The optional ``images`` list as image ContentParts. Every refusal is one static message: nothing from the
+    request (a mime string, base64 text) is echoed back."""
+    raw = body.get("images")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise BadRequest("images must be a list")
+    if len(raw) > MAX_IMAGES:
+        raise BadRequest("at most {} images per message".format(MAX_IMAGES))
+    parts, total = [], 0
+    for item in raw:
+        if not isinstance(item, dict):
+            raise BadRequest("each image needs a mime type and data")
+        mime, data = item.get("mime"), item.get("data")
+        if not isinstance(mime, str) or mime not in IMAGE_MIMES:
+            raise BadRequest("image type is not allowed (png, jpeg, gif or webp)")
+        if not isinstance(data, str) or not data:
+            raise BadRequest("image data must be base64 text")
+        if len(data) > (MAX_IMAGE_BYTES + 2) // 3 * 4:   # before decoding: never allocate for a body over the cap
+            raise BadRequest("image is larger than 5 MB")
+        try:
+            raw_bytes = base64.b64decode(data.encode("ascii"), validate=True)
+        except (binascii.Error, ValueError, UnicodeEncodeError):
+            raise BadRequest("image data is not valid base64") from None
+        if not raw_bytes:
+            raise BadRequest("image data must be base64 text")
+        if len(raw_bytes) > MAX_IMAGE_BYTES:
+            raise BadRequest("image is larger than 5 MB")
+        total += len(raw_bytes)
+        if total > MAX_IMAGES_TOTAL:
+            raise BadRequest("images together are larger than 5 MB")
+        parts.append(ContentPart(type="image", data=data, mime=mime))
+    return parts
+
+
 async def _send(c, p, q, body):
-    text = _str(body, "text", required=True, limit=MAX_TEXT)
+    parts = _images(body)
+    text = _str(body, "text", required=not parts, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
-    return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+    return await c.source.call(s.TurnSend(session=p[2], text=text, parts=parts, mode=mode))
 
 
 async def _models(c, p, q, body):
