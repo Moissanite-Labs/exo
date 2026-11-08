@@ -13,6 +13,8 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
+  GET  /api/chat/pins                      the pinned session ids, {pins: [...]}; a JSON file under the Exo home
+  POST /api/chat/pins                      {id, pinned}; principal only, probed like rename (D-069); returns {pins}
   GET  /api/chat/models                    models.list           the /model picker's choices
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
@@ -35,8 +37,10 @@ centre's source. A core that does not handle a command yet answers 501.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import threading
 from typing import Any, Dict, Optional, Tuple
 
 from exo import complete as cm
@@ -122,6 +126,7 @@ def _route(method: str, p: list, key: str):
     get, post = method == "GET", method == "POST"
     table = {
         "chat/sessions": (_sessions, _create),
+        "chat/pins": (_pins, _pins_set),
         "chat/models": (_models, None),
         "chat/panels": (_panels, None),
         "feedback": (None, _feedback),
@@ -155,6 +160,72 @@ async def _sessions(c, p, q, body):
         raise BadRequest("limit must be at least 1")
     res = await c.source.call(s.SessionList(limit=limit))
     return {"sessions": res.get("sessions") or []}
+
+
+PIN_ID = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+MAX_PINS = 200
+_pin_lock = threading.Lock()
+
+
+def _pins_path():
+    from .config import exo_home
+    return exo_home() / "state" / "chat-pins.json"
+
+
+def _read_pins() -> list:
+    """The pinned ids, oldest first. A missing, corrupt or oddly shaped file counts as no pins."""
+    try:
+        data = json.loads(_pins_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    raw = data.get("pins") if isinstance(data, dict) else None
+    out: list = []
+    for x in raw if isinstance(raw, list) else []:
+        if isinstance(x, str) and PIN_ID.match(x) and x not in out:
+            out.append(x)
+    return out[:MAX_PINS]
+
+
+def _write_pins(pins: list) -> None:
+    path = _pins_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("{}.{}.tmp".format(path.name, os.getpid()))
+    try:
+        tmp.write_text(json.dumps({"pins": pins}), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+async def _pins(c, p, q, body):
+    return {"pins": _read_pins()}
+
+
+async def _pins_set(c, p, q, body):
+    pid = _str(body, "id", required=True, limit=200)
+    if not PIN_ID.match(pid):
+        raise BadRequest("id must be 1 to 200 letters, digits, - or _")
+    pinned = body.get("pinned")
+    if not isinstance(pinned, bool):
+        raise BadRequest("pinned must be true or false")
+    try:   # the same principal gate as rename: an empty title is refused for the principal after the check passes
+        await c.source.call(s.CommandRun(name="rename", args="", session=pid))
+    except SourceError as exc:
+        if exc.code == "forbidden":
+            raise Forbidden(exc.message) from None
+        if exc.code != "bad_request":
+            raise
+    with _pin_lock:
+        pins = _read_pins()
+        if pinned and pid not in pins:
+            if len(pins) >= MAX_PINS:
+                raise BadRequest("at most {} pinned chats".format(MAX_PINS))
+            pins.append(pid)
+        elif not pinned:
+            pins = [x for x in pins if x != pid]
+        _write_pins(pins)
+    return {"pins": pins}
 
 
 async def _create(c, p, q, body):

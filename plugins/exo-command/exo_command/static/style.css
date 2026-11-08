@@ -836,3 +836,6 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-rename-editor label { display: flex; flex-direction: column; gap: 4px; }
 .xc-rename-editor input { min-width: 0; width: 100%; box-sizing: border-box; }
 .xc-rename-error { color: var(--fg-2); font-size: 12px; overflow-wrap: anywhere; }
+.xc-pin { flex-shrink: 0; min-height: 36px; padding: 6px 8px; font-size: 12px; }
+.xc-pin.on { color: var(--fg); }
+.xc-pinmark { margin-right: 4px; font-size: 11px; }
