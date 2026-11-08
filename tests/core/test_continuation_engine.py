@@ -170,8 +170,8 @@ def test_stop_during_turn_clears_requested_wake(tmp_path):
 def test_user_denied_tool_prevents_wake(tmp_path):
     async def run():
         engine, sid = await setup(tmp_path, steps=[
-            {"tool": "exo_end_turn", "args": {"continue_now": True}},
-            {"tool": "needs_permission", "args": {}}, "finished"])
+            {"tool": "needs_permission", "args": {}},
+            {"tool": "exo_end_turn", "args": {"continue_now": True}}, "finished"])
         engine.registry.register(ToolSpec(name="needs_permission", description="test", parameters={}),
                                  lambda args, ctx: pytest.fail("denied tool executed"))
         engine.plugins.hooks.register("pre_tool_call", lambda tool_name, **kw:

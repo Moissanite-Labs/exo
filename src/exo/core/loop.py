@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Iterable
 
 from exo import provenance
@@ -113,6 +113,7 @@ class Loop:
         self.provider_opts = dict(provider_opts or {})
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
+        self.end_turn_requested: Callable[[str, str], bool] | None = None
         self.on_steer: Callable[[str, dict[str, Any]], None] | None = None
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
@@ -333,11 +334,24 @@ class Loop:
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result, _)
+            finalizing = bool(self.end_turn_requested and self.end_turn_requested(session, turn_id))
+            stream = await self._call(session, messages, msg_id, st, result, _,
+                                      tool_choice="none" if finalizing else "")
             if await self._settle(session, turn_id, stream, msg_id, _, st, result):
                 result.stop_reason = "error"
                 return
+            # End-turn is accepted by the registered harness handler, never inferred from text or a
+            # tool name. Finish the whole preceding tool batch, then allow its normal final reply.
+            # Providers must not make stray calls executable or persist unpaired tool calls here.
             reply = self._assemble(stream, msg_id)
+            if finalizing:
+                meta = dict(reply.meta)
+                if isinstance(meta.get("responses_output"), list):
+                    # Responses replays raw calls independently of canonical tool_calls. Keep its
+                    # supported non-tool output (including opaque reasoning), never orphan calls.
+                    meta["responses_output"] = [item for item in meta["responses_output"]
+                                                if isinstance(item, dict) and item.get("type") in ("reasoning", "message")]
+                reply = replace(reply, tool_calls=[], meta=meta)
             result.message = await self._add(session, reply, turn_id)
             if not reply.tool_calls:
                 result.stop_reason = stream.done.stop_reason or "end"
