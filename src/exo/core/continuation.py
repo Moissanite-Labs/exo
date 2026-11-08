@@ -1,6 +1,8 @@
 """Turn continuation: the agent asks the harness to wake its own session after the turn ends.
 
 The agent calls the ``exo_end_turn`` tool during a turn with structured flags. Nothing is parsed from reply prose.
+An accepted request finishes its current tool batch, then permits one final reply with tool use disabled.
+A principal steer invalidates that request and restores ordinary tool use for the new work.
 When that turn ends cleanly (stop reason ``end``) the harness, not a fake user, starts the next turn:
 
 * ``continue_now`` - wake again right away (one coalesced wake, never a parallel turn).
@@ -48,6 +50,7 @@ END_TURN = ToolSpec(
                  "(no user message is needed). wake_after: seconds to wait before the harness wakes you (use it while "
                  "waiting on something that finishes later). followup_pending: you owe the user a follow-up; this is "
                  "only recorded, it never wakes you and never sends anything. Call it once, near the end of the turn. "
+                 "The next reply is final, with tool use disabled. "
                  "A stop from the user, a denied tool or an error cancels the wake. Background tasks you started can also resume you when their receipts arrive."),
     parameters={"type": "object", "properties": {
         "continue_now": {"type": "boolean", "description": "Wake this session again right after this turn."},
@@ -135,6 +138,15 @@ class Continuations:
         if follow:
             out += " The follow-up is recorded only; nothing is sent."
         return out
+
+    def ending(self, session: str, turn_id: str) -> bool:
+        """An accepted, current-generation end-turn request also closes tool use for this turn.
+
+        Reading the intent does not consume it: engine turn completion still applies its wake flags.
+        """
+        st = self._st(session)
+        return bool(not self.closed and st.request is not None
+                    and st.request.turn_id == turn_id and st.request.generation == st.gen)
 
     def note_denied(self, session: str, turn_id: str) -> None:
         """A tool was denied in this turn: its continuation request is void."""

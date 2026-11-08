@@ -233,6 +233,7 @@ class CoreRuntime:
                          context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        self.loop.end_turn_requested = self.continuations.ending
         self.loop.on_steer = self.continuations.steer_entered
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul

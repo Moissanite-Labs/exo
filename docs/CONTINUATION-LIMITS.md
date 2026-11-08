@@ -5,8 +5,15 @@ verified with offline fake-provider runtime tests. This is not evidence of live 
 
 ## Requests are bounded, not durable jobs
 
-`exo_end_turn` is a main-agent harness tool. It records a request; it does not
-immediately terminate the model's turn or override the turn's eventual outcome.
+`exo_end_turn` is a main-agent harness tool. A successful, authorized request
+finishes the current tool batch, then allows one final reply with
+`tool_choice="none"`. Sibling calls in that batch still receive their results.
+Provider tool calls returned despite that setting are not executed or retained
+in the final reply or provider replay metadata. Native non-tool reasoning and
+message replay are retained. The final reply
+uses the ordinary usage accounting and Stop/error handling. A principal steer
+clears the old finish intent and restores ordinary tool use for the new work.
+The request's wake flags are applied only after the turn actually completes.
 `continue_now` and `wake_after` are mutually exclusive. Delays are whole seconds
 from 1 through 3600. Only one request per session is retained; a later request
 replaces the earlier one. The default chain budget is five harness wakes.
@@ -97,3 +104,15 @@ in-memory test doubles; no network or live service is needed. Restart recovery
 is not tested or supplied. The external sprint receipt records exact results
 and SHA-256 hashes; these tests do not establish the model identity of any live
 process.
+
+## Parent continuity evidence
+
+Capability: `exo.delegation.parent-continuity`. Repeated calls to `exo_end_turn`
+inside one turn are distinct from repeated receipt wakes. Diagnose a claimed
+wake loop by comparing actual system-origin continuation messages and
+`turn.started` events with tool rounds in the same turn. A model's description
+of being woken does not establish a new harness ingress. Offline replay showed
+that advisory finish instructions alone allowed repeated tool rounds; explicit
+final-reply tool disabling prevents that pattern. Live behavior after adoption
+still needs verification; no receipt scheduler or wake limit changes follow
+from this finding.
