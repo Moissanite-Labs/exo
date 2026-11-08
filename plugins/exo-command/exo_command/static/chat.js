@@ -7,6 +7,7 @@ import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
+import { attachImages } from "./images.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
@@ -115,7 +116,9 @@ export function mount(root) {
   const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
   modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), recoveryEl, modelPicker);
+  const images = attachImages({ input, wrap: inputWrap, flash: (m) => flash(m) });
+  const composer = h("div", { class: "xc-composer" }, images.tray, promptEl, inputWrap,
+    h("div", { class: "xc-btnrow" }, sendBtn, stopBtn, images.button, images.picker), recoveryEl, modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   function saveDraft() {
@@ -696,6 +699,7 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
+    if (current !== id) images.take();   // an attachment belongs to one conversation
     current = id; loading = true; pending = []; items = []; win = WINDOW; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
@@ -871,7 +875,8 @@ export function mount(root) {
 
   async function send() {
     const text = input.value.trim();
-    if (!text || draft(current).pending) return;
+    if (images.pending()) { flash("images are still loading; send again when ready"); return; }
+    if ((!text && !images.count()) || draft(current).pending) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
     // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
@@ -931,6 +936,7 @@ export function mount(root) {
       return;
     }
     saveDraft();
+    const shots = images.take();   // handed to this send; put back if it fails
     let origin = current, nav = navigation;
     const steering = busy, intent = draft(origin);
     intent.pending = true;
@@ -939,7 +945,7 @@ export function mount(root) {
     let sid = origin;
     try {
       if (!sid) {
-        const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
+        const d = await api("POST", "/api/chat/sessions", { title: short(text || "Image", 60) });
         sid = d.session.id;
         // Once created, this conversation owns both the request and anything typed behind it.
         if (mounted && current === origin) saveDraft();
@@ -951,7 +957,8 @@ export function mount(root) {
         if (show && current === sid) nav = navigation;
         await refreshSessions();
       }
-      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
+      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send",
+        ...(shots.length ? { images: images.payload(shots) } : {}) });
       intent.pending = false; changedDraft(origin);
       if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; if (mounted) drawSteers(); }
       if (mounted && nav === navigation && current === origin) {
@@ -959,6 +966,8 @@ export function mount(root) {
         else { drawDraft(); flash(""); }
       }
     } catch (e) {
+      // Only back into the tray of the conversation they were sent from.
+      if (shots.length && mounted && current === origin) images.restore(shots);
       if (mounted && current === origin) saveDraft();
       intent.pending = false;
       const restored = intent.revision === revision && !intent.text;
@@ -1046,7 +1055,7 @@ export function mount(root) {
       else recover();
     }
   });
-  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { images.take(); recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
