@@ -68,7 +68,7 @@ MAX_HEADER_LINES = 100
 MAX_HEADER_BYTES = 16 * 1024   # request line + header lines
 MAX_REQUEST_LINE = 8 * 1024
 OVERFLOW_S = 1.0               # how long an over-cap connection may take to send its head
-MAX_CONNECTIONS = 64           # open connections, event streams included; over the cap -> 503 and close
+MAX_CONNECTIONS = 64           # ordinary handlers (including streams); equally bounded rejection pool replies 503
 GZIP_MIN = 256                 # smaller assets are sent as they are
 GZIP_TYPES = ("text/", "application/javascript", "application/json", "image/svg+xml")
 # One policy for every response (#162): script, style, images and requests from this server only. No inline script,
@@ -98,6 +98,7 @@ class WebServer:
         self.router_factory = prov.ps.build_router
         self._server: Optional[asyncio.AbstractServer] = None
         self._conns: set = set()
+        self._overflow_conns: set = set()
         self._close_task: Optional[asyncio.Task] = None
         self._feeds: list = []
         self._hosts: set = set()
@@ -283,19 +284,23 @@ class WebServer:
         if self._close_task is not None:
             writer.close()
             return
-        if len(self._conns) >= self.max_connections:
-            # Over the cap: read the request head briefly (so the reply is not lost to a reset), answer 503, close.
-            # Not tracked in _conns; each lives at most OVERFLOW_S.
-            asyncio.create_task(self._overflow(reader, writer))
+        over = len(self._conns) - len(self._overflow_conns) >= self.max_connections
+        if over and len(self._overflow_conns) >= self.max_connections:
+            # The bounded rejection pool is full too: do not create more tasks
+            # for idle peers. Ordinary handlers retain their own admission budget.
+            writer.close()
             return
-        # Register at acceptance, before the coroutine gets its first event-loop
-        # turn, so shutdown cannot miss an accepted but not yet started handler.
-        task = asyncio.create_task(self._client(reader, writer))
+        # Register both ordinary and rejection handlers before their first turn.
+        # Rotation and shutdown own every accepted handler, including idle overflow.
+        task = asyncio.create_task(self._overflow(reader, writer) if over else self._client(reader, writer))
         self._conns.add(task)
+        if over:
+            self._overflow_conns.add(task)
 
         def finished(task: asyncio.Task) -> None:
             # Cancellation before the coroutine's first turn cannot run its finally.
             self._conns.discard(task)
+            self._overflow_conns.discard(task)
             try:
                 writer.close()
             except Exception:
@@ -581,9 +586,11 @@ class WebServer:
                     .format(extra, SECURITY_HEADERS))
             writer.write(head.encode())
             return await writer.drain()
-        if use_gz:
+        payload = raw
+        if use_gz and gz is not None:
             extra += "Content-Encoding: gzip\r\n"
-        await self._send(writer, 200, gz if use_gz else raw, ctype, extra, "no-cache")
+            payload = gz
+        await self._send(writer, 200, payload, ctype, extra, "no-cache")
 
     def _cached(self, f: Path, textual: bool) -> Tuple[str, bytes, Optional[bytes]]:
         """``(etag, bytes, gzip bytes or None)`` of a static file, computed once and again only when its mtime or

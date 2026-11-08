@@ -207,7 +207,7 @@ def test_page_and_api_stay_no_store():
 
 def test_health_has_no_userinfo_and_no_paths(tmp_path):
     settings = load_settings({
-        "url": "http://user:hunter2-pass@core.example:7341/base",
+        "url": "http://user:hunter2-pass@example.invalid:7341/base",
         "socket": str(tmp_path / "run" / "exod.sock"),
         "principal_store": str(tmp_path / "store"),
         "decisions_queue": str(tmp_path / "q" / "decisions.jsonl"),
@@ -215,12 +215,12 @@ def test_health_has_no_userinfo_and_no_paths(tmp_path):
 
     class Down(Src):
         async def call(self, body):
-            raise ConnectionError("cannot reach http://user:hunter2-pass@core.example:7341 via {}/run/exod.sock"
+            raise ConnectionError("cannot reach http://user:hunter2-pass@example.invalid:7341 via {}/run/exod.sock"
                                   .format(tmp_path))
 
     async def body(web, port):
         await web.centre.refresh() if hasattr(web.centre, "refresh") else None
-        web.centre.last_error = "dial http://u:hunter2-pass@core.example/x failed at {}/run/exod.sock".format(tmp_path)
+        web.centre.last_error = "dial http://u:hunter2-pass@example.invalid/x failed at {}/run/exod.sock".format(tmp_path)
         return await fetch(port, "/api/health", AUTH)
 
     status, _, raw = run_web(body, src=Down(), settings=settings)
@@ -228,15 +228,15 @@ def test_health_has_no_userinfo_and_no_paths(tmp_path):
     text = raw.decode()
     health = json.loads(text)
     assert "hunter2-pass" not in text and str(tmp_path) not in text and "exod.sock" not in text
-    assert health["settings"]["url"] == "http://core.example:7341/base"
+    assert health["settings"]["url"] == "http://example.invalid:7341/base"
     assert not re.search(r'"/[^"\s]*/[^"]*"', text), text            # no absolute path anywhere
     assert "[path]" in health["error"] and "u:" not in health["error"]
     assert "token" not in health["settings"] and TOKEN not in text
 
 
 def test_public_settings_drop_paths_and_userinfo():
-    pub = Settings(url="https://a:b@h.example/x", socket="/var/run/x.sock", principal_store="/home/x/s").public()
-    assert pub["url"] == "https://h.example/x"
+    pub = Settings(url="https://a:b@example.org/x", socket="/var/run/x.sock", principal_store="/home/x/s").public()
+    assert pub["url"] == "https://example.org/x"
     for k in ("socket", "principal_store", "decisions_queue"):
         assert k not in pub
 
@@ -288,3 +288,58 @@ def test_non_loopback_bind_logs_one_warning(host, warns, capsys, caplog):
             await web.close()
     asyncio.run(go())
     assert capsys.readouterr().err.count("plain HTTP") == 1
+
+
+@pytest.mark.parametrize("action", ["close", "rotate"])
+def test_idle_overflow_is_owned_and_drained(action, monkeypatch):
+    monkeypatch.setattr(server, "OVERFLOW_S", 30)
+
+    async def body(web, port):
+        peers = [await asyncio.open_connection("127.0.0.1", port) for _ in range(2)]
+        try:
+            # Both sockets must have reached acceptance before exercising lifecycle.
+            for _ in range(100):
+                if len(web._conns) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(web._conns) == 2
+            if action == "close":
+                await asyncio.wait_for(web.close(), 1)
+            else:
+                web.rotate()
+            assert await asyncio.wait_for(peers[0][0].read(), 1) == b""
+            assert await asyncio.wait_for(peers[1][0].read(), 1) == b""
+            await asyncio.sleep(0)
+            assert not web._conns and not web._overflow_conns
+        finally:
+            for _, writer in peers:
+                writer.close()
+
+    run_web(body, max_connections=1)
+
+
+def test_idle_overflow_admission_is_bounded(monkeypatch):
+    monkeypatch.setattr(server, "OVERFLOW_S", 30)
+
+    async def body(web, port):
+        peers = []
+        try:
+            for _ in range(8):
+                peers.append(await asyncio.open_connection("127.0.0.1", port))
+            # Accept callbacks precede EOF for the final rejected client.
+            assert await asyncio.wait_for(peers[-1][0].read(), 1) == b""
+            assert len(web._conns) == 2 and len(web._overflow_conns) == 1
+            # Releasing the ordinary slot admits real work even while overflow waits.
+            peers[0][1].close()
+            for _ in range(100):
+                if len(web._conns) == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert (await fetch(port, "/api/health", AUTH))[0] == 200
+            await asyncio.wait_for(web.close(), 1)
+            assert await asyncio.wait_for(peers[1][0].read(), 1) == b""
+        finally:
+            for _, writer in peers:
+                writer.close()
+
+    run_web(body, max_connections=1)
