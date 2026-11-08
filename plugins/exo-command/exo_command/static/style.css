@@ -843,7 +843,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 body:not([data-xc-view="chat"]) .xc-flow-toggle { display: none; }
 body.xc-flow[data-xc-view="chat"] .xc-nav { position: fixed; top: 6px; right: 8px; left: auto; z-index: 60; min-height: 0; padding: 0; background: transparent; border: 0; }
 body.xc-flow[data-xc-view="chat"] .xc-nav::after { display: none; }
-body.xc-flow[data-xc-view="chat"] .xc-nav > :not(.xc-flow-toggle) { display: none; }
+body.xc-flow[data-xc-view="chat"] .xc-nav > :not(.xc-flow-toggle):not(.xc-conn) { display: none; }
 body.xc-flow[data-xc-view="chat"] .xc-flow-toggle { margin: 0; opacity: .6; background: var(--bg-2); }
 body.xc-flow[data-xc-view="chat"] .xc-flow-toggle:hover, body.xc-flow[data-xc-view="chat"] .xc-flow-toggle:focus-visible { opacity: 1; }
 body.xc-flow[data-xc-view="chat"] .xc-main { padding: 0; }

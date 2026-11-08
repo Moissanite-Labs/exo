@@ -214,7 +214,7 @@ async def _pins_set(c, p, q, body):
     except SourceError as exc:
         if exc.code == "forbidden":
             raise Forbidden(exc.message) from None
-        if exc.code != "bad_request":
+        if exc.code != "bad_request" or exc.message != "usage: /rename <title>":
             raise
     with _pin_lock:
         pins = _read_pins()

@@ -60,7 +60,7 @@ def test_css_hides_chrome_but_keeps_the_working_pieces():
         assert scope + " " + hidden in css
     assert "grid-template-columns: minmax(0, 1fr)" in css
     assert "100dvh" in css
-    assert scope + " .xc-nav > :not(.xc-flow-toggle) { display: none; }" in css
+    assert scope + " .xc-nav > :not(.xc-flow-toggle):not(.xc-conn) { display: none; }" in css
     # kept: the working state, the wire, notices, approvals, the composer and Stop are never display:none
     assert ":not(.xc-state.on):not(.xc-wire):not(.xc-flash)" in css
     for kept in (".xc-approvals", ".xc-composer", ".xc-btnrow", ".xc-log", ".xc-chat-main {"):

@@ -79,7 +79,12 @@ def test_non_principal_is_refused_and_nothing_is_written(home):
 
 
 def test_principal_gate_is_a_harmless_rename_probe():
-    src = FakeSource(fail={"command.run": "bad_request"})   # what the core answers a principal's empty title
+    class PrincipalSource(FakeSource):
+        async def call(self, body):
+            from exo_command.source import SourceError
+            self.calls.append(body)
+            raise SourceError("bad_request", "usage: /rename <title>")
+    src = PrincipalSource()   # exact refusal after the core principal check
     assert pin(centre(src), "s1") == (200, {"pins": ["s1"]})
     probe = [b for b in src.calls if type(b).TYPE == "command.run"][0]
     assert (probe.name, probe.args, probe.session) == ("rename", "", "s1")
@@ -93,3 +98,9 @@ def test_other_core_errors_pass_through_without_writing(home):
 
 def test_wrong_method_is_405():
     assert call(centre(), "DELETE", "/api/chat/pins")[0] == 405
+
+
+def test_unrelated_bad_request_does_not_authorize_a_pin(home):
+    src = FakeSource(fail={"command.run": "bad_request"})
+    assert pin(centre(src), "s1")[0] == 400
+    assert not (home / "state").exists()
