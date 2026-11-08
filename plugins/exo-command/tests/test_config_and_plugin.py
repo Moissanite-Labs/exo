@@ -3,9 +3,10 @@ import sys
 from pathlib import Path
 
 
-from conftest import PLUGIN_DIR
 from exo import privacy
 from exo_command.config import load_settings
+
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
 DENY = privacy.deny_regex()  # untracked deny-list, None when absent
 

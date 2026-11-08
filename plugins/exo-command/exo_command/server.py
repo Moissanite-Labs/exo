@@ -61,9 +61,11 @@ from .source import SourceError, core_message
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
 # Only the send route takes images, and the core refuses any /command body over 8 MiB, so a bigger cap here would
-# only move the refusal. Every other route keeps MAX_BODY.
+# only move the refusal. Pad has its own bounded cap; other routes keep MAX_BODY.
 MAX_SEND_BODY = 8 * 1024 * 1024
 SEND_ROUTE = re.compile(r"/api/chat/sessions/[^/]+/send")
+# A valid 32 KiB Pad can use six JSON bytes per ASCII character.
+MAX_PAD_BODY = 32768 * 6 + 1024
 HEARTBEAT = 15.0
 # Limits on reading a request (not on a stream that was already accepted). A client that stalls, sends endless header
 # lines, or holds a socket without asking for anything is dropped; the server stays answerable to the page.
@@ -436,7 +438,8 @@ class WebServer:
         if path.startswith("/api/"):
             body: Dict[str, Any] = {}
             if method == "POST":
-                got = await self._body(reader, writer, headers, MAX_SEND_BODY if SEND_ROUTE.fullmatch(path) else MAX_BODY)
+                limit = MAX_SEND_BODY if SEND_ROUTE.fullmatch(path) else MAX_PAD_BODY if path == "/api/pad" else MAX_BODY
+                got = await self._body(reader, writer, headers, limit=limit)
                 if got is None:
                     return
                 body = got
@@ -476,7 +479,7 @@ class WebServer:
             status, data = 403, {"error": "launch code refused"}
         return await self._json(writer, status, data)
 
-    async def _body(self, reader, writer, headers: Dict[str, str], limit: int = MAX_BODY) -> Optional[Dict[str, Any]]:
+    async def _body(self, reader, writer, headers: Dict[str, str], *, limit: int = MAX_BODY) -> Optional[Dict[str, Any]]:
         """Read a JSON object body from a same-origin POST; answer the error and return None otherwise."""
         origin, host = headers.get("origin"), headers.get("host", "")
         if origin and urlsplit(origin).netloc != host:

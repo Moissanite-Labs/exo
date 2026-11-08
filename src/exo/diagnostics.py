@@ -186,6 +186,9 @@ def memory_status(eng: CoreEngine) -> dict[str, str]:
     return {"state": "on", "provider": mem.name, "text": ""}
 
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
+    if b.name == "pad":  # Reserve even when disabled: never fall through to a plugin/disk fallback.
+        from exo.shared_pad_adapter import command as shared_pad_command
+        return await shared_pad_command(eng, b)
     if b.name == "checkpoint":
         from exo.work_checkpoint import command
         return await command(eng, b)
