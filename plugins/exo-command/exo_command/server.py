@@ -54,6 +54,8 @@ from .source import SourceError, core_message
 
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
+# A valid 32 KiB Pad can use six JSON bytes per ASCII character.
+MAX_PAD_BODY = 32768 * 6 + 1024
 HEARTBEAT = 15.0
 # One policy for every response (#162): script, style, images and requests from this server only. No inline script,
 # style attribute or eval, no plugins, no <base>, no native form posts (every form is handled in script), no framing.
@@ -351,7 +353,8 @@ class WebServer:
         if path.startswith("/api/"):
             body: Dict[str, Any] = {}
             if method == "POST":
-                got = await self._body(reader, writer, headers)
+                got = await self._body(reader, writer, headers,
+                                       limit=MAX_PAD_BODY if path == "/api/pad" else MAX_BODY)
                 if got is None:
                     return
                 body = got
@@ -391,7 +394,7 @@ class WebServer:
             status, data = 403, {"error": "launch code refused"}
         return await self._json(writer, status, data)
 
-    async def _body(self, reader, writer, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _body(self, reader, writer, headers: Dict[str, str], *, limit: int = MAX_BODY) -> Optional[Dict[str, Any]]:
         """Read a JSON object body from a same-origin POST; answer the error and return None otherwise."""
         origin, host = headers.get("origin"), headers.get("host", "")
         if origin and urlsplit(origin).netloc != host:
@@ -401,7 +404,7 @@ class WebServer:
             n = int(headers.get("content-length", "0"))
         except ValueError:
             n = -1
-        if n < 0 or n > MAX_BODY:
+        if n < 0 or n > limit:
             await self._json(writer, 400, {"error": "body too large"})
             return None
         try:

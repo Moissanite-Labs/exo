@@ -3,7 +3,7 @@
 import { h, api, errorBox, pageHead } from "./dom.js";
 
 export function mount(root) {
-  let revision = 0, loaded = false, off = false, saving = false, armed = false, closed = false;
+  let revision = 0, loaded = false, off = false, saving = false, loading = false, armed = false, closed = false;
   let baseline = "";   // the text as last loaded or saved, to tell unsaved edits from none
   const area = h("textarea", { class: "xc-input xc-pad-text", rows: "18", spellcheck: "true", "aria-label": "Shared pad",
     disabled: true, oninput: () => { armed = false; paint(); } });
@@ -19,16 +19,18 @@ export function mount(root) {
   function say(t) { status.textContent = t; }
   function paint() {
     // Off keeps an unsaved draft visible and read-only so it can still be copied.
-    area.disabled = !loaded;
+    area.disabled = !loaded || loading;
     area.readOnly = off;
-    save.disabled = !loaded || off || saving || !dirty();
+    save.disabled = !loaded || off || saving || loading || !dirty();
     // Reload stays usable after a failed first load so the user can retry in place.
-    reload.disabled = saving;
+    reload.disabled = saving || loading;
     body.hidden = off && !dirty();
   }
   function refuse(t) { gate.replaceChildren(errorBox(t)); }
 
   async function load() {
+    if (loading || saving) return;
+    loading = true; paint();
     try {
       const got = await api("GET", "/api/pad");
       area.value = baseline = typeof got.text === "string" ? got.text : "";
@@ -40,10 +42,12 @@ export function mount(root) {
       if (e.status === 501) { off = true; loaded = true; gate.replaceChildren(h("p", { class: "xc-void-body" }, "The pad is not enabled.")); }
       else { refuse(e.message); }
     }
+    loading = false;
     if (!closed) paint();
   }
 
   async function again() {
+    if (loading || saving) return;
     // Reload replaces the text, so edits not yet saved need a second click.
     if (dirty() && !armed) { armed = true; say("You have unsaved edits. Press Reload again to discard them."); return; }
     armed = false;
@@ -52,7 +56,7 @@ export function mount(root) {
   }
 
   async function submit() {
-    if (saving || !dirty()) return;
+    if (saving || loading || off || !loaded || !dirty()) return;
     const sent = area.value;
     saving = true; armed = false; gate.replaceChildren(); paint(); say("Saving...");
     try {
