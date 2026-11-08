@@ -271,6 +271,7 @@ def test_bare_link_guidance_and_fresh_fragment_in_same_tab(tmp_path):
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
+    (tmp_path / "layout.mjs").write_text((STATIC / "layout.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
 export const api=async()=>{throw Error("bare URL must not make requests");};
