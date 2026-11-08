@@ -18,10 +18,13 @@ export function mount(root) {
   const dirty = () => area.value !== baseline;
   function say(t) { status.textContent = t; }
   function paint() {
-    area.disabled = !loaded || off;
+    // Off keeps an unsaved draft visible and read-only so it can still be copied.
+    area.disabled = !loaded;
+    area.readOnly = off;
     save.disabled = !loaded || off || saving || !dirty();
-    reload.disabled = !loaded && !off ? true : saving;
-    body.hidden = off;
+    // Reload stays usable after a failed first load so the user can retry in place.
+    reload.disabled = saving;
+    body.hidden = off && !dirty();
   }
   function refuse(t) { gate.replaceChildren(errorBox(t)); }
 
