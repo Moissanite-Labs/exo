@@ -13,7 +13,7 @@ NODE = shutil.which("node")
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_chat_reconnect_refresh_commands_and_structured_memory(tmp_path):
-    for name in ("chat", "chat_state", "approvals", "markdown", "desktop_prefs"):
+    for name in ("chat", "chat_state", "approvals", "markdown", "desktop_prefs", "images"):
         if name == "approvals" and not (STATIC / "approvals.js").exists():
             continue  # older chat embeds approval handling; newer chat imports the actual controller
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))

@@ -862,3 +862,11 @@ body.xc-flow[data-xc-view="chat"] .xc-chat-main { padding-inline: clamp(0px, 4vw
 .xc-pin { flex-shrink: 0; min-height: 36px; padding: 6px 8px; font-size: 12px; }
 .xc-pin.on { color: var(--fg); }
 .xc-pinmark { margin-right: 4px; font-size: 11px; }
+/* Image input: attached thumbnails above the box, drop highlight on the box. */
+.xc-images { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.xc-images[hidden] { display: none; }
+.xc-image { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); font-size: 12px; }
+.xc-image-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.xc-image-size { color: var(--fg-3, inherit); opacity: 0.7; white-space: nowrap; }
+.xc-image-x { width: 18px; height: 18px; line-height: 16px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
+.xc-inwrap.xc-drop .xc-input { outline: 2px dashed var(--accent); outline-offset: -2px; }
