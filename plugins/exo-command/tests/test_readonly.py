@@ -1,12 +1,21 @@
 """The Hermes importer stays read-only. These tests cover ``exo.ingest.hermes_dashboard``."""
+import hashlib
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from conftest import PLUGIN_DIR, digest_tree
 from exo.ingest import hermes_dashboard as ro
 
+
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
+
+def digest_tree(root: Path) -> dict:
+    out = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
 
 def test_uri_is_read_only(tmp_path):
     assert ro.ro_uri(tmp_path / "x.db").endswith("?mode=ro")
