@@ -1,4 +1,3 @@
-import hashlib
 import os
 import subprocess
 import sys
@@ -57,11 +56,3 @@ def world(tmp_path, now):
 def settings(world):
     from exo_command.config import load_settings
     return load_settings({"principal_store": str(world["store"]), "generic_paths": [GENERIC_HOME]})
-
-
-def digest_tree(root: Path) -> dict:
-    out = {}
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
-    return out
