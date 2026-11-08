@@ -2,7 +2,6 @@
 // Drawn like the site's roadmap grid (D-061): a status tally, then one hairline lane per status.
 import { h, api, short, ago, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
 import * as bus from "./bus.js";
-import "./egg.js";   // defines window.ExoEgg (copied from site/brand/egg.js); used once, in the empty state
 
 const ORDER = ["running", "queued", "failed", "done", "cancelled"];
 // status word -> the pill state, whose led form carries it without colour
@@ -21,8 +20,12 @@ export function mount(root) {
     if (eggEl) return eggEl;
     const cv = h("canvas", { class: "xc-egg", "aria-hidden": "true" });
     eggEl = h("div", { class: "xc-void-mark" }, cv);
+    // egg.js (copied from site/brand/egg.js, 24 KB) defines window.ExoEgg. It is used only here, so it loads on demand;
+    // if it cannot load, the empty state simply has no animated mark.
     requestAnimationFrame(() => {
-      if (!egg && window.ExoEgg && cv.isConnected) egg = window.ExoEgg.mount(cv, { stage: 0, activity: 0.25, seed: 7, spin: 0.6 });
+      import("./egg.js").then(() => {
+        if (!egg && window.ExoEgg && cv.isConnected) egg = window.ExoEgg.mount(cv, { stage: 0, activity: 0.25, seed: 7, spin: 0.6 });
+      }).catch(() => {});
     });
     return eggEl;
   }
