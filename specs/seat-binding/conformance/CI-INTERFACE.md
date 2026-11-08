@@ -18,18 +18,18 @@ The blocking CI gate must invoke **`replay.py` directly** (not rely on pytest al
 
 ### CI gate setup (required before `replay.py`)
 
-Pinned release: **tla2tools v1.8.0**
+Pinned artifact: **tla2tools.jar asset 718777374**, published under the upstream **v1.8.0** release tag. The asset ID fixes the download identity. The SHA-256 below remains mandatory.
 
-- URL: `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar`
-- SHA-256: `e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf`
+- URL: `https://api.github.com/repos/tlaplus/tlaplus/releases/assets/718777374`
+- SHA-256: `e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`
 
 Example (from repository root):
 
 ```bash
 JAR=specs/seat-binding/tla2tools.jar
-curl -fsSL -o "$JAR" \
-  https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-echo "e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf  $JAR" | sha256sum -c -
+curl -fsSL -H "Accept: application/octet-stream" -o "$JAR" \
+  https://api.github.com/repos/tlaplus/tlaplus/releases/assets/718777374
+echo "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f  $JAR" | sha256sum -c -
 export TLA2TOOLS_JAR="$PWD/$JAR"
 python3 specs/seat-binding/conformance/replay.py specs/seat-binding/conformance/traces/good_new_after_resume.jsonl
 ```
@@ -39,10 +39,22 @@ If `TLA2TOOLS_JAR` is unset, `replay.py` defaults to `specs/seat-binding/tla2too
 Local optional install (same pin):
 
 ```bash
-curl -fsSL -o specs/seat-binding/tla2tools.jar \
-  https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-# e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf
+curl -fsSL -H "Accept: application/octet-stream" -o specs/seat-binding/tla2tools.jar \
+  https://api.github.com/repos/tlaplus/tlaplus/releases/assets/718777374
+# e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f
 ```
+
+## Artifact provenance (2026-11-08)
+
+The previous approved SHA-256 (`e20447644bfabd29d6bd0fc2c0eb1473fb301c1a0e4dfe1961938ce5a191edbf`) no longer matches the artifact served by the mutable v1.8.0 download URL. A gate retry on unchanged application code downloaded successfully and failed that checksum before trace execution. No original artifact recovery URL has been established. The replacement artifact was checked against the following primary upstream evidence:
+
+- Official metadata for the asset URL above reports 4,510,215 bytes, created/updated `2026-11-06T22:28:28Z`. Its published SHA-256 matches independently downloaded bytes and the pin above.
+- [Official release checksum table](https://github.com/tlaplus/tlaplus/releases/tag/v1.8.0): SHA-1 `0b57675323babad8ab3815b1db9f30e75dac1cdb` also matches those bytes. SHA-1 is an additional provenance crosscheck, not the verification algorithm.
+- [Release tag](https://api.github.com/repos/tlaplus/tlaplus/git/ref/tags/v1.8.0) and JAR manifest `X-Git-Revision` both identify `d8fb231de4e4b5d02c1b2ed1ac759c086f694021`. Manifest build timestamp is `2026-11-06T22:23:57.662Z`.
+
+**Version mismatch:** although published under the **v1.8.0** tag, this JAR declares manifest `Implementation-Version: 2.0 2026-11-06`. These crosschecks establish the identity of the current upstream artifact. They do not establish equivalence to the previous artifact or replay compatibility.
+
+The blocking CI job must still pass direct good-trace replay, negative fixtures and scratch mutation checks before this tooling change is accepted. Missing tools and checksum mismatches continue to fail closed.
 
 ## Runtime
 
