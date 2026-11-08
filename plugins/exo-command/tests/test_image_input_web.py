@@ -86,3 +86,47 @@ def test_client_keeps_images_in_memory_and_wires_the_composer():
     # A failed send only refills its own conversation's tray, and switching conversation empties the tray.
     assert "current === origin) images.restore(shots)" in chat
     assert "if (current !== id) images.take()" in chat
+
+
+def test_attachment_reads_are_serialized_and_cancelled_on_take(tmp_path):
+    import subprocess
+    script = r"""
+import assert from 'node:assert/strict';
+import { attachImages } from '__IMAGES__';
+class El {
+  constructor() { this.listeners = {}; this.classList = { add(){}, remove(){} }; }
+  addEventListener(k, f) { this.listeners[k] = f; }
+  setAttribute() {} appendChild() {} replaceChildren() {} click() {}
+}
+globalThis.document = { createElement: () => new El(), createTextNode: () => new El() };
+const readers = [];
+globalThis.FileReader = class {
+  readAsDataURL(f) { this.file = f; readers.push(this); }
+  finish() { this.result = 'data:image/png;base64,AA=='; this.onload(); }
+};
+const tick = async () => { for (let i=0; i<8; i++) await Promise.resolve(); };
+const input = new El(), wrap = new El(), notices = [];
+const images = attachImages({ input, wrap, flash: x => notices.push(x) });
+const f = size => ({ name:'image', type:'image/png', size });
+const drop = files => wrap.listeners.drop({ preventDefault(){}, dataTransfer:{ files } });
+drop([f(1)]); await tick(); assert(images.pending());
+images.take(); readers.shift().finish(); await tick();
+assert.equal(images.count(), 0); assert.equal(images.pending(), false);
+drop([f(3*1024*1024)]); drop([f(3*1024*1024)]); await tick();
+readers.shift().finish(); await tick();
+assert.equal(readers.length, 0); assert.equal(images.count(), 1); assert(!images.pending());
+assert(notices.some(x => x.includes('together')));
+images.take();
+drop([f(1),f(1),f(1)]); drop([f(1),f(1),f(1)]); await tick();
+for (let i=0; i<4; i++) { readers.shift().finish(); await tick(); }
+assert.equal(images.count(),4); assert.equal(readers.length,0); assert(!images.pending());
+assert(notices.some(x => x.includes('at most')));
+images.take(); drop([f(3*1024*1024)]); await tick();
+images.restore([{mime:'image/png',data:'AA==',size:3*1024*1024,name:'restored'}]);
+readers.shift().finish(); await tick(); assert.equal(images.count(),1);
+assert(notices.some(x => x.includes('restoring')));
+""".replace("__IMAGES__", (STATIC / "images.js").as_uri())
+    file = tmp_path / "images.mjs"
+    file.write_text(script)
+    result = subprocess.run(["node", str(file)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

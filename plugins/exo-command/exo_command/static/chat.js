@@ -820,6 +820,7 @@ export function mount(root) {
 
   async function send() {
     const text = input.value.trim();
+    if (images.pending()) { flash("images are still loading; send again when ready"); return; }
     if ((!text && !images.count()) || draft(current).pending) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
@@ -999,7 +1000,7 @@ export function mount(root) {
       else recover();
     }
   });
-  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { images.take(); recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");

@@ -19,7 +19,7 @@ function readBase64(file) {
 
 // attachImages({ input, wrap, flash }) -> { take(), restore(list), count() }
 export function attachImages({ input, wrap, flash }) {
-  let items = [];   // { mime, data, name, size }
+  let items = [], generation = 0, pending = 0, reads = Promise.resolve();   // memory belongs to this composer generation
   const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
   const tray = h("div", { class: "xc-images", hidden: true, "aria-label": "Attached images" });
   const picker = h("input", { type: "file", accept: IMAGE_MIMES.join(","), multiple: true, hidden: true });
@@ -36,16 +36,29 @@ export function attachImages({ input, wrap, flash }) {
     tray.hidden = !items.length;
   }
 
-  async function addFiles(files) {
+  function addFiles(files) {
+    const owner = generation;
+    pending++;
+    reads = reads.then(async () => {
     for (const f of files) {
+      if (owner !== generation) break;
       if (items.length >= MAX_IMAGES) { flash("at most " + MAX_IMAGES + " images per message"); break; }
       if (!IMAGE_MIMES.includes(f.type)) { flash("only png, jpeg, gif or webp images"); continue; }
       if (f.size > MAX_IMAGE_BYTES) { flash("image is larger than 5 MB"); continue; }
       if (items.reduce((n, it) => n + it.size, 0) + f.size > MAX_IMAGES_TOTAL) { flash("images together are larger than 5 MB"); continue; }
-      try { items.push({ mime: f.type, data: await readBase64(f), name: f.name || "pasted image", size: f.size }); }
-      catch (e) { flash(e.message); }
+      try {
+        const data = await readBase64(f);
+        if (owner !== generation) break;
+        // A failed send may have restored images while this file was being read.
+        if (items.length >= MAX_IMAGES || items.reduce((n, it) => n + it.size, 0) + f.size > MAX_IMAGES_TOTAL) {
+          flash("image did not fit after restoring the failed send"); continue;
+        }
+        items.push({ mime: f.type, data, name: f.name || "pasted image", size: f.size });
+      }
+      catch (e) { if (owner === generation) flash(e.message); }
     }
-    draw();
+    if (owner === generation) draw();
+    }).finally(() => { if (owner === generation) pending--; });
   }
 
   const imageFiles = (list) => Array.from(list || []).filter((f) => f && f.type && f.type.startsWith("image/"));
@@ -68,9 +81,18 @@ export function attachImages({ input, wrap, flash }) {
   return {
     tray, button, picker,
     count: () => items.length,
+    pending: () => pending > 0,
     // Hands the images to a send and clears the tray. restore() puts them back if the send fails.
-    take() { const out = items; items = []; draw(); return out; },
-    restore(list) { items = list.concat(items).slice(0, MAX_IMAGES); draw(); },
+    take() { const out = items; generation++; pending = 0; items = []; draw(); return out; },
+    restore(list) {
+      // Failed sends retain their attachments; additions that no longer fit are refused explicitly.
+      const newer = items; items = list.slice();
+      for (const it of newer) {
+        if (items.length < MAX_IMAGES && items.reduce((n, x) => n + x.size, 0) + it.size <= MAX_IMAGES_TOTAL) items.push(it);
+        else flash("newer image did not fit after restoring the failed send");
+      }
+      draw();
+    },
     payload: (list) => list.map((it) => ({ mime: it.mime, data: it.data })),
   };
 }
