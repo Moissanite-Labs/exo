@@ -12,6 +12,9 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
 
+// The transcript window: how many of the newest items get DOM nodes, and how many more "Show earlier messages" adds.
+const WINDOW = 200;
+
 // Page-lifetime intent only: never write prompts to browser storage.
 const drafts = new Map();
 let lastThread = null;
@@ -36,6 +39,7 @@ export function mount(root) {
     if (mounted && current && !loading && transcriptLoaded) saveDesktopPreferences({ thread: current, scroll: logEl.scrollHeight > logEl.clientHeight ? Math.min(1, Math.max(0, logEl.scrollTop / (logEl.scrollHeight - logEl.clientHeight))) : 0 });
   }
   function flushHiddenReading() { if (document.visibilityState === "hidden") flushReading(); }
+  let win = WINDOW, earlierBtn = null;
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
@@ -229,6 +233,7 @@ export function mount(root) {
     return out;
   }
 
+  // find() searches every item, rendered or not: events for a message outside the transcript window still land.
   function find(id) { return items.find((i) => i.id === id); }
   // One card per peer, bus or job message: peer.message and the stored message.completed share its msg_id and come
   // in either order. The second adds what the first lacked: the stored kind (Bus, Job) or the delivery mode.
@@ -413,6 +418,7 @@ export function mount(root) {
   function push(it) {
     it.fresh = true;
     items.push(it);
+    if (items.length - 1 >= win) win++;   // the window's old edge stays put, so the button's count stays true
     if (items.length === 1) { drawLog(); return; }
     keepReading(() => {
       if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));
@@ -429,9 +435,50 @@ export function mount(root) {
         h("div", { class: "xc-chips" }, chip("Enter", "send"), chip("Shift+Enter", "new line"), chip("/", "commands")));
     }
   }
-  function redraw(it) { const old = it.el; if (old && old.isConnected) { keepReading(() => old.replaceWith(itemEl(it)), aboveViewport(old)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
+  function redraw(it) {
+    const old = it.el;
+    if (old && old.isConnected) { keepReading(() => old.replaceWith(itemEl(it)), aboveViewport(old)); }   // keep the old node: itemEl points it.el at the new one
+    else if (hiddenCount() > 0 && items.indexOf(it) < hiddenCount()) it.el = null;   // before the window: no node to update; it renders from items[] when revealed
+    else drawLog();
+  }
+
+  // Transcript window: only the newest `win` items have DOM nodes (a 4,500-message session would otherwise build and
+  // parse every one). A button at the old end of the log reveals WINDOW more per click.
+  function hiddenCount() { return Math.max(0, items.length - win); }
+  function visibleItems() { return hiddenCount() ? items.slice(hiddenCount()) : items; }
+  function earlierLabel() { return "Show earlier messages (" + hiddenCount() + ")"; }
+  function earlierButton() {
+    const n = hiddenCount();
+    if (!n) { earlierBtn = null; return null; }
+    earlierBtn = h("button", { type: "button", class: "xc-btn xc-earlier", onclick: showEarlier }, earlierLabel());
+    return earlierBtn;
+  }
+  function logNodes() {
+    const nodes = ordered(visibleItems(), layout).map(itemEl), btn = earlierButton();
+    if (btn) { if (layout === "inverse") nodes.push(btn); else nodes.unshift(btn); }   // the old end: bottom when newest is on top
+    return nodes;
+  }
+  function showEarlier() {
+    const before = hiddenCount();
+    if (!before || !earlierBtn || !earlierBtn.isConnected) return;
+    const from = Math.max(0, before - WINDOW);
+    const btn = earlierBtn;
+    // Pin the message next to the button on screen. Measure it rather than trust scrollHeight: the browser's own scroll
+    // anchoring may already have moved the view, and adding the height again would jump by the inserted amount.
+    const anchor = layout === "inverse" ? btn.previousElementSibling : btn.nextElementSibling;
+    const was = anchor ? anchor.getBoundingClientRect().top : 0;
+    logEl.style.overflowAnchor = "none";   // the correction below is the only one
+    win += before - from;
+    const nodes = ordered(items.slice(from, before), layout).map(itemEl);
+    if (layout === "inverse") btn.before(...nodes); else btn.after(...nodes);
+    if (hiddenCount()) btn.textContent = earlierLabel(); else { btn.remove(); earlierBtn = null; }
+    if (anchor && anchor.isConnected) { ++homeRevision; logEl.scrollTop += anchor.getBoundingClientRect().top - was; }
+    logEl.style.overflowAnchor = "";
+    updateLatest();
+    btn.isConnected && btn.focus({ preventScroll: true });   // keep the reader where they are; focus would scroll to the moved button
+  }
   function drawLog() {
-    logEl.replaceChildren(...ordered(items, layout).map(itemEl));
+    logEl.replaceChildren(...logNodes());
     drawHero();
     home();
     scheduleHome();   // finish initial positioning only if no newer reading, layout or navigation intent won
@@ -440,7 +487,7 @@ export function mount(root) {
   // one who scrolled away keeps their place, as with new output (keepReading).
   function redrawLog() {
     if (!logEl.childElementCount || nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) { drawLog(); return; }
-    keepReading(() => { logEl.replaceChildren(...ordered(items, layout).map(itemEl)); drawHero(); }, layout === "inverse");
+    keepReading(() => { logEl.replaceChildren(...logNodes()); drawHero(); }, layout === "inverse");
   }
 
   function itemEl(it) {
@@ -450,7 +497,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : cachedMarkdown(it));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
@@ -641,7 +688,7 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    current = id; loading = true; pending = []; items = []; win = WINDOW; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
@@ -1012,6 +1059,12 @@ export function mount(root) {
   }
   refreshSessions().then(finishInitialSelection);
   return off;
+}
+
+// Completed Markdown is kept on the item and moved, not re-parsed, while its text is unchanged (redraws, window moves).
+function cachedMarkdown(it) {
+  if (!it.mdEl || it.mdText !== it.text) { it.mdEl = markdown(it.text); it.mdText = it.text; }
+  return it.mdEl;
 }
 
 // A completed reply as Markdown, or its plain text if the renderer fails: one reply must never blank the thread.
