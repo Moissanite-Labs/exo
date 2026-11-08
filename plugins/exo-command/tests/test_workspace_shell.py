@@ -49,7 +49,7 @@ def test_shell_semantic_navigation_history_skip_focus_and_no_boot_overlay():
     try:
         with Browser(width=1200, height=850) as b:
             b.goto(srv.url()); b.wait("!!document.querySelector('.xc-nav a[aria-current=page]')")
-            assert b.eval("[...document.querySelectorAll('.xc-nav-link')].map(a=>a.textContent)") == ["Chat", "Tasks", "Schedule", "Command", "Providers"]
+            assert b.eval("[...document.querySelectorAll('.xc-nav-link')].map(a=>a.textContent)") == ["Chat", "Tasks", "Schedule", "Pad", "Command", "Providers"]
             assert b.eval("document.querySelector('nav').getAttribute('role')") is None
             assert b.eval("document.querySelector('main').id") == "xc-main"
             assert b.eval("document.querySelector('.xc-conn').getAttribute('role')") == "status"
@@ -115,7 +115,7 @@ export const onState=f=>{globalThis.connectionState=f;f({connected:false});};
 export const start=()=>new Promise(resolve=>globalThis.finishStartup=()=>{globalThis.panelsReady=true;resolve();});
 export const restart=async()=>{};
 ''')
-    for name in ("chat", "tasks", "schedule", "command", "providers"):
+    for name in ("chat", "tasks", "schedule", "pad", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text(f'export const mount=()=>{{globalThis.mounts.push(["{name}",globalThis.panelsReady]);return ()=>{{}};}};')
     (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true}),start=()=>{};')
     (tmp_path / "test.mjs").write_text('''

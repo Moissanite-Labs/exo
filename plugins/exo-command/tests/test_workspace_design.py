@@ -99,7 +99,7 @@ def test_real_expired_connection_status_wraps_without_hiding_navigation():
                 assert result['left'] >= 0 and result['right'] <= width, (width, result)
                 assert result['content'] <= result['box'] + 1, (width, result)
                 assert result['overflow'] not in ('hidden', 'clip'), (width, result)
-                assert len(result['links']) == 5 and all(link['left'] >= 0 and link['right'] <= width and link['height'] >= 40 for link in result['links']), (width, result)
+                assert len(result['links']) == 6 and all(link['left'] >= 0 and link['right'] <= width and link['height'] >= 40 for link in result['links']), (width, result)
             assert not src.sent
     finally:
         srv.close()
