@@ -246,10 +246,14 @@ export function mount(app) {
   function later() { clearTimeout(timer); timer = setTimeout(function () { load(false); }, 150); }
 
   var es = null, poll = null;
+  function poll_tick() { if (!document.hidden) load(false); }
   load(false);
   try {
     es = stream("/api/stream");
     es.onmessage = later;
-  } catch (e) { poll = setInterval(function () { if (!document.hidden) load(false); }, 5000); }
+    // The same stream the chat view uses already carries this view's updates (every event triggers a snapshot reload), so
+    // polling is only the fallback: the browser retries a dropped stream itself, and if it gives up for good, poll.
+    es.onerror = function () { if (es && es.readyState === 2 && !poll) poll = setInterval(poll_tick, 5000); };
+  } catch (e) { poll = setInterval(poll_tick, 5000); }
   return function unmount() { clearTimeout(timer); clearInterval(poll); if (es) es.close(); };
 }
