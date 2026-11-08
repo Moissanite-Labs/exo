@@ -22,6 +22,30 @@ def _replay_module():
     return mod
 
 
+def test_pinned_tool_artifact_is_consistent_across_gate_and_setup_docs():
+    mod = _replay_module()
+    workflow = (ROOT / ".github/workflows/spec-conformance.yml").read_text()
+    interface = (REPLAY.parent / "CI-INTERFACE.md").read_text()
+    # Download verification, cache verification, and cache identity must agree
+    # with the replay runner's independent fail-closed check.
+    assert workflow.count(mod.TLA2TOOLS_SHA256) == 3
+    assert mod.TLA2TOOLS_SHA256 in interface
+    assert mod.TLA2TOOLS_URL in workflow and mod.TLA2TOOLS_URL in interface
+    assert 'Accept: application/octet-stream' in workflow
+    assert 'sha256sum -c -' in workflow
+
+
+def test_toolchain_rejects_tampered_artifact_before_execution(tmp_path, monkeypatch):
+    mod = _replay_module()
+    jar = tmp_path / "tla2tools.jar"
+    jar.write_bytes(b"tampered artifact")
+    monkeypatch.delenv("TLA2TOOLS_JAR", raising=False)
+    monkeypatch.setattr(mod.shutil, "which", lambda command: "/available/java")
+    reason = mod.toolchain_skip_reason(jar)
+    assert "checksum mismatch" in reason
+    assert mod.TLA2TOOLS_SHA256 in reason
+
+
 def _run(trace: Path, *extra: str) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(REPLAY), *extra, str(trace)],
