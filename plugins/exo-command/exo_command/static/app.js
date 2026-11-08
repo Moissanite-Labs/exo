@@ -75,10 +75,14 @@ function setFlowMode(on, save = true) {
   flowBtn.setAttribute("aria-pressed", flow ? "true" : "false");
 }
 setFlowMode(flow, false);
+const onChat = () => !document.body || !document.body.dataset || document.body.dataset.xcView === "chat";
+// The toggle is caught early; Esc waits for the bubble phase so editors and cards that claim it win.
 if (document.addEventListener) document.addEventListener("keydown", (e) => {
-  if (isFlowToggle(e)) { e.preventDefault(); e.stopPropagation(); setFlowMode(!flow); }
-  else if (flow && isFlowExit(e)) { e.preventDefault(); setFlowMode(false); }
+  if (isFlowToggle(e) && onChat()) { e.preventDefault(); e.stopPropagation(); setFlowMode(!flow); }
 }, true);
+if (document.addEventListener) document.addEventListener("keydown", (e) => {
+  if (flow && isFlowExit(e)) { e.preventDefault(); setFlowMode(false); }
+});
 const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
 nav.replaceChildren(h("strong", { class: "xc-brand" },
   h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, "Exo"),

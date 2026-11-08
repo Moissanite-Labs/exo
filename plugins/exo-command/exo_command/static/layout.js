@@ -62,7 +62,7 @@ export function isFlowToggle(e) {
 
 // Anything that owns Escape first: an open modal, listbox, picker or menu. Then Esc is not ours.
 export const FLOW_ESC_BLOCKERS = '[role="dialog"]:not([hidden]), [role="alertdialog"]:not([hidden]), [aria-modal="true"], '
-  + '.xc-menu:not([hidden]), .xc-model-picker:not([hidden]), [role="menu"]:not([hidden]), [role="listbox"]:not([hidden]), dialog[open]';
+  + '.xc-rename-editor:not([hidden]), .xc-menu:not([hidden]), .xc-model-picker:not([hidden]), [role="menu"]:not([hidden]), [role="listbox"]:not([hidden]), dialog[open]';
 
 export function isFlowExit(e, doc) {
   if (!e || e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
