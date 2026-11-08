@@ -8,13 +8,12 @@ there is no automatic context import, publishing, logging, or background work.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from exo.config import ConfigError
 from exo.core.private import private_dir, private_file, umask
@@ -29,6 +28,7 @@ MAX_BYTES = 32768
 # JSON can escape each byte of an ASCII document as six characters.
 MAX_ARGS_BYTES = MAX_BYTES * 6 + 1024
 PAD = 'brainstorm'
+_T = TypeVar('_T')
 
 
 class SharedPadConfig:
@@ -119,17 +119,16 @@ class SharedPadAdapter:
         self._owner = 'owner:' + hashlib.sha256(
             b'exo.shared-pad.owner.v1\0' + json.dumps(identity, ensure_ascii=True).encode('ascii')).hexdigest()
         self._path = home / 'shared-pad' / 'pads.sqlite'
-        with self._private_io():
-            self._storage = SharedPadStorage(self._path, owner=self._owner, max_bytes=MAX_BYTES)
+        self._storage = self._private_io(
+            lambda: SharedPadStorage(self._path, owner=self._owner, max_bytes=MAX_BYTES))
 
     @property
     def owner(self) -> str:
         """Read-only trusted binding; never emitted in wire responses."""
         return self._owner
 
-    @contextmanager
-    def _private_io(self):
-        # Synchronous only; use the core-wide umask lock, never await in here.
+    def _private_io(self, operation: Callable[[], _T]) -> _T:
+        # Run trusted synchronous storage work without yielding the core-wide umask lock.
         with umask(0o077):
             parent = private_dir(self._path.parent)
             parent.chmod(0o700)  # private_dir preserves existing modes; this feature must tighten them.
@@ -140,7 +139,7 @@ class SharedPadAdapter:
                     raise OSError('refusing shared pad sidecar symlink')
                 if sidecar.exists():
                     private_file(sidecar)
-            yield
+            return operation()
 
     def _session(self, session: str | None, *, required: bool) -> None:
         if session is None and not required:
@@ -179,18 +178,20 @@ class SharedPadAdapter:
 
     def _execute(self, args: dict[str, Any]) -> dict[str, Any]:
         args = _validate(args)
-        with self._private_io():
-            try:
-                if args['action'] == 'history':
-                    return {'ok': True, 'history': [_wire(row) for row in
-                            self._storage.history(PAD, args.get('limit', 10))]}
-                if args['action'] == 'read':
-                    row = self._storage.read(PAD, args.get('revision'))
-                else:
-                    row = self._storage.update(PAD, args['expected_revision'], args['document'])
-                return {'ok': True, 'snapshot': _wire(row)}
-            except RevisionConflict as exc:
-                return {'ok': False, 'code': 'revision_conflict', 'current': _wire(exc.current)}
+        return self._private_io(lambda: self._execute_storage(args))
+
+    def _execute_storage(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            if args['action'] == 'history':
+                return {'ok': True, 'history': [_wire(row) for row in
+                        self._storage.history(PAD, args.get('limit', 10))]}
+            if args['action'] == 'read':
+                row = self._storage.read(PAD, args.get('revision'))
+            else:
+                row = self._storage.update(PAD, args['expected_revision'], args['document'])
+            return {'ok': True, 'snapshot': _wire(row)}
+        except RevisionConflict as exc:
+            return {'ok': False, 'code': 'revision_conflict', 'current': _wire(exc.current)}
 
     async def tool(self, args: dict[str, Any], ctx: ToolContext) -> str:
         try:
