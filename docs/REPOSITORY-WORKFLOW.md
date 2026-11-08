@@ -26,6 +26,19 @@ A web UI change in `plugins/exo-command` is shared code even when the desktop pi
 
 The code change is reviewed once upstream. The downstream reviewer checks the combined tree, conflict resolutions and desktop integration. Upstream approval does not prove that native behavior or downstream integration works.
 
+## Pilot iteration and review
+
+When an agent improves the tooling it is using, keep the implementation and independent verification as separate responsibilities. The current pilot assigns investigation and local implementation to Razi, verification and PR preparation to Codex, and the final merge decision to Razi. Other contributors can use the same procedure with named authors and reviewers.
+
+1. **Record the finding.** Open an issue in the implementation's home repository. Describe the observed behavior, supporting evidence, and the determination or inference leading to the proposed change. Separate confirmed observations from possible causes. Discuss alternatives, tradeoffs and known limitations.
+2. **Hand off the patch.** Include the exact base commit and complete diff or immutable commit link, affected dependencies, and checks already run. State whether the change is only in source or actually loaded in the running app. Preserve the original author's work and credit. An existing PR can serve as the patch handoff without creating a duplicate.
+3. **Verify independently.** The reviewer checks the exact revision in an isolated checkout, reproduces the failure where practical, observes live effects where safely available, and runs relevant tests. The reviewer prepares the canonical PR with the issue link, reasoning, considerations, diff and verification evidence. Changed revisions require renewed review of the changed result.
+4. **Evaluate for merge.** Razi, or the designated maintainer, decides whether the reviewed change is the best way forward. Required checks and independent review still apply. Local tests, live behavior, hosted CI, upstream merge, downstream integration and installation are separate states and must be reported separately.
+
+**An issue is valid without a fix.** If no fix is obvious, say so. Include reproduction attempts, relevant evidence, hypotheses clearly marked as unconfirmed, and useful next investigation steps. Do not invent a root cause or an unverified patch to complete the handoff. Feature proposals without an observed defect continue to belong in the Feature requests discussion category.
+
+Live observation must preserve active work and avoid exposing credentials or private conversation content. A request to review or merge does not authorize a restart. When a refresh is authorized, use an idle handoff with backups and a rollback path, preserve conversations, local files, settings and permissions, and verify the actual running result afterward. Never restore an older database over newer work.
+
 ## GitHub collaboration tools (proposed guidance)
 
 This section is advisory until the principal accepts it. Until then the author and review flow above governs.
