@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from exo_command import api
 from test_chat import FakeSource, call, centre
 
 
