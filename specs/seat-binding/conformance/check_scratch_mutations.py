@@ -114,8 +114,6 @@ async def emit_new_after_resume(trace_path: Path, trace_dir: Path) -> None:
     from exo.core.plugins import PluginManager
     from exo.core.seats import Seat
     from exo.core.seat_binding_conformance import SeatBindingRecorder
-    from exo.protocol import schema as s
-    from exo.server.app import Dispatcher
     from exo_tui.app import ExoApp
     from exo_tui.conn import LocalClient
 
@@ -126,11 +124,7 @@ async def emit_new_after_resume(trace_path: Path, trace_dir: Path) -> None:
             home, MODELS, plugins=PluginManager(), cwd=str(trace_dir), env={}, seat=None
         )
         try:
-            response = await Dispatcher(bare).run(
-                s.Command.of(s.SessionCreate(seat="scout", title="scout work"))
-            )
-            assert response.ok, response.error
-            scout_id = response.result["session"]["id"]
+            scout_id = bare.store.create_session(agent="worker", seat="scout", title="scout work").id
         finally:
             await bare.close()
 
