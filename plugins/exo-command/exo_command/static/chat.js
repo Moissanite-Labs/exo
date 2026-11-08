@@ -40,7 +40,7 @@ export function mount(root) {
   }
   function flushHiddenReading() { if (document.visibilityState === "hidden") flushReading(); }
   let win = WINDOW, earlierBtn = null;
-  let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
+  let pins = [], sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
@@ -61,7 +61,7 @@ export function mount(root) {
     h("option", { value: "all" }, "All conversations"), h("option", { value: "working" }, "Working"), h("option", { value: "attention" }, "Needs you"));
   const threadScope = h("p", { class: "xc-thread-scope", id: "xc-thread-scope", role: "status" });
   let renameTarget = null, renameSaving = false, renameActive = true;
-  const renameButtons = new Map(), conversationButtons = new Map();
+  const renameButtons = new Map(), conversationButtons = new Map(), pinButtons = new Map();
   const renameInput = h("input", { type: "text", "aria-label": "Thread title", autocomplete: "off", maxlength: "200" });
   const renameError = h("div", { role: "alert", class: "xc-rename-error" });
   const renameSave = h("button", { type: "submit", class: "xc-btn xc-primary" }, "Save");
@@ -586,27 +586,35 @@ export function mount(root) {
     const focused = document.activeElement;
     const focusedConversation = [...conversationButtons].find(([, button]) => button === focused);
     const focusedRename = [...renameButtons].find(([, button]) => button === focused);
+    const focusedPin = [...pinButtons].find(([, button]) => button === focused);
     const query = threadQuery.trim().toLowerCase();
+    const pinned = new Set(pins);
     const shown = sessions.filter(s => (!query || [s.title, s.id, s.agent, s.seat].some(value => String(value || "").toLowerCase().includes(query)))
       && (threadFilter === "all" || (threadFilter === "working" ? s.status === "live" : globalWaiting || waiting.has(s.id))));
     searchClear.hidden = !threadQuery;
     threadScope.textContent = shown.length + " of " + sessions.length + " loaded conversations";
-    renameButtons.clear(); conversationButtons.clear();
+    shown.sort((a, b) => pinned.has(b.id) - pinned.has(a.id));   // stable: the existing order holds inside each group
+    renameButtons.clear(); conversationButtons.clear(); pinButtons.clear();
     listEl.replaceChildren(...(shown.length ? shown.map((s) => {
+      const isPinned = pinned.has(s.id);
+      const pinButton = h("button", { class: "xc-btn xc-pin" + (isPinned ? " on" : ""), type: "button", "aria-pressed": String(isPinned),
+        "aria-label": (isPinned ? "Unpin " : "Pin ") + (s.title || s.id), title: isPinned ? "Unpin" : "Pin", onclick: () => setPin(s.id, !isPinned) }, isPinned ? "Unpin" : "Pin");
+      pinButtons.set(s.id, pinButton);
       const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
       renameButtons.set(s.id, button);
       const conversationButton = h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => chooseConversation(s.id),
         title: "Open conversation", "aria-current": s.id === current ? "true" : null,
         ondblclick: () => beginRename(s) },
-        h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
+        h("span", { class: "xc-sess-title" }, isPinned ? h("span", { class: "xc-pinmark", "aria-hidden": "true", title: "Pinned" }, "\u{1F4CC}") : null, short(s.title || s.id, 40)),
         h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
       conversationButtons.set(s.id, conversationButton);
-      return h("div", { class: "xc-session-row" }, conversationButton, button);
+      return h("div", { class: "xc-session-row" + (isPinned ? " pinned" : "") }, conversationButton, pinButton, button);
     }) : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
       sessions.length ? h("button", { class: "xc-btn", onclick: () => {
         searchInput.value = threadQuery = ""; threadFilterInput.value = threadFilter = "all"; drawSessions(); searchInput.focus();
       } }, "Show all conversations") : null)]));
     if (focusedConversation) (conversationButtons.get(focusedConversation[0]) || searchInput).focus({ preventScroll: true });
+    else if (focusedPin) (pinButtons.get(focusedPin[0]) || searchInput).focus({ preventScroll: true });
     else if (focusedRename) (renameButtons.get(focusedRename[0]) || searchInput).focus({ preventScroll: true });
     const selected = sessions.find(s => s.id === current);
     conversationTitle.textContent = selected ? short(selected.title || selected.id, 40) : "Choose a conversation";
@@ -1045,6 +1053,14 @@ export function mount(root) {
   restoreDraft();
   if (hasDesktopPreferences()) { window.addEventListener("pagehide", flushReading); document.addEventListener("visibilitychange", flushHiddenReading); }
   const startingNavigation = navigation;
+  // Pins live on the server (the desktop app's web storage is lost on restart); load once, redraw when they arrive.
+  api("GET", "/api/chat/pins").then((d) => { if (mounted && Array.isArray(d.pins)) { pins = d.pins; drawSessions(); } }).catch(() => {});
+  async function setPin(id, on) {
+    try {
+      const d = await api("POST", "/api/chat/pins", { id, pinned: on });
+      if (Array.isArray(d.pins)) { pins = d.pins; drawSessions(); }
+    } catch (e) { fail(e); }
+  }
   function finishInitialSelection(listReady) {
     // A failed read is not evidence that the saved conversation disappeared. A later reconnect may retry.
     if (!initialSelectionPending || !mounted || current || navigation !== startingNavigation) return;

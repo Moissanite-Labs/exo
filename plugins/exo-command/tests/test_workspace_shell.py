@@ -105,6 +105,7 @@ def test_slow_bootstrap_keeps_route_changes_and_initial_panels_before_mount(tmp_
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
+    (tmp_path / "layout.mjs").write_text((STATIC / "layout.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>"test-token",redeem=async()=>({});
 export const h=(tag,attrs,...children)=>({tag,attrs:attrs||{},children,classList:{remove(){}},setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},replaceChildren(...c){this.children=c;}});

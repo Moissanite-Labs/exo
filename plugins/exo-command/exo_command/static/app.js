@@ -10,6 +10,7 @@ import * as schedule from "./schedule.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
 import * as permissions from "./permissions.js";
+import { FLOW_CLASS, getFlow, setFlow, isFlowToggle, isFlowExit } from "./layout.js";
 
 const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
 
@@ -64,10 +65,28 @@ const appearance = h("select", { class: "xc-appearance", "aria-label": "Appearan
   ...[["dark", "Dark"], ["light", "Light"], ["system", "System"]].map(([value, label]) => h("option", { value }, label)));
 appearance.value = applyAppearance(desktopPreference("appearance") || getAppearance());
 const appearanceControl = h("label", { class: "xc-appearance-wrap" }, h("span", null, "Appearance"), appearance);
+// Flow mode (body.xc-flow, chat page only): the toggle sits in the bar and floats alone while the bar is hidden.
+let flow = getFlow();
+const flowBtn = h("button", { class: "xc-btn xc-flow-toggle", type: "button", "aria-label": "Flow mode", "aria-pressed": "false",
+  "aria-keyshortcuts": "Control+Shift+F Meta+Shift+F", title: "Flow mode: only the chat (Cmd/Ctrl+Shift+F, Esc leaves)", onclick: () => setFlowMode(!flow) }, "Flow");
+function setFlowMode(on, save = true) {
+  flow = save ? setFlow(on) : !!on;   // the first paint only reads the saved choice, it never writes
+  if (document.body) document.body.classList.toggle(FLOW_CLASS, flow);
+  flowBtn.setAttribute("aria-pressed", flow ? "true" : "false");
+}
+setFlowMode(flow, false);
+const onChat = () => !document.body || !document.body.dataset || document.body.dataset.xcView === "chat";
+// The toggle is caught early; Esc waits for the bubble phase so editors and cards that claim it win.
+if (document.addEventListener) document.addEventListener("keydown", (e) => {
+  if (isFlowToggle(e) && onChat()) { e.preventDefault(); e.stopPropagation(); setFlowMode(!flow); }
+}, true);
+if (document.addEventListener) document.addEventListener("keydown", (e) => {
+  if (flow && isFlowExit(e)) { e.preventDefault(); setFlowMode(false); }
+});
 const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
 nav.replaceChildren(h("strong", { class: "xc-brand" },
   h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, "Exo"),
-  where, ...links, appearanceControl, conn);
+  where, ...links, appearanceControl, flowBtn, conn);
 const skip = document.getElementById("xc-skip");
 if (skip && skip.addEventListener) skip.addEventListener("click", (event) => { event.preventDefault(); main.focus(); });
 
@@ -80,6 +99,7 @@ function show(id) {
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
+  if (document.body) document.body.dataset.xcView = current;
   saveDesktopPreferences({ view: current });
   if (location.hash !== "#" + current) history.replaceState(null, "", "#" + current);
   where.textContent = "";
