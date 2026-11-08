@@ -125,13 +125,14 @@ def test_retry_leaves_focus_moved_away_alone(monkeypatch):
     """Focus the person moves out of the panel while a retry runs stays there when the reply is drawn."""
     reads = []
     release = threading.Event()
+    retry_started = threading.Event()
 
     async def handle(centre, method, path, body, router_factory=None):
         if path == '/api/providers':
             return 200, PROVIDERS
         if path == '/api/providers/models':
             reads.append(path)
-            if len(reads) > 1:   # hold the retry until the test has moved focus
+            if retry_started.is_set():   # hold only the deliberate retry, not initial catalog reads
                 for _ in range(500):
                     if release.is_set():
                         break
@@ -145,12 +146,14 @@ def test_retry_leaves_focus_moved_away_alone(monkeypatch):
         with Browser() as b:
             b.goto(srv.url('providers'))
             b.wait(f"!!{RETRY}")
+            before = len(reads)
+            retry_started.set()
             b.eval(f"window.oldRetry = {RETRY}; window.oldRetry.focus()")
             b.press(' ', 'Space', 32)
             end = time.monotonic() + 10
-            while len(reads) < 2 and time.monotonic() < end:
+            while len(reads) < before + 1 and time.monotonic() < end:
                 time.sleep(0.02)
-            assert len(reads) == 2
+            assert len(reads) == before + 1
             b.eval("document.getElementById('xc-skip').focus()")
             release.set()
             b.wait(DRAWN['fails'])
@@ -277,12 +280,15 @@ class Planned:
 
     def __init__(self, monkeypatch, rows=TWO_ROWS, saved=()):
         self.rows, self.seen, self.models, self.posts, self.saved = rows, [], [], [], list(saved)
+        self.initial_failure = False
 
         async def handle(centre, method, path, body, router_factory=None):
             self.seen.append(path)
             if path == '/api/providers':
                 return 200, self.rows
             if path == MODELS:
+                if self.initial_failure:
+                    return 200, MODEL_REPLIES['fails']
                 reply, gate = self.models.pop(0) if self.models else ('list', None)
                 await opened(gate)
                 return 200, MODEL_REPLIES[reply]
@@ -397,13 +403,15 @@ def test_a_retry_reply_is_drawn_while_a_key_is_typed(monkeypatch, cached, outcom
     try:
         with Browser() as b:
             if not cached:
-                s.models.append(('fails', None))
+                # Main and worker catalogs both discover models on mount.
+                s.initial_failure = True
             b.goto(s.srv.url('providers'))
             if cached:
                 b.wait(f"{SELECT}?.value === 'demo:first'")
                 s.models.append(('fails', None))
                 b.eval(f"{TEST}.click()")
             b.wait(f"!!{RETRY}")
+            s.initial_failure = False
             b.eval(REJECTIONS)
             b.eval(COUNT_REPLIES)
             s.models.append((outcome, gate))

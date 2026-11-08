@@ -528,6 +528,9 @@ async def _complete_commands(c, p, q, body):
     except Exception:
         pass
     client = [n for n in cm.ARG_HINTS if n not in WEB_COMMANDS and n not in PLUGIN_COMMANDS]
+    # The canary's terminal worker editor has no shared argument hint. Never send it as a model prompt.
+    if "workers" not in client:
+        client.append("workers")
     return {"commands": rows, "guidance": guidance, "core": core, "client": client}
 
 
