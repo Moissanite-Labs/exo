@@ -31,10 +31,15 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/tasks/<task>/stop              command.run subagent stop
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
+  GET  /api/pad                            command.run pad       {text, revision}; 501 while the core has the pad off
+  POST /api/pad                            command.run pad       {text, revision} -> {revision}; 409 {revision} when
+                                           the pad moved on, so the page reloads. Neither reply ever carries the text
+                                           except the GET that asked for it.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from typing import Any, Dict, Optional, Tuple
@@ -63,6 +68,14 @@ class BadRequest(Exception):
 
 class Forbidden(Exception):
     pass
+
+
+class Conflict(Exception):
+    """The pad moved on since the page read it. Carries only the current revision, never the text."""
+
+    def __init__(self, revision: int):
+        super().__init__("the pad changed since it was loaded")
+        self.revision = revision
 
 
 def _str(body: Dict[str, Any], key: str, required: bool = False, limit: int = 2000) -> str:
@@ -94,6 +107,8 @@ def error_reply(exc: Exception) -> Reply:
         return 400, {"error": str(exc)}
     if isinstance(exc, Forbidden):
         return 403, {"error": str(exc), "code": "forbidden"}
+    if isinstance(exc, Conflict):
+        return 409, {"error": str(exc), "code": "conflict", "revision": exc.revision}
     if isinstance(exc, SourceError):
         status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
                   else 400 if exc.code in ("bad_model", "bad_request")
@@ -131,6 +146,7 @@ def _route(method: str, p: list, key: str):
         "permissions": (_permissions, _permissions_set),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
+        "pad": (_pad_get, _pad_save),
     }
     if key in table:
         g, po = table[key]
@@ -301,6 +317,30 @@ async def _schedule_edit(c, p, q, body):
         action=action, job_id=job, when=_str(body, "when", limit=100), prompt=_str(body, "prompt", limit=MAX_TEXT),
         title=_str(body, "title", limit=200), seat=_opt(body, "seat"), tier=_choice(body, "tier", TIERS, "fast"),
         deliver=_str(body, "deliver", limit=100) or "notice"))
+
+
+async def _pad(c, args: Dict[str, Any]) -> Dict[str, Any]:
+    out = (await c.source.call(s.CommandRun(name="pad", args=json.dumps(args)))).get("output")
+    return out if isinstance(out, dict) else {}
+
+
+async def _pad_get(c, p, q, body):
+    snap = (await _pad(c, {"action": "read"})).get("snapshot") or {}
+    return {"text": snap.get("document") or "", "revision": snap.get("revision") or 0}
+
+
+async def _pad_save(c, p, q, body):
+    text = body.get("text")
+    revision = body.get("revision")
+    if not isinstance(text, str):
+        raise BadRequest("text must be text")
+    if type(revision) is not int or revision < 0:
+        raise BadRequest("revision must be a whole number")
+    # The core owns the size and character rules; it answers with a fixed sentence that does not repeat the text.
+    out = await _pad(c, {"action": "update", "expected_revision": revision, "document": text})
+    if out.get("code") == "revision_conflict":
+        raise Conflict((out.get("current") or {}).get("revision") or 0)
+    return {"revision": (out.get("snapshot") or {}).get("revision") or 0}
 
 
 # ---------------------------------------------------------------- completion (D-037)
