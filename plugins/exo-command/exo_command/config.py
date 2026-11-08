@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 PLUGIN_ID = "exo-command"
 
@@ -42,6 +43,25 @@ DEFAULTS: Dict[str, Any] = {
 }
 
 
+PATH_FIELDS = ("socket", "principal_store", "decisions_queue")
+
+
+def _is_abs_path(p: Any) -> bool:
+    t = str(p)
+    return t.startswith(("/", "~", "\\")) or (len(t) > 2 and t[1] == ":" and t[2] in "\\/")
+
+
+def strip_userinfo(url: str) -> str:
+    """``url`` without ``user:pass@``. Text that is not a URL with an authority comes back unchanged."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
 @dataclass
 class Settings:
     socket: str = ""
@@ -63,11 +83,18 @@ class Settings:
     generic_paths: List[str] = field(default_factory=list)
 
     def public(self) -> Dict[str, Any]:
+        """What a page or /api/health may see. No secret, no userinfo in a URL, no absolute filesystem path."""
         out: Dict[str, Any] = {}
         for f in fields(self):
             if f.name in ("token", "token_file"):
                 continue  # never echo a secret to a page
+            if f.name in PATH_FIELDS:
+                continue  # socket and store paths say where things live on this host
             v = getattr(self, f.name)
+            if f.name == "url":
+                v = strip_userinfo(str(v or ""))
+            elif f.name == "generic_paths":
+                v = [p for p in v if not _is_abs_path(p)]
             out[f.name] = str(v) if isinstance(v, Path) else v
         return out
 

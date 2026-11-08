@@ -49,7 +49,7 @@ def test_shell_semantic_navigation_history_skip_focus_and_no_boot_overlay():
     try:
         with Browser(width=1200, height=850) as b:
             b.goto(srv.url()); b.wait("!!document.querySelector('.xc-nav a[aria-current=page]')")
-            assert b.eval("[...document.querySelectorAll('.xc-nav-link')].map(a=>a.textContent)") == ["Chat", "Tasks", "Schedule", "Command", "Providers", "Credentials"]
+            assert b.eval("[...document.querySelectorAll('.xc-nav-link')].map(a=>a.textContent)") == ["Chat", "Tasks", "Schedule", "Pad", "Command", "Providers", "Credentials"]
             assert b.eval("document.querySelector('nav').getAttribute('role')") is None
             assert b.eval("document.querySelector('main').id") == "xc-main"
             assert b.eval("document.querySelector('.xc-conn').getAttribute('role')") == "status"
@@ -105,6 +105,7 @@ def test_slow_bootstrap_keeps_route_changes_and_initial_panels_before_mount(tmp_
     (tmp_path / "app.mjs").write_text((STATIC / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "desktop_prefs.mjs").write_text((STATIC / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((STATIC / "appearance.js").read_text())
+    (tmp_path / "layout.mjs").write_text((STATIC / "layout.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>"test-token",redeem=async()=>({});
 export const h=(tag,attrs,...children)=>({tag,attrs:attrs||{},children,classList:{remove(){}},setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},replaceChildren(...c){this.children=c;}});
@@ -114,7 +115,7 @@ export const onState=f=>{globalThis.connectionState=f;f({connected:false});};
 export const start=()=>new Promise(resolve=>globalThis.finishStartup=()=>{globalThis.panelsReady=true;resolve();});
 export const restart=async()=>{};
 ''')
-    for name in ("chat", "tasks", "schedule", "command", "providers", "credentials"):
+    for name in ("chat", "tasks", "schedule", "pad", "command", "providers", "credentials"):
         (tmp_path / f"{name}.mjs").write_text(f'export const mount=()=>{{globalThis.mounts.push(["{name}",globalThis.panelsReady]);return ()=>{{}};}};')
     (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true}),start=()=>{};')
     (tmp_path / "test.mjs").write_text('''

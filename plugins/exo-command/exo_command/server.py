@@ -38,14 +38,20 @@ that second redemption: a launched browser that never runs the page's script nev
 from __future__ import annotations
 
 import asyncio
+import gzip
+import hashlib
 import hmac
 import json
 import mimetypes
+import re
 import secrets
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
+
+from exo.core.models.keys import redact_secrets
 
 from . import api
 from . import credentials as creds
@@ -55,19 +61,38 @@ from .source import SourceError, core_message
 
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
+# Only the send route takes images, and the core refuses any /command body over 8 MiB, so a bigger cap here would
+# only move the refusal. Pad has its own bounded cap; other routes keep MAX_BODY.
+MAX_SEND_BODY = 8 * 1024 * 1024
+SEND_ROUTE = re.compile(r"/api/chat/sessions/[^/]+/send")
+# A valid 32 KiB Pad can use six JSON bytes per ASCII character.
+MAX_PAD_BODY = 32768 * 6 + 1024
 HEARTBEAT = 15.0
+# Limits on reading a request (not on a stream that was already accepted). A client that stalls, sends endless header
+# lines, or holds a socket without asking for anything is dropped; the server stays answerable to the page.
+READ_TIMEOUT_S = 10.0          # the whole header block, and each body read
+MAX_HEADER_LINES = 100
+MAX_HEADER_BYTES = 16 * 1024   # request line + header lines
+MAX_REQUEST_LINE = 8 * 1024
+OVERFLOW_S = 1.0               # how long an over-cap connection may take to send its head
+MAX_CONNECTIONS = 64           # ordinary handlers (including streams); equally bounded rejection pool replies 503
+GZIP_MIN = 256                 # smaller assets are sent as they are
+GZIP_TYPES = ("text/", "application/javascript", "application/json", "image/svg+xml")
 # One policy for every response (#162): script, style, images and requests from this server only. No inline script,
 # style attribute or eval, no plugins, no <base>, no native form posts (every form is handled in script), no framing.
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
        "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 SECURITY_HEADERS = ("Content-Security-Policy: {}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
                     .format(CSP))
-REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
-           501: "Not Implemented", 502: "Bad Gateway"}
+REASONS = {200: "OK", 304: "Not Modified", 400: "Bad Request", 403: "Forbidden", 404: "Not Found",
+           405: "Method Not Allowed", 408: "Request Timeout", 431: "Request Header Fields Too Large",
+           501: "Not Implemented", 502: "Bad Gateway", 503: "Service Unavailable"}
 DECISIONS = ("allow", "deny", "allow_always")
 STREAMS = ("/api/events", "/api/stream")
 LAUNCH = "/api/launch"
 LAUNCH_TTL = 120.0
+_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/@]*@")
+_ABS_PATH = re.compile(r"(?<![\w/:.\-])(?:~|[A-Za-z]:)?/(?:[^\s/'\"<>:]+/)+[^\s'\"<>:]*")
 BAD_TOKEN = {"error": "missing or wrong page token: open the link `exo web` printed"}
 
 
@@ -80,18 +105,26 @@ class WebServer:
         self.router_factory = prov.ps.build_router
         self._server: Optional[asyncio.AbstractServer] = None
         self._conns: set = set()
+        self._overflow_conns: set = set()
         self._close_task: Optional[asyncio.Task] = None
         self._feeds: list = []
         self._hosts: set = set()
         self._codes: Dict[str, float] = {}   # unused launch codes -> monotonic deadline
         self._spent: set = set()             # redeemed launch codes: one coming back means it leaked
         self._shown: Optional[Tuple[str, int]] = None
+        self.max_connections = MAX_CONNECTIONS
+        self._static: Dict[str, Tuple[int, int, str, bytes, Optional[bytes]]] = {}   # path -> mtime, size, etag, raw, gz
 
     # ------------------------------------------------------------ lifecycle
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         if self._close_task is not None and (not self._close_task.done() or self._conns):
             raise RuntimeError("web server shutdown is still in progress")
+        if not _is_loopback_bind(host):
+            msg = ("WARNING: listening on {!r}, not a loopback address. The page token and every request "
+                   "travel over plain HTTP and can be read by anyone on that network. Bind 127.0.0.1 (the default) "
+                   "or put a TLS proxy in front.".format(host or "all interfaces"))
+            print("exo-command: " + msg, file=sys.stderr, flush=True)
         self._server = await asyncio.start_server(self._accept_client, host, port)
         self._close_task = None
         bound = self._server.sockets[0].getsockname()[1]
@@ -258,14 +291,23 @@ class WebServer:
         if self._close_task is not None:
             writer.close()
             return
-        # Register at acceptance, before the coroutine gets its first event-loop
-        # turn, so shutdown cannot miss an accepted but not yet started handler.
-        task = asyncio.create_task(self._client(reader, writer))
+        over = len(self._conns) - len(self._overflow_conns) >= self.max_connections
+        if over and len(self._overflow_conns) >= self.max_connections:
+            # The bounded rejection pool is full too: do not create more tasks
+            # for idle peers. Ordinary handlers retain their own admission budget.
+            writer.close()
+            return
+        # Register both ordinary and rejection handlers before their first turn.
+        # Rotation and shutdown own every accepted handler, including idle overflow.
+        task = asyncio.create_task(self._overflow(reader, writer) if over else self._client(reader, writer))
         self._conns.add(task)
+        if over:
+            self._overflow_conns.add(task)
 
         def finished(task: asyncio.Task) -> None:
             # Cancellation before the coroutine's first turn cannot run its finally.
             self._conns.discard(task)
+            self._overflow_conns.discard(task)
             try:
                 writer.close()
             except Exception:
@@ -273,12 +315,32 @@ class WebServer:
 
         task.add_done_callback(finished)
 
+    async def _overflow(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        body = b'{"error": "too many connections"}'
+        try:
+            try:
+                await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), OVERFLOW_S)
+            except Exception:
+                pass
+            writer.write(("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                          "Content-Length: {}\r\nCache-Control: no-store\r\nRetry-After: 1\r\n{}"
+                          "Connection: close\r\n\r\n").format(len(body), SECURITY_HEADERS).encode() + body)
+            await asyncio.wait_for(writer.drain(), OVERFLOW_S)
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
         self._conns.add(task)
         try:
             await self._request(reader, writer)
-        except (ConnectionError, asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError,
+                asyncio.TimeoutError, TimeoutError):
             pass
         except asyncio.CancelledError:
             pass
@@ -289,16 +351,40 @@ class WebServer:
             except Exception:
                 pass
 
-    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        line = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
-        method, target, _ = line.split(" ", 2)
+    async def _read_head(self, reader: asyncio.StreamReader) -> Optional[Tuple[str, str, Dict[str, str]]]:
+        """The request line and headers, or None when they pass a cap. Raises on EOF or a bad line."""
+        raw = await reader.readuntil(b"\r\n")
+        used = len(raw)
+        if used > MAX_REQUEST_LINE:
+            return None
+        method, target, _ = raw.decode("latin-1").strip().split(" ", 2)
         headers: Dict[str, str] = {}
+        lines = 0
         while True:
-            h = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
+            raw = await reader.readuntil(b"\r\n")
+            used += len(raw)
+            lines += 1
+            h = raw.decode("latin-1").strip()
             if not h:
                 break
+            if lines > MAX_HEADER_LINES or used > MAX_HEADER_BYTES:
+                return None
             k, _, v = h.partition(":")
             headers[k.strip().lower()] = v.strip()
+        return method, target, headers
+
+    async def _read_body(self, reader: asyncio.StreamReader, n: int) -> bytes:
+        """``n`` body bytes within READ_TIMEOUT_S; a stalled sender raises TimeoutError and the connection closes."""
+        return await asyncio.wait_for(reader.readexactly(n), READ_TIMEOUT_S)
+
+    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:   # the whole header block shares one deadline, so a client cannot hold the socket a byte at a time
+            head = await asyncio.wait_for(self._read_head(reader), READ_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return   # dropped: nothing was asked for yet
+        if head is None:
+            return await self._json(writer, 431, {"error": "request headers too large"})
+        method, target, headers = head
         url = urlsplit(target)
         path, q = url.path, parse_qs(url.query)
         refused = self._refuse(headers, path, q)
@@ -306,14 +392,15 @@ class WebServer:
             return await self._json(writer, *refused)
         c = self.centre
         if path == "/" and method == "GET":
-            return await self._file(writer, STATIC / "index.html")
+            return await self._file(writer, STATIC / "index.html")   # no-store: the shell is always fetched anew
         if path.startswith("/static/") and method == "GET":
             f = (STATIC / path[len("/static/"):]).resolve()
             if STATIC not in f.parents or not f.is_file():
                 return await self._json(writer, 404, {"error": "not found"})
-            return await self._file(writer, f)
+            return await self._file(writer, f, headers)
         if path == "/api/health" and method == "GET":
-            return await self._json(writer, 200, {"ok": True, "connected": c.connected, "error": c.last_error,
+            return await self._json(writer, 200, {"ok": True, "connected": c.connected,
+                                                  "error": _public_text(c.last_error),
                                                   "seq": c.state.seq, "settings": c.settings.public()})
         if path == "/api/snapshot" and method == "GET":
             only = [x.strip() for x in q["sections"][0].split(",")] if q.get("sections") else None
@@ -352,7 +439,8 @@ class WebServer:
         if path.startswith("/api/"):
             body: Dict[str, Any] = {}
             if method == "POST":
-                got = await self._body(reader, writer, headers)
+                limit = MAX_SEND_BODY if SEND_ROUTE.fullmatch(path) else MAX_PAD_BODY if path == "/api/pad" else MAX_BODY
+                got = await self._body(reader, writer, headers, limit=limit)
                 if got is None:
                     return
                 body = got
@@ -389,13 +477,13 @@ class WebServer:
             return await self._json(writer, *refused)
         try:
             n = int(headers.get("content-length", "0"))
-            body = json.loads(await reader.readexactly(n)) if 0 < n <= 1024 else None
+            body = json.loads(await self._read_body(reader, n)) if 0 < n <= 1024 else None
             status, data = self.redeem(body.get("code") if isinstance(body, dict) else None)
         except Exception:
             status, data = 403, {"error": "launch code refused"}
         return await self._json(writer, status, data)
 
-    async def _body(self, reader, writer, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _body(self, reader, writer, headers: Dict[str, str], *, limit: int = MAX_BODY) -> Optional[Dict[str, Any]]:
         """Read a JSON object body from a same-origin POST; answer the error and return None otherwise."""
         origin, host = headers.get("origin"), headers.get("host", "")
         if origin and urlsplit(origin).netloc != host:
@@ -405,11 +493,11 @@ class WebServer:
             n = int(headers.get("content-length", "0"))
         except ValueError:
             n = -1
-        if n < 0 or n > MAX_BODY:
+        if n < 0 or n > limit:
             await self._json(writer, 400, {"error": "body too large"})
             return None
         try:
-            body = json.loads(await reader.readexactly(n)) if n else {}
+            body = json.loads(await self._read_body(reader, n)) if n else {}
         except (ValueError, RecursionError):
             body = None
         if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
@@ -467,7 +555,7 @@ class WebServer:
         if n < 0 or n > MAX_BODY:
             return await self._json(writer, 400, {"error": "body too large"})
         try:
-            body = json.loads(await reader.readexactly(n)) if n else {}
+            body = json.loads(await self._read_body(reader, n)) if n else {}
         except (ValueError, RecursionError):
             return await self._json(writer, 400, {"error": "bad json"})
         if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
@@ -481,25 +569,60 @@ class WebServer:
             await self.centre.respond_approval(rid, decision, str(body.get("note") or ""))
         except SourceError as exc:
             return await self._json(writer, 404 if exc.code == "not_found" else 502,
-                                    {"error": exc.message, "code": exc.code})
+                                    {"error": api._safe_message(exc.message), "code": exc.code})
         except Exception as exc:
             return await self._json(writer, 502, {"error": core_message(exc)})
         return await self._json(writer, 200, {"ok": True})
 
-    async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:
-        head = ("HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n"
-                "{}Connection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body), SECURITY_HEADERS)
+    async def _send(self, writer, status: int, body: bytes, ctype: str, extra: str = "",
+                    cache: str = "no-store") -> None:
+        head = ("HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\n"
+                "{}{}Connection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body), cache,
+                                                          extra, SECURITY_HEADERS)
         writer.write(head.encode() + body)
         await writer.drain()
 
     async def _json(self, writer, status: int, data: Any) -> None:
         await self._send(writer, status, json.dumps(data, default=_json_default).encode(), "application/json")
 
-    async def _file(self, writer, f: Path) -> None:
+    async def _file(self, writer, f: Path, headers: Optional[Dict[str, str]] = None) -> None:
         ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
+        textual = ctype.startswith(GZIP_TYPES)
         if ctype.startswith("text/") or ctype.endswith("javascript"):
             ctype += "; charset=utf-8"
-        await self._send(writer, 200, f.read_bytes(), ctype)
+        if headers is None:   # the page shell: always fetched anew
+            return await self._send(writer, 200, f.read_bytes(), ctype)
+        etag, raw, gz = self._cached(f, textual)
+        use_gz = gz is not None and "gzip" in _accepts(headers.get("accept-encoding", ""))
+        tag = '"{}{}"'.format(etag, "-gzip" if use_gz else "")
+        extra = "ETag: {}\r\nVary: Accept-Encoding\r\n".format(tag)
+        if _etag_matches(headers.get("if-none-match", ""), tag):
+            head = ("HTTP/1.1 304 Not Modified\r\nCache-Control: no-cache\r\n{}{}Connection: close\r\n\r\n"
+                    .format(extra, SECURITY_HEADERS))
+            writer.write(head.encode())
+            return await writer.drain()
+        payload = raw
+        if use_gz and gz is not None:
+            extra += "Content-Encoding: gzip\r\n"
+            payload = gz
+        await self._send(writer, 200, payload, ctype, extra, "no-cache")
+
+    def _cached(self, f: Path, textual: bool) -> Tuple[str, bytes, Optional[bytes]]:
+        """``(etag, bytes, gzip bytes or None)`` of a static file, computed once and again only when its mtime or
+        size changes."""
+        st = f.stat()
+        key = str(f)
+        hit = self._static.get(key)
+        if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return hit[2], hit[3], hit[4]
+        raw = f.read_bytes()
+        etag = hashlib.sha256(raw).hexdigest()[:32]
+        gz = None
+        if textual and len(raw) >= GZIP_MIN:
+            packed = gzip.compress(raw, 6, mtime=0)
+            gz = packed if len(packed) < len(raw) else None
+        self._static[key] = (st.st_mtime_ns, st.st_size, etag, raw, gz)
+        return etag, raw, gz
 
     async def _sse(self, writer) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
@@ -517,6 +640,37 @@ class WebServer:
                 await writer.drain()
         finally:
             self.centre.unsubscribe(q)
+
+
+def _accepts(value: str) -> set:
+    """Content codings a client accepts, without those it refuses with q=0."""
+    out = set()
+    for part in value.lower().split(","):
+        name, _, params = part.partition(";")
+        q = params.replace(" ", "")
+        if name.strip() and q not in ("q=0", "q=0.0", "q=0.00", "q=0.000"):
+            out.add(name.strip())
+    return out
+
+
+def _etag_matches(header: str, tag: str) -> bool:
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    want = tag[2:] if tag.startswith("W/") else tag
+    return any((t.strip()[2:] if t.strip().startswith("W/") else t.strip()) == want for t in header.split(","))
+
+
+def _public_text(text: Any) -> Any:
+    """A status sentence for /api/health: no URL userinfo, no known key value, no absolute filesystem path."""
+    if not isinstance(text, str) or not text:
+        return text
+    return _ABS_PATH.sub("[path]", redact_secrets(_USERINFO.sub(r"\1", text)))
+
+
+def _is_loopback_bind(host: str) -> bool:
+    return (host or "").strip("[]").lower() in ("127.0.0.1", "localhost", "::1") or (host or "").startswith("127.")
 
 
 def _origin(host: str, port: int) -> str:

@@ -7,6 +7,7 @@ import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
+import { attachImages } from "./images.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
@@ -22,6 +23,8 @@ export function refreshRelative(root) {
     if (text && el.textContent !== text) el.textContent = text;
   }
 }
+// The transcript window: how many of the newest items get DOM nodes, and how many more "Show earlier messages" adds.
+const WINDOW = 200;
 
 // Page-lifetime intent only: never write prompts to browser storage.
 const drafts = new Map();
@@ -47,7 +50,8 @@ export function mount(root) {
     if (mounted && current && !loading && transcriptLoaded) saveDesktopPreferences({ thread: current, scroll: logEl.scrollHeight > logEl.clientHeight ? Math.min(1, Math.max(0, logEl.scrollTop / (logEl.scrollHeight - logEl.clientHeight))) : 0 });
   }
   function flushHiddenReading() { if (document.visibilityState === "hidden") flushReading(); }
-  let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
+  let win = WINDOW, earlierBtn = null;
+  let pins = [], sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
@@ -68,7 +72,7 @@ export function mount(root) {
     h("option", { value: "all" }, "All conversations"), h("option", { value: "working" }, "Working"), h("option", { value: "attention" }, "Needs you"));
   const threadScope = h("p", { class: "xc-thread-scope", id: "xc-thread-scope", role: "status" });
   let renameTarget = null, renameSaving = false, renameActive = true;
-  const renameButtons = new Map(), conversationButtons = new Map();
+  const renameButtons = new Map(), conversationButtons = new Map(), pinButtons = new Map();
   const renameInput = h("input", { type: "text", "aria-label": "Thread title", autocomplete: "off", maxlength: "200" });
   const renameError = h("div", { role: "alert", class: "xc-rename-error" });
   const renameSave = h("button", { type: "submit", class: "xc-btn xc-primary" }, "Save");
@@ -122,7 +126,9 @@ export function mount(root) {
   const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
   modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), recoveryEl, modelPicker);
+  const images = attachImages({ input, wrap: inputWrap, flash: (m) => flash(m) });
+  const composer = h("div", { class: "xc-composer" }, images.tray, promptEl, inputWrap,
+    h("div", { class: "xc-btnrow" }, sendBtn, stopBtn, images.button, images.picker), recoveryEl, modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   function saveDraft() {
@@ -240,6 +246,7 @@ export function mount(root) {
     return out;
   }
 
+  // find() searches every item, rendered or not: events for a message outside the transcript window still land.
   function find(id) { return items.find((i) => i.id === id); }
   // One card per peer, bus or job message: peer.message and the stored message.completed share its msg_id and come
   // in either order. The second adds what the first lacked: the stored kind (Bus, Job) or the delivery mode.
@@ -424,6 +431,7 @@ export function mount(root) {
   function push(it) {
     it.fresh = true;
     items.push(it);
+    if (items.length - 1 >= win) win++;   // the window's old edge stays put, so the button's count stays true
     if (items.length === 1) { drawLog(); return; }
     keepReading(() => {
       if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));
@@ -440,9 +448,50 @@ export function mount(root) {
         h("div", { class: "xc-chips" }, chip("Enter", "send"), chip("Shift+Enter", "new line"), chip("/", "commands")));
     }
   }
-  function redraw(it) { const old = it.el; if (old && old.isConnected) { keepReading(() => old.replaceWith(itemEl(it)), aboveViewport(old)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
+  function redraw(it) {
+    const old = it.el;
+    if (old && old.isConnected) { keepReading(() => old.replaceWith(itemEl(it)), aboveViewport(old)); }   // keep the old node: itemEl points it.el at the new one
+    else if (hiddenCount() > 0 && items.indexOf(it) < hiddenCount()) it.el = null;   // before the window: no node to update; it renders from items[] when revealed
+    else drawLog();
+  }
+
+  // Transcript window: only the newest `win` items have DOM nodes (a 4,500-message session would otherwise build and
+  // parse every one). A button at the old end of the log reveals WINDOW more per click.
+  function hiddenCount() { return Math.max(0, items.length - win); }
+  function visibleItems() { return hiddenCount() ? items.slice(hiddenCount()) : items; }
+  function earlierLabel() { return "Show earlier messages (" + hiddenCount() + ")"; }
+  function earlierButton() {
+    const n = hiddenCount();
+    if (!n) { earlierBtn = null; return null; }
+    earlierBtn = h("button", { type: "button", class: "xc-btn xc-earlier", onclick: showEarlier }, earlierLabel());
+    return earlierBtn;
+  }
+  function logNodes() {
+    const nodes = ordered(visibleItems(), layout).map(itemEl), btn = earlierButton();
+    if (btn) { if (layout === "inverse") nodes.push(btn); else nodes.unshift(btn); }   // the old end: bottom when newest is on top
+    return nodes;
+  }
+  function showEarlier() {
+    const before = hiddenCount();
+    if (!before || !earlierBtn || !earlierBtn.isConnected) return;
+    const from = Math.max(0, before - WINDOW);
+    const btn = earlierBtn;
+    // Pin the message next to the button on screen. Measure it rather than trust scrollHeight: the browser's own scroll
+    // anchoring may already have moved the view, and adding the height again would jump by the inserted amount.
+    const anchor = layout === "inverse" ? btn.previousElementSibling : btn.nextElementSibling;
+    const was = anchor ? anchor.getBoundingClientRect().top : 0;
+    logEl.style.overflowAnchor = "none";   // the correction below is the only one
+    win += before - from;
+    const nodes = ordered(items.slice(from, before), layout).map(itemEl);
+    if (layout === "inverse") btn.before(...nodes); else btn.after(...nodes);
+    if (hiddenCount()) btn.textContent = earlierLabel(); else { btn.remove(); earlierBtn = null; }
+    if (anchor && anchor.isConnected) { ++homeRevision; logEl.scrollTop += anchor.getBoundingClientRect().top - was; }
+    logEl.style.overflowAnchor = "";
+    updateLatest();
+    btn.isConnected && btn.focus({ preventScroll: true });   // keep the reader where they are; focus would scroll to the moved button
+  }
   function drawLog() {
-    logEl.replaceChildren(...ordered(items, layout).map(itemEl));
+    logEl.replaceChildren(...logNodes());
     drawHero();
     home();
     scheduleHome();   // finish initial positioning only if no newer reading, layout or navigation intent won
@@ -451,7 +500,7 @@ export function mount(root) {
   // one who scrolled away keeps their place, as with new output (keepReading).
   function redrawLog() {
     if (!logEl.childElementCount || nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) { drawLog(); return; }
-    keepReading(() => { logEl.replaceChildren(...ordered(items, layout).map(itemEl)); drawHero(); }, layout === "inverse");
+    keepReading(() => { logEl.replaceChildren(...logNodes()); drawHero(); }, layout === "inverse");
   }
 
   function itemEl(it) {
@@ -461,7 +510,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : cachedMarkdown(it));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
@@ -563,28 +612,36 @@ export function mount(root) {
     const focused = document.activeElement;
     const focusedConversation = [...conversationButtons].find(([, button]) => button === focused);
     const focusedRename = [...renameButtons].find(([, button]) => button === focused);
+    const focusedPin = [...pinButtons].find(([, button]) => button === focused);
     const query = threadQuery.trim().toLowerCase();
+    const pinned = new Set(pins);
     const shown = sessions.filter(s => (!query || [s.title, s.id, s.agent, s.seat].some(value => String(value || "").toLowerCase().includes(query)))
       && (threadFilter === "all" || (threadFilter === "working" ? s.status === "live" : globalWaiting || waiting.has(s.id))));
     searchClear.hidden = !threadQuery;
     threadScope.textContent = shown.length + " of " + sessions.length + " loaded conversations";
-    renameButtons.clear(); conversationButtons.clear();
+    shown.sort((a, b) => pinned.has(b.id) - pinned.has(a.id));   // stable: the existing order holds inside each group
+    renameButtons.clear(); conversationButtons.clear(); pinButtons.clear();
     listEl.replaceChildren(...(shown.length ? shown.map((s) => {
+      const isPinned = pinned.has(s.id);
+      const pinButton = h("button", { class: "xc-btn xc-pin" + (isPinned ? " on" : ""), type: "button", "aria-pressed": String(isPinned),
+        "aria-label": (isPinned ? "Unpin " : "Pin ") + (s.title || s.id), title: isPinned ? "Unpin" : "Pin", onclick: () => setPin(s.id, !isPinned) }, isPinned ? "Unpin" : "Pin");
+      pinButtons.set(s.id, pinButton);
       const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
       renameButtons.set(s.id, button);
       const conversationButton = h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => chooseConversation(s.id),
         title: "Open conversation", "aria-current": s.id === current ? "true" : null,
         ondblclick: () => beginRename(s) },
-        h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
+        h("span", { class: "xc-sess-title" }, isPinned ? h("span", { class: "xc-pinmark", "aria-hidden": "true", title: "Pinned" }, "\u{1F4CC}") : null, short(s.title || s.id, 40)),
         h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", globalWaiting || waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", relativeLabel(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))));
       conversationButtons.set(s.id, conversationButton);
-      return h("div", { class: "xc-session-row" }, conversationButton, button);
+      return h("div", { class: "xc-session-row" + (isPinned ? " pinned" : "") }, conversationButton, pinButton, button);
     }) : [h("div", { class: "xc-thread-empty" }, h("p", null, sessions.length ? "No loaded conversations match." : "No conversations yet."),
       sessions.length ? h("button", { class: "xc-btn", onclick: () => {
         searchInput.value = threadQuery = ""; threadFilterInput.value = threadFilter = "all"; drawSessions(); searchInput.focus();
       } }, "Show all conversations") : null)]));
     if (listEl.querySelector && listEl.querySelector("time[data-xc-rel]")) relativeClock();
     if (focusedConversation) (conversationButtons.get(focusedConversation[0]) || searchInput).focus({ preventScroll: true });
+    else if (focusedPin) (pinButtons.get(focusedPin[0]) || searchInput).focus({ preventScroll: true });
     else if (focusedRename) (renameButtons.get(focusedRename[0]) || searchInput).focus({ preventScroll: true });
     const selected = sessions.find(s => s.id === current);
     conversationTitle.textContent = selected ? short(selected.title || selected.id, 40) : "Choose a conversation";
@@ -666,7 +723,8 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    if (current !== id) images.take();   // an attachment belongs to one conversation
+    current = id; loading = true; pending = []; items = []; win = WINDOW; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     restoreDraft();
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
@@ -841,7 +899,8 @@ export function mount(root) {
 
   async function send() {
     const text = input.value.trim();
-    if (!text || draft(current).pending) return;
+    if (images.pending()) { flash("images are still loading; send again when ready"); return; }
+    if ((!text && !images.count()) || draft(current).pending) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
     // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
@@ -901,6 +960,7 @@ export function mount(root) {
       return;
     }
     saveDraft();
+    const shots = images.take();   // handed to this send; put back if it fails
     let origin = current, nav = navigation;
     const steering = busy, intent = draft(origin);
     intent.pending = true;
@@ -909,7 +969,7 @@ export function mount(root) {
     let sid = origin;
     try {
       if (!sid) {
-        const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
+        const d = await api("POST", "/api/chat/sessions", { title: short(text || "Image", 60) });
         sid = d.session.id;
         // Once created, this conversation owns both the request and anything typed behind it.
         if (mounted && current === origin) saveDraft();
@@ -921,7 +981,8 @@ export function mount(root) {
         if (show && current === sid) nav = navigation;
         await refreshSessions();
       }
-      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
+      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send",
+        ...(shots.length ? { images: images.payload(shots) } : {}) });
       intent.pending = false; changedDraft(origin);
       if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; if (mounted) drawSteers(); }
       if (mounted && nav === navigation && current === origin) {
@@ -929,6 +990,8 @@ export function mount(root) {
         else { drawDraft(); flash(""); }
       }
     } catch (e) {
+      // Only back into the tray of the conversation they were sent from.
+      if (shots.length && mounted && current === origin) images.restore(shots);
       if (mounted && current === origin) saveDraft();
       intent.pending = false;
       const restored = intent.revision === revision && !intent.text;
@@ -1016,13 +1079,21 @@ export function mount(root) {
       else recover();
     }
   });
-  const off = () => { recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); stopRelativeClock(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { images.take(); recoveryWanted = null; flushReading(); if (hasDesktopPreferences()) { window.removeEventListener("pagehide", flushReading); document.removeEventListener("visibilitychange", flushHiddenReading); } if (narrowThreads && narrowThreads.removeEventListener) narrowThreads.removeEventListener("change", adaptThreadChooser); saveDraft(); renameActive = false; renameInput.value = ""; mounted = false; draftListeners.delete(changed); ++navigation; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); stopRelativeClock(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
   restoreDraft();
   if (hasDesktopPreferences()) { window.addEventListener("pagehide", flushReading); document.addEventListener("visibilitychange", flushHiddenReading); }
   const startingNavigation = navigation;
+  // Pins live on the server (the desktop app's web storage is lost on restart); load once, redraw when they arrive.
+  api("GET", "/api/chat/pins").then((d) => { if (mounted && Array.isArray(d.pins)) { pins = d.pins; drawSessions(); } }).catch(() => {});
+  async function setPin(id, on) {
+    try {
+      const d = await api("POST", "/api/chat/pins", { id, pinned: on });
+      if (Array.isArray(d.pins)) { pins = d.pins; drawSessions(); }
+    } catch (e) { fail(e); }
+  }
   function finishInitialSelection(listReady) {
     // A failed read is not evidence that the saved conversation disappeared. A later reconnect may retry.
     if (!initialSelectionPending || !mounted || current || navigation !== startingNavigation) return;
@@ -1037,6 +1108,12 @@ export function mount(root) {
   }
   refreshSessions().then(finishInitialSelection);
   return off;
+}
+
+// Completed Markdown is kept on the item and moved, not re-parsed, while its text is unchanged (redraws, window moves).
+function cachedMarkdown(it) {
+  if (!it.mdEl || it.mdText !== it.text) { it.mdEl = markdown(it.text); it.mdText = it.text; }
+  return it.mdEl;
 }
 
 // A completed reply as Markdown, or its plain text if the renderer fails: one reply must never blank the thread.

@@ -2,6 +2,8 @@
 chat that opens at its newest item in both layouts. The behaviour tests drive headless Chrome and skip without it."""
 from __future__ import annotations
 
+import re
+
 import asyncio
 import json
 import shutil
@@ -30,7 +32,7 @@ def test_the_layout_module_names_the_default_and_how_to_flip_it():
 def test_the_chat_view_uses_the_layout_module_and_has_a_switch_and_a_command():
     src = text("chat.js")
     assert 'from "./layout.js"' in src and "xc-layout" in src and "/layout" in src
-    assert "columnOrder(layout)" in src and "ordered(items, layout)" in src
+    assert "columnOrder(layout)" in src and re.search(r"ordered\((items|visibleItems\(\)|items\.slice\([^)]*\)), layout\)", src)
 
 
 def test_the_layout_styles_use_the_site_tokens_only():

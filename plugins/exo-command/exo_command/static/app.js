@@ -1,5 +1,5 @@
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
-// Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
+// Chat is the default page; Tasks, Schedule, Pad and Command (the read-mostly overview) are the other views.
 import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
 import { h, token, redeem } from "./dom.js";
 import { getAppearance, applyAppearance, setAppearance } from "./appearance.js";
@@ -7,12 +7,14 @@ import * as bus from "./bus.js";
 import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
 import * as schedule from "./schedule.js";
+import * as pad from "./pad.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
 import * as permissions from "./permissions.js";
 import * as credentials from "./credentials.js";
+import { FLOW_CLASS, getFlow, setFlow, isFlowToggle, isFlowExit } from "./layout.js";
 
-const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers], ["credentials", "Credentials", credentials]];
+const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["pad", "Pad", pad], ["command", "Command", command], ["providers", "Providers", providers], ["credentials", "Credentials", credentials]];
 
 // The page token arrives in the URL fragment of the link `exo web` prints; every request needs it (D-039). Keep it in this tab's
 // sessionStorage only, then take it out of the address bar and history.
@@ -65,10 +67,28 @@ const appearance = h("select", { class: "xc-appearance", "aria-label": "Appearan
   ...[["dark", "Dark"], ["light", "Light"], ["system", "System"]].map(([value, label]) => h("option", { value }, label)));
 appearance.value = applyAppearance(desktopPreference("appearance") || getAppearance());
 const appearanceControl = h("label", { class: "xc-appearance-wrap" }, h("span", null, "Appearance"), appearance);
+// Flow mode (body.xc-flow, chat page only): the toggle sits in the bar and floats alone while the bar is hidden.
+let flow = getFlow();
+const flowBtn = h("button", { class: "xc-btn xc-flow-toggle", type: "button", "aria-label": "Flow mode", "aria-pressed": "false",
+  "aria-keyshortcuts": "Control+Shift+F Meta+Shift+F", title: "Flow mode: only the chat (Cmd/Ctrl+Shift+F, Esc leaves)", onclick: () => setFlowMode(!flow) }, "Flow");
+function setFlowMode(on, save = true) {
+  flow = save ? setFlow(on) : !!on;   // the first paint only reads the saved choice, it never writes
+  if (document.body) document.body.classList.toggle(FLOW_CLASS, flow);
+  flowBtn.setAttribute("aria-pressed", flow ? "true" : "false");
+}
+setFlowMode(flow, false);
+const onChat = () => !document.body || !document.body.dataset || document.body.dataset.xcView === "chat";
+// The toggle is caught early; Esc waits for the bubble phase so editors and cards that claim it win.
+if (document.addEventListener) document.addEventListener("keydown", (e) => {
+  if (isFlowToggle(e) && onChat()) { e.preventDefault(); e.stopPropagation(); setFlowMode(!flow); }
+}, true);
+if (document.addEventListener) document.addEventListener("keydown", (e) => {
+  if (flow && isFlowExit(e)) { e.preventDefault(); setFlowMode(false); }
+});
 const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
 nav.replaceChildren(h("strong", { class: "xc-brand" },
   h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, "Exo"),
-  where, ...links, appearanceControl, conn);
+  where, ...links, appearanceControl, flowBtn, conn);
 const skip = document.getElementById("xc-skip");
 if (skip && skip.addEventListener) skip.addEventListener("click", (event) => { event.preventDefault(); main.focus(); });
 
@@ -81,6 +101,7 @@ function show(id) {
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
+  if (document.body) document.body.dataset.xcView = current;
   saveDesktopPreferences({ view: current });
   if (location.hash !== "#" + current) history.replaceState(null, "", "#" + current);
   where.textContent = "";

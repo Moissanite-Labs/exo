@@ -7,12 +7,14 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/sessions                  session.list
   POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
   GET  /api/chat/sessions/<id>             session.get           the transcript so far, and the ids of queued steers
-  POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
+  POST /api/chat/sessions/<id>/send        turn.send             {text, mode, images}; images: up to 4 of {mime, data}, 5 MB together
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
+  GET  /api/chat/pins                      the pinned session ids, {pins: [...]}; a JSON file under the Exo home
+  POST /api/chat/pins                      {id, pinned}; principal only, probed like rename (D-069); returns {pins}
   GET  /api/chat/models                    models.list           the /model picker's choices
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
@@ -31,20 +33,36 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/tasks/<task>/stop              command.run subagent stop
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
+  GET  /api/pad                            command.run pad       {text, revision}; 501 while the core has the pad off
+  POST /api/pad                            command.run pad       {text, revision} -> {revision}; 409 {revision} when
+                                           the pad moved on, so the page reloads. Neither reply ever carries the text
+                                           except the GET that asked for it.
 """
 from __future__ import annotations
 
 import asyncio
+import json
+import base64
+import binascii
 import os
 import re
+import threading
 from typing import Any, Dict, Optional, Tuple
 
 from exo import complete as cm
+from exo.core.models.keys import redact_secrets
+from exo.core.types import ContentPart
 from exo.protocol import schema as s
 
 from .source import TOKEN_REFUSED, SourceError, core_message
 
 MAX_TEXT = 50_000
+MAX_IMAGES = 4
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# All images in one send together. The core caps a /command body at 8 MiB (server/app.py MAX_BODY), and base64
+# adds a third, so 5 MiB raw plus text fits; 4 x 5 MiB would reach the core as a 413.
+MAX_IMAGES_TOTAL = 5 * 1024 * 1024
+IMAGE_MIMES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
 READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
@@ -63,6 +81,14 @@ class BadRequest(Exception):
 
 class Forbidden(Exception):
     pass
+
+
+class Conflict(Exception):
+    """The pad moved on since the page read it. Carries only the current revision, never the text."""
+
+    def __init__(self, revision: int):
+        super().__init__("the pad changed since it was loaded")
+        self.revision = revision
 
 
 def _str(body: Dict[str, Any], key: str, required: bool = False, limit: int = 2000) -> str:
@@ -89,17 +115,25 @@ def _choice(body: Dict[str, Any], key: str, allowed: tuple, default: Optional[st
     return v
 
 
+def _safe_message(message: Any) -> str:
+    """A core error text for the page: known key values redacted, at most 500 characters."""
+    return redact_secrets(str(message))[:500]
+
+
 def error_reply(exc: Exception) -> Reply:
     if isinstance(exc, BadRequest):
         return 400, {"error": str(exc)}
     if isinstance(exc, Forbidden):
         return 403, {"error": str(exc), "code": "forbidden"}
+    if isinstance(exc, Conflict):
+        return 409, {"error": str(exc), "code": "conflict", "revision": exc.revision}
     if isinstance(exc, SourceError):
         status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
                   else 400 if exc.code in ("bad_model", "bad_request")
                   else 501 if exc.code in ("unsupported", "unknown_command") else 502)
         # #856: a refused bearer token gets the token-file sentence, not the core's raw 401 body
-        return status, {"error": core_message(exc) if exc.code in TOKEN_REFUSED else exc.message, "code": exc.code}
+        text = core_message(exc) if exc.code in TOKEN_REFUSED else _safe_message(exc.message)
+        return status, {"error": text, "code": exc.code}
     return 502, {"error": core_message(exc)}
 
 
@@ -122,6 +156,7 @@ def _route(method: str, p: list, key: str):
     get, post = method == "GET", method == "POST"
     table = {
         "chat/sessions": (_sessions, _create),
+        "chat/pins": (_pins, _pins_set),
         "chat/models": (_models, None),
         "chat/panels": (_panels, None),
         "feedback": (None, _feedback),
@@ -131,6 +166,7 @@ def _route(method: str, p: list, key: str):
         "permissions": (_permissions, _permissions_set),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
+        "pad": (_pad_get, _pad_save),
     }
     if key in table:
         g, po = table[key]
@@ -157,6 +193,72 @@ async def _sessions(c, p, q, body):
     return {"sessions": res.get("sessions") or []}
 
 
+PIN_ID = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+MAX_PINS = 200
+_pin_lock = threading.Lock()
+
+
+def _pins_path():
+    from .config import exo_home
+    return exo_home() / "state" / "chat-pins.json"
+
+
+def _read_pins() -> list:
+    """The pinned ids, oldest first. A missing, corrupt or oddly shaped file counts as no pins."""
+    try:
+        data = json.loads(_pins_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    raw = data.get("pins") if isinstance(data, dict) else None
+    out: list = []
+    for x in raw if isinstance(raw, list) else []:
+        if isinstance(x, str) and PIN_ID.match(x) and x not in out:
+            out.append(x)
+    return out[:MAX_PINS]
+
+
+def _write_pins(pins: list) -> None:
+    path = _pins_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name("{}.{}.tmp".format(path.name, os.getpid()))
+    try:
+        tmp.write_text(json.dumps({"pins": pins}), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+async def _pins(c, p, q, body):
+    return {"pins": _read_pins()}
+
+
+async def _pins_set(c, p, q, body):
+    pid = _str(body, "id", required=True, limit=200)
+    if not PIN_ID.match(pid):
+        raise BadRequest("id must be 1 to 200 letters, digits, - or _")
+    pinned = body.get("pinned")
+    if not isinstance(pinned, bool):
+        raise BadRequest("pinned must be true or false")
+    try:   # the same principal gate as rename: an empty title is refused for the principal after the check passes
+        await c.source.call(s.CommandRun(name="rename", args="", session=pid))
+    except SourceError as exc:
+        if exc.code == "forbidden":
+            raise Forbidden(exc.message) from None
+        if exc.code != "bad_request" or exc.message != "usage: /rename <title>":
+            raise
+    with _pin_lock:
+        pins = _read_pins()
+        if pinned and pid not in pins:
+            if len(pins) >= MAX_PINS:
+                raise BadRequest("at most {} pinned chats".format(MAX_PINS))
+            pins.append(pid)
+        elif not pinned:
+            pins = [x for x in pins if x != pid]
+        _write_pins(pins)
+    return {"pins": pins}
+
+
 async def _create(c, p, q, body):
     res = await c.source.call(s.SessionCreate(title=_str(body, "title", limit=200), seat=_opt(body, "seat"),
                                               model=_opt(body, "model"), cwd=_opt(body, "cwd"),
@@ -171,10 +273,47 @@ async def _transcript(c, p, q, body):
             "seq": since}
 
 
+def _images(body: Dict[str, Any]) -> list:
+    """The optional ``images`` list as image ContentParts. Every refusal is one static message: nothing from the
+    request (a mime string, base64 text) is echoed back."""
+    raw = body.get("images")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise BadRequest("images must be a list")
+    if len(raw) > MAX_IMAGES:
+        raise BadRequest("at most {} images per message".format(MAX_IMAGES))
+    parts, total = [], 0
+    for item in raw:
+        if not isinstance(item, dict):
+            raise BadRequest("each image needs a mime type and data")
+        mime, data = item.get("mime"), item.get("data")
+        if not isinstance(mime, str) or mime not in IMAGE_MIMES:
+            raise BadRequest("image type is not allowed (png, jpeg, gif or webp)")
+        if not isinstance(data, str) or not data:
+            raise BadRequest("image data must be base64 text")
+        if len(data) > (MAX_IMAGE_BYTES + 2) // 3 * 4:   # before decoding: never allocate for a body over the cap
+            raise BadRequest("image is larger than 5 MB")
+        try:
+            raw_bytes = base64.b64decode(data.encode("ascii"), validate=True)
+        except (binascii.Error, ValueError, UnicodeEncodeError):
+            raise BadRequest("image data is not valid base64") from None
+        if not raw_bytes:
+            raise BadRequest("image data must be base64 text")
+        if len(raw_bytes) > MAX_IMAGE_BYTES:
+            raise BadRequest("image is larger than 5 MB")
+        total += len(raw_bytes)
+        if total > MAX_IMAGES_TOTAL:
+            raise BadRequest("images together are larger than 5 MB")
+        parts.append(ContentPart(type="image", data=data, mime=mime))
+    return parts
+
+
 async def _send(c, p, q, body):
-    text = _str(body, "text", required=True, limit=MAX_TEXT)
+    parts = _images(body)
+    text = _str(body, "text", required=not parts, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
-    return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+    return await c.source.call(s.TurnSend(session=p[2], text=text, parts=parts, mode=mode))
 
 
 async def _models(c, p, q, body):
@@ -269,7 +408,7 @@ async def _permissions_set(c, p, q, body):
         res = await c.source.call(s.CommandRun(name="permissions", args=("full " + sid) if sid else mode, session=None if sid == "all" else sid))
     except SourceError as exc:
         if exc.code == "forbidden":
-            raise Forbidden(exc.message) from None
+            raise Forbidden(_safe_message(exc.message)) from None
         raise
     return {"output": res.get("output"), "permissions": await _permissions(c, p, q, {})}
 
@@ -318,6 +457,30 @@ async def _schedule_edit(c, p, q, body):
         action=action, job_id=job, when=_str(body, "when", limit=100), prompt=_str(body, "prompt", limit=MAX_TEXT),
         title=_str(body, "title", limit=200), seat=_opt(body, "seat"), tier=_choice(body, "tier", TIERS, "fast"),
         deliver=_str(body, "deliver", limit=100) or "notice"))
+
+
+async def _pad(c, args: Dict[str, Any]) -> Dict[str, Any]:
+    out = (await c.source.call(s.CommandRun(name="pad", args=json.dumps(args)))).get("output")
+    return out if isinstance(out, dict) else {}
+
+
+async def _pad_get(c, p, q, body):
+    snap = (await _pad(c, {"action": "read"})).get("snapshot") or {}
+    return {"text": snap.get("document") or "", "revision": snap.get("revision") or 0}
+
+
+async def _pad_save(c, p, q, body):
+    text = body.get("text")
+    revision = body.get("revision")
+    if not isinstance(text, str):
+        raise BadRequest("text must be text")
+    if type(revision) is not int or revision < 0:
+        raise BadRequest("revision must be a whole number")
+    # The core owns the size and character rules; it answers with a fixed sentence that does not repeat the text.
+    out = await _pad(c, {"action": "update", "expected_revision": revision, "document": text})
+    if out.get("code") == "revision_conflict":
+        raise Conflict((out.get("current") or {}).get("revision") or 0)
+    return {"revision": (out.get("snapshot") or {}).get("revision") or 0}
 
 
 # ---------------------------------------------------------------- completion (D-037)

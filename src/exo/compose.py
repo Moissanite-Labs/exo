@@ -42,6 +42,11 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    # Validate opt-in before executor/plugin/database side effects. Explicit null is not omission.
+    from exo.shared_pad_adapter import SharedPadConfig
+    if "shared_pad" in cfg.data and not isinstance(cfg.data["shared_pad"], dict):
+        raise ConfigError("shared_pad must be an object")
+    shared_pad_config = SharedPadConfig(cfg.data.get("shared_pad"))
     from exo.work_checkpoint import CheckpointConfig
     checkpoint_config = CheckpointConfig(cfg.get("work_checkpoint"))
     notebook_config = None
@@ -123,6 +128,10 @@ def create(seat: str | None = None) -> CoreEngine:
     if notebook_config is not None and notebook_config.enabled:
         from exo.work_notebook import attach as attach_work_notebook
         attach_work_notebook(eng, notebook_config, principal=principal)
+    # Bind only trusted composition identity and eng.home; caller labels never select an owner.
+    if shared_pad_config.enabled:
+        from exo.shared_pad_adapter import attach as attach_shared_pad
+        attach_shared_pad(eng, principal=principal, enabled=True)
     from exo.work_checkpoint import attach as attach_work_checkpoint
     attach_work_checkpoint(eng, checkpoint_config, principal=principal or "")
     if cfg.get("learn", {}).get("enabled", True) is not False:

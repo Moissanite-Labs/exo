@@ -452,6 +452,7 @@ def test_the_page_strips_the_code_before_it_sends_it(tmp_path):
     (tmp_path / "app.mjs").write_text((static / "app.js").read_text().replace('.js"', '.mjs"'))
     (tmp_path / "desktop_prefs.mjs").write_text((static / "desktop_prefs.js").read_text())
     (tmp_path / "appearance.mjs").write_text((static / "appearance.js").read_text())
+    (tmp_path / "layout.mjs").write_text((static / "layout.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
 export const api=async()=>({});
@@ -462,7 +463,7 @@ export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove()
 ''')
     (tmp_path / "bus.mjs").write_text('export const onState=f=>f({connected:false});export const start=async()=>{};'
                                       'export const restart=async()=>{globalThis.restarted++;};')
-    for name in ("chat", "tasks", "schedule", "command", "providers", "credentials"):
+    for name in ("chat", "tasks", "schedule", "pad", "command", "providers", "credentials"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
     (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{};')
     (tmp_path / "test.mjs").write_text(r'''

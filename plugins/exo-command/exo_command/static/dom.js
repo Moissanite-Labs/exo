@@ -61,6 +61,7 @@ export async function api(method, path, body) {
   if (!r.ok) {
     const err = new Error(data.error || ("HTTP " + r.status));
     err.status = r.status;
+    err.data = data;   // structured fields (a conflict's revision); callers that do not need them ignore it
     throw err;
   }
   return data;
