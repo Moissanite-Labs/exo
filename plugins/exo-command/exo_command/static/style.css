@@ -836,6 +836,26 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-rename-editor label { display: flex; flex-direction: column; gap: 4px; }
 .xc-rename-editor input { min-width: 0; width: 100%; box-sizing: border-box; }
 .xc-rename-error { color: var(--fg-2); font-size: 12px; overflow-wrap: anywhere; }
+
+/* ---------- flow mode: body.xc-flow on the chat page, the chat fills the window ---------- */
+.xc-flow-toggle { margin-left: 8px; padding: 4px 10px; font-size: 12px; min-height: 0; }
+.xc-flow-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+body:not([data-xc-view="chat"]) .xc-flow-toggle { display: none; }
+body.xc-flow[data-xc-view="chat"] .xc-nav { position: fixed; top: 6px; right: 8px; left: auto; z-index: 60; min-height: 0; padding: 0; background: transparent; border: 0; }
+body.xc-flow[data-xc-view="chat"] .xc-nav::after { display: none; }
+body.xc-flow[data-xc-view="chat"] .xc-nav > :not(.xc-flow-toggle) { display: none; }
+body.xc-flow[data-xc-view="chat"] .xc-flow-toggle { margin: 0; opacity: .6; background: var(--bg-2); }
+body.xc-flow[data-xc-view="chat"] .xc-flow-toggle:hover, body.xc-flow[data-xc-view="chat"] .xc-flow-toggle:focus-visible { opacity: 1; }
+body.xc-flow[data-xc-view="chat"] .xc-main { padding: 0; }
+body.xc-flow[data-xc-view="chat"] .xc-chat { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; border: 0; }
+body.xc-flow[data-xc-view="chat"] .xc-chat-left,
+body.xc-flow[data-xc-view="chat"] .xc-side,
+body.xc-flow[data-xc-view="chat"] .xc-setup,
+body.xc-flow[data-xc-view="chat"] .xc-guide { display: none; }
+/* the status strip keeps only the orange working state and the wire; notices stay so an error is never hidden */
+body.xc-flow[data-xc-view="chat"] .xc-strip > :not(.xc-state.on):not(.xc-wire):not(.xc-flash) { display: none; }
+body.xc-flow[data-xc-view="chat"] .xc-strip { border-top: 0; border-bottom: 0; background: transparent; }
+body.xc-flow[data-xc-view="chat"] .xc-chat-main { padding-inline: clamp(0px, 4vw, 64px); }
 .xc-pin { flex-shrink: 0; min-height: 36px; padding: 6px 8px; font-size: 12px; }
 .xc-pin.on { color: var(--fg); }
 .xc-pinmark { margin-right: 4px; font-size: 11px; }

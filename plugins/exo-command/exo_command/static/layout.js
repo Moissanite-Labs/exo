@@ -40,3 +40,32 @@ export function columnOrder(layout) {
     ? ["banner", "status", "guide", "composer", "menu", "steer", "approvals", "stage"]
     : ["banner", "stage", "approvals", "status", "steer", "guide", "composer", "menu"];
 }
+
+// Flow mode: the active chat fills the window (only the transcript and the composer stay). One class on
+// document.body, saved in this browser under "xc-flow". Pure helpers here; app.js wires the button and keys.
+export const FLOW_KEY = "xc-flow";
+export const FLOW_CLASS = "xc-flow";
+
+export function getFlow(store) {
+  try { return (store || localStorage).getItem(FLOW_KEY) === "1"; } catch (e) { return false; }
+}
+
+export function setFlow(on, store) {
+  try { (store || localStorage).setItem(FLOW_KEY, on ? "1" : "0"); } catch (e) { /* private mode: lasts this page only */ }
+  return !!on;
+}
+
+// Cmd/Ctrl+Shift+F toggles. Alt is left alone so it never collides with an input method or an OS shortcut.
+export function isFlowToggle(e) {
+  return !!e && String(e.key).toLowerCase() === "f" && !!e.shiftKey && (!!e.metaKey !== !!e.ctrlKey) && !e.altKey && !e.isComposing;
+}
+
+// Anything that owns Escape first: an open modal, listbox, picker or menu. Then Esc is not ours.
+export const FLOW_ESC_BLOCKERS = '[role="dialog"]:not([hidden]), [role="alertdialog"]:not([hidden]), [aria-modal="true"], '
+  + '.xc-menu:not([hidden]), .xc-model-picker:not([hidden]), [role="menu"]:not([hidden]), [role="listbox"]:not([hidden]), dialog[open]';
+
+export function isFlowExit(e, doc) {
+  if (!e || e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
+  if (e.target && e.target.closest && e.target.closest(".xc-approvals")) return false;   // a card uses Esc to cancel
+  return !(doc || document).querySelector(FLOW_ESC_BLOCKERS);
+}
