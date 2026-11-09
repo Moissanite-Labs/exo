@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from exo.core.models.base import HttpTransport, StreamState, error_event, map_finish_reason, parse_json_args
 from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolSpec, Usage
@@ -33,6 +34,17 @@ _LEGACY_THINKING = ("claude-3", "claude-opus-4-0", "claude-opus-4-1", "claude-so
 _NO_XHIGH = ("claude-opus-4-6", "claude-sonnet-4-6")
 _BUDGET = {"low": 4000, "medium": 8000, "high": 16000, "xhigh": 32000, "max": 32000}
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+
+def _first_party(base_url: str) -> bool:
+    """Only the HTTPS Claude API origin accepts first-party thinking controls."""
+    try:
+        url = urlsplit(base_url)
+        return (url.scheme == "https" and url.hostname == "api.anthropic.com"
+                and url.port in (None, 443) and url.username is None and url.password is None)
+    except ValueError:
+        return False
 
 
 def normalize_model(model: str) -> str:
@@ -259,7 +271,7 @@ class AnthropicProvider(HttpTransport):
 
     def headers(self) -> dict[str, str]:
         h = {"anthropic-version": API_VERSION, "content-type": "application/json"}
-        if "anthropic.com" in self.base_url:
+        if _first_party(self.base_url):
             h["anthropic-beta"] = THINKING_BINDING_BETA
         if self.api_key:
             h["x-api-key"] = self.api_key
@@ -269,8 +281,11 @@ class AnthropicProvider(HttpTransport):
         model = normalize_model(opts.get("model") or self.model or "")
         max_tokens = int(opts.get("max_tokens") or 32000)
         # Thinking signatures are proprietary; other Anthropic-compatible hosts reject them.
-        first_party = "anthropic.com" in self.base_url
-        system, msgs = convert_messages(messages, keep_thinking=first_party, model=model)
+        first_party = _first_party(self.base_url)
+        thinking = thinking_params(model, opts.get("reasoning"), max_tokens)
+        # Without a thinking configuration there is nowhere to request mismatch handling.
+        # Keep text and tool pairs, but omit signed blocks that could reject an edited prefix.
+        system, msgs = convert_messages(messages, keep_thinking=first_party and bool(thinking), model=model)
         wire_tools = convert_tools(tools)
         if self.cache and opts.get("cache", True):
             apply_cache_control(system, msgs, wire_tools)
@@ -281,7 +296,7 @@ class AnthropicProvider(HttpTransport):
             body["tools"] = wire_tools
             if opts.get("tool_choice"):  # "none": tools stay declared (removing them is a prompt edit), use is off
                 body["tool_choice"] = {"type": opts["tool_choice"]}
-        body.update(thinking_params(model, opts.get("reasoning"), max_tokens))
+        body.update(thinking)
         if first_party and "thinking" in body and _replays_thinking(msgs):
             # Untagged history (written before thinking_model was recorded) may still hold a
             # block from another model or system prompt: drop it rather than fail the call.
