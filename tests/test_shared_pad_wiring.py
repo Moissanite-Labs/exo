@@ -7,13 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from exo import compose, diagnostics
+from exo import compose
 from exo.application import CoreEngine
 from exo.config import Config, ConfigError
 from exo.core.models.fake import FakeProvider, tool_turn
 from exo.core.plugins import PluginManager
 from exo.core.seats import Seat
-from exo.principal import CALLER, Caller
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
 from exo.shared_pad_adapter import attach
