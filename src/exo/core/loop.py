@@ -242,7 +242,11 @@ class Loop:
                 st.steer.clear()
                 for m in late:
                     await self._add(session, m, turn_id)
-                await self._rounds(session, turn_id, late[-1], st, result)
+                if any(self._recall_principal(m) for m in late):
+                    invalidate = getattr(self.context, "invalidate_turn_view", None)
+                    if invalidate is not None:
+                        await maybe_await(invalidate(session))
+                await self._rounds(session, turn_id, late[-1], st, result, recall_anchor_id=user.id or "")
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
@@ -276,15 +280,32 @@ class Loop:
                 await self._emit(trace.error_body("turn observer", exc), session)
         return result
 
-    async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> str:
+    async def _drain_steer(self, session: str, turn_id: str, st: _SessionState,
+                           applied: list[Message] | None = None) -> str:
         """Add the queued steers as context. Returns the newest author drained ("" when none), so the rounds
         after a steer run for the steer's author (#598): bypass stops lowering once the turn takes anyone else's."""
         out = ""
         for m in st.steer:
             await self._add(session, m, turn_id)
+            if applied is not None:
+                applied.append(m)
             out = provenance.author_of(m)
         st.steer.clear()
         return out
+
+    @staticmethod
+    def _recall_principal(message: Message) -> bool:
+        """Only the principal's ingress may select memory, never an internal wake or context note."""
+        return (message.role == "user" and not message.meta.get("note")
+                and message.meta.get("origin") != "harness_continuation"
+                and provenance.is_principal_author(provenance.author_of(message)))
+
+    def _recall_query(self, session: str, user: Message) -> str:
+        if self._recall_principal(user):
+            return user.text()
+        # Visible thread history respects undo and fork boundaries; the agent's shared log does not.
+        return next((message.text() for message in reversed(self.store.messages(session))
+                     if self._recall_principal(message)), "")
 
     def _takes_recall(self) -> bool:
         """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
@@ -309,16 +330,39 @@ class Loop:
         base = await self.base_system(session)
         parts = [base]
         # recalled memory is data (D-040): it may quote a peer, so its pinned-block tags are escaped (#279)
-        recall = provenance.defuse_pins(await self._memory("prefetch", query, session_id=session) or "")
+        recall = provenance.defuse_pins((await self._memory("prefetch", query, session_id=session) or "") if query else "")
         if recall and not self._takes_recall():
             parts.append("# Recalled memory\n" + recall)
             recall = ""
         return "\n\n".join(p for p in parts if p), recall
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
-                      result: TurnResult) -> None:
-        system, recall = await self._system(session, user.text())
+                      result: TurnResult, recall_anchor_id: str | None = None) -> None:
+        system, recall = await self._system(session, self._recall_query(session, user))
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
+        # An explicit opening-message anchor survives steer refreshes and falls back before the tail
+        # after compaction. Older context plugins keep their existing call signature.
+        try:
+            anchor_supported = "recall_anchor_id" in inspect.signature(self.context.build).parameters
+        except (TypeError, ValueError):
+            anchor_supported = False
+        if anchor_supported:
+            extra["recall_anchor_id"] = (user.id or "") if recall_anchor_id is None else recall_anchor_id
+
+        async def take_steers() -> str:
+            nonlocal system
+            applied: list[Message] = []
+            newest = await self._drain_steer(session, turn_id, st, applied)
+            principal = next((m for m in reversed(applied) if self._recall_principal(m)), None)
+            if principal is not None:
+                invalidate = getattr(self.context, "invalidate_turn_view", None)
+                if invalidate is not None:
+                    await maybe_await(invalidate(session))
+                system, refreshed = await self._system(session, principal.text())
+                if self._takes_recall():
+                    extra["recall"] = refreshed
+            return newest
+
         author = provenance.author_of(user)  # who the turn is for; a steer takes over (#598)
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
@@ -336,7 +380,7 @@ class Loop:
                 if result.stop_reason == "tool_use":
                     result.stop_reason = "end"
                 if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
-                    author = await self._drain_steer(session, turn_id, st) or author
+                    author = await take_steers() or author
                     continue
                 return
             spend = getattr(getattr(self.provider, "router", None), "spend", None)
@@ -348,7 +392,7 @@ class Loop:
                     await self._emit(ev.Error(code="model_spend_stopped", message=result.error, retryable=False), session)
                     return
             await self._tools(session, turn_id, reply.tool_calls, st, author)
-            author = await self._drain_steer(session, turn_id, st) or author
+            author = await take_steers() or author
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
