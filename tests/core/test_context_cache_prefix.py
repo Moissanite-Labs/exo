@@ -139,3 +139,34 @@ def test_configured_large_leaves_do_not_extend_sixteen_message_adoption_bound():
         fork_out = await ctx.build(fork.id, 'SYS', settle=False, turn_id='turn')
         assert 'latest fork-visible summary' in fork_out[0].text()
     asyncio.run(go())
+
+
+def test_production_adapter_forwards_recall_anchor_and_steer_invalidation():
+    from exo.plugin_context import ContextAdapter
+
+    async def go():
+        store, sid, ctx, node = setup()
+        adapter = ContextAdapter(ctx)
+        first = await adapter.build(sid, 'SYS', settle=False, turn_id='turn',
+                                    recall='synthetic recall', recall_anchor_id='missing-opening')
+        assert first[1].meta.get('author') == 'system'
+        node.text = 'latest summary'; store.save_summary(node)
+        assert (await adapter.build(sid, 'SYS', settle=False, turn_id='turn'))[0].text() == first[0].text()
+        adapter.invalidate_turn_view(sid)
+        assert 'latest summary' in (await adapter.build(sid, 'SYS', settle=False, turn_id='turn'))[0].text()
+        adapter.rewound(sid)
+        assert sid not in ctx._turn_views
+    asyncio.run(go())
+
+
+def test_production_adapter_preserves_legacy_tree_build_signature():
+    from exo.plugin_context import ContextAdapter
+    from exo.core.context import TreeContext
+
+    async def go():
+        store, sid, _, _ = setup()
+        adapter = ContextAdapter(TreeContext(store, None))
+        out = await adapter.build(sid, 'SYS', recall='synthetic recall', recall_anchor_id='ignored')
+        assert 'synthetic recall' in out[0].text()
+        assert adapter.invalidate_turn_view(sid) is None
+    asyncio.run(go())
