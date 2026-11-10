@@ -7,7 +7,7 @@
 # `key_env` may be a list (one credential per variable, rotated in order). A config table that sets
 # `base_url` does not take this `key_env`: it uses only the `key_env` it sets, or none.
 # `roles = [...]` limits a provider to those roles.
-# Prices are USD per million tokens (Anthropic first-party list prices, cached 2026-10-06).
+# Prices are USD per million tokens (Anthropic first-party list prices, cached 2026-10-06; newer checks noted below).
 # cache_write defaults to 1.25 x input when omitted.
 
 [providers.anthropic]
@@ -133,12 +133,13 @@ input = 4.00
 output = 20.00
 cache_read = 0.20
 
+# Sonnet cache read verified 2026-11-10 against the prompt-caching price table below.
 [models."anthropic:claude-sonnet-5-5"]
 context = 1000000
 max_output = 128000
 input = 2.00
 output = 10.00
-cache_read = 0.20
+cache_read = 0.10
 
 [models."anthropic:claude-haiku-5-5"]
 context = 1000000
@@ -152,6 +153,18 @@ max_output = 128000
 input = 10.00
 output = 50.00
 cache_read = 0.25
+
+# Fable 5.2 limits and standard first-party prices verified 2026-11-10:
+# https://platform.claude.com/docs/en/models/fable-5-2/overview
+# https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+# Exo's ephemeral cache uses the default 5-minute lifetime; cache_write is that rate.
+[models."anthropic:claude-fable-5-2"]
+context = 1000000
+max_output = 128000
+input = 8.00
+output = 40.00
+cache_read = 0.20
+cache_write = 10.00
 
 # Roles: each is an ordered route list; the first available route serves, the rest
 # are fallbacks. Resolution when a role is empty or every route fails:
