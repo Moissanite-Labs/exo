@@ -1089,12 +1089,13 @@ class AgentContext(TreeContext):
 
         seq = self.store.last_seq(session)
         cached = self._turn_views.get(session)
-        valid = cached and (cached["turn"], cached["key"], cached["system"]) == (turn_id, key, system)
-        if valid:
+        valid = (bool(cached) and cached is not None
+                 and (cached["turn"], cached["key"], cached["system"]) == (turn_id, key, system))
+        if valid and cached is not None:
             anchor = self.store.messages(session, cached["seq"] - 1, cached["seq"])
             valid = bool(anchor) and anchor[0].id == cached["anchor"]  # undo/clear can hide the old anchor
         fresh_tail = None
-        if valid:
+        if valid and cached is not None:
             held_tail = self._thread_tail(session, cached["frontier"])
             held_cost = sum(estimate_tokens(p) for p in cached["parts"]) + sum(_cost(m) for m in held_tail)
             valid = seq - cached["seq"] < min(16, 2 * self.leaf_size) and held_cost - cached["cost"] < self.view_budget
