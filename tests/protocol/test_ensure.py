@@ -287,10 +287,15 @@ Path(result).write_text(json.dumps(response))
         response = asyncio.run(set_model())
         assert response.ok, response.error
         assert response.result["routes"][0] == "fake:x"
-        deadline = time.monotonic() + 5
-        while not result_file.exists() and time.monotonic() < deadline:
+        deadline = time.monotonic() + 10
+        payload = ""
+        while time.monotonic() < deadline:
+            if result_file.exists():
+                payload = result_file.read_text()
+                if payload.strip():
+                    break
             time.sleep(.05)
-        tool_response = json.loads(result_file.read_text())
+        tool_response = json.loads(payload)
         assert not tool_response["ok"] and tool_response["error"]["code"] == "forbidden"
         # Control: the same child, started outside the core's tree, is accepted, so the refusal above is the
         # ancestry check and not a bad token.

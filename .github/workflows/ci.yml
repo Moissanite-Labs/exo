@@ -104,7 +104,7 @@ jobs:
           ulimit -n 4096
           set -o pipefail
           status=0
-          for d in plugins/*/; do
+          for d in plugins/*/ plugins-opt-in/*/; do
             if [ -d "$d/tests" ]; then
               echo "::group::$d"
               (cd "$d" && uv run --project ../.. pytest -q $PYTEST_PARALLEL) || status=1

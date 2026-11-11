@@ -8,8 +8,6 @@ The model is the config-scripted fake, so nothing touches the network.
 from __future__ import annotations
 
 import asyncio
-import ast
-import collections
 import json
 import os
 import re
@@ -24,6 +22,14 @@ from pathlib import Path
 
 import pytest
 
+from exo.budget_scorecard import (
+    CORE,
+    CORE_FLOOR,
+    INWARD_IMPORTS_MAX,
+    PRIVATE_STATE_MAX,
+    core_line_total,
+    scorecard,
+)
 from exo.config import Config
 from exo.protocol import schema as s
 from exo.protocol.client import Client
@@ -185,19 +191,10 @@ commit = "{base}"
     assert "agent/memory_provider.py" in text and "agent/context_engine.py" in text
 
 
-CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.py", "src/exo/upstream.py"]
-
-# The core budget is a reported number, not a gate (D-083, amending D-077; docs/ENGINE-SPLIT.md "Budget policy").
-CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
 
-# Step 4 of the engine split is asserted, not only printed. Both numbers come from ``_scorecard`` below and only
-# go down, like CORE_FLOOR (D-083, docs/ENGINE-SPLIT.md "Budget policy"). They cover src/exo/core.
-INWARD_IMPORTS_MAX = 39  # imports of a product module (a non-core exo module) from the core
-PRIVATE_STATE_MAX = 8  # reads of another module's private state: no call, not the reader's own state
 
-
-def test_core_line_budget():
+def test_core_line_budget(repo: Path | None = None):
     """Check 6: the core's counted lines are reported and the step 4 structure is capped (generated files excluded).
 
     The line ceiling is off (D-083, amending D-077, docs/ENGINE-SPLIT.md "Budget policy"). The principal's ruling of
@@ -225,10 +222,12 @@ def test_core_line_budget():
     plumbing into hooks. On 2026-10-27 main counted 15,828 against a 15,824 ceiling, so the ceiling was failing its
     own test while the work it blocked was ordinary product work. D-083 drops the ceiling, keeps the floor and the
     structure caps, and leaves the count as a report. Issue #46 tracks the rest of the split."""
-    files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
+    repo = repo or REPO
+    files = [p for c in CORE for p in ((repo / c).rglob("*.py") if (repo / c).is_dir() else [repo / c])
              if "generated" not in p.parts]
-    counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}
-    total = sum(counts.values())
+    counts = {p.relative_to(repo).as_posix(): len(p.read_text().splitlines()) for p in files}
+    total = core_line_total(repo)
+    assert total == sum(counts.values())
     status = (f"core budget: {total:,} counted lines, floor {CORE_FLOOR:,}, "
               f"{total - CORE_FLOOR:+,} against the floor, no ceiling (D-083)")
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -241,7 +240,7 @@ def test_core_line_budget():
         print(f"  {n:6,}  {name}" + (f"  <- above {BIG_FILE:,} lines" if n > BIG_FILE else ""))
     print(f"{big} counted file{'s' if big > 1 else ''} above {BIG_FILE:,} lines" if big
           else f"no counted file above {BIG_FILE:,} lines")
-    imports, reads = _scorecard(REPO / "src/exo/core")
+    imports, reads = scorecard(repo / "src/exo/core", repo=repo)
     item = f"step 4 structure: {imports}, {reads}"
     print(item)
     print("  " + ", ".join(f"exo.{k} {n}" for k, n in imports.by_name.most_common(5)))  # the report, not asserted
@@ -249,88 +248,6 @@ def test_core_line_budget():
     assert imports.total <= INWARD_IMPORTS_MAX and reads.total <= PRIVATE_STATE_MAX, (
         f"{item}. Both caps only go down: a PR that removes some sets the cap to its own count, "
         f"and one that adds some has to remove others first. See docs/ENGINE-SPLIT.md 'Budget policy'.")
-
-
-class _Score:
-    """A measured count, its hotspots, and a string for the failure message."""
-
-    def __init__(self, title: str, cap: int, hits: list[tuple[str, str]]) -> None:
-        self.title, self.cap = title, cap
-        self.hits = hits
-        self.total = len(hits)
-        self.by_file = collections.Counter(f for f, _ in hits)
-        self.by_name = collections.Counter(n for _, n in hits)
-
-    def __str__(self) -> str:
-        return f"{self.total} {self.title} (cap {self.cap})"
-
-
-def _inward_modules(node: ast.AST, package: tuple[str, ...]) -> list[str]:
-    """The absolute modules an import statement names, with relative imports resolved against ``package``.
-
-    ``from exo import b`` names a module only when ``b`` is one; a name imported from the ``exo`` package itself is
-    otherwise a symbol and is not counted here.
-    """
-    if isinstance(node, ast.Import):
-        return [a.name for a in node.names]
-    if not isinstance(node, ast.ImportFrom):
-        return []
-    module = node.module or ""
-    if node.level:  # relative: this file's package, up (level - 1), then the written module
-        parts = list(package[: len(package) - node.level + 1])
-        module = ".".join(parts + (module.split(".") if module else []))
-    if module != "exo":
-        return [module]
-    base = REPO / "src" / "exo"
-    return [f"exo.{a.name}" for a in node.names
-            if (base / a.name).is_dir() or (base / f"{a.name}.py").exists()]
-
-
-def _scorecard(root: Path) -> tuple[_Score, _Score]:
-    """Measure ENGINE-SPLIT step 4 over ``src/exo/core``: inward product imports, cross-module private reads.
-
-    An inward import is an ``exo`` module outside the core (core, protocol, server), counted wherever the statement
-    puts it (``import a.b``, ``from a.b import c``, ``from exo import b``, ``from ..b``). A private-state read is a
-    ``_name`` attribute read that is not part of a call, not reached through ``self``/``cls``, and not a ``_name``
-    the reader module binds itself (module level, local, function or argument name, or its own attribute). A name the
-    reader merely assigns on another object does not exempt reading it: ``child._state = e.loop._state`` is exactly
-    the cross-module read this counts. Parse errors fail the caller; a false positive is fixed by renaming the
-    reader's own name or by adjusting the test in the same PR, not by raising the cap.
-    """
-    imports: set[tuple[str, str]] = set()
-    reads: list[tuple[str, str]] = []
-    for path in sorted(root.rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        where = path.relative_to(REPO).as_posix()
-        package = path.relative_to(REPO / "src").parts[:-1]
-        for node in ast.walk(tree):
-            for module in _inward_modules(node, package):
-                parts = module.split(".")
-                if parts[0] == "exo" and len(parts) > 1 and parts[1] not in {"core", "protocol", "server"}:
-                    imports.add((where, parts[1]))  # one dependency per file and module, counted once
-        own, called = set(), set()
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)) or (
-                    isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)):
-                if not isinstance(node, ast.Attribute) or (isinstance(node.value, ast.Name)
-                                                           and node.value.id == "self"):
-                    own.add(getattr(node, "attr", None) or getattr(node, "id", ""))  # a name the reader binds
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.arg)):
-                own.add(getattr(node, "name", None) or node.arg)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                called.add(id(node.func))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute) or not isinstance(node.ctx, ast.Load):
-                continue
-            if not node.attr.startswith("_") or node.attr.startswith("__"):
-                continue
-            if isinstance(node.value, ast.Name) and node.value.id in {"self", "cls"}:
-                continue  # the reader's own state, inherited or not (a provider's own timeout, say)
-            if node.attr not in own and id(node) not in called:
-                reads.append((where, node.attr))
-    return _Score("inward product imports", INWARD_IMPORTS_MAX, sorted(imports)), _Score(
-        "cross-module private-state reads", PRIVATE_STATE_MAX, reads)
 
 
 @pytest.mark.parametrize("reader,statement", [
@@ -343,15 +260,14 @@ def _scorecard(root: Path) -> tuple[_Score, _Score]:
     ("models/reader.py", "from ...envscrub import scrub_env"),
     ("reader.py", "import exo.envscrub as scrub"),
 ])
-def test_scorecard_counts_each_absolute_and_relative_module_form(tmp_path, monkeypatch, reader, statement):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+def test_scorecard_counts_each_absolute_and_relative_module_form(tmp_path, reader, statement):
     package = tmp_path / "src/exo"
     package.mkdir(parents=True)
     (package / "envscrub.py").write_text("def scrub_env(): pass\n")
     path = package / "core" / reader
     path.parent.mkdir(parents=True)
     path.write_text(statement + "\n")
-    imports, reads = _scorecard(package / "core")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
     assert imports.hits == [(path.relative_to(tmp_path).as_posix(), "envscrub")]
     assert reads.total == 0
 
@@ -360,20 +276,18 @@ def test_scorecard_counts_each_absolute_and_relative_module_form(tmp_path, monke
     ("reader.py", "from . import sessions"),
     ("models/reader.py", "from .. import sessions"),
 ])
-def test_scorecard_excludes_normal_core_relative_imports(tmp_path, monkeypatch, reader, statement):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+def test_scorecard_excludes_normal_core_relative_imports(tmp_path, reader, statement):
     core = tmp_path / "src/exo/core"
     core.mkdir(parents=True)
     (core / "sessions.py").write_text("")
     path = core / reader
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(statement + "\n")
-    imports, reads = _scorecard(core)
+    imports, reads = scorecard(core, repo=tmp_path)
     assert imports.total == reads.total == 0
 
 
-def test_scorecard_deduplicates_forms_and_excludes_core_packages_and_exported_symbols(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+def test_scorecard_deduplicates_forms_and_excludes_core_packages_and_exported_symbols(tmp_path):
     package = tmp_path / "src/exo"
     for name in ("core", "protocol", "server", "bus"):
         directory = package / name
@@ -383,7 +297,7 @@ def test_scorecard_deduplicates_forms_and_excludes_core_packages_and_exported_sy
     (package / "envscrub.py").write_text("def scrub_env(): pass\n")
     path = package / "core/reader.py"
     path.write_text("from .. import envscrub, bus, core, protocol, server, __version__\n")
-    imports, reads = _scorecard(package / "core")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
     expected = [("src/exo/core/reader.py", "bus"), ("src/exo/core/reader.py", "envscrub")]
     assert imports.hits == expected and reads.total == 0
     path.write_text(path.read_text() + """from exo import envscrub as scrub, bus as bus_alias, core, protocol, server, __version__
@@ -391,7 +305,7 @@ from ..envscrub import scrub_env
 import exo.envscrub
 from ..bus import send
 """)
-    imports, reads = _scorecard(package / "core")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
     assert imports.hits == expected
     assert imports.by_name == {"bus": 1, "envscrub": 1}
     assert reads.total == 0
@@ -402,8 +316,7 @@ from ..bus import send
     ("extra.py", "from .. import envscrub"),
     ("models/extra.py", "from ... import envscrub as scrub"),
 ])
-def test_scorecard_cap_rejects_extra_dependency_in_absolute_and_relative_forms(tmp_path, monkeypatch, reader, statement):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+def test_scorecard_cap_rejects_extra_dependency_in_absolute_and_relative_forms(tmp_path, reader, statement):
     package = tmp_path / "src/exo"
     for name in ("core", "protocol", "server"):
         (package / name).mkdir(parents=True)
@@ -411,12 +324,12 @@ def test_scorecard_cap_rejects_extra_dependency_in_absolute_and_relative_forms(t
         (package / name).write_text("")
     for index in range(INWARD_IMPORTS_MAX):
         (package / f"core/reader{index}.py").write_text("from exo import envscrub\n")
-    test_core_line_budget()  # exactly the existing cap passes
+    test_core_line_budget(repo=tmp_path)  # exactly the existing cap passes
     path = package / "core" / reader
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(statement + "\n")
     with pytest.raises(AssertionError, match=f"{INWARD_IMPORTS_MAX + 1} inward product imports"):
-        test_core_line_budget()  # spelling cannot hide the extra dependency from the actual gate
+        test_core_line_budget(repo=tmp_path)  # spelling cannot hide the extra dependency from the actual gate
 
 
 def test_dependencies_are_listed():
