@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 
+from exo.core.group_execution import ExecutionReceipt, GroupExecutions
 from exo.core.group_messages import GroupMessage, GroupMessages
 from exo.core.group_runner import GroupRunner, MemberStatus
 from exo.core.groups import GroupMember
@@ -49,7 +50,7 @@ Adapter = Callable[[MemberContext], Awaitable[None]]
 class GroupRuntime:
     """One process-local execution. Only a trusted human host gets controls.
 
-    The host must prevent duplicate runtimes across clients/processes. Adapter
+    A durable claim prevents duplicate execution across clients/processes. Adapter
     construction and permission checks stay outside this class. A paused status
     means a checkpoint or pre-entry wait is parked, not that detached work stopped.
     """
@@ -64,6 +65,8 @@ class GroupRuntime:
             raise ValueError("one authorized adapter is required for each member")
         self.group = group
         self._messages = messages
+        self._executions = GroupExecutions(messages.groups)
+        self._settler: asyncio.Task | None = None
         self._gates = {p: asyncio.Event() for p in profiles}
         for gate in self._gates.values():
             gate.set()
@@ -94,7 +97,22 @@ class GroupRuntime:
                 del self._paused[profile]
 
     def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        receipt = self._executions.claim(self.group.id, owner=self.group.owner)
+        # Claim first: even a partial start failure must not permit automatic retry.
         self._runner.start()
+        self._settler = loop.create_task(self._settle(receipt.id))
+        # Retrieve background errors without logging adapter text. wait() still raises.
+        self._settler.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+    async def _settle(self, execution_id: str) -> None:
+        statuses = await self._runner.wait()
+        self._executions.finish(self.group.id, owner=self.group.owner, execution_id=execution_id,
+                                members={s.profile: s.state for s in statuses})
+
+    def receipt(self) -> ExecutionReceipt | None:
+        """Last durable receipt, not a liveness probe or live member status."""
+        return self._executions.get(self.group.id, owner=self.group.owner)
 
     def status(self) -> tuple[MemberStatus, ...]:
         result = []
@@ -122,7 +140,9 @@ class GroupRuntime:
         self._runner.stop(profile)
 
     async def wait(self) -> tuple[MemberStatus, ...]:
-        await self._runner.wait()
+        if self._settler is None:
+            raise ValueError("group execution has not started")
+        await asyncio.shield(self._settler)
         return self.status()
 
     def send_human(self, *, audience: list[str], text: str) -> GroupMessage:
