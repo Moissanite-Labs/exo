@@ -27,6 +27,7 @@ def rig(tmp_path):
     # Exercise the actual session.get projection without starting any runtime services.
     engine = CoreEngine.__new__(CoreEngine)
     engine.store, engine.loop, engine.cwd = store, loop, str(tmp_path)
+    engine.seat = None
     sid = store.create_session(cwd=str(tmp_path)).id
     loop.state(sid).running = loop.state(sid).accepting_steers = True
     yield engine, loop, store, events, sid

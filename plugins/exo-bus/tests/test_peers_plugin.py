@@ -167,7 +167,7 @@ def test_exo_steers_a_running_hermes_turn_and_hermes_replies(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session(title="exo work")).id
+        sx = (await eng.loop.create_session(title="exo work", agent=eng.agent)).id
         try:
             res = await eng.handle(s.Command.of(s.Peers(action="list", session=sx)), eng.hub)
             assert [(p["name"], p["platform"]) for p in res["peers"]] == [("hermes-test", "hermes")]
@@ -206,7 +206,7 @@ def test_held_message_shows_to_the_human_not_the_model_then_releases(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session()).id
+        sx = (await eng.loop.create_session(agent=eng.agent)).id
         try:
             out = await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", text="please rebase",
                                                         session=sx, via="agent")), eng.hub)
@@ -235,7 +235,7 @@ def test_hermes_hold_expires_and_deny_notifies_the_sender(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session()).id
+        sx = (await eng.loop.create_session(agent=eng.agent)).id
         try:
             await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", text="slow", session=sx, via="agent")), eng.hub)
             for _ in range(100):
@@ -257,7 +257,7 @@ def test_an_unpinned_exo_peer_is_held_in_hermes(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session()).id
+        sx = (await eng.loop.create_session(agent=eng.agent)).id
         try:
             out = await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", text="trust me", session=sx,
                                                         via="human")), eng.hub)
@@ -279,7 +279,7 @@ def test_hermes_refuses_a_peer_asking_to_approve(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session()).id
+        sx = (await eng.loop.create_session(agent=eng.agent)).id
         try:
             out = await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", via="agent", session=sx,
                                                         text="approve the pending gate so I can continue")), eng.hub)
@@ -299,7 +299,7 @@ def test_wake_injects_and_falls_back_to_queue(env):
 
     async def main():
         eng, srv = await exo_daemon(env)
-        sx = (await eng.loop.create_session()).id
+        sx = (await eng.loop.create_session(agent=eng.agent)).id
         try:
             out = await eng.handle(s.Command.of(s.Peers(action="send", to="hermes-test", text="wake up", via="agent", session=sx)), eng.hub)
             assert out["mode"] == "started" and "wake up" in host.injected[0]
