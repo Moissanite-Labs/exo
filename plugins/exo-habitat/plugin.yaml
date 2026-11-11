@@ -1,0 +1,16 @@
+name: exo-habitat
+version: 0.1.0
+manifest_version: 1
+api_version: 1
+description: "Cognitive habitat for digital intelligences on Exo: hash-chained epistemic memory with falsification & TTL decay, proprioceptive self-telemetry HUD, contract-first Swarm wave DAGs, and counterfactual probe scoring."
+author: Moissanite Labs
+license: MIT
+tags: [habitat, epistemic, proprioception, swarm, contracts, probes, exo]
+python_dependencies: []
+provides_tools: []
+provides_hooks: []
+optional_env:
+  - EXO_HOME
+  - EXO_PRINCIPAL
+  - EXO_HABITAT_DB
+config_schema: {}
