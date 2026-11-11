@@ -25,8 +25,6 @@ def find_repo_root() -> Path:
         if (root / "src" / "exo").is_dir():
             return root
     here = Path(__file__).resolve().parent
-    if (here / "core").is_dir() and here.name == "exo":
-        return here.parent.parent
     candidate = here.parent.parent
     if (candidate / "src" / "exo" / "core").is_dir():
         return candidate

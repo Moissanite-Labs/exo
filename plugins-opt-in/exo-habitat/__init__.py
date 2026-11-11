@@ -10,9 +10,11 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import sqlite3
 import sys
+import threading
 import time
 from typing import Any
 
@@ -70,40 +72,60 @@ class EpistemicStore:
     def __init__(self, db_path: str | Path | None = None) -> None:
         if db_path is None:
             exo_home = Path(os.environ.get("EXO_HOME", Path.home() / ".exo"))
-            default_db = exo_home / "habitat.sqlite"
+            principal = os.environ.get("EXO_PRINCIPAL", "").strip()
+            default_db = (
+                exo_home / "principals" / principal / "habitat.sqlite"
+                if principal
+                else exo_home / "habitat.sqlite"
+            )
             db_path = Path(os.environ.get("EXO_HABITAT_DB", default_db))
         self.db_path = Path(db_path)
+        self._lock = threading.RLock()
         if str(self.db_path) != ":memory:":
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS epistemic_claims (
-                claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                topic TEXT NOT NULL,
-                statement TEXT NOT NULL,
-                status TEXT NOT NULL,
-                confidence REAL NOT NULL,
-                evidence_ref TEXT NOT NULL,
-                falsifier TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                ttl_seconds INTEGER,
-                prev_hash TEXT NOT NULL,
-                entry_hash TEXT NOT NULL
-            )
-            """
+            try:
+                from exo.core.private import private_file
+
+                private_file(self.db_path)
+            except ImportError:
+                self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                fd = os.open(self.db_path, os.O_RDWR | os.O_CREAT, 0o600)
+                os.close(fd)
+        self._conn = sqlite3.connect(
+            str(self.db_path), check_same_thread=False, isolation_level=None
         )
-        self._conn.commit()
+        self._conn.row_factory = sqlite3.Row
+        with self._lock:
+            if str(self.db_path) != ":memory:":
+                self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS epistemic_claims (
+                    claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
+                    statement TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    evidence_ref TEXT NOT NULL,
+                    falsifier TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    ttl_seconds INTEGER,
+                    prev_hash TEXT NOT NULL,
+                    entry_hash TEXT NOT NULL
+                )
+                """
+            )
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def head_hash(self) -> str:
-        row = self._conn.execute(
-            "SELECT entry_hash FROM epistemic_claims ORDER BY claim_id DESC LIMIT 1"
-        ).fetchone()
-        return str(row["entry_hash"]) if row else self.GENESIS
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT entry_hash FROM epistemic_claims ORDER BY claim_id DESC LIMIT 1"
+            ).fetchone()
+            return str(row["entry_hash"]) if row else self.GENESIS
 
     def record(
         self,
@@ -130,32 +152,43 @@ class EpistemicStore:
         ts = round(time.time() if now is None else float(now), 6)
         conf = round(confidence, 6)
         ev, fal = evidence_ref.strip(), falsifier.strip()
-        prev = self.head_hash()
-        digest = _canonical_hash(
-            {
-                "topic": clean_topic,
-                "statement": clean_stmt,
-                "status": status,
-                "confidence": conf,
-                "evidence_ref": ev,
-                "falsifier": fal,
-                "created_at": ts,
-                "ttl_seconds": ttl_seconds,
-                "prev_hash": prev,
-            }
-        )
-        cur = self._conn.execute(
-            """
-            INSERT INTO epistemic_claims (
-                topic, statement, status, confidence, evidence_ref,
-                falsifier, created_at, ttl_seconds, prev_hash, entry_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (clean_topic, clean_stmt, status, conf, ev, fal, ts, ttl_seconds, prev, digest),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT entry_hash FROM epistemic_claims ORDER BY claim_id DESC LIMIT 1"
+                ).fetchone()
+                prev = str(row["entry_hash"]) if row else self.GENESIS
+                digest = _canonical_hash(
+                    {
+                        "topic": clean_topic,
+                        "statement": clean_stmt,
+                        "status": status,
+                        "confidence": conf,
+                        "evidence_ref": ev,
+                        "falsifier": fal,
+                        "created_at": ts,
+                        "ttl_seconds": ttl_seconds,
+                        "prev_hash": prev,
+                    }
+                )
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO epistemic_claims (
+                        topic, statement, status, confidence, evidence_ref,
+                        falsifier, created_at, ttl_seconds, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (clean_topic, clean_stmt, status, conf, ev, fal, ts, ttl_seconds, prev, digest),
+                )
+                claim_id = int(cur.lastrowid or 0)
+            except BaseException:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
         return EpistemicClaim(
-            claim_id=int(cur.lastrowid or 0),
+            claim_id=claim_id,
             topic=clean_topic,
             statement=clean_stmt,
             status=status,
@@ -176,12 +209,16 @@ class EpistemicStore:
         evidence_ref: str = "",
         now: float | None = None,
     ) -> EpistemicClaim:
-        orig = self._conn.execute(
-            "SELECT * FROM epistemic_claims WHERE claim_id = ?", (claim_id,)
-        ).fetchone()
+        with self._lock:
+            orig = self._conn.execute(
+                "SELECT * FROM epistemic_claims WHERE claim_id = ?", (claim_id,)
+            ).fetchone()
         if orig is None:
             raise KeyError(f"claim #{claim_id} not found")
-        msg = f"[FALSIFIED #{claim_id}] {orig['statement']} — Reason: {reason.strip()}"
+        if str(orig["status"]) == "falsified" or claim_id in self.refuted_ids():
+            raise ValueError(f"claim #{claim_id} is already falsified")
+        orig_stmt = str(orig["statement"])
+        msg = f"[FALSIFIED #{claim_id}] {orig_stmt} — Reason: {reason.strip()}"
         return self.record(
             topic=str(orig["topic"]),
             statement=msg,
@@ -194,15 +231,16 @@ class EpistemicStore:
         )
 
     def list_claims(self, topic: str | None = None) -> list[EpistemicClaim]:
-        if topic and topic.strip():
-            rows = self._conn.execute(
-                "SELECT * FROM epistemic_claims WHERE topic = ? ORDER BY claim_id ASC",
-                (topic.strip(),),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM epistemic_claims ORDER BY claim_id ASC"
-            ).fetchall()
+        with self._lock:
+            if topic and topic.strip():
+                rows = self._conn.execute(
+                    "SELECT * FROM epistemic_claims WHERE topic = ? ORDER BY claim_id ASC",
+                    (topic.strip(),),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM epistemic_claims ORDER BY claim_id ASC"
+                ).fetchall()
         return [
             EpistemicClaim(
                 claim_id=int(r["claim_id"]),
@@ -220,9 +258,17 @@ class EpistemicStore:
             for r in rows
         ]
 
+    def refuted_ids(self) -> set[int]:
+        out: set[int] = set()
+        for c in self.list_claims():
+            if c.status == "falsified" and (m := re.match(r"^\[FALSIFIED #(\d+)\]", c.statement)):
+                out.add(int(m.group(1)))
+        return out
+
     def stale_claims(self, now: float | None = None) -> list[EpistemicClaim]:
         ref_now = time.time() if now is None else now
-        return [c for c in self.list_claims() if c.is_stale(ref_now)]
+        refuted = self.refuted_ids()
+        return [c for c in self.list_claims() if c.claim_id not in refuted and c.is_stale(ref_now)]
 
     def verify_chain(self) -> tuple[bool, int | None]:
         prev = self.GENESIS
@@ -407,17 +453,24 @@ class ContractGraph:
 
     @staticmethod
     def detect_path_collisions(nodes: list[ContractNode]) -> list[tuple[str, str, str]]:
-        seen: dict[str, str] = {}
+        seen: list[tuple[PurePosixPath, str]] = []
         collisions: list[tuple[str, str, str]] = []
         for node in nodes:
-            for path in node.touches_paths:
-                norm = path.strip().rstrip("/")
-                if not norm:
+            for raw_path in node.touches_paths:
+                cleaned = raw_path.strip().replace("\\", "/").rstrip("/")
+                if not cleaned:
                     continue
-                if norm in seen and seen[norm] != node.node_id:
-                    collisions.append((norm, seen[norm], node.node_id))
+                cand = PurePosixPath(cleaned)
+                if str(cand) == ".":
+                    continue
+                for prev_path, prev_owner in seen:
+                    if prev_owner == node.node_id:
+                        continue
+                    if cand == prev_path or cand in prev_path.parents or prev_path in cand.parents:
+                        collisions.append((str(cand), prev_owner, node.node_id))
+                        break
                 else:
-                    seen[norm] = node.node_id
+                    seen.append((cand, node.node_id))
         return collisions
 
 
@@ -464,6 +517,8 @@ class ProbeArena:
     ) -> ArenaDecision:
         if not probes:
             return ArenaDecision(winner=None, rejected=[])
+        if len({p.probe_id for p in probes}) != len(probes):
+            raise ValueError("CandidateProbe probe_id values must be unique")
         passing = sorted(
             [p for p in probes if p.gate_ok],
             key=lambda p: (p.utility_score(), -p.cost_usd, -p.latency_ms),
@@ -473,7 +528,7 @@ class ProbeArena:
         rejected: list[tuple[CandidateProbe, str]] = []
 
         for probe in probes:
-            if winner and probe.probe_id == winner.probe_id:
+            if winner is not None and probe is winner:
                 if self._store is not None:
                     self._store.record(
                         topic=topic,
@@ -519,9 +574,30 @@ class HabitatRuntime:
     """Session companion binding EpistemicStore, ProprioceptionMonitor, and ContractGraph."""
 
     def __init__(self, db_path: str | None = None) -> None:
-        self.store = EpistemicStore(db_path=db_path)
+        self._db_path = db_path
+        self._store: EpistemicStore | None = None
+        self._lock = threading.RLock()
         self.monitor = ProprioceptionMonitor()
         self.contracts = ContractGraph()
+
+    @property
+    def store(self) -> EpistemicStore:
+        with self._lock:
+            if self._store is None:
+                self._store = EpistemicStore(db_path=self._db_path)
+            return self._store
+
+    def close(self) -> None:
+        with self._lock:
+            if self._store is not None:
+                self._store.close()
+                self._store = None
+
+    def on_post_tool_call(
+        self, tool_name: str = "", args: dict[str, Any] | None = None, result: str = "", **_kw: Any
+    ) -> None:
+        ok = not str(result).lstrip().lower().startswith(("error:", "traceback"))
+        self.monitor.record_tool_call(tool_name, args or {}, ok=ok)
 
     def cmd_sense(self, _rest: str = "") -> str:
         snap = self.monitor.sense()
@@ -533,7 +609,7 @@ class HabitatRuntime:
         )
 
     def cmd_claim(self, rest: str) -> str:
-        parts = [p.strip() for p in rest.split("|")]
+        parts = [p.replace(r"\|", "|").strip() for p in re.split(r"(?<!\\)\|", rest, maxsplit=2)]
         if len(parts) < 2 or not parts[0] or not parts[1]:
             return "usage: /exo claim <topic> | <statement> [| <falsifier>]"
         falsifier = parts[2] if len(parts) >= 3 else ""
@@ -546,12 +622,19 @@ class HabitatRuntime:
     def cmd_audit(self, rest: str = "") -> str:
         claims = self.store.list_claims(topic=rest.strip() or None)
         ok, broken = self.store.verify_chain()
-        header = f"epistemic audit ({len(claims)} claims, chain={'ok' if ok else f'#{broken}'})"
+        refuted = self.store.refuted_ids()
+        chain_tag = "ok" if ok else f"#{broken}"
+        header = f"epistemic audit ({len(claims)} claims, chain={chain_tag})"
         if not claims:
             return header
         lines = [header]
         for c in claims[-15:]:
-            tag = "STALE" if c.is_stale() else c.status.upper()
+            if c.claim_id in refuted:
+                tag = "SUPERSEDED"
+            elif c.is_stale():
+                tag = "STALE"
+            else:
+                tag = c.status.upper()
             lines.append(f"  #{c.claim_id} [{tag}] {c.topic}: {c.statement}")
         return "\n".join(lines)
 
@@ -572,8 +655,14 @@ def register(ctx: Any) -> HabitatRuntime:
     opt = (lambda k, d=None: get(k, d)) if get else (lambda k, d=None: d)
     runtime = HabitatRuntime(db_path=opt("db_path"))
     plugin_name = "exo-habitat"
+    reg_hook = getattr(ctx, "register_hook", None)
+    if callable(reg_hook):
+        reg_hook("post_tool_call", runtime.on_post_tool_call)
+    undo_list = getattr(ctx, "_undo", None)
+    if isinstance(undo_list, list):
+        undo_list.append(runtime.close)
     try:
-        from exo.dispatcher import register_root, register_subcommand
+        from exo.dispatcher import register_root, register_subcommand, unregister_plugin
 
         register_subcommand(
             "sense",
@@ -601,6 +690,8 @@ def register(ctx: Any) -> HabitatRuntime:
             "Compute the next conflict-free parallel Swarm contract wave.",
             plugin=plugin_name,
         )
+        if isinstance(undo_list, list):
+            undo_list.append(lambda: unregister_plugin(plugin_name))
         register_root(ctx)
     except ImportError:
         register_cmd = getattr(ctx, "register_command", None)

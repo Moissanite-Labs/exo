@@ -9,9 +9,14 @@ license: MIT
 tags: [habitat, epistemic, proprioception, swarm, contracts, probes, exo]
 python_dependencies: []
 provides_tools: []
-provides_hooks: []
+provides_hooks:
+  - post_tool_call
 optional_env:
   - EXO_HOME
   - EXO_PRINCIPAL
   - EXO_HABITAT_DB
-config_schema: {}
+config_schema:
+  db_path:
+    type: str
+    default: ""
+    description: "SQLite path for EpistemicStore (defaults to $EXO_HABITAT_DB, $EXO_HOME/principals/$EXO_PRINCIPAL/habitat.sqlite, or $EXO_HOME/habitat.sqlite)."
