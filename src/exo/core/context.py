@@ -778,6 +778,7 @@ class AgentContext(TreeContext):
         self.note_user_chars = note_user_chars
         self.note_reply_chars = note_reply_chars
         self._titles: dict[str, str] = {}
+        self._turn_views: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def key(agent: str) -> str:
@@ -1021,6 +1022,7 @@ class AgentContext(TreeContext):
         key = self._agent_key(session)
         if key is None:
             raise ValueError("this thread is not part of an agent's memory (no summary tree)")
+        self._turn_views.clear()  # explicit compaction supersedes every cached view of the shared tree
         before = self.report(session, system)
         captured = await self.capture_now(session)  # principal words reach the store before anything is folded
         known = {n.id for n in self.store.summaries(key)}
@@ -1044,7 +1046,7 @@ class AgentContext(TreeContext):
     # ---- one model call
 
     async def build(self, session: str, system: str, settle: bool = True, recall: str = "",
-                    turn_id: str = "") -> list[Message]:
+                    turn_id: str = "", recall_anchor_id: str = "") -> list[Message]:
         key = self._agent_key(session)
         if key is None:
             if recall:
@@ -1056,17 +1058,61 @@ class AgentContext(TreeContext):
             if self._own(session):  # D-068 on its own tree: a long private thread's first leaves are nearly done
                 await settle_for_turn(self, session, turn_id)
         top, frontier, parts = self._view(key)
+        frontier, parts = self._turn_view(session, key, turn_id, system, frontier, parts)
         self.sync_thread(session, frontier)
         tail = thread_tail(self, session, frontier, turn_id)  # a private tree's pending spans cut (#244)
         if recall:
             block = Message.user("# Recalled memory (for this turn)\n" + recall)
             block.meta["author"] = "system"  # D-040: recalled memory is data, never the principal's words
-            at = next((i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id
-                       and m.role == "user" and not m.meta.get("note")), None)
-            if at is None:
-                at = max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail))
+            at = next((i for i, m in enumerate(tail) if m.id == recall_anchor_id), 0) if recall_anchor_id else next(
+                (i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id
+                 and m.role == "user" and not m.meta.get("note")), 0)
             tail.insert(at, block)
         return _with_view(system, AGENT_VIEW_HEADER, parts, tail)
+
+    def invalidate_turn_view(self, session: str) -> None:
+        """A principal steer/explicit edit must see the latest memory at its next call."""
+        self._turn_views.pop(session, None)
+
+    def _turn_view(self, session: str, key: str, turn_id: str, system: str,
+                   frontier: int, parts: list[str]) -> tuple[int, list[str]]:
+        """Batch shared summary adoption without pausing capture or compression.
+
+        view_budget is a summary/overflow trigger, not a provider's whole-request token limit. Defer at most
+        one view_budget of extra rendered context and at most two leaves (capped at 16) of new thread messages. Private trees
+        keep their existing pending-span cuts. No turn id means an inspection, never a frozen model call.
+        """
+        if not turn_id or self._own(session):
+            self.invalidate_turn_view(session)
+            return frontier, parts
+        from exo.turn_settle import _cost
+
+        seq = self.store.last_seq(session)
+        cached = self._turn_views.get(session)
+        valid = (bool(cached) and cached is not None
+                 and (cached["turn"], cached["key"], cached["system"]) == (turn_id, key, system))
+        if valid and cached is not None:
+            anchor = self.store.messages(session, cached["seq"] - 1, cached["seq"])
+            valid = bool(anchor) and anchor[0].id == cached["anchor"]  # undo/clear can hide the old anchor
+        fresh_tail = None
+        if valid and cached is not None:
+            held_tail = self._thread_tail(session, cached["frontier"])
+            held_cost = sum(estimate_tokens(p) for p in cached["parts"]) + sum(_cost(m) for m in held_tail)
+            valid = seq - cached["seq"] < min(16, 2 * self.leaf_size) and held_cost - cached["cost"] < self.view_budget
+            if valid and (frontier, parts) != (cached["frontier"], cached["parts"]):
+                fresh_tail = self._thread_tail(session, frontier)
+                fresh_cost = sum(estimate_tokens(p) for p in parts) + sum(_cost(m) for m in fresh_tail)
+                valid = held_cost - fresh_cost < self.view_budget
+            if valid:
+                return cached["frontier"], list(cached["parts"])
+        tail = fresh_tail if fresh_tail is not None else self._thread_tail(session, frontier)
+        anchor = self.store.messages(session, seq - 1, seq)
+        self._turn_views[session] = {
+            "turn": turn_id, "key": key, "system": system, "frontier": frontier, "parts": list(parts),
+            "seq": seq, "anchor": anchor[0].id if anchor else "",
+            "cost": sum(estimate_tokens(p) for p in parts) + sum(_cost(m) for m in tail),
+        }
+        return frontier, parts
 
     def _own(self, key: str) -> bool:
         """A private thread (D-028): its entries stay out of the agent tree, so it keeps a tree of its own."""

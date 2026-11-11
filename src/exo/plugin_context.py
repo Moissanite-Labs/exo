@@ -96,8 +96,11 @@ class ContextAdapter:
             self._started.add(session)
             safe_plugin_call(self.plugin, "on_session_start", session, platform="exo")
 
-    async def build(self, session: str, system: str, **kw: Any) -> list[Message]:
-        if "recall" in inspect.signature(self.tree.build).parameters:
+    async def build(self, session: str, system: str, recall_anchor_id: str = "", **kw: Any) -> list[Message]:
+        params = inspect.signature(self.tree.build).parameters
+        if "recall_anchor_id" in params:
+            kw["recall_anchor_id"] = recall_anchor_id
+        if "recall" in params:
             msgs = await self.tree.build(session, system, **kw)
         else:  # a per-session tree: recall goes in the system message, as before D-028
             recall = kw.get("recall") or ""
@@ -119,11 +122,17 @@ class ContextAdapter:
             return msgs
         return apply_selection(msgs, flat, out)
 
+    def invalidate_turn_view(self, session: str) -> Any:
+        """Forward a principal steer/edit to trees that support bounded view adoption."""
+        invalidate = getattr(self.tree, "invalidate_turn_view", None)
+        return invalidate(session) if invalidate else None
+
     def rewound(self, session: str) -> None:
         """After undo: ``on_session_switch(session, rewound=True, messages=, summaries=)`` with every message still
         visible in the thread and ``{tree key: ids of its summary nodes still stored}`` for the tree the thread's
         view reads, so the context plugin drops what it kept from the undone turns: their pins, and each summary
         node (``on_compacted``) the undo deleted (D-041)."""
+        self.invalidate_turn_view(session)
         if self.plugin is None or getattr(self, "_private", lambda _s: False)(session):  # D-028: never a private thread
             return
         flat = [provenance.flat(m) for m in self.tree.transcript(session, 1 << 30)]  # the whole thread, not a window
