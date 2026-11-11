@@ -26,7 +26,7 @@ is implied. There is no edit or deletion operation yet.
 Reads require the metadata owner's ID. A missing group and a foreign group both
 return no record. The owner argument must come from trusted runtime identity,
 not an agent-supplied field. Metadata ownership does not authorize execution as
-a member profile, reading member history, or approving that profile's actions.
+a member profile, reading a member's private session, or approving that profile's actions.
 
 A member session remains an ordinary private thread of its profile: that profile's
 own clients can list it and send turns into it, and it can recall that profile's memory.
@@ -61,7 +61,7 @@ input IDs and track ambiguous external actions separately before retrying work.
 
 The adapter is internal. Trusted callers supply owner and member identity. It is
 not a public endpoint or an agent tool, and does not authorize impersonation.
-Human observation, runtime execution, shared APIs and client controls remain
+Runtime execution, shared APIs and client controls remain
 separate work. Delivery receipts do not prove a model processed the input.
 
 ## Concurrent lifecycle foundation (G02, G06)
@@ -88,3 +88,26 @@ across clients and processes, and isolate workspaces. Runners must finish cleanu
 before exiting. This layer cannot prove an adapter stopped detached processes.
 Persistent recovery, concurrency limits, pause/resume, streaming state and
 message consumption integration are not implemented by this supervisor.
+
+## Human messages and observation (G05, C04)
+
+The internal message store supports human messages with an explicit audience.
+The host can target one member or broadcast to all members. Human authorship is
+stored separately from member authorship, even when their names match. These
+messages do not grant permissions or approve actions.
+
+`observe` reads all group channels for the authorized human owner. `history`
+reads only a member's sent and addressed messages. Both page by sequence and
+leave delivery and consumption receipts unchanged. A worker cannot read another
+worker's private channel through member history. Human observation must never be
+exposed as a member tool.
+
+This history is group-channel history, not a member's private session. Storage
+currently imposes no message-text size cap: the page limit bounds rows, not bytes.
+An API follow-up must choose and enforce a shared text budget for human and member
+sends before claiming bounded payloads. This slice does not select that policy.
+
+The host must authenticate human access and bind member identities before calling
+these methods. No public API or client controls are added here. Human input is
+queued for delivery, not injected into a running provider prompt. Pause/resume
+and safe-boundary consumption remain runtime work.
