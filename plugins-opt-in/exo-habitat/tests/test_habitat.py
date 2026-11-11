@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_FILE = Path(__file__).resolve().parent.parent / "__init__.py"
 _SPEC = importlib.util.spec_from_file_location("exo_habitat_plugin", PLUGIN_FILE)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -355,6 +356,133 @@ class TestExoHabitat(unittest.TestCase):
         runtime.on_post_tool_call("bash", {"cmd": "y"}, result="ok")
         self.assertEqual(runtime.monitor._failure_streak, 0)
         runtime.close()
+
+    def test_post_tool_call_counts_bash_nonzero_exit(self) -> None:
+        runtime = exo_habitat.HabitatRuntime(db_path=str(self.tmp_path / "bash_fail.sqlite"))
+        runtime.on_post_tool_call("bash", {"cmd": "false"}, result="(no output)\n[exit 1]")
+        self.assertEqual(runtime.monitor._failure_streak, 1)
+        runtime.on_post_tool_call(
+            "bash",
+            {"cmd": "true"},
+            result="(no output)\n[exit 0]",
+        )
+        self.assertEqual(runtime.monitor._failure_streak, 0)
+        runtime.on_post_tool_call(
+            "read_file",
+            {},
+            result="Invalid arguments for read_file: missing path",
+        )
+        self.assertEqual(runtime.monitor._failure_streak, 1)
+        runtime.close()
+
+    def test_epistemic_concurrent_falsify_exactly_one_wins(self) -> None:
+        db = self.tmp_path / "falsify_race.sqlite"
+        seed = exo_habitat.EpistemicStore(db_path=db)
+        claim = seed.record("once", "hypothesis", status="verified", now=1.0)
+        seed.close()
+        barrier = threading.Barrier(8)
+        outcomes: list[str] = []
+        outcomes_lock = threading.Lock()
+
+        def worker() -> None:
+            store = exo_habitat.EpistemicStore(db_path=db)
+            barrier.wait()
+            try:
+                store.falsify(claim.claim_id, "race", now=2.0)
+                with outcomes_lock:
+                    outcomes.append("ok")
+            except ValueError:
+                with outcomes_lock:
+                    outcomes.append("reject")
+            finally:
+                store.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda _: worker(), range(8)))
+        self.assertEqual(outcomes.count("ok"), 1)
+        self.assertEqual(outcomes.count("reject"), 7)
+        checker = exo_habitat.EpistemicStore(db_path=db)
+        falsified = [c for c in checker.list_claims() if c.status == "falsified"]
+        self.assertEqual(len(falsified), 1)
+        self.assertEqual(checker.verify_chain(), (True, None))
+        checker.close()
+
+    def test_plugin_manager_default_load_sense_claim_audit(self) -> None:
+        from exo.core.plugins import PluginManager
+        from exo.dispatcher import dispatch
+
+        home = self.tmp_path / "exo_home"
+        home.mkdir()
+        prev_home = os.environ.get("EXO_HOME")
+        prev_principal = os.environ.get("EXO_PRINCIPAL")
+        prev_db = os.environ.get("EXO_HABITAT_DB")
+        try:
+            os.environ["EXO_HOME"] = str(home)
+            os.environ["EXO_PRINCIPAL"] = "agent-default"
+            os.environ.pop("EXO_HABITAT_DB", None)
+            pm = PluginManager()
+            rec = pm.load_folder(REPO_ROOT / "plugins-opt-in" / "exo-habitat")
+            self.assertTrue(rec.ok)
+            expected_db = home / "principals" / "agent-default" / "habitat.sqlite"
+            sense = dispatch("sense")
+            self.assertIn("[HABITAT HUD]", sense)
+            self.assertNotIn("IsADirectoryError", sense)
+            self.assertTrue(expected_db.is_file())
+            claim = dispatch("claim race | once | because")
+            self.assertIn("recorded #", claim)
+            audit = dispatch("audit")
+            self.assertIn("epistemic audit", audit)
+        finally:
+            if prev_home is None:
+                os.environ.pop("EXO_HOME", None)
+            else:
+                os.environ["EXO_HOME"] = prev_home
+            if prev_principal is None:
+                os.environ.pop("EXO_PRINCIPAL", None)
+            else:
+                os.environ["EXO_PRINCIPAL"] = prev_principal
+            if prev_db is None:
+                os.environ.pop("EXO_HABITAT_DB", None)
+            else:
+                os.environ["EXO_HABITAT_DB"] = prev_db
+
+    def test_find_repo_root_from_install_checkout_when_site_packages(self) -> None:
+        import json
+
+        from exo import budget_scorecard
+
+        repo = REPO_ROOT
+        home = self.tmp_path / "home"
+        home.mkdir()
+        (home / "config.json").write_text(
+            json.dumps({"install": {"checkout": str(repo)}}),
+            encoding="utf-8",
+        )
+        fake_module = (
+            home
+            / "venv/lib/python3.13/site-packages/exo/budget_scorecard.py"
+        )
+        fake_module.parent.mkdir(parents=True, exist_ok=True)
+        prev_home = os.environ.get("EXO_HOME")
+        prev_src = os.environ.get("EXO_SRC")
+        try:
+            os.environ["EXO_HOME"] = str(home)
+            os.environ.pop("EXO_SRC", None)
+            budget_scorecard.__file__ = str(fake_module)
+            root = budget_scorecard.find_repo_root()
+            self.assertEqual(root, repo)
+        finally:
+            budget_scorecard.__file__ = str(
+                REPO_ROOT / "src/exo/budget_scorecard.py"
+            )
+            if prev_home is None:
+                os.environ.pop("EXO_HOME", None)
+            else:
+                os.environ["EXO_HOME"] = prev_home
+            if prev_src is None:
+                os.environ.pop("EXO_SRC", None)
+            else:
+                os.environ["EXO_SRC"] = prev_src
 
     def test_register_undo_closes_store(self) -> None:
         db_file = str(self.tmp_path / "undo.sqlite")

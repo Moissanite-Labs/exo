@@ -43,6 +43,23 @@ def _canonical_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+_EXIT_TAIL_RE = re.compile(r"\[exit (\d+)\]\s*$")
+
+
+def _tool_result_ok(result: str) -> bool:
+    """Classify tool text the engine passes to ``post_tool_call`` (no ``is_error`` kwarg)."""
+    text = str(result).lstrip()
+    low = text.lower()
+    if low.startswith(("error:", "traceback", "blocked:")):
+        return False
+    if low.startswith("invalid arguments for "):
+        return False
+    m = _EXIT_TAIL_RE.search(text)
+    if m is not None and int(m.group(1)) != 0:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class EpistemicClaim:
     claim_id: int
@@ -70,6 +87,8 @@ class EpistemicStore:
     GENESIS = "0" * 64
 
     def __init__(self, db_path: str | Path | None = None) -> None:
+        if db_path is not None and not str(db_path).strip():
+            db_path = None
         if db_path is None:
             exo_home = Path(os.environ.get("EXO_HOME", Path.home() / ".exo"))
             principal = os.environ.get("EXO_PRINCIPAL", "").strip()
@@ -209,25 +228,79 @@ class EpistemicStore:
         evidence_ref: str = "",
         now: float | None = None,
     ) -> EpistemicClaim:
+        clean_reason = reason.strip()
+        if not clean_reason:
+            raise ValueError("falsify reason must be non-empty")
+        ts = round(time.time() if now is None else float(now), 6)
+        falsified_prefix = f"[FALSIFIED #{claim_id}]"
         with self._lock:
-            orig = self._conn.execute(
-                "SELECT * FROM epistemic_claims WHERE claim_id = ?", (claim_id,)
-            ).fetchone()
-        if orig is None:
-            raise KeyError(f"claim #{claim_id} not found")
-        if str(orig["status"]) == "falsified" or claim_id in self.refuted_ids():
-            raise ValueError(f"claim #{claim_id} is already falsified")
-        orig_stmt = str(orig["statement"])
-        msg = f"[FALSIFIED #{claim_id}] {orig_stmt} — Reason: {reason.strip()}"
-        return self.record(
-            topic=str(orig["topic"]),
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                orig = self._conn.execute(
+                    "SELECT * FROM epistemic_claims WHERE claim_id = ?", (claim_id,)
+                ).fetchone()
+                if orig is None:
+                    raise KeyError(f"claim #{claim_id} not found")
+                if str(orig["status"]) == "falsified":
+                    raise ValueError(f"claim #{claim_id} is already falsified")
+                dup = self._conn.execute(
+                    """
+                    SELECT 1 FROM epistemic_claims
+                    WHERE status = 'falsified' AND statement LIKE ?
+                    LIMIT 1
+                    """,
+                    (f"{falsified_prefix}%",),
+                ).fetchone()
+                if dup is not None:
+                    raise ValueError(f"claim #{claim_id} is already falsified")
+                orig_stmt = str(orig["statement"])
+                msg = f"{falsified_prefix} {orig_stmt} — Reason: {clean_reason}"
+                topic = str(orig["topic"])
+                ev = evidence_ref or str(orig["evidence_ref"])
+                row = self._conn.execute(
+                    "SELECT entry_hash FROM epistemic_claims ORDER BY claim_id DESC LIMIT 1"
+                ).fetchone()
+                prev = str(row["entry_hash"]) if row else self.GENESIS
+                digest = _canonical_hash(
+                    {
+                        "topic": topic,
+                        "statement": msg,
+                        "status": "falsified",
+                        "confidence": 1.0,
+                        "evidence_ref": ev,
+                        "falsifier": clean_reason,
+                        "created_at": ts,
+                        "ttl_seconds": None,
+                        "prev_hash": prev,
+                    }
+                )
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO epistemic_claims (
+                        topic, statement, status, confidence, evidence_ref,
+                        falsifier, created_at, ttl_seconds, prev_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (topic, msg, "falsified", 1.0, ev, clean_reason, ts, None, prev, digest),
+                )
+                new_id = int(cur.lastrowid or 0)
+            except BaseException:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+        return EpistemicClaim(
+            claim_id=new_id,
+            topic=topic,
             statement=msg,
             status="falsified",
             confidence=1.0,
-            evidence_ref=evidence_ref or str(orig["evidence_ref"]),
-            falsifier=reason.strip(),
+            evidence_ref=ev,
+            falsifier=clean_reason,
+            created_at=ts,
             ttl_seconds=None,
-            now=now,
+            prev_hash=prev,
+            entry_hash=digest,
         )
 
     def list_claims(self, topic: str | None = None) -> list[EpistemicClaim]:
@@ -596,7 +669,7 @@ class HabitatRuntime:
     def on_post_tool_call(
         self, tool_name: str = "", args: dict[str, Any] | None = None, result: str = "", **_kw: Any
     ) -> None:
-        ok = not str(result).lstrip().lower().startswith(("error:", "traceback"))
+        ok = _tool_result_ok(result)
         self.monitor.record_tool_call(tool_name, args or {}, ok=ok)
 
     def cmd_sense(self, _rest: str = "") -> str:

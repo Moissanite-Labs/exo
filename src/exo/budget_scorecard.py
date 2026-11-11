@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,8 +18,27 @@ INWARD_IMPORTS_MAX = 39
 PRIVATE_STATE_MAX = 8
 
 
+def _checkout_from_exo_home() -> Path | None:
+    home = Path(os.environ.get("EXO_HOME", Path.home() / ".exo"))
+    cfg_path = home / "config.json"
+    if cfg_path.is_file():
+        try:
+            data = json.loads(cfg_path.read_text())
+            raw = (data.get("install") or {}).get("checkout")
+            if isinstance(raw, str) and raw.strip():
+                root = Path(raw).expanduser()
+                if (root / "src" / "exo" / "core").is_dir():
+                    return root
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    clone = home / "src" / "exo"
+    if (clone / "src" / "exo" / "core").is_dir():
+        return clone
+    return None
+
+
 def find_repo_root() -> Path:
-    """The checkout root: ``EXO_SRC``, else parent of the installed ``exo`` package."""
+    """The checkout root: ``EXO_SRC``, editable install layout, then install metadata under ``EXO_HOME``."""
     raw = os.environ.get("EXO_SRC")
     if raw:
         root = Path(raw).expanduser()
@@ -28,6 +48,9 @@ def find_repo_root() -> Path:
     candidate = here.parent.parent
     if (candidate / "src" / "exo" / "core").is_dir():
         return candidate
+    found = _checkout_from_exo_home()
+    if found is not None:
+        return found
     raise FileNotFoundError("cannot locate exo checkout for core budget measurement")
 
 
