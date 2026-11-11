@@ -17,8 +17,6 @@ import time
 from typing import Any
 
 _HERE = Path(__file__).resolve().parent
-INWARD_IMPORTS_MAX = 39
-CORE_LINE_BUDGET = 16000
 VALID_STATUSES = frozenset({"verified", "hypothesis", "falsified"})
 
 
@@ -257,7 +255,7 @@ class ProprioceptionSnapshot:
     failure_streak: int
     thrash_detected: bool
     core_import_headroom: int
-    core_line_headroom: int
+    core_lines: int
     advisories: list[str]
 
     def format_hud(self) -> str:
@@ -267,7 +265,7 @@ class ProprioceptionSnapshot:
             f"spend={self.budget_ratio * 100:.1f}% | "
             f"fail_streak={self.failure_streak} | "
             f"core_imports_left={self.core_import_headroom} | "
-            f"core_lines_left={self.core_line_headroom} | "
+            f"core_lines={self.core_lines:,} | "
             f"signal={state}"
         )
 
@@ -291,9 +289,11 @@ class ProprioceptionMonitor:
         token_budget: int = 128000,
         spend_usd: float = 0.0,
         daily_budget_usd: float = 10.0,
-        inward_core_imports: int = 39,
-        core_lines: int = 15836,
+        inward_core_imports: int | None = None,
+        core_lines: int | None = None,
     ) -> ProprioceptionSnapshot:
+        from exo.budget_scorecard import INWARD_IMPORTS_MAX, core_budget_snapshot
+
         ctx_ratio = min(1.0, max(0.0, tokens_used / max(1, token_budget)))
         spend_ratio = (
             min(1.0, max(0.0, spend_usd / daily_budget_usd)) if daily_budget_usd > 0 else 0.0
@@ -303,8 +303,10 @@ class ProprioceptionMonitor:
             counts[sig] = counts.get(sig, 0) + 1
         thrash = any(c >= self._thrash_threshold for c in counts.values())
 
-        import_headroom = INWARD_IMPORTS_MAX - inward_core_imports
-        line_headroom = CORE_LINE_BUDGET - core_lines
+        budget = core_budget_snapshot()
+        measured_imports = inward_core_imports if inward_core_imports is not None else budget.inward_imports
+        measured_lines = core_lines if core_lines is not None else budget.core_lines
+        import_headroom = INWARD_IMPORTS_MAX - measured_imports
         advisories: list[str] = []
         if thrash or self._failure_streak >= 3:
             advisories.append("BREAK_THRASH_LOOP")
@@ -312,7 +314,7 @@ class ProprioceptionMonitor:
             advisories.append("COMPACT_OR_HANDOFF")
         if spend_ratio >= 0.85:
             advisories.append("CONSERVE_MODEL_SPEND")
-        if import_headroom <= 0 or line_headroom <= 200:
+        if import_headroom < 0:
             advisories.append("MOVE_NEW_MODULES_OUTSIDE_CORE_D083")
 
         return ProprioceptionSnapshot(
@@ -321,7 +323,7 @@ class ProprioceptionMonitor:
             failure_streak=self._failure_streak,
             thrash_detected=thrash,
             core_import_headroom=import_headroom,
-            core_line_headroom=line_headroom,
+            core_lines=measured_lines,
             advisories=advisories,
         )
 

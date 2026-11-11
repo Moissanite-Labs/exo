@@ -93,16 +93,28 @@ class TestExoHabitat(unittest.TestCase):
             spend_usd=9.0,
             daily_budget_usd=10.0,
             inward_core_imports=40,
-            core_lines=15900,
         )
         self.assertTrue(snap.thrash_detected)
         self.assertEqual(snap.failure_streak, 3)
         self.assertEqual(snap.core_import_headroom, -1)
+        self.assertGreater(snap.core_lines, 0)
         self.assertIn("BREAK_THRASH_LOOP", snap.advisories)
         self.assertIn("COMPACT_OR_HANDOFF", snap.advisories)
         self.assertIn("CONSERVE_MODEL_SPEND", snap.advisories)
         self.assertIn("MOVE_NEW_MODULES_OUTSIDE_CORE_D083", snap.advisories)
+        self.assertNotIn("core_lines_left=", snap.format_hud())
         self.assertIn("[HABITAT HUD]", snap.format_hud())
+
+    def test_sense_live_metrics_match_core_line_budget_gate(self) -> None:
+        from exo.budget_scorecard import INWARD_IMPORTS_MAX, core_budget_snapshot
+        from tests.integration.test_wave1_acceptance import test_core_line_budget
+
+        test_core_line_budget()
+        budget = core_budget_snapshot()
+        snap = exo_habitat.ProprioceptionMonitor().sense()
+        self.assertEqual(snap.core_import_headroom, INWARD_IMPORTS_MAX - budget.inward_imports)
+        self.assertEqual(snap.core_lines, budget.core_lines)
+        self.assertNotIn("MOVE_NEW_MODULES_OUTSIDE_CORE_D083", snap.advisories)
 
     def test_contract_graph_waves_collision_detection_and_cycle_guard(self) -> None:
         dag = exo_habitat.ContractGraph()
@@ -154,11 +166,22 @@ class TestExoHabitat(unittest.TestCase):
             def get_config(self, key: str, default: object = None) -> object:
                 return db_file if key == "db_path" else default
 
-            def register_command(self, name: str, fn: object) -> None:
+            def register_command(
+                self,
+                name: str,
+                fn: object,
+                description: str = "",
+                args_hint: str = "",
+                **kwargs: object,
+            ) -> None:
                 registered[name] = fn
 
+        from exo.dispatcher import subcommands
+
         runtime = exo_habitat.register(DummyCtx())
-        self.assertEqual(set(registered), {"sense", "claim", "audit", "wave"})
+        habitat_cmds = {s.name for s in subcommands() if getattr(s, "plugin", "") == "exo-habitat"}
+        self.assertEqual(habitat_cmds, {"sense", "claim", "audit", "wave"})
+        self.assertIn("exo", registered)
 
         arena = exo_habitat.ProbeArena(store=runtime.store)
         bad = exo_habitat.CandidateProbe("in-core", "in core", 20, 0, False, 0.1, 800)

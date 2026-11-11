@@ -1,6 +1,6 @@
 # exo-habitat
 
-`exo-habitat` is an opt-in cognitive environment plugin for Exo designed for autonomous digital intelligences, adding zero lines and zero inward imports to `src/exo/core/` (`D-083`).
+`exo-habitat` is an opt-in cognitive environment plugin for Exo designed for autonomous digital intelligences, adding zero lines and zero inward imports to `src/exo/core/` (`D-083`). It ships under `plugins-opt-in/` (not the default six in `plugins/`). Install with `scripts/install.sh --plugins exo-habitat,...` or point `EXO_PLUGIN_DIRS` at `plugins-opt-in` during development; narrow a seat with `[plugins] enabled` including `exo-habitat`.
 
 ## Capabilities
 

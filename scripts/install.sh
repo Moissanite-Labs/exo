@@ -286,6 +286,11 @@ if [ -n "$PLUGINS" ] && [ -f "$EXO_SRC/plugins/exo-gate/plugin.yaml" ]; then
   esac
 fi
 SELECTED=() AVAIL=()
+plugin_src_for() {
+  if [ -d "$EXO_SRC/plugins/$1" ]; then echo "$EXO_SRC/plugins/$1"
+  elif [ -d "$EXO_SRC/plugins-opt-in/$1" ]; then echo "$EXO_SRC/plugins-opt-in/$1"
+  else return 1; fi
+}
 for d in "$EXO_SRC"/plugins/*/; do
   [ -f "$d/plugin.yaml" ] || continue
   name="$(basename "$d")"
@@ -294,6 +299,13 @@ for d in "$EXO_SRC"/plugins/*/; do
     case ",$PLUGINS," in *",$name,"*) ;; *) continue ;; esac
   fi
   SELECTED+=("$name")
+done
+for d in "$EXO_SRC"/plugins-opt-in/*/; do
+  [ -f "$d/plugin.yaml" ] || continue
+  name="$(basename "$d")"
+  AVAIL+=("$name")
+  [ -n "$PLUGINS" ] || continue
+  case ",$PLUGINS," in *",$name,"*) SELECTED+=("$name") ;; esac
 done
 # A name that matches no plugin (a typo) must not narrow the install: the list also removes and is remembered.
 UNKNOWN=""
@@ -397,7 +409,8 @@ for PDIR in "${PDIRS[@]}"; do
   for name in "${SELECTED[@]}"; do
     foreign "$PDIR/$name" &&
       die "refusing: $PDIR/$name exists and was not installed by Exo. Move it away or choose another install home."
-    copy_managed "$EXO_SRC/plugins/$name" "$PDIR/$name" "plugin $name"
+    src="$(plugin_src_for "$name")" || die "internal: selected plugin $name has no source folder"
+    copy_managed "$src" "$PDIR/$name" "plugin $name"
   done
 done
 
