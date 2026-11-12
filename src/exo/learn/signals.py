@@ -29,14 +29,18 @@ def _domain(rt: Runtime, text: str) -> str:
     return guess_domain(text, domains) or "general"
 
 
-def ensure_utterance(rt: Runtime, session: str | None, role: str, text: str, message_id: str | None = None) -> str:
-    """The id of the ledger utterance for `text` in `session`: the one exo-memory wrote, or a backfill."""
+def ensure_utterance(rt: Runtime, session: str | None, role: str, text: str, message_id: str | None = None,
+                     *, placeholder: bool = False) -> str:
+    """The id of an existing utterance or backfill. Mark missing text separately from actual agent words."""
     want = capture.normalize(text)
     for ev in rt.ledger.iter(kind="utterance", session=session):
         b = ev["body"] or {}
-        if b.get("role") == role and capture.normalize(str(b.get("text") or "")) == want:
+        if (b.get("role") == role and bool(b.get("placeholder")) == placeholder
+                and capture.normalize(str(b.get("text") or "")) == want):
             return ev["id"]
-    body = {"text": text or "(empty)", "role": role, "source": "learn_backfill"}
+    body: dict[str, Any] = {"text": text or "(empty)", "role": role, "source": "learn_backfill"}
+    if placeholder:
+        body["placeholder"] = True
     if message_id:
         body["message_id"] = message_id
     return rt.ledger.append("utterance", body, rt.ledger.author if role != "user" else PRINCIPAL,
@@ -89,7 +93,8 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     text = (getattr(body, "text", "") or "").strip()
     answer, context, mid = _answer_and_context(lr, session, getattr(body, "message_id", None))
     with rt.lock:
-        target = ensure_utterance(rt, session, "assistant", answer or "(answer not in the transcript)", mid)
+        target = ensure_utterance(rt, session, "assistant", answer or "(answer not in the transcript)", mid,
+                                  placeholder=not bool(answer))
         ev_body: dict[str, Any] = {"verdict": verdict, "target": target, "source": "ui", "answer": answer[:MAX_ANSWER]}
         if mid:
             ev_body["message_id"] = mid
@@ -178,7 +183,8 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
             kind, body = capture.to_event(sig, source="learn")
             if kind == "verdict":
                 said = capture.content_text(msgs[sig.target_index].get("content")) if sig.target_index is not None else ""
-                body["target"] = ensure_utterance(rt, session, "assistant", said or "(agent output not in the transcript)")
+                body["target"] = ensure_utterance(rt, session, "assistant", said or "(agent output not in the transcript)",
+                                                  placeholder=not bool(said))
             # No known.add: extract_signals gives each key once, and the set holds only what known_keys read.
             out.append(rt.ledger.append(kind, body, PRINCIPAL, session=session))
     return out

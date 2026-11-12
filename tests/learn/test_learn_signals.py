@@ -411,3 +411,35 @@ def test_an_accept_whose_answer_is_not_in_the_transcript_is_no_replay_gold(engin
     assert [t["source"] for t in targets] == ["learn_backfill", "learn_backfill"]
     golds = {i["session"]: i["gold"] for i in build_replays(led)}
     assert golds == {found: "Here is a long summary."}   # a backfill that holds the answer still counts
+
+
+@pytest.mark.parametrize("tool_only", [False, True])
+def test_correction_without_reply_keeps_evidence_but_has_no_self_answering_replay(engine, learner, tool_only):
+    from exo.eval import build_replays
+    from exo.core.types import Message, ToolCall
+    from exo.learn.signals import record_chat_signals
+    correction = "Important correction: use a table, NOT bullet lists."
+    sid, _ = new_session(engine)
+    if tool_only:
+        engine.store.append_message(sid, Message("assistant", tool_calls=[ToolCall("c1", "synthetic", {})]), "t1")
+    engine.store.append_message(sid, Message.user(correction), "t1")
+    led = learner.runtime.ledger
+    led.append("utterance", {"text": correction, "role": "user"}, provenance.PRINCIPAL, session=sid)
+    (event,) = record_chat_signals(learner, sid)
+    target = led.get(event["body"]["target"])
+    assert event["body"]["text"] == correction and target["kind"] == "utterance"
+    assert build_replays(led) == []
+    assert target["body"]["placeholder"] is True
+    assert record_chat_signals(learner, sid) == []
+    assert led.get(event["id"]) == event  # filtering does not rewrite captured evidence
+
+
+def test_placeholder_backfill_is_distinct_from_real_identical_text(learner):
+    from exo.learn.signals import ensure_utterance
+    rt = learner.runtime
+    text = "(agent output not in the transcript)"
+    real = ensure_utterance(rt, "s", "assistant", text)
+    missing = ensure_utterance(rt, "s", "assistant", text, placeholder=True)
+    assert real != missing
+    assert ensure_utterance(rt, "s", "assistant", text) == real
+    assert ensure_utterance(rt, "s", "assistant", text, placeholder=True) == missing
