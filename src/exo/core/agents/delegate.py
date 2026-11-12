@@ -100,13 +100,17 @@ class Limits:
     max_depth: int = 1          # flat by default, as in Hermes: parent (0) -> child (1)
     max_children: int = 10      # tasks per delegate call
     max_concurrent: int = 4     # running children per depth level, engine-wide
-    max_turns: int = 24         # tool rounds per child
+    max_turns: int = 0          # tool rounds per child, 0 means unlimited
     max_tokens: int = 200_000   # new tokens per child: uncached input, cache writes, output; not cache reads (D-080)
     timeout_s: int = 900        # wall time per child
     max_summary_chars: int = 6000
 
     @classmethod
     def of(cls, cfg: dict[str, Any] | None) -> Limits:
+        if cfg and "max_turns" in cfg:
+            value = cfg["max_turns"]
+            if type(value) is not int or value < 0:
+                raise ValueError("max_turns must be a non-negative integer (0 means unlimited)")
         names = {f.name for f in fields(cls)}
         return cls(**{k: int(v) for k, v in (cfg or {}).items() if k in names})
 
@@ -315,7 +319,7 @@ class Delegator:
         # no cwd line here: the loop names the child session's cwd (b.cwd) in the system text
         child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
                      e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
-                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
+                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
         child._state = e.loop._state  # one lock, steer queue and running flag per session, whichever loop runs it

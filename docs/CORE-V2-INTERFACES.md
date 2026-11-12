@@ -47,7 +47,7 @@ use off: Anthropic sends `{"type": "none"}`, OpenAI-compatible transports send `
 cannot say it, ignores it. `muse-cli` is text only and refuses any call that declares tools, so a wrap-up on that
 route falls through to the next route, as a tool round does.
 
-Round cap (issue #92): a turn that reaches `max_iterations` tool rounds (24) emits the `stopped after N tool rounds`
+Round cap (issue #92): a turn that reaches `max_iterations` tool rounds (when configured above zero) emits the `stopped after N tool rounds`
 notice, then makes one more model call with `tool_choice="none"` and a transient `[harness]` prompt asking what was
 done, what is open and the next step. The prompt is never stored. The reply is stored with `meta.wrap_up` (and the
 route's `meta.model`); a tool call in it is dropped and never runs, and its signed thinking is not kept (it was
@@ -181,3 +181,16 @@ Events (21): the 20 from 5.2 plus `taste.updated` (D-012 inline taste).
 `context.py` W1-C, `src/exo/core/plugins.py`, `slots.py`, `hooks.py`, `src/exo/upstream.py`,
 `PROVENANCE.toml` W1-D, `src/exo/protocol/` (not `schema.py`) and `src/exo/server/` W1-E.
 `types.py` and `schema.py` belong to the lead. Hermes notice: `LICENSES/hermes-agent-MIT.txt`.
+
+## Unlimited tool rounds
+
+The parent loop and delegated workers default to unlimited tool rounds.
+Set `loop.max_iterations` for the parent or `delegation.max_turns` for workers
+to a positive integer to restore a cap. Zero means unlimited. Negative values,
+booleans and non-integers are rejected. These settings apply when the engine
+is constructed, not to a turn already running.
+
+Stop, cancellation, permission checks and provider spend checks still apply.
+Worker token and wall-time limits are unchanged. This is unlimited tool
+rounds, not unlimited tokens, runtime or spending. Scheduled loops also inherit
+the unlimited default. Their existing cancellation and spend checks remain.
