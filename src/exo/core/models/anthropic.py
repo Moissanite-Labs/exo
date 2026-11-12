@@ -14,11 +14,15 @@ import hashlib
 import json
 import re
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from exo.core.models.base import HttpTransport, StreamState, error_event, map_finish_reason, parse_json_args
 from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 API_VERSION = "2023-06-01"
+# Lets a request ask the API to drop a replayed thinking block bound to another conversation
+# (other model, other system prompt) instead of failing the whole call with HTTP 400.
+THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 EPHEMERAL = {"type": "ephemeral"}
 _INPUT_USAGE = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 _PLACEHOLDER = "(empty)"
@@ -30,6 +34,17 @@ _LEGACY_THINKING = ("claude-3", "claude-opus-4-0", "claude-opus-4-1", "claude-so
 _NO_XHIGH = ("claude-opus-4-6", "claude-sonnet-4-6")
 _BUDGET = {"low": 4000, "medium": 8000, "high": 16000, "xhigh": 32000, "max": 32000}
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+
+def _first_party(base_url: str) -> bool:
+    """Only the HTTPS Claude API origin accepts first-party thinking controls."""
+    try:
+        url = urlsplit(base_url)
+        return (url.scheme == "https" and url.hostname == "api.anthropic.com"
+                and url.port in (None, 443) and url.username is None and url.password is None)
+    except ValueError:
+        return False
 
 
 def normalize_model(model: str) -> str:
@@ -100,8 +115,13 @@ def _part_block(p: ContentPart) -> dict[str, Any] | None:
     return None
 
 
-def _assistant_blocks(m: Message, keep_thinking: bool) -> list[dict[str, Any]]:
+def _assistant_blocks(m: Message, keep_thinking: bool, model: str = "") -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
+    # A signature binds thinking to the model that wrote it. After a model switch the old
+    # blocks are refused, so drop them when the message says another model produced them.
+    made_by = (m.meta or {}).get("thinking_model")
+    if model and made_by and made_by != model:
+        keep_thinking = False
     for p in m.content:
         if p.type == "reasoning":
             # Signed thinking goes back unchanged; redacted thinking carries its payload in
@@ -167,7 +187,8 @@ def _merge_roles(result: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return fixed
 
 
-def convert_messages(messages: list[Message], keep_thinking: bool = True) -> tuple[list[dict], list[dict]]:
+def convert_messages(messages: list[Message], keep_thinking: bool = True,
+                     model: str = "") -> tuple[list[dict], list[dict]]:
     """Exo messages to ``(system_blocks, messages)``. All system messages join the system param."""
     system: list[dict[str, Any]] = []
     result: list[dict[str, Any]] = []
@@ -176,7 +197,7 @@ def convert_messages(messages: list[Message], keep_thinking: bool = True) -> tup
             if m.text().strip():
                 system.append({"type": "text", "text": m.text()})
         elif m.role == "assistant":
-            result.append({"role": "assistant", "content": _assistant_blocks(m, keep_thinking)})
+            result.append({"role": "assistant", "content": _assistant_blocks(m, keep_thinking, model)})
         elif m.role == "tool":
             blocks = [_tool_result_block(r) for r in m.tool_results]
             if result and result[-1]["role"] == "user" and result[-1]["content"] and \
@@ -214,6 +235,11 @@ def apply_cache_control(system: list[dict], messages: list[dict], tools: list[di
                 break
 
 
+def _replays_thinking(msgs: list[dict]) -> bool:
+    return any(isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking")
+               for m in msgs if m.get("role") == "assistant" for b in m.get("content") or [])
+
+
 def thinking_params(model: str, effort: str | None, max_tokens: int) -> dict[str, Any]:
     """Map Exo's ``reasoning`` effort to Anthropic params. Adaptive models get
     ``thinking: adaptive`` + ``output_config.effort``; legacy ones get a budget."""
@@ -245,6 +271,8 @@ class AnthropicProvider(HttpTransport):
 
     def headers(self) -> dict[str, str]:
         h = {"anthropic-version": API_VERSION, "content-type": "application/json"}
+        if _first_party(self.base_url):
+            h["anthropic-beta"] = THINKING_BINDING_BETA
         if self.api_key:
             h["x-api-key"] = self.api_key
         return h
@@ -253,8 +281,11 @@ class AnthropicProvider(HttpTransport):
         model = normalize_model(opts.get("model") or self.model or "")
         max_tokens = int(opts.get("max_tokens") or 32000)
         # Thinking signatures are proprietary; other Anthropic-compatible hosts reject them.
-        first_party = "anthropic.com" in self.base_url
-        system, msgs = convert_messages(messages, keep_thinking=first_party)
+        first_party = _first_party(self.base_url)
+        thinking = thinking_params(model, opts.get("reasoning"), max_tokens)
+        # Without a thinking configuration there is nowhere to request mismatch handling.
+        # Keep text and tool pairs, but omit signed blocks that could reject an edited prefix.
+        system, msgs = convert_messages(messages, keep_thinking=first_party and bool(thinking), model=model)
         wire_tools = convert_tools(tools)
         if self.cache and opts.get("cache", True):
             apply_cache_control(system, msgs, wire_tools)
@@ -265,7 +296,11 @@ class AnthropicProvider(HttpTransport):
             body["tools"] = wire_tools
             if opts.get("tool_choice"):  # "none": tools stay declared (removing them is a prompt edit), use is off
                 body["tool_choice"] = {"type": opts["tool_choice"]}
-        body.update(thinking_params(model, opts.get("reasoning"), max_tokens))
+        body.update(thinking)
+        if first_party and "thinking" in body and _replays_thinking(msgs):
+            # Untagged history (written before thinking_model was recorded) may still hold a
+            # block from another model or system prompt: drop it rather than fail the call.
+            body["thinking"]["block_binding"] = {"prefix_mismatch_behavior": "drop_block"}
         if (opts.get("temperature") is not None and (is_legacy(model) or any(s in model for s in _NO_XHIGH))
                 and "thinking" not in body):
             body["temperature"] = opts["temperature"]
@@ -282,6 +317,8 @@ class AnthropicProvider(HttpTransport):
         blocks: dict[int, dict] = st.meta.setdefault("_blocks", {})
         if kind == "message_start":
             u = (d.get("message") or {}).get("usage") or {}
+            if (d.get("message") or {}).get("model"):
+                st.meta["thinking_model"] = normalize_model(d["message"]["model"])
             st.meta["_usage_complete"] = False
             st.meta["_usage_input"] = ("_usage_input" not in st.meta and
                 all(type(u.get(k)) is int and u[k] >= 0 for k in (*_INPUT_USAGE, "output_tokens")))
