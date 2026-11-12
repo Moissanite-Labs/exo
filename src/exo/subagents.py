@@ -8,7 +8,9 @@ by calling ``steer`` and ``stop`` with ``by=<parent session id>``.
 Who may act (D-052): the principal, or the parent session of that task. Nobody else, including local callers.
 Whose words land (D-040): a principal caller typed it, so the message is the principal's; the parent session
 speaks as ``delegate``. A finished child takes no new turns, so steering or stopping it fails with ``conflict``.
-The note ("steered by principal") goes to the child's receipt through ``Delegator.marks``.
+A background task that is still waiting for a concurrency slot has no loop to interrupt, so a stop cancels its
+run instead (``Delegator.cancel``). The note ("steered by principal") goes to the child's receipt through
+``Delegator.marks``.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ USAGE = "usage: subagent list | open <task> | send <task> <text> | stop <task>"
 
 def find(eng: CoreEngine, ref: str) -> dict[str, Any]:
     """The task row for a task id, a unique id prefix or the child's session id."""
-    ref, rows = ref.strip(), [t for t in eng.agents.list() if t["child_session"] or t["status"] in ("queued", "running")]
+    ref, rows = ref.strip(), [t for t in eng.agents.list() if t["child_session"] or t["status"] in ("queued", "running") or eng.agents.background_active(t["task_id"])]
     if not ref:
         raise CommandFailed("bad_request", USAGE)
     hit = [t for t in rows if ref in (t["task_id"], t["child_session"])] or [
@@ -43,7 +45,13 @@ def live(eng: CoreEngine, row: dict[str, Any]) -> bool:
     return row["status"] == "running" and row["child_session"] in eng.agents.loops
 
 
-def _act(eng: CoreEngine, ref: str, by: str | None, verb: str) -> tuple[dict[str, Any], str, str]:
+def cancellable(eng: CoreEngine, row: dict[str, Any]) -> bool:
+    """The advertised task or its current retry still has a live background runner."""
+    return eng.agents.background_active(row["task_id"])
+
+
+def _act(eng: CoreEngine, ref: str, by: str | None, verb: str,
+         ok: Any = None) -> tuple[dict[str, Any], str, str]:
     """(row, author, who) once the caller may act on a running child; otherwise the right error."""
     row = find(eng, ref)
     if by is not None:
@@ -55,7 +63,7 @@ def _act(eng: CoreEngine, ref: str, by: str | None, verb: str) -> tuple[dict[str
     else:
         raise CommandFailed("forbidden", f"only the principal or the parent session can {verb} a subagent"
                             + demoted())
-    if not live(eng, row):
+    if not (ok or live)(eng, row):
         raise CommandFailed("conflict", f"task {row['task_id']} is finished ({row['status']}); nothing to {verb}")
     return row, author, who
 
@@ -79,15 +87,20 @@ async def steer(eng: CoreEngine, ref: str, text: str, by: str | None = None) -> 
 
 
 async def stop(eng: CoreEngine, ref: str, by: str | None = None) -> dict[str, Any]:
-    """Interrupt a running child; its receipt comes back as cancelled and says who stopped it."""
-    row, _, who = _act(eng, ref, by, "stop")
+    """Interrupt a running child, or cancel a background task that has not started yet; its receipt comes back as
+    cancelled and says who stopped it."""
+    row, _, who = _act(eng, ref, by, "stop", ok=lambda e, r: live(e, r) or cancellable(e, r))
     child = row["child_session"]
-    eng.agents.marks.setdefault(child, []).append(f"stopped by {who}")
-    if not eng.agents.interrupt(child):
+    if child:
+        eng.agents.marks.setdefault(child, []).append(f"stopped by {who}")
+        if eng.agents.interrupt(child):
+            _announce(eng, row, f"stopped by {who}")
+            return {"task_id": row["task_id"], "child_session": child, "stopped": True}
         eng.agents.marks.pop(child, None)
-        raise CommandFailed("conflict", f"task {row['task_id']} is between turns; nothing to stop")
-    _announce(eng, row, f"stopped by {who}")
-    return {"task_id": row["task_id"], "child_session": child, "stopped": True}
+    if await eng.agents.cancel(row["task_id"], who):  # queued: no loop yet, so cancel the run itself
+        _announce(eng, row, f"stopped by {who}")
+        return {"task_id": row["task_id"], "child_session": child, "stopped": True}
+    raise CommandFailed("conflict", f"task {row['task_id']} is between turns; nothing to stop")
 
 
 def view(eng: CoreEngine, ref: str, tail: int = 20) -> dict[str, Any]:
