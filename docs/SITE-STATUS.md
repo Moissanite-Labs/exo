@@ -46,3 +46,21 @@ anchor targets clear the sticky header, and the decorative floating egg is hidde
 keep text unobscured. The egg asset and brand link resolve from the shared script location, so
 client subpages use the same site-level renderer. On narrow screens, the egg caption flows below
 the hero content and wraps within its width; it keeps its absolute placement on desktop.
+
+## Live egg feed
+
+The egg on the home page and the roadmap hero reacts to repository activity. The interface is the one in
+`docs/LIVE-EGG.md` section 1 (branch `design/event-activation`, D-059): `egg.event(type, {replay, weight})`,
+`egg.signal(level)`, `egg.queued()` and `ExoEgg.EVENTS` in `site/brand/egg.js`; the feed client `ExoEggFeed.connect`
+in `site/brand/egg-feed.js`; and the demo feed `site/brand/egg-feed.demo.json`. `egg.pulse(n)` is unchanged.
+
+Levels: `issue` 1 (a quick pulse at one node), `pr` 2 (a stronger pulse and a bright travelling packet), `merge` 3
+(a flash through the lattice, a brief rise in brightness and activity, a faster heartbeat for a few seconds),
+`release` 4 (a merge, a lift of the stage, a fainter second flash). Events play from a queue; replays play at 0.6
+strength and never bloom twice. With `prefers-reduced-motion` there is no motion, only a brief highlight.
+
+`site/assets/activity.js` is the page glue. `?feed=demo` (and by default on `staging.` hosts) reads the demo feed and
+loops it, and the page shows a "demo activity" label. `?feed=off` turns it off. Otherwise it polls `/api/egg/feed`
+(or the `data-feed` attribute); the legend appears only after a good poll, so production with no feed shows no
+animation and no label. The functions behind `/api/egg/feed` do not exist yet. The roadmap page keeps its
+scroll-driven stage and ignores the feed's `egg.stage`.
