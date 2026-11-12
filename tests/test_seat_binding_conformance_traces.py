@@ -71,8 +71,10 @@ def test_emit_new_after_resuming_another_seat(trace_dir):
             try:
                 async with app.run_test(size=(120, 40)):
                     await asyncio.wait_for(app.ready.wait(), 5)
+                    assert app.seat == "scout"  # the resumed thread's label
                     await app.new_session()
                     assert worker.store.get_session(app.session).seat == "worker"
+                    assert app.seat == "worker"  # the new thread's label (#1146)
             finally:
                 await worker.close()
         finally:
@@ -82,6 +84,10 @@ def test_emit_new_after_resuming_another_seat(trace_dir):
     path = asyncio.run(run())
     validate_emitted_trace(path)
     assert path.is_file() and path.stat().st_size > 0
+    # The trace records the label the window showed, so replay checks the code, not a copy of the model.
+    states = {rec["event"]: rec["state"] for rec in _replay_module().load_trace(path)}
+    assert states["resume"]["client_display_seat"] == "scout"
+    assert states["client_new"]["client_display_seat"] == "worker"
 
 
 def test_emit_seated_refusal(trace_dir):

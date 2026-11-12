@@ -169,7 +169,8 @@ Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` o
 each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
 to that server's seat. `/new` sends the seat the window was started with, not a label copied from a resumed thread.
 If that name is a different seat, the core refuses, the window omits the name, and the new thread belongs to the
-core's seat. The window says which seat it joined. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+core's seat. The window says which seat it joined. Its status line, brand bar and start card show the seat of the
+thread that is open: the core's seat after `/new` or a join, and a resumed thread's own label. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
 all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
 
 - **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
