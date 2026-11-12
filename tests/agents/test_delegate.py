@@ -400,3 +400,28 @@ def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
     assert "queued" in tool_text(eng, sid).lower()
     eng.agents.__init__(eng)  # a restart keeps the remote task queued
     assert eng.agents.list(sid)[0]["status"] == "queued"
+
+
+def test_offline_child_gets_constraint_aware_discovery_guidance(tmp_path, monkeypatch):
+    """Actual parent/child prompts must not direct offline workers to paid discovery."""
+    from exo.core.tools.builtin import codefind
+
+    monkeypatch.setattr(codefind, "_available", lambda: True)
+    rules = [("PARENT", [tool_turn("delegate", {
+        "goal": "CHILD-OFFLINE inspect unfamiliar behavior", "role": "scout",
+        "context": "Offline; no-network; no-paid-discovery. Use local files only.",
+        "accept": "Report local evidence",
+    }), "parent done"]), ("CHILD-OFFLINE", ["Local evidence only."])]
+    eng, fake = engine(tmp_path, rules)
+    asyncio.run(parent_turn(eng, "PARENT go"))
+    child = next(call for call in fake.calls if "CHILD-OFFLINE" in call["user"])
+    assert "code_find" in child["tools"]
+    assert "Offline; no-network; no-paid-discovery" in child["user"]
+    for prompt in (eng.loop.system_prompt, child["system"]):
+        assert "only when the task permits network and paid discovery" in prompt
+        assert "Task constraints take precedence" in prompt
+        assert "HTTP 402" in prompt
+        assert "do not repeat the same failed discovery call" in prompt
+    spec = next(spec for spec in eng.registry.specs() if spec.name == "code_find")
+    assert "Do not use for offline, no-network" in spec.description
+    assert "hosted, paid backend" in spec.description

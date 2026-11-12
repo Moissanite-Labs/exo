@@ -60,8 +60,12 @@ TUTORIAL_LINE = (
     "The user is new to Exo and has tutorial mode on. When an Exo concept they may not know comes up (memory "
     "and the summary tree, threads, the approval gate, steering, model routes, peers, trace, findings), explain "
     "it in one plain sentence the first time, then carry on. Do not lecture or repeat it.")
-CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions across many files; use grep or read_file "
-                  "when you already know the symbol or path.")
+CODE_FIND_LINE = ("Use code_find for unfamiliar code across many files only when the task permits network and paid discovery. "
+                  "It may send source to a hosted, paid backend. For offline, no-network or no-paid-discovery tasks, "
+                  "use grep and read_file instead. Task constraints take precedence over this search guidance. "
+                  "Also use grep or read_file for known symbols or paths. If code_find fails because of billing, "
+                  "payment (HTTP 402), authentication or backend availability, switch to grep and read_file; "
+                  "do not repeat the same failed discovery call or attempt to repair billing or credentials.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
 
