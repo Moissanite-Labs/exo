@@ -61,7 +61,10 @@ Completions or Anthropic Messages endpoint, model and optional key. Use **Edit**
 restart the core to apply settings. Supported protocols and remote-core key limits are in `docs/PROVIDERS.md`.
 
 For a ChatGPT subscription, open Providers and choose **Continue with ChatGPT**. Sign in in your browser,
-then select an account and one of its models. This is a separate connection from an OpenAI API key.
+then select an account and one of its models. With saved connections, **Reconnect this account** refreshes one.
+A successful reconnect of an inactive connection makes it active only when ChatGPT plan usage is enabled.
+**Add another connection** creates a new one. It becomes active only when ChatGPT plan usage is enabled.
+This is a separate connection from an OpenAI API key.
 **Manage usage** opens your ChatGPT usage settings. See `docs/CHATGPT-PROVIDER.md` for accounts and limits.
 The direct Meta API provider uses the same protected API-key entry as other hosted providers.
 

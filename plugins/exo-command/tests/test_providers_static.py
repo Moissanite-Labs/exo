@@ -169,3 +169,58 @@ def test_chatgpt_store_ok_guard_rejects_a_constant_true_prefix():
 
     assert accepted(good)
     assert not accepted(bad)
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node is needed to execute the ChatGPT connection panel")
+def test_chatgpt_reconnect_sends_profile_and_add_another_sends_none():
+    """Saved registrations: per-account Reconnect starts with its profile; Add another connection starts without one
+    and says the new plan-enabled connection becomes active while the previous registration stays. First sign-in is unchanged."""
+    script = r'''
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const func = src.slice(src.indexOf("function drawChatGPT("), src.indexOf("async function refreshChatGPT("));
+const h = (tag, attrs, ...kids) => ({ tag, attrs: attrs || {}, kids: kids.flat(Infinity).filter((k) => k != null) });
+const walk = (n, out = []) => { out.push(n); if (typeof n === "object") n.kids.forEach((k) => walk(k, out)); return out; };
+const text = (n) => typeof n === "string" ? n : n.kids.map(text).join("");
+function render(state) {
+  const calls = []; let tree;
+  const context = { h, NEED_SECRET_STORE: "x", alive: true, authBusy: false, authState: state,
+    connection: { replaceChildren: (n) => { tree = n; } }, chatGPT: (action, profile) => calls.push({ action, profile }) };
+  vm.createContext(context);
+  vm.runInContext(func + "; this.drawChatGPT = drawChatGPT;", context);
+  context.drawChatGPT();
+  const nodes = walk(tree);
+  const buttons = nodes.filter((n) => n.tag === "button").map((n) => ({ label: text(n), cls: n.attrs.class, click: n.attrs.onclick }));
+  const out = { labels: buttons.map((b) => b.label), cls: Object.fromEntries(buttons.map((b) => [b.label + "|" + buttons.indexOf(b), b.cls])),
+    prose: nodes.filter((n) => n.tag === "p").map(text).join(" "), rows: nodes.filter((n) => n.attrs && n.attrs.class === "xc-prow").map(text), calls: [] };
+  for (const b of buttons) { calls.length = 0; b.click(); out.calls.push([b.label, calls.slice()]); }
+  return out;
+}
+const profiles = [{ profile: "p1", client_id: "client-aaaaaaaa", email: "a@example.test", plan_enabled: true },
+                  { profile: "p2", client_id: "client-bbbbbbbb", email: "b@example.test", plan_enabled: true }];
+process.stdout.write(JSON.stringify({ first: render({ profiles: [], active: null }),
+  saved: render({ profiles, active: "p2", pending: false }) }));
+'''
+    proc = subprocess.run([shutil.which("node"), "-e", script, str(STATIC / "providers.js")],
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    first, saved = out["first"], out["saved"]
+    # First-time sign-in: one straightforward button, no profile, no reconnect/add wording.
+    assert first["labels"][0] == "Continue with ChatGPT" and "Reconnect" not in " ".join(first["labels"])
+    assert dict(first["calls"])["Continue with ChatGPT"] == [{"action": "start"}]
+    assert "Add another connection" not in first["labels"] and "Add another connection" not in first["prose"]
+    # Saved registrations: no ambiguous primary "Continue"; the old row label is gone.
+    assert "Continue with ChatGPT" not in saved["labels"] and "Sign in to this account" not in saved["labels"]
+    calls = [(label, c) for label, c in saved["calls"] if label in ("Reconnect this account", "Add another connection")]
+    assert calls == [("Reconnect this account", [{"action": "start", "profile": "p1"}]),
+                     ("Reconnect this account", [{"action": "start", "profile": "p2"}]),
+                     ("Add another connection", [{"action": "start"}])]
+    assert "profile" not in dict(saved["calls"])["Add another connection"][0]
+    # Reconnect rows come before the add action, and the active indicator stays visible.
+    assert saved["labels"].index("Reconnect this account") < saved["labels"].index("Add another connection")
+    assert "registration bbbbbbbb · active" in saved["rows"][1] and "active" not in saved["rows"][0]
+    # Activation wording: a new plan-enabled connection becomes active and the previous registration remains.
+    prose = saved["prose"]
+    assert "becomes active" in prose and "plan usage enabled" in prose and "previous registration stays saved" in prose
+    assert "does not add a new one" in prose
