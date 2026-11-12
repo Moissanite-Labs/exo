@@ -121,6 +121,38 @@ def test_a_tree_that_cannot_run_exits_2(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
 
 
+@pytest.mark.parametrize("case", ["package", "link_out", "link_in"])
+def test_a_gate_loaded_from_anything_but_the_trees_gate_py_exits_2(tmp_path, case):
+    """#1162: each child checks that the gate Python loaded resolves to the tree's own src/exo/gate.py. A package
+    src/exo/gate/ is imported in its place and sits inside the tree, so a check for "inside the tree" alone let it
+    run (an empty one is enough: before, the run went on and failed later for another reason). A gate.py that links
+    to another file loads that file, out of the tree or in it, where the preflight's list may not reach."""
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head")
+    gate = head / "src" / "exo" / "gate.py"
+    if case == "package":
+        (gate.parent / "gate").mkdir()
+        (gate.parent / "gate" / "__init__.py").write_text("", encoding="utf-8")
+    else:
+        target = tmp_path / "elsewhere" / "gate.py" if case == "link_out" else head / "docs" / "gate_impl.py"
+        target.parent.mkdir()
+        gate.replace(target)
+        gate.symlink_to(target)
+    proc, _ = _run(base, head, tmp_path)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "gate loaded from" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_a_tree_reached_through_a_link_still_runs(tmp_path):
+    """A tree named through a link (macOS's /var is one) still runs: the parent resolves each tree, and the child's
+    origin check compares real paths."""
+    base = _tree(tmp_path, "base")
+    (tmp_path / "link").symlink_to(_tree(tmp_path, "head"), target_is_directory=True)
+    proc, rep = _run(base, tmp_path / "link", tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert rep["counts"]["lowered_pairs"] == 0
+
+
 @pytest.mark.parametrize("case", ["home", "json", "raises", "not_json", "corpus_item"])
 def test_an_error_in_the_script_exits_2_not_1(tmp_path, case):
     # Exit 1 means lowered: a fault of the tool or of its input must never read as one.

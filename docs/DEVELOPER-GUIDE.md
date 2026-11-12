@@ -486,11 +486,40 @@ Check your prose before you commit docs:
 
 ### Checking a gate change against main
 
-Gate-related pull requests also run `gate-preflight.yml`: the gate plugin suite and the base revision's
-comparator against the composed PR tree, with the JSON differential retained as an artifact. A nonzero
-comparator result fails that job. Hosted execution and branch-protection enforcement remain separate:
+Every pull request and merge-queue entry also runs `gate-preflight.yml` (#1151). Its first step runs the base
+revision's `scripts/gate_preflight_relevant.py` on the diff. When the diff touches a path on its list, the job runs
+the gate plugin suite and the base revision's comparator against the composed PR tree, with the JSON differential
+retained as an artifact. Otherwise it succeeds without them. A nonzero comparator result fails that job.
+
+The list holds the gate plugin, the comparator and the detector, their tests, the workflow, `pyproject.toml`,
+`uv.lock`, and the files that change the gate's code or data as Python loads it. The comparator's child puts the
+tree's `src/` first on `sys.path` and imports `exo.gate`. That runs `src/exo/__init__.py`, imports `store.py` and
+reads `core/models/catalog.toml`. Python imports a package or an extension module named like one of those modules in
+its place, and a committed `.pyc` in place of its source. A `.gitattributes` line can change their bytes on checkout.
+The comparator stops with exit 2 when the gate a child loaded does not resolve to the tree's own `src/exo/gate.py`.
+So a package or an extension module in its place, or a `gate.py` that links to another file, fails the job. To move
+the gate into a package, first change the three places in `scripts/gate_diff.py` that name `src/exo/gate.py`
+(`_tree_arg`, `gate_tables` and `_load_tree`) in a pull request of their own, since CI runs the base revision's
+comparator.
+
+Because the child puts `src/` first, a module in `src/` outside `src/exo/` can be imported in place of a standard
+library module the gate imports. The editable install also lists `src/` and `clients/tui/` on every interpreter's
+path, after the standard library. So a `sitecustomize.py` in either runs at start-up in both of the comparator's
+children, and the comparator cannot see its effect. So the list also covers `.gitattributes` at any depth and every
+path in those two directories outside `src/exo/` and `clients/tui/exo_tui/`.
+
+When the gate starts to import or read another file, add it to the list and to `.github/CODEOWNERS`.
+`tests/test_gate_preflight_relevant.py` walks the gate's imports and its `Path(__file__).parent` reads, and fails
+when one of those files or a stand-in for it is not covered. It also fails on the other ways it knows to find, read
+or run a file (`__file__`, `__spec__`, importlib, pkgutil, inspect, `exec`), until it follows that use or names the
+function as one the gate never runs. It is a tripwire for honest changes, not a proof.
+
+The list decides when the comparator runs. It is no guard against a pull request written to defeat the comparator:
+the job runs the pull request's own tests and dependencies first. Only review guards against that, and
+`.github/CODEOWNERS` does not cover `plugins/exo-gate/`, `pyproject.toml` or `uv.lock`. Hosted execution and
+branch-protection enforcement remain separate:
 maintainers must make `never-looser` a required check to enforce it at merge. Reviewers still inspect docs and
-explain every intentional lowering; this workflow does not waive the docs rule.
+explain every intentional lowering. This workflow does not waive the docs rule.
 
 A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so (D-038,
 amendment of 2026-10-22). `scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and

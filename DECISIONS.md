@@ -3558,6 +3558,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this one reports 348 pairs (`_exo_relative`'s "too many to resolve" returns made `""`), 808,963 (`binds_exact`
   returning False) and 27,985 (`body_unseen` dropped, `decide`'s own reading kept); for `NO_GRANT = ()` 222 against
   350,322, and for a `decide` that says `"Ask"` 11,530 against 625,921.
+  2026-11-05 (#1151 follow-up): the preflight runs the comparator when a PR changes a file that changes the gate's
+  code or data as Python loads it, not only `gate.py`. The comparator's child imports `exo.gate` with the tree's
+  `src/` first on `sys.path`. That runs `src/exo/__init__.py`, imports `store.py` and reads
+  `core/models/catalog.toml`. Python imports a package or an extension module named like one of those modules in its
+  place, and a committed `.pyc` in place of its source. A `.gitattributes` line can change their bytes on checkout.
+  Because the child puts `src/` first, a module there outside the package can stand in for a standard library
+  module. The editable install lists `src/` and `clients/tui/`, so a `sitecustomize.py` in either runs in both
+  children. All of these were outside
+  the detector's list, so a PR that loosened the gate through one of them skipped the comparator and the check
+  passed. The list now covers `src/exo/gate*`, `src/exo/__init__*`, `src/exo/store*`, `__pycache__` under
+  `src/exo/`, `catalog.toml`, `.gitattributes`, and `src/` and `clients/tui/` outside their packages. A test walks
+  what the gate imports and reads, and fails when a file or a stand-in for it is not covered, or on a form of loading
+  it knows but cannot follow. The comparator's child also checks that the gate it loaded resolves to the tree's own
+  `src/exo/gate.py` (#1162). A package or an extension module that Python imports in its place, or a `gate.py` that
+  links to another file, stops the run (exit 2). So a pull request that moves the gate into a package changes the
+  comparator first. The check reads what the module reports, which the stand-in itself or `src/exo/__init__.py` can
+  change. It is a tripwire for an honest move, not a guard, and the list covers those files, so the comparator still
+  runs on them. The detector reads `git diff -z`, so a name git would quote (non-ASCII, a tab, a newline, a quote)
+  still matches.
+  `.github/CODEOWNERS` covers the same paths. The list is no guard against a PR written to defeat the comparator:
+  the job runs the PR's own tests and dependencies first. Only review guards against that, and `.github/CODEOWNERS`
+  does not cover `plugins/exo-gate/`, `pyproject.toml` or `uv.lock`.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
