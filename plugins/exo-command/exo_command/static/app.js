@@ -1,5 +1,5 @@
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
-// Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
+// Chat is the default page; Tasks, Schedule, Pad and Command (the read-mostly overview) are the other views.
 import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
 import { h, token, redeem } from "./dom.js";
 import { getAppearance, applyAppearance, setAppearance } from "./appearance.js";
@@ -7,12 +7,13 @@ import * as bus from "./bus.js";
 import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
 import * as schedule from "./schedule.js";
+import * as pad from "./pad.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
 import * as permissions from "./permissions.js";
 import { FLOW_CLASS, getFlow, setFlow, isFlowToggle, isFlowExit } from "./layout.js";
 
-const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
+const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["pad", "Pad", pad], ["command", "Command", command], ["providers", "Providers", providers]];
 
 // The page token arrives in the URL fragment of the link `exo web` prints; every request needs it (D-039). Keep it in this tab's
 // sessionStorage only, then take it out of the address bar and history.
