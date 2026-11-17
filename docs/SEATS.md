@@ -124,6 +124,23 @@ Event subscription and replay, other retrieval APIs, tools with filesystem acces
 and unseated cores still need separate access controls. Do not treat profiles
 sharing a home as isolated from hostile code.
 
+## Event ownership
+
+A loaded profile's event hub filters replay and live delivery by the session's stored
+`agent`, including requests without a session filter. Owned child sessions remain
+visible. Events for missing or foreign sessions are hidden. Events without a session
+are also hidden because the shared event log has no owner for them. Producers must
+attach an owned session to profile notices that clients need to see.
+
+Scheduled runs attach their child session to running/completion updates, result
+notices and delivery warnings, so the running seat receives them. Queued updates,
+failures before a child session exists and scheduler-stopped warnings remain
+unattributed and hidden on loaded profiles; they remain in the durable event log.
+
+The same hub serves command replay, SSE, stdio and channel subscriptions. Unseated
+cores keep the existing event behavior. Sequence cursors remain global and may have
+gaps. This does not hide activity counts or replace other retrieval-path checks.
+
 ## Skills
 
 Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/` in the checkout, or
@@ -174,8 +191,9 @@ all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
 
 - **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
   the write transaction, so two cores never reuse one. One core's stream still rises, with gaps where the other
-  seat wrote. A core sends only its own events live. Replay goes by number, not by seat, so it returns the other
-  seat's events too. A session filter still lets through the ones with no session, such as a scheduled job's card.
+  seat wrote. A core sends only its own events live. Loaded profiles filter both live events and replay by the
+  stored session owner, including when no session filter was requested. Unseated cores retain cross-seat replay
+  and session-less events; a session filter on an unseated core still includes session-less events.
   `hello`, `events.subscribe` and `/health` report the table's highest number, so a client that starts from there
   replays none of the other seat's past events.
 - **Delegate tasks.** A core fails the queued or running tasks a dead process left behind only for its own agent,

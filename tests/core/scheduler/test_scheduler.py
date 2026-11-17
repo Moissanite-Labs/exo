@@ -867,6 +867,100 @@ async def test_seat_bound_job_runs_only_in_its_seat(tmp_path):
     assert scout.store.get_session(child[0].child_session).agent == "scout"
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure", "missing-channel", "failed-channel"])
+@aio
+async def test_scheduled_progress_and_result_belong_to_the_running_seat(tmp_path, outcome):
+    from exo.server.engine import Hub
+
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    own_sub = scout.hub.subscribe(scout.hub.head())
+    foreign_hub = Hub(visible=forge.event_visible)
+    foreign_sub = foreign_hub.subscribe()
+    try:
+        if outcome == "failure":
+            scout.loop.provider = FakeProvider([])
+            scout.loop.max_retries = 0
+        elif outcome == "failed-channel":
+            class BrokenChannel:
+                async def deliver(self, text):
+                    raise RuntimeError("channel unavailable")
+
+            scout.channels["chat9"] = BrokenChannel()
+        deliver = "chat9" if outcome.endswith("channel") else "notice"
+        job = scout.scheduler.add("every 1h", "make the report", title="Report", seat="scout", deliver=deliver)
+        task_id = scout.scheduler.launch(job)
+        await scout.scheduler.wait()
+
+        replay = scout.hub.since(0)
+        updates = [e for e in replay if isinstance(e.body, s.TaskUpdated) and e.body.task_id == task_id]
+        assert [e.body.status for e in updates] == ["running", "failed" if outcome == "failure" else "done"]
+        sid = updates[0].body.child_session
+        assert sid and scout.store.thread(sid)[0] == "scout"
+        assert all(e.session == sid == e.body.child_session for e in updates)
+        notes = [e for e in replay if isinstance(e.body, s.Notice)]
+        assert notes and all(e.session == sid for e in notes)
+        if outcome == "failure":
+            assert notes[-1].body.level == "warn" and "failed:" in notes[-1].body.text
+        else:
+            assert notes[-1].body.text == "Report: report from scout"
+            if outcome.endswith("channel"):
+                assert [e.body.level for e in notes] == ["warn", "info"]
+
+        live = []
+        while (event := await own_sub.next(timeout=0.01)) is not None:
+            live.append(event)
+        assert [e.seq for e in live] == [e.seq for e in replay]
+        records = scout.store.events_since(0)
+        queued = [e for e in records if isinstance(e.body, s.TaskUpdated) and e.body.status == "queued"]
+        assert len(queued) == 1 and queued[0].session is None
+        assert queued[0] not in replay  # no owned session exists at the queued stage
+        assert forge.hub.since(0) == []
+        # Check the same produced records against a foreign profile's live filter as well as durable replay.
+        for event in records:
+            foreign_hub.publish(event.body, event.session)
+        assert await foreign_sub.next(timeout=0.01) is None
+    finally:
+        own_sub.close()
+        foreign_sub.close()
+        await scout.close()
+        await forge.close()
+
+
+@aio
+async def test_pre_session_scheduler_failure_and_stopped_notice_stay_unattributed(tmp_path, monkeypatch):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    try:
+        def no_route(tier):
+            raise RuntimeError("no model route")
+
+        monkeypatch.setattr(scout.agents, "route", no_route)
+        job = scout.scheduler.add("every 1h", "make the report", seat="scout")
+        scout.scheduler.launch(job)
+        await scout.scheduler.wait()
+        assert scout.scheduler.get(job["id"])["last_status"] == "failed"
+        updates = [e for e in scout.store.events_since(0) if isinstance(e.body, s.TaskUpdated)]
+        assert [e.body.status for e in updates] == ["queued", "failed"]
+        assert all(e.session is None and e.body.child_session is None for e in updates)
+
+        async def stopped():
+            raise RuntimeError("timer stopped")
+
+        task = asyncio.create_task(stopped())
+        await asyncio.gather(task, return_exceptions=True)
+        scout.scheduler._main = task
+        scout.scheduler._loop_ended(task)
+        notices = [e for e in scout.store.events_since(0) if isinstance(e.body, s.Notice)]
+        assert any("no model route" in e.body.text for e in notices)
+        assert any("scheduler stopped" in e.body.text for e in notices)
+        assert all(e.session is None for e in notices)
+        assert scout.hub.since(0) == forge.hub.since(0) == []
+    finally:
+        await scout.close()
+        await forge.close()
+
+
 @aio
 async def test_other_seats_due_job_does_not_spin_the_timer(tmp_path):
     clk = Clock(ts(2026, 10, 11, 8, 0))

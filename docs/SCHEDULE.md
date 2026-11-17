@@ -55,12 +55,25 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
 - The timer loop survives a failing check or next-run database listing: the error is recorded as a
   `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
   itself, that is recorded too (`scheduler loop`) and a
-  warning notice is shown.
+  session-less warning notice is recorded (see event visibility below).
 - A run that hits the tool-round cap (24) is a failed run, `stopped early (max_iterations)`. The loop's wrap-up reply
   (what was done, what is open, the next step; see `docs/CORE-V2-INTERFACES.md`) is appended to its status and
   warning notice. When there is no complete wrap-up reply (it failed, had no text, or `wrap_up` is off), nothing
   is appended; the last tool round's text is never shown as the report.
 - Runs missed while the engine was down happen once at start, not once per missed slot.
+
+## Event visibility
+
+Running and final task updates, result notices, failure notices after session creation and channel-delivery
+warnings carry the run's child session. A loaded profile receives these events only when it owns that session;
+other profiles do not receive them through live delivery or replay. The same rule applies to owned scheduled
+runs whether the job was seat-bound or claimed from an unbound schedule.
+
+The queued update occurs before a child session exists. It remains session-less, as do failures before session
+creation and the scheduler-stopped warning. These events are persisted but hidden from loaded profiles under
+the existing event ownership rule. Unseated event observers retain their existing access. No job-wide owner
+or special authorization for global scheduler events is introduced here; seated clients cannot rely on these
+unattributed events to detect an early routing failure or a stopped timer.
 
 ## Clock changes
 

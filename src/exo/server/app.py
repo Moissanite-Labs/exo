@@ -66,6 +66,8 @@ class Dispatcher:
         self.engine = engine
         # An engine with its own durable hub (the real core) keeps it; tests get a memory hub.
         self.hub = hub or getattr(engine, "hub", None) or Hub()
+        if (visible := getattr(engine, "event_visible", None)) is not None:
+            self.hub.visible = visible
         self.caller = caller  # D-039: who an in-process user of this dispatcher is; transports pass their own
 
     async def dispatch(self, raw: str | bytes, caller: str | None = None,

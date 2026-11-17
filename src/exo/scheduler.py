@@ -194,7 +194,7 @@ class Scheduler:
 
     def _emit(self, job: dict[str, Any], task_id: str, status: str, detail: str, child: str | None = None) -> None:
         self.engine.hub.publish(s.TaskUpdated(task_id=task_id, title=job["title"], status=status,
-                                              child_session=child, detail=detail))
+                                              child_session=child, detail=detail), child)
 
     def interrupt(self, session: str) -> bool:
         loop = self.loops.get(session)
@@ -260,12 +260,12 @@ class Scheduler:
             ok = status == "done"
             self._emit(job, task_id, status, f"{job['title']!r} finished." if ok else f"{job['title']!r} failed: {answer}", sid)
         if ok:
-            await self._deliver(job, answer or "(no answer)")
+            await self._deliver(job, answer or "(no answer)", sid)
         else:
-            e.hub.publish(s.Notice(text=f"Scheduled job {job['title']!r} failed: {answer}", level="warn"))
+            e.hub.publish(s.Notice(text=f"Scheduled job {job['title']!r} failed: {answer}", level="warn"), sid)
         return status
 
-    async def _deliver(self, job: dict[str, Any], text: str) -> None:
+    async def _deliver(self, job: dict[str, Any], text: str, session: str | None) -> None:
         e, to = self.engine, job["deliver"]
         msg = f"{job['title']}: {text}"
         chan = e.channels.get(to) if to != "notice" else None
@@ -274,10 +274,10 @@ class Scheduler:
                 await maybe_await(chan.deliver(msg))
                 return
             except Exception as exc:
-                e.hub.publish(s.Notice(text=f"Could not deliver to {to!r}: {exc}", level="warn"))
+                e.hub.publish(s.Notice(text=f"Could not deliver to {to!r}: {exc}", level="warn"), session)
         elif to != "notice":
-            e.hub.publish(s.Notice(text=f"Channel {to!r} cannot take deliveries here; showing the result here.", level="warn"))
-        e.hub.publish(s.Notice(text=msg))
+            e.hub.publish(s.Notice(text=f"Channel {to!r} cannot take deliveries here; showing the result here.", level="warn"), session)
+        e.hub.publish(s.Notice(text=msg), session)
 
     # ------------------------------------------------------------ loop
 
