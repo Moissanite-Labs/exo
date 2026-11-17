@@ -33,8 +33,9 @@ class SavedGroup:
 class GroupStore:
     """Internal storage adapter. Callers supply trusted owner and profile catalog.
 
-    No protocol command or agent tool exposes this adapter. A future runtime must
-    authorize profile execution and message audiences separately from metadata.
+    The principal-only group command exposes selected host operations; no agent
+    tool exposes this storage adapter. Runtime hosts must authorize profile
+    execution and message audiences separately from metadata.
     """
 
     def __init__(self, sessions: SessionStore):

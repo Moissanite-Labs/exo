@@ -6,6 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Added principal-only `/group list`, `inspect`, `send` and read-only `observe` through `command.run`, scoped to the loaded seat's saved groups. No group creation or execution controls are added (#978).
 - Providers now includes Google AI Studio Gemini through Google's OpenAI-compatible API and a custom endpoint form for
   supported OpenAI Chat Completions and Anthropic Messages protocols. Custom settings apply when the core restarts.
 - Added `exo improve --offline`: an opt-in Harness²-style Propose–Probe–Compose experiment on explicit public fixtures, with trusted built-in adapters, disjoint held-out checks, bounded calls and typed review-only evidence export. No runtime adoption.
