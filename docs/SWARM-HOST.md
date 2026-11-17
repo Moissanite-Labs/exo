@@ -4,8 +4,10 @@
 human host and the Swarm group primitives (`GroupRunner`,
 `GroupEngineAdapter`, `GroupRuntime`, `GroupMessages`).
 
-Scope of this slice: trusted host injection only. There is no protocol or
-client integration, and no real engine factory. Tests use fakes, and a real
+The principal-only group command can forward lifecycle operations to an explicitly
+injected host with the same owner and session-store object as its engine. There
+is no live host composition or client control integration, and no real engine
+factory. Tests use fakes, and a real
 factory that constructs authorized engines is deliberately out of scope.
 
 ## Trust model

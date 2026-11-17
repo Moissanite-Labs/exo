@@ -63,6 +63,11 @@ class GroupHost:
     def owner(self) -> str:
         return self._owner
 
+    @property
+    def groups(self) -> GroupStore:
+        """The backing store, so trusted command wiring can verify composition."""
+        return self._groups
+
     def create(self, *, mode: str, members: Collection[str],
                conductor: str | None = None) -> SavedGroup:
         """Persist a group restricted to the injected authorized profile set."""
