@@ -63,3 +63,28 @@ The adapter is internal. Trusted callers supply owner and member identity. It is
 not a public endpoint or an agent tool, and does not authorize impersonation.
 Human observation, runtime execution, shared APIs and client controls remain
 separate work. Delivery receipts do not prove a model processed the input.
+
+## Concurrent lifecycle foundation (G02, G06)
+
+`GroupRunner` starts independent async runners for all group members, rejecting
+duplicate member profiles before creating tasks. An ordinary `Exception` in one
+does not cancel its siblings. It distinguishes queued, running, stopping,
+stopped, completed and failed. Stop requests are idempotent during cleanup.
+Cancelling a status waiter does not cancel the participants. Execution cannot
+restart through the same supervisor, and failed work is never retried here.
+
+`stopped` acknowledges a requested stop only after the task exits, including a
+runner that catches cancellation, finishes cleanup and returns. Cancellation
+without a stop request reports `failed`. Repeated waits preserve terminal states.
+A stop before `start()` is a no-op; it does not reserve a future stop. Stopping
+after `start()` but before a task's first step prevents that runner from entering.
+Other `BaseException` behavior is not isolated: in particular, `SystemExit` and
+`KeyboardInterrupt` follow asyncio's loop termination and sibling cancellation
+semantics. Loop shutdown cancellation without a stop request is not a stop receipt.
+
+This is an internal, process-local supervisor, not a profile execution API.
+A trusted host must authorize and construct runners, enforce single ownership
+across clients and processes, and isolate workspaces. Runners must finish cleanup
+before exiting. This layer cannot prove an adapter stopped detached processes.
+Persistent recovery, concurrency limits, pause/resume, streaming state and
+message consumption integration are not implemented by this supervisor.
