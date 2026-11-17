@@ -140,6 +140,46 @@ parked. Cancelling one of several checkpoints does not hide the remaining waiter
 
 These objects are internal Python APIs, not a sandbox or model tools. Only the
 trusted human host receives group controls and full observation. The host still
-must enforce one runtime per group across clients and processes. Pause state is
+must use the runtime execution claim across clients and processes. Pause state is
 process-local. Durable execution recovery, provider adapters, protocol commands
 and client controls are not implemented by this layer.
+
+
+## Durable execution claims (G07)
+
+`GroupRuntime.start()` claims the saved group in SQLite before invoking any
+adapter. Another runtime using the same database cannot start that group, even
+after the first execution finishes. This is a one-execution-per-group guard,
+not an exactly-once guarantee for adapter side effects. The lower-level
+`GroupRunner` remains process-local and does not provide this guard.
+
+`receipt()` reads the persisted claim and final member outcomes. `active` means
+an execution was claimed and has no final receipt. It does not prove the process
+is alive. A crash or partial start failure leaves that claim in place. There is
+no timeout takeover, automatic retry, reset or resume API in this layer.
+Reconciliation and safe recovery are separate work, not deletion of the claim.
+
+Starting outside a running event loop fails before taking a claim. If runner
+startup fails after the claim was taken, the initial `start()` exception is the
+failure report: `wait()` says execution has not started, and the receipt stays
+active. This layer does not reconcile partially started work or release its claim.
+
+An active receipt's member values remain the claim-time `queued` placeholders,
+even if adapters have run or finished and final persistence failed. Treat their
+current outcomes as unknown, not as evidence that execution never began.
+
+A background task writes `settled` only after every participant has exited and
+adapter cleanup has completed. Cancelling an observer does not cancel execution
+or prevent settlement. Adapter error text is not persisted. If saving the final
+receipt fails, `wait()` raises and the existing claim continues to block restarts.
+The host must keep the store and event loop open through `wait()` on shutdown.
+
+Claims cover callers sharing one database. Independent copies of the database
+and direct use of `GroupRunner` are outside this guarantee. Python callers are
+trusted: receipt IDs are correlation identifiers, not authorization tokens.
+
+The single-execution rule above describes the current implementation proposed in
+#968; it is not a recorded Swarm-wide policy decision. Principal confirmation is
+still needed for reuse of completed groups and for ownership of the stack's
+decision record and guide/map/changelog placement (see #969's existing review).
+This layer does not allocate a D-number or define retry/recovery semantics.
