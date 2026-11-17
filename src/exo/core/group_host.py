@@ -9,8 +9,9 @@ this module constructs no profiles, engines or CoreEngine instances itself.
 protocol command or agent tool. Host objects must never be exposed to models.
 It delegates durable claims, pause/stop semantics and receipts to
 ``GroupRuntime``: one claim per group, no automatic retry, no stale-claim
-takeover. A real factory integration (constructing authorized engines) is
-deliberately out of scope for this slice.
+takeover. The explicit product-layer factory is documented in
+docs/SWARM-COMPOSITION.md; live activation and caller-owned cleanup integration
+remain separate from this host seam.
 """
 from __future__ import annotations
 

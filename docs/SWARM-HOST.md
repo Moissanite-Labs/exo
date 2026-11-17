@@ -6,9 +6,9 @@ human host and the Swarm group primitives (`GroupRunner`,
 
 The principal-only group command can forward lifecycle operations to an explicitly
 injected host with the same owner and session-store object as its engine. There
-is no live host composition or client control integration, and no real engine
-factory. Tests use fakes, and a real
-factory that constructs authorized engines is deliberately out of scope.
+is no live host activation or client control integration. An explicit real-engine
+factory now exists in `exo.group_composition` (see [Swarm composition](SWARM-COMPOSITION.md));
+its empty-plugin, environment and caller-owned cleanup limits still apply.
 
 ## Trust model
 
