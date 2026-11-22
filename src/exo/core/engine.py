@@ -729,11 +729,15 @@ class CoreRuntime:
 
     async def _models_list(self, b: s.ModelsList) -> dict[str, Any]:
         from exo.models_cmd import available_models  # network on a cold cache, so off the event loop
+        listing = ""
         try:
             avail = await asyncio.wait_for(asyncio.to_thread(available_models, self.router, self.home), 25)
+        except asyncio.TimeoutError:
+            avail, listing = [], "timeout"  # say so, rather than implying these providers have no models
         except Exception:
-            avail = []
-        return {"models": self.router.status(), "available": avail, "spend": self.router.spend_status()}
+            avail, listing = [], "error"
+        return {"models": self.router.status(), "available": avail, "spend": self.router.spend_status(),
+                "available_error": listing}
 
     async def _models_set(self, b: s.ModelsSet) -> dict[str, Any]:
         require_principal("change models")
