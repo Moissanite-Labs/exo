@@ -842,6 +842,9 @@ export function mount(root) {
       const rows = [...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])];
       const routes = [...new Set(rows.map(m => m && m.route).filter(ref => typeof ref === "string" && ref))];
       if (!routes.length) { flash("No models listed. Open Providers to set up a provider."); return; }
+      // A failed listing leaves the picker with configured routes only: say so, or the short list
+      // reads as "these are all the models there are".
+      if (d.available_error) flash("Some providers did not list their models (" + d.available_error + "); showing " + routes.length + " known route" + (routes.length === 1 ? "" : "s") + ".");
       const select = h("select", { class: "xc-field", "aria-label": defaults ? "Default model" : "Main model" },
         ...routes.map(ref => h("option", { value: ref, selected: ref === model }, ref)));
       select.value = routes.includes(model) ? model : routes[0];

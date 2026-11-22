@@ -100,29 +100,31 @@ def _custom_cache_identity(spec: dict[str, Any]) -> str | None:
 def available_models(router: Router, home: Path, *, get: Callable[..., Any] | None = None,
                      now: float | None = None) -> list[dict[str, Any]]:
     """Every model the user can pick: each keyed provider's /models list, cached for six hours in
-    ``home/cache/models``. A provider that fails to answer is skipped (its stale cache is used if any).
-    Models a provider lists but Exo cannot call yet (``hide_models`` substrings) are left out."""
+    ``home/cache/models``. Networked providers are listed together, not one after another (serially,
+    seven providers with a ``20 s`` timeout each can take ``140 s``, longer than the ``25 s`` the
+    engine allows the whole list). A provider that fails to answer is skipped (its stale cache is
+    used if any). Models a provider lists but Exo cannot call yet (``hide_models`` substrings) are
+    left out."""
     import json, time
     now = time.time() if now is None else now
     out: list[dict[str, Any]] = []
     cache_dir = Path(home) / 'cache' / 'models'
+    seq: list[tuple[str, list[dict[str, Any]] | None]] = []   # provider order; None = rows arrive after the pool
+    plans: dict[str, dict[str, Any]] = {}
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
         manual = spec.get('setup_model') if spec.get('setup_managed') is True else None
         if isinstance(manual, str) and manual and router._allows(name, 'main') and \
                 (not spec.get('key_env') or st.get('key') == 'yes'):
-            out.append({'route': f'{name}:{manual}', 'provider': name})
+            seq.append((name, [{'route': f'{name}:{manual}', 'provider': name}]))
         if spec.get('auth') == 'chatgpt':
             if router.auth_available(name) and router._allows(name, 'main'):
-                try:
-                    out += [{'route': f"{name}:{row['id']}", 'provider': name,
-                             'display_name': row['display_name']} for row in _remote_catalog(router, name, get=get)]
-                except ValueError:
-                    pass  # never reuse another account's catalog after an authorization failure
+                plans[name] = {'kind': 'catalog'}
+                seq.append((name, None))
             continue
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
             if router._allows(name, "main") and router.credentials(name):
-                out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
+                seq.append((name, [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]))
             continue
         if (spec.get('transport', 'openai') not in ('openai', 'responses') or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
@@ -138,19 +140,50 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
                 ids = cached['ids']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             cached = None
-        if ids is None:
+        if ids is not None:
+            hide = [h.lower() for h in spec.get('hide_models') or []]
+            seq.append((name, [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                                if i != manual and not any(h in i.lower() for h in hide)]))
+            continue
+        plans[name] = {'kind': 'network', 'file': f, 'identity': identity,
+                       'cached': cached, 'manual': manual, 'spec': spec}
+        seq.append((name, None))
+    listed: dict[str, list[dict[str, Any]]] = {}
+    if plans:
+        def load(item: tuple[str, dict[str, Any]]) -> list[dict[str, Any]]:
+            name, plan = item
             try:
+                if plan['kind'] == 'catalog':
+                    return [{'route': f"{name}:{row['id']}", 'provider': name,
+                             'display_name': row['display_name']} for row in _remote_catalog(router, name, get=get)]
                 ids = remote_models(router, name, get=get)
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 record: dict[str, Any] = {'at': now, 'ids': ids}
-                if identity is not None:
-                    record['configuration'] = identity
-                f.write_text(json.dumps(record))
+                if plan['identity'] is not None:
+                    record['configuration'] = plan['identity']
+                plan['file'].write_text(json.dumps(record))
+                hide = [h.lower() for h in plan['spec'].get('hide_models') or []]
+                return [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                        if i != plan['manual'] and not any(h in i.lower() for h in hide)]
             except ValueError:
-                ids = cached['ids'] if cached else []
-        hide = [h.lower() for h in spec.get('hide_models') or []]
-        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids
-                if i != manual and not any(h in i.lower() for h in hide)]
+                return []   # a provider that refuses to answer is skipped; the merge below uses its stale cache
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(plans))) as pool:
+            listed = dict(zip(plans, pool.map(load, list(plans.items()))))
+    for name, rows in seq:
+        if rows is not None:
+            out += rows
+            continue
+        plan = plans[name]
+        got = listed.get(name) or []
+        if not got and plan['kind'] == 'network':
+            # never reuse another account's catalog after an authorization failure; networked
+            # providers fall back to their stale cache, if any
+            ids = (plan['cached'] or {}).get('ids') or []
+            hide = [h.lower() for h in plan['spec'].get('hide_models') or []]
+            got = [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                   if i != plan['manual'] and not any(h in i.lower() for h in hide)]
+        out += got
     return out
 
 

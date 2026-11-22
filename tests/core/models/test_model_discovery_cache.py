@@ -96,3 +96,51 @@ def test_legacy_cache_for_non_custom_provider_is_still_used(tmp_path):
     calls = []
     assert routes(router, tmp_path, reply("unexpected", calls), 101) == ["existing:cached"]
     assert not calls
+
+
+def two_providers(endpoints, *, model="chosen", envs=("KEY_ONE", "KEY_TWO")):
+    """Two eligible networked providers; a custom provider's endpoint change rebinds its key."""
+    catalog = {"providers": {}, "roles": {"main": []}}
+    env = {}
+    for label, endpoint, env_name in zip(("one", "two"), endpoints, envs):
+        name, spec = ps.custom_provider(label, endpoint, "openai", "key", model)
+        catalog["providers"][name] = spec
+        catalog["roles"]["main"] += [f"{name}:{model}"]
+        env[spec["key_env"]] = KEY
+    return Router(catalog=catalog, env=env, key_sources=False)
+
+
+def test_slow_providers_are_listed_together_not_one_after_another(tmp_path):
+    # Seven providers with a 20 s timeout each can take 140 s serially; the engine allows 25 s
+    # for the whole list. Providers answer in parallel, so the wall time is near the slowest.
+    import time
+    seen = []
+
+    def slow(url, **kwargs):
+        seen.append(url)
+        time.sleep(0.4)
+        return httpx.Response(200, json={"data": [{"id": "late"}]}, request=httpx.Request("GET", url))
+
+    router = two_providers(["https://one.test/v1", "https://two.test/v1"])
+    start = time.monotonic()
+    got = routes(router, tmp_path, slow, 100)
+    elapsed = time.monotonic() - start
+    assert set(seen) == {"https://one.test/v1/models", "https://two.test/v1/models"}
+    assert got == ["custom-one:chosen", "custom-one:late", "custom-two:chosen", "custom-two:late"]
+    assert elapsed < 0.8, f"listings ran serially: {elapsed:.2f}s for two 0.4s providers"
+
+
+def test_a_provider_that_fails_does_not_block_or_hide_the_others(tmp_path):
+    # One broken provider must not stop the rest from listing, and its own stale cache (if any)
+    # is still shown rather than nothing at all.
+    router = two_providers(["https://one.test/v1", "https://two.test/v1"])
+    routes(router, tmp_path, reply("old-model", []), 100)  # both providers cache "old-model"
+
+    def one_fails(url, **kwargs):
+        if url.startswith("https://one.test"):
+            raise ConnectionError("synthetic")
+        return httpx.Response(200, json={"data": [{"id": "fresh"}]}, request=httpx.Request("GET", url))
+
+    got = routes(router, tmp_path, one_fails, 101 + CACHE_TTL)
+    assert got == ["custom-one:chosen", "custom-one:old-model",   # failed: stale cache rows
+                   "custom-two:chosen", "custom-two:fresh"]      # succeeded: fresh rows
