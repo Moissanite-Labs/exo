@@ -162,9 +162,9 @@ def test_late_steer_reentry_keeps_original_recall_anchor(tmp_path):
     loop.context = context
     original = loop._rounds
     inserted = False
-    async def rounds(session, turn_id, user, state, result, **kw):
+    async def rounds(session, turn_id, user, state, result, max_rounds=None, recall_anchor_id=None):
         nonlocal inserted
-        await original(session, turn_id, user, state, result, **kw)
+        await original(session, turn_id, user, state, result, max_rounds, recall_anchor_id)
         if not inserted:
             inserted = True
             principal = Message.user('late principal intent')

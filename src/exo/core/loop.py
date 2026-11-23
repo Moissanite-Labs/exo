@@ -241,7 +241,8 @@ class Loop:
             await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
-            await self._rounds(session, turn_id, user, st, result, max_rounds)
+            await self._rounds(session, turn_id, user, st, result, max_rounds,
+                               recall_anchor_id=user.id or "")
             while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
                 late = list(st.steer)
                 st.steer.clear()
