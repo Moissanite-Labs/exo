@@ -52,6 +52,7 @@ It uses the current thread's working directory when no directory is given.
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
   changes course. Nothing is lost and you do not need to wait.
+- Type `/rounds [default|off|number]` to set the tool-round limit for new turns in this window (`off` means unlimited; later turns only).
 - Press ctrl+c, or type `/stop`, to stop a running turn. With selected text ctrl+c copies it; while idle it shows the quit hint. Esc never stops a turn: it only closes a menu, clears a tip or leaves a panel.
 - A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box to return it to the composer for editing, or type `/unsteer`.
 - Press ctrl+f to focus a pending approval card so you can answer it without losing the composer draft. Press ctrl+g to open or close the big composer for a longer message.

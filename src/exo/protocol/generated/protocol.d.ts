@@ -411,6 +411,7 @@ export interface TurnSend {
   text?: string;
   parts?: ContentPart[];
   mode?: "send" | "queue" | "steer";
+  max_rounds?: number | null;
 }
 
 export interface TurnStarted {

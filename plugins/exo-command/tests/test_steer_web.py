@@ -73,3 +73,31 @@ def test_steer_chip_goes_when_the_core_no_longer_queues_it():
             b.wait("!document.querySelector('[data-steer=queued]')")
     finally:
         srv.close()
+
+
+@needs_chrome
+def test_window_round_override_is_omitted_when_steering():
+    from test_model_command_web import enter
+    src = SteerSrc()
+    original = src.call
+    sent = []
+
+    async def record(body):
+        if type(body).TYPE == 'turn.send':
+            sent.append(body)
+        return await original(body)
+
+    src.call = record
+    srv = Served(src)
+    try:
+        with Browser() as b:
+            b.goto(srv.url())
+            b.wait("document.querySelector('.xc-state')?.textContent === 'working'")
+            enter(b, '/rounds off')
+            b.wait("document.querySelector('.xc-strip').textContent.includes('window: unlimited')")
+            enter(b, 'a steer')
+            b.wait("!!document.querySelector('[data-steer=queued]')")
+            assert len(sent) == 1 and sent[0].mode == 'steer'
+            assert sent[0].max_rounds is None
+    finally:
+        srv.close()
