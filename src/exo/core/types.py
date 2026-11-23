@@ -42,6 +42,15 @@ class ContentPart:
         return cls(type="text", text=text)
 
 
+class BadArguments(dict[str, Any]):
+    """Tool-call arguments that were not a JSON object. It stays empty, so a replay to the provider sends ``{}``.
+    ``error`` says what was wrong. The registry answers the call with it, and no hook or tool runs."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__()
+        self.error = error
+
+
 @dataclass
 class ToolCall:
     """A model's request to run a tool. ``arguments`` is already parsed JSON."""

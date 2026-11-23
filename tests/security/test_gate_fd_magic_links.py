@@ -146,4 +146,4 @@ def test_a_descriptor_number_of_any_length_never_raises():
 def test_the_lexer_keeps_the_descriptor_of_a_redirection():
     cmds = gate._parse("exec 3< a 10<b 2>c < d {x}<e")[0]
     assert [(op, t.text, t.fd) for op, t in cmds[0].redirs] == [
-        ("<", "a", "3"), ("<", "b", "10"), (">", "c", "2"), ("<", "d", ""), ("<", "e", "")]
+        ("<", "a", "3"), ("<", "b", "10"), (">", "c", "2"), ("<", "d", ""), ("<", "e", "{x}")]

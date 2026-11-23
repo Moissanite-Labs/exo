@@ -320,6 +320,144 @@ console.log(JSON.stringify({out, lines}));''')
     assert all(got["lines"])
 
 
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_key_advice_follows_the_error_category(tmp_path):
+    """#756: a transport failure never sends someone to the Providers page; a refusal does; an unreadable one is general."""
+    got = node(tmp_path, '''
+const ask = (err) => { const r = new c.Guide({clock: () => 1000}).rules({providerError: err})[0]; return r ? r.text : ""; };
+console.log(JSON.stringify({
+  kinds: ["ReadError: peer closed", "HTTP 401: Incorrect API key provided", "HTTP 429: rate limited", "", true]
+    .map((e) => c.providerErrorKind(e)),
+  transport: ask("ReadError: peer closed connection without sending complete message body"),
+  timeout: ask("ReadTimeout: the provider did not answer in 120 s"),
+  bare: ask("ReadTimeout: "),
+  stream: ask("stream ended without a response"),
+  auth: ask("HTTP 401: Incorrect API key provided"),
+  denied: ask("AuthenticationError: invalid x-api-key"),
+  quota: ask("HTTP 429: rate limited"),
+  other: ask("provider did not return complete token usage"),
+  flag: ask(true),
+}));''')
+    assert got["kinds"] == ["transport", "auth", "other", "", ""]
+    # a transport failure is never the keys
+    for kind in ("transport", "timeout", "stream", "quota", "other"):
+        assert "key" not in got[kind].lower() and "providers" not in got[kind].lower(), (kind, got[kind])
+    assert got["transport"] != got["auth"] and got["auth"] != got["other"] and got["transport"] != got["other"]
+    for kind in ("auth", "denied"):
+        assert "check your keys on the Providers page" in got[kind]
+    assert got["flag"] == got["other"]
+    # #855: a timeout is the transport line itself, not just "no key advice"
+    assert got["timeout"] == got["bare"] == got["transport"] == "the model could not be reached: send it again, or /trace"
+
+
+TRANSPORT_LINE = "the model could not be reached: send it again, or /trace"
+AUTH_LINE = "that model call was refused: check your keys on the Providers page"
+OTHER_LINE = "that model call failed: /trace shows the error"
+
+
+def lines_for(tmp_path, calls):
+    """The guide's line for each model.call body ({error, attempts}), as chat.js hands it over."""
+    return node(tmp_path, "const calls = %s;\nconsole.log(JSON.stringify(calls.map((b) => { const r = new c.Guide("
+                          "{clock: () => 1000}).rules({providerError: b.error || '', providerAttempts: b.attempts || []})[0];"
+                          " return r ? r.text : ''; })));" % json.dumps(calls))
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_router_failures_get_the_line_their_cause_calls_for(tmp_path):
+    """#855: the model.call bodies a real Loop and Router record. A failure before any output ends as "all routes for
+    'main' failed or are cooling down", so the transport cause is only in the attempts; the router words its own
+    refusals ("rejected the key", "refused the login", "no credentials for role"); a spend limit is never the keys."""
+    import httpx
+
+    from exo.core.loop import Loop
+    from exo.core.models.router import Router
+    from exo.core.sessions import EventBus, SessionStore
+
+    bad_key = b'{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'
+    answers = {
+        "read": lambda r: (_ for _ in ()).throw(httpx.ReadError("", request=r)),
+        "timeout": lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("", request=r)),
+        "connect": lambda r: (_ for _ in ()).throw(httpx.ConnectError("All connection attempts failed", request=r)),
+        "401": lambda r: httpx.Response(401, content=bad_key, headers={"content-type": "application/json"}),
+        "402": lambda r: httpx.Response(402, content=b'{"error":{"message":"over limit"}}', headers={"content-type": "application/json"}),
+        "503": lambda r: httpx.Response(503, content=b'{"error":"overloaded"}', headers={"content-type": "application/json"}),
+    }
+    keyed = {"providers": {"p": {"base_url": "https://p.test/v1", "key_env": "P_KEY"}}, "roles": {"main": ["p:m"]}}
+    login = {"providers": {"lm": {"base_url": "https://lm.test/v1"}}, "roles": {"main": ["lm:m"]}}
+
+    def recorded(answer, cfg, env, n):
+        async def handler(request):
+            return answers[answer](request)
+
+        store = SessionStore(tmp_path / f"s{n}.sqlite")
+        router = Router.from_config(cfg, env=env, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        loop = Loop(store, router.provider("main"), bus=EventBus(store), retry_delay=0)
+
+        async def go():
+            info = await loop.create_session()
+            await loop.send(info.id, "hi")
+            return info.id
+
+        sid = asyncio.run(go())
+        call = [e.body for e in store.events_since(0, session=sid) if e.type == "model.call"][-1]
+        store.close()
+        return {"error": call.error, "attempts": call.attempts}
+
+    cases = [("read", keyed, {"P_KEY": "x"}, TRANSPORT_LINE), ("timeout", keyed, {"P_KEY": "x"}, TRANSPORT_LINE),
+             ("connect", keyed, {"P_KEY": "x"}, TRANSPORT_LINE), ("401", keyed, {"P_KEY": "x"}, AUTH_LINE),
+             ("401", login, {}, AUTH_LINE), ("read", keyed, {}, AUTH_LINE),   # no key at all: "no credentials for role"
+             ("402", keyed, {"P_KEY": "x"}, OTHER_LINE), ("503", keyed, {"P_KEY": "x"}, OTHER_LINE)]
+    calls = [recorded(a, cfg, env, n) for n, (a, cfg, env, _) in enumerate(cases)]
+    assert "cooling down" in calls[0]["error"] and "ReadError" not in calls[0]["error"]   # the cause is only in the attempts
+    assert "refused the login" in calls[4]["error"] and "no credentials for role" in calls[5]["error"]
+    assert lines_for(tmp_path, calls) == [want for *_, want in cases]
+    # Without the attempts the same bodies read as "other": the line has to see them.
+    assert lines_for(tmp_path, [{"error": c["error"]} for c in calls[:3]]) == [OTHER_LINE] * 3
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_error_text_the_router_and_the_cli_write(tmp_path):
+    """#855: claude-cli's login refusals, its own timeout, and statuses that are not the keys."""
+    got = lines_for(tmp_path, [{"error": e} for e in [
+        "claude-cli refused the login (claude: Not logged in · Please run /login): log in again, then test it in /providers",
+        "claude-cli refused the login (claude: OAuth token has expired. Please obtain a new token or refresh your existing "
+        "token.): log in again, then test it in /providers",
+        "no model configured for role 'main'; use /providers and choose a default model",
+        "ReadTimeout: claude sent nothing for 120 s",
+        "ConnectTimeout: ",
+        "Error code: 401 - {'error': {'type': 'authentication_error'}}",
+        "HTTP 404: model gpt-403 not found",
+        "HTTP 407: Proxy Authentication Required",
+        "p is over its provider spend limit (HTTP 402: over limit): raise the limit or top up the account, then test it in /providers",
+    ]])
+    assert got == [AUTH_LINE, AUTH_LINE, OTHER_LINE, TRANSPORT_LINE, TRANSPORT_LINE, AUTH_LINE, OTHER_LINE, OTHER_LINE,
+                   OTHER_LINE]
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_each_failure_kind_keeps_its_own_count(tmp_path):
+    """#855 and D-092: two failures of other kinds do not use up a refusal's line, and each kind still stops at two."""
+    got = node(tmp_path, '''
+let t = 1000; const g = new c.Guide({clock: () => t});
+const at = (err) => { t += 30000; const r = g.pick({providerError: err, providerAttempts: []}); return r ? r.key : null; };
+console.log(JSON.stringify([
+  at("ReadError: "), at("HTTP 503: overloaded"), at("p rejected the key (HTTP 401: bad): fix P_KEY or add a key in /providers"),
+  at("ReadError: "), at("HTTP 503: overloaded"), at("ReadError: "), at("HTTP 503: overloaded"),
+  at("p rejected the key (HTTP 401: bad)"), at("ReadError: "), at("p rejected the key (HTTP 401: bad)"),
+  at("p rejected the key (HTTP 401: bad)"),
+]));''')
+    assert got == ["providers:transport", "providers:error", "providers:auth", "providers:transport", "providers:error",
+                   None, None, "providers:auth", None, None, None]
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_the_transport_line_fills_trace(tmp_path):
+    """#855: the transport line names /trace, so Tab fills it in, as the general line does."""
+    got = node(tmp_path, 'console.log(JSON.stringify(["ReadError: ", "HTTP 503: x", "HTTP 401: x"].map((e) => '
+                         'new c.Guide({clock: () => 1000}).rules({providerError: e})[0].fill)));')
+    assert got == ["/trace", "/trace", ""]
+
+
 def test_escape_never_stops_a_turn_in_the_page():
     """D-043: Escape closes/cancels local UI, never interrupts a turn. DOM stopPropagation is harmless."""
     static = Path(__file__).resolve().parents[1] / "exo_command" / "static"

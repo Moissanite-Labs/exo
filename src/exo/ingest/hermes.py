@@ -10,7 +10,9 @@ authored `hermes:unverified-user` with role `user`, so they never pass as the pr
 
 Provenance: `src = {adapter, key, path, rowid, message_uid?}`, plus `profile`, `source`
 (the Hermes session source) and `hermes_session` in the body; session = `hermes:<profile>:<id>`.
-Watermark: {"max_id": highest message rowid read}.
+Watermark: {"max_id": highest message rowid read, "sources": the session sources read}. The rowid covers only
+those sources (a watermark without them read INTERACTIVE). A run that reads a source outside them starts again
+from the first row, and `src.key` keeps it from adding a row twice.
 """
 from __future__ import annotations
 
@@ -46,7 +48,8 @@ def ingest(source_path, ledger, principal_author: str, *, since: str | None = No
            sources: tuple[str, ...] = INTERACTIVE) -> dict:
     db = _db_path(Path(source_path).expanduser())
     run = Run(ledger, ADAPTER, db, principal_author, since)
-    max_id = int(run.watermark.get('max_id', 0))
+    read = set(run.watermark.get('sources', INTERACTIVE))
+    max_id = int(run.watermark.get('max_id', 0)) if set(sources) <= read else 0
     con = connect_ro(db)
     try:
         mcols = {r[1] for r in con.execute('PRAGMA table_info(messages)')}
@@ -81,4 +84,4 @@ def ingest(source_path, ledger, principal_author: str, *, since: str | None = No
                          model=model, **common)
     finally:
         con.close()
-    return run.finish({'max_id': max(max_id, int(top))})
+    return run.finish({'max_id': max(max_id, int(top)), 'sources': sorted(set(sources))})

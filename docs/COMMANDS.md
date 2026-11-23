@@ -21,7 +21,7 @@ A client reads the line and decides. Three things can answer:
    unknown name fails with the error code `not_found`.
 
 `commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`) plus every plugin command, each with a name, a description and an argument hint.
+`compact`, `trace`, `findings`), optional `work` and `checkpoint`, plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -111,7 +111,8 @@ History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 5
 key or password is never kept.
 
 Guidance. With the composer empty, one dim line may suggest a next step, chosen by local rules: first run (`/intro`),
-a failed model call (`/providers` to check the provider), a finished job (ask for its `job_output`), open findings
+a failed model call (`/providers` to check the provider; the web page's line reads the error instead, see
+`docs/ui/WEB.md` "The composer (D-037)"), a finished job (ask for its `job_output`), open findings
 (`/findings`), a slow turn (`/trace`), a long thread (`/context`). At most one new line per 25 seconds, each rule twice
 a session, none while a turn runs, and a rule stops once you run its command. Tab fills the line in. Turn it off with
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
@@ -123,6 +124,15 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 `docs/ui/WEB.md` "The composer".
 
 ### Core built-ins (`command.run`)
+
+`/checkpoint` shows the current conversation's record-derived continuity index
+when `work_checkpoint.enabled` is true (default). It requires a principal
+connection and accepts no arguments. It never executes indexed work. See
+[WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
+
+`/work [show|history]` reads the current session's saved working notes when
+`work_notes.enabled` is true. It requires a principal connection and passes
+through the tool gate and configured executor. See [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
 
 All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 
@@ -227,6 +237,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo ask seed <path>` | Loads a numbered Markdown question list into the queue. | none | same |
 | `exo ask decide` | Ask or act? Reads a JSON list of predicted choices on stdin and prints the verdict. | `--domain` (default `default`) | same |
 | `exo eval` | An n=1 evaluation report. See `docs/TOOLS-CLI.md`. | `--responder MOD:FN`, `--qa FILE`, `--pairs FILE`, `--seed N`, `--no-write` | `src/exo/eval.py` |
+| `exo improve --offline` | A Harness² experiment on explicit public/synthetic fixtures; no principal store or activation. Stdout JSON, optional new owner-only run export. Exit 0: review-ready proposal; 1: valid experiment failed, exhausted its budget, did not improve or failed held-out checks; 2: invalid input/limits or filesystem-policy/I/O refusal. See `docs/integrations/HARNESS2.md` (D-096). | Required: `--offline`, `--adapter signed-decimal-v1` or `text-normalize-v1`, `--fixture FILE` (plain JSON filename in cwd). Optional: `--output RUN` (new ID under `./improvement-runs`), `--iterations N` (default 1; saturation/later non-improvement discards the candidate), `--max-tasks N` (16 total), `--max-calls N` (64 including held-out), `--margin X` (.01). No `--root`/`--principal`. | `src/exo/improvement/offline.py` |
 | `exo brief` | The morning brief. See `docs/TOOLS-CLI.md`. | `--html`, `--write` | `src/exo/brief.py` |
 | `exo consolidate` | Turns new ledger events into belief proposals. See `docs/TOOLS-CLI.md`. | `--as SEAT`, `--key PATH`, `--dry-run` | `src/exo/consolidate.py` |
 | `exo proposals [list\|show\|accept\|reject\|revert] [id]` | Reviews belief proposals. Default action is `list`. | `--reason` (required for `reject` and `revert`), `--all` list decided ones too, `--as SEAT` (default `principal`), `--key PATH` | `cmd_proposals` in `src/exo/consolidate.py` |
@@ -252,10 +263,10 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo config show` | Every key with its effective value. | none | `main` in `src/exo/config.py` |
+| `exo config show` | Every key with its effective value. A secret prints as `***`, as `config.get` returns it (`docs/SEATS.md` "Config and secrets"). | none | `main` in `src/exo/config.py` |
 | `exo config path` | Where `config.json` lives. | none | same |
 | `exo config roles` | The model route per role. No secrets. | none | same |
-| `exo config get <key>` | One value. Exit code 1 if unset. | `<key>` | same |
+| `exo config get <key>` | One value, a secret masked as in `show`. Exit code 1 if unset. | `<key>` | same |
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo models` | Providers, whether a key is found (yes or no, never the value), the route per role, and the `code_find` status. | `--remote PROVIDER` lists that provider's models over the network | `cmd_models` in `src/exo/models_cmd.py` |
@@ -271,6 +282,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
+| `exo findings backlog` | Unresolved findings (open, reopened, and fixed awaiting re-verification) counted by severity and by age, with the oldest listed. The backlog read uses one snapshot without a write lock; opening the store still takes a write lock for its schema check. | `--limit N` (oldest rows, 0..100, default 20), `--json` | same |
 | `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too, and so does one whose ledger file is a symlink. A ledger whose two anchors are more than one event apart passes with a warning. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 

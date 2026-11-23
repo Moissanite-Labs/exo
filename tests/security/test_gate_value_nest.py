@@ -347,10 +347,11 @@ def test_the_nest_end_is_the_lexer_s():
 
 def test_a_part_marked_remote_stays_private_to_the_ssh_line():
     """The same text read as ssh's remote command and as a local one shares its parts in the memo. The ssh hop
-    marks a copy, so the local `ls` keeps its own exposure."""
+    marks a copy, so the local `ls` keeps its own exposure. The remote `ls` also has a copy on the host (#461
+    follow-up), remote too."""
     c = gate.classify({"tool": "bash", "args": {"command": "ssh h 'rm -rf /tmp/x; ls'; bash -c 'rm -rf /tmp/x; ls'"}})
-    exposures = sorted(p.exposure for p in gate._each_part(c) if p.summary == "ls")
-    assert exposures == ["internal", "private"], exposures
+    exposures = sorted((p.exposure, p.target) for p in gate._each_part(c) if p.summary == "ls")
+    assert exposures == [("internal", ""), ("internal", "h"), ("private", "")], exposures
 
 
 def test_a_line_read_again_spends_the_budget_again():

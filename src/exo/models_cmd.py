@@ -34,32 +34,67 @@ def render(router: Router) -> str:
     return '\n'.join(lines)
 
 
-def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | None = None) -> list[str]:
-    """Model ids from ``{base_url}/models`` of an OpenAI-compatible provider."""
+def _remote_catalog(router: Router, provider: str, *, get=None) -> list[dict]:
+    """Public model endpoint. SIWC catalog is account-specific and deliberately never cached."""
+    import asyncio
     spec = router.providers.get(provider)
     if spec is None:
         raise ValueError(f'unknown provider {provider!r}')
-    if spec.get('transport', 'openai') != 'openai':
+    if spec.get('transport', 'openai') not in ('openai', 'responses'):
         raise ValueError(f'provider {provider!r} has no OpenAI-style /models endpoint')
-    envs = spec.get('key_env') or []
-    envs = [envs] if isinstance(envs, str) else list(envs)
-    key = next((k for e in envs if (k := router._key(e))), None)
-    headers = {'authorization': f'Bearer {key}'} if key else {}
+    subscription = spec.get('auth') == 'chatgpt'
+    auth = router.provider_auth.get(provider)
+    scope_fn = auth[2] if auth is not None and len(auth) > 2 else None
+    scope = scope_fn() if subscription and callable(scope_fn) else ''
+    if subscription:
+        if spec.get('base_url') != 'https://api.openai.com/v1' or not router.auth_available(provider):
+            raise ValueError('ChatGPT plan usage is not connected')
+        try:
+            headers = asyncio.run(router.provider_auth[provider][1]())
+        except Exception:
+            raise ValueError('ChatGPT authorization unavailable') from None
+    else:
+        envs = spec.get('key_env') or []
+        envs = [envs] if isinstance(envs, str) else list(envs)
+        key = next((k for e in envs if (k := router._key(e))), None)
+        headers = {**({'authorization': f'Bearer {key}'} if key else {}), **(spec.get('headers') or {})}
     if get is None:
         import httpx
         get = httpx.get
     try:
-        resp = get(spec['base_url'].rstrip('/') + '/models', headers={**headers, **(spec.get('headers') or {})},
-                   timeout=20.0)
+        resp = get(spec['base_url'].rstrip('/') + '/models', headers=headers, timeout=20.0)
         resp.raise_for_status()
         data = resp.json()
-    except Exception as e:  # never echo request headers
-        raise ValueError(f'{provider}: could not list models ({type(e).__name__})') from None
-    items = data.get('data') if isinstance(data, dict) else data
-    return sorted(str(m.get('id', m)) if isinstance(m, dict) else str(m) for m in items or [])
+        if subscription:
+            if scope != (scope_fn() if callable(scope_fn) else ''):
+                raise ValueError('Selected account changed')
+            items = data['models']
+            if not isinstance(items, list):
+                raise ValueError()
+            return [{'id': item['slug'], 'display_name': item.get('display_name', item['slug'])}
+                    for item in items if isinstance(item, dict) and item.get('visibility') == 'list'
+                    and isinstance(item.get('slug'), str) and item['slug']]
+        items = data.get('data') if isinstance(data, dict) else data
+        return sorted([{'id': str(m.get('id', m)) if isinstance(m, dict) else str(m)} for m in items or []],
+                      key=lambda item: item['id'])
+    except Exception as exc:
+        raise ValueError(f'{provider}: could not list models ({type(exc).__name__})') from None
+
+
+def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | None = None) -> list[str]:
+    return [row['id'] for row in _remote_catalog(router, provider, get=get)]
 
 
 CACHE_TTL = 6 * 3600.0
+
+
+def _custom_cache_identity(spec: dict[str, Any]) -> str | None:
+    """Bind managed custom discovery to non-secret routing metadata, never a key value."""
+    if spec.get('setup_managed') is not True:
+        return None
+    import hashlib, json
+    fields = [spec.get('transport', 'openai'), spec.get('base_url'), spec.get('setup_auth'), spec.get('key_env')]
+    return hashlib.sha256(json.dumps(fields, ensure_ascii=True).encode()).hexdigest()
 
 
 def available_models(router: Router, home: Path, *, get: Callable[..., Any] | None = None,
@@ -73,30 +108,49 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     cache_dir = Path(home) / 'cache' / 'models'
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
+        manual = spec.get('setup_model') if spec.get('setup_managed') is True else None
+        if isinstance(manual, str) and manual and router._allows(name, 'main') and \
+                (not spec.get('key_env') or st.get('key') == 'yes'):
+            out.append({'route': f'{name}:{manual}', 'provider': name})
+        if spec.get('auth') == 'chatgpt':
+            if router.auth_available(name) and router._allows(name, 'main'):
+                try:
+                    out += [{'route': f"{name}:{row['id']}", 'provider': name,
+                             'display_name': row['display_name']} for row in _remote_catalog(router, name, get=get)]
+                except ValueError:
+                    pass  # never reuse another account's catalog after an authorization failure
+            continue
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
             continue
-        if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'
+        if (spec.get('transport', 'openai') not in ('openai', 'responses') or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
         f = cache_dir / f'{name}.json'
+        identity = _custom_cache_identity(spec)
         ids: list[str] | None = None
         try:
             cached = json.loads(f.read_text())
-            if now - cached['at'] < CACHE_TTL:
+            if identity is not None and cached.get('configuration') != identity:
+                cached = None  # Old, differently configured, and pre-identity caches cannot be fallback data.
+            if cached is not None and now - cached['at'] < CACHE_TTL:
                 ids = cached['ids']
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             cached = None
         if ids is None:
             try:
                 ids = remote_models(router, name, get=get)
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({'at': now, 'ids': ids}))
+                record: dict[str, Any] = {'at': now, 'ids': ids}
+                if identity is not None:
+                    record['configuration'] = identity
+                f.write_text(json.dumps(record))
             except ValueError:
                 ids = cached['ids'] if cached else []
         hide = [h.lower() for h in spec.get('hide_models') or []]
-        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids if not any(h in i.lower() for h in hide)]
+        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids
+                if i != manual and not any(h in i.lower() for h in hide)]
     return out
 
 

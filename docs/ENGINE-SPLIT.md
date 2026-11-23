@@ -81,33 +81,40 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
     `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
     approver checks moved with the desk to `exo.core.approvals`).
 - 2026-10-15, budget policy (D-077): the hard 15,000-line ceiling became a ratchet with headroom (see "Budget
-  policy"). No code changed. Counted core lines: 14,999 before and after, against a floor of 14,813 and a ceiling
-  of 15,813.
+  policy"). No code changed. Counted core lines: 14,999 before and after, against the floor of 14,813 and a ceiling
+  of 15,813 (that ceiling is off since 2026-10-27, D-083).
+- 2026-10-27, ceiling dropped (D-083): the count is reported, not asserted. The floor and the two step 4 structure
+  caps stay.
 
 ## Budget policy
 
-Decided 2026-10-15 (D-077). It replaces the hard 15,000-line ceiling that D-067 set on 2026-10-13. The principal's
-ruling: "important to be lean and optimized but not at the cost of functionality and robustness and
-product-market fit". A line count should not stand in the way of security, robustness or product work, so the budget
-is a ratchet with headroom. The structural goal in point 5 is the aim, and the count is a signal for it.
+Decided 2026-10-15 (D-077), amended 2026-10-27 (D-083). It replaced the hard 15,000-line ceiling that D-067 set on
+2026-10-13; the ceiling is now off entirely. The principal's ruling of 2026-10-15: "important to be lean and
+optimized but not at the cost of functionality and robustness and product-market fit". The ruling of 2026-10-27:
+"we're dropping the ceiling for now as we build out the codebase, it was too restrictive".
 
-1. **Two recorded numbers.** `tests/integration/test_wave1_acceptance.py` holds `CORE_FLOOR = 14813` and
-   `CORE_HEADROOM = 1000`. The only assertion is `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is
-   15,813 counted lines. The floor is the count right after the last real reduction, #124 (D-067). That branch measured 14,812
-   before its last merge from main, and the count at the merge is 14,813.
+1. **One recorded number, and no ceiling.** `tests/integration/test_wave1_acceptance.py` holds
+   `CORE_FLOOR = 14813`, the count right after the last real reduction, #124 (D-067). That branch measured 14,812
+   before its last merge from main, and the count at the merge is 14,813. The line ceiling was failing its own test:
+   on 2026-10-27 `main` at `13cea687` counted 15,828 against a 15,824 ceiling, 4 over, while the work it blocked was
+   ordinary product work. D-083 took the ceiling off. The count is printed on every run and nothing about lines is
+   asserted.
 2. **The floor ratchets down.** Every real reduction PR (deletions, simplification, real seams per this plan) sets
    `CORE_FLOOR` to its post-merge count in the same PR. The floor never goes up, so a reduction that ends above the
    current floor leaves it where it is.
-3. **Headroom is for shipping.** Fixes and features land inside the headroom with no ceremony. The test prints the
-   count, the floor and the headroom left on every run (`pytest -s` or `-rP` shows it), and its failure message shows
-   them too.
-4. **Security and robustness fixes are never blocked by the budget.** If one would cross the ceiling, its PR raises
-   `CORE_HEADROOM` by the minimum needed, with a one-line `DECISIONS.md` note, and the lead schedules a reduction
-   within the week. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+3. **The count is a report.** The test prints the count and its distance from the floor (`pytest -s` or `-rP` shows
+   it). No PR waits on a line number and no headroom note is needed to land one.
+4. **Nothing is blocked by the budget.** Fixes and features land on their own merits. A count that climbs far past
+   the floor is news for the lead and a reason to schedule a reduction, never a reason to refuse work.
 5. **The structural goal carries the real intent.** Step 4's criteria are the goal: no private-state reads across
    module boundaries (`loop._state`, `store._q`, the tree's `_view` and `_agent_key`), no product imports into the
-   engine (the inward imports listed under "Progress"), and one responsibility per module. The test also prints the
-   largest counted files and flags any above 1,000 lines. That report is information, not an assertion.
+   engine (the inward imports listed under "Progress"), and one responsibility per module. Two of the counts are
+   asserted, and they ratchet down like the floor (D-083): `INWARD_IMPORTS_MAX = 39` imports of
+   a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. Relative imports
+   such as `from .. import envscrub` count like `from exo import envscrub`. Exported symbols such as `__version__`
+   are not modules, and repeated forms in one file count once. Neither cap may be raised
+   to pass a false positive; fix the reader. The test also prints the largest counted files and flags any above 1,000
+   lines. That report is information, not an assertion.
 6. **The `CORE` list is never edited to dodge the count,** as before. Excluding an existing counted module to make a
    failing test pass is not a reduction.
 

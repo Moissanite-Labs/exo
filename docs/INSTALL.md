@@ -1,13 +1,13 @@
 # Installing Exo
 
-The README has the short version (`## Quick start`). This page has the full detail. The repository is a private
-preview during the early build. Access is on request from [Aska Digital](https://digital.askaconsult.com).
+The README has the short version (`## Quick start`). This page has the full detail. The repository is public
+and remains an early preview.
 
 One script installs Exo for any user on macOS or Linux (D-004). It never touches an existing
 `~/.hermes` unless you name it.
 
 ```sh
-git clone https://github.com/aska-digital/exo && cd exo
+git clone https://github.com/Moissanite-Labs/exo && cd exo
 scripts/install.sh --dry-run      # print the plan, change nothing
 scripts/install.sh                # install Exo (no Hermes); `exo` lands on your PATH
 exo                               # open the terminal client (a new terminal if PATH just changed)
@@ -15,7 +15,7 @@ scripts/install.sh --with-hermes  # optional: also pin Hermes and its patches
 ```
 
 To install from the repository URL without cloning first, give the installer a source and it clones into
-`~/.exo/src/exo`: `bash scripts/install.sh --exo-source https://github.com/aska-digital/exo`. A re-run pulls and
+`~/.exo/src/exo`: `bash scripts/install.sh --exo-source https://github.com/Moissanite-Labs/exo`. A re-run pulls and
 reinstalls (an upgrade). `exo update` does the same from anywhere.
 
 ## The `exo` command

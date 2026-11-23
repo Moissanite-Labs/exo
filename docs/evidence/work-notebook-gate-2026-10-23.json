@@ -1,0 +1,1638 @@
+{
+  "date": "2026-10-23",
+  "scope": "Focused work_notes classification comparison using the unchanged gate_diff.py from main.",
+  "script_commit": "5a9dc394f7406fe58f3c257e8227649ca9a56f72",
+  "flags": [
+    "--only-corpus",
+    "--no-variants",
+    "--jobs",
+    "1",
+    "--json-limit",
+    "10000",
+    "--max-examples",
+    "4",
+    "--timeout",
+    "120"
+  ],
+  "exit_code": 1,
+  "interpretation": "Nine intentional read/history classification lowerings; update has four tightenings. No lowering among sampled absent or invalid actions, or supported actions with unsupported keys.",
+  "prior_missing_action_coverage": {
+    "comparison_head": "cdf54caf",
+    "lowered_pairs": 2167,
+    "unique_actions": 32,
+    "all_included_in_this_corpus": true,
+    "lowered_pairs_after_fix": 0
+  },
+  "corpus_generation": "Main build_corpus(head, base), filtered to work_notes, then each generated argument shape combined with read/history/update, plus explicit read/history/history-with-limit/update/invalid/null/list/absent actions, deduplicated.",
+  "corpus": [
+    {
+      "tool": "work_notes",
+      "args": {}
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dest": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "destination": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "dir": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "directory": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "file_path": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "filename": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "files": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "path": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "paths": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "root": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "source": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "src": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "channel": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "chat_id": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "message": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "target": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.exo/state/gate-grants.json",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.exo/state/gate-grants.json",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.exo/state/gate-grants.json",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.ssh/id_rsa",
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.ssh/id_rsa",
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "text": "~/.ssh/id_rsa",
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": "read"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": "history"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": "update"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": "invalid"
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": null
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": []
+      }
+    },
+    {
+      "tool": "work_notes",
+      "args": {
+        "action": "history",
+        "limit": 10
+      }
+    }
+  ],
+  "report": {
+    "policies": [
+      "default",
+      "deny_force_push",
+      "deny_delete",
+      "deny_store_write",
+      "deny_credentials",
+      "deny_github_post",
+      "deny_opaque_exec",
+      "deny_local_write",
+      "categories_deny",
+      "categories_ask",
+      "categories_allow",
+      "categories_log",
+      "category_delete_allow",
+      "category_local_write_deny",
+      "category_store_write_deny",
+      "category_vcs_push_allow",
+      "category_opaque_exec_allow",
+      "category_opaque_exec_log",
+      "rule_opaque_exec_allow",
+      "rule_opaque_exec_log_then_allow",
+      "reserved_store_write",
+      "reserved_delete_force_push",
+      "reserved_command_rm",
+      "reserved_target_ssh",
+      "reserved_post_mapping",
+      "reserved_tool_terminal",
+      "scope_internal_all",
+      "scope_private_all",
+      "scope_private_own",
+      "deny_target_ssh",
+      "deny_target_pub",
+      "deny_target_store",
+      "deny_target_dev_proc",
+      "allow_ls_anchored",
+      "allow_ls_unanchored",
+      "allow_git_status",
+      "allow_git_push",
+      "allow_git_push_force_reserved",
+      "allow_rm_rf_build",
+      "allow_rm_rf_build_delete_deny",
+      "allow_bash_c",
+      "allow_ssh",
+      "allow_everything",
+      "allow_everything_under_denies",
+      "allow_command_list",
+      "ask_curl",
+      "ask_git",
+      "deny_rule_rm",
+      "deny_rule_push_force",
+      "deny_command_force",
+      "deny_command_store",
+      "order_allow_then_ask",
+      "order_ask_then_allow",
+      "order_log_then_allow",
+      "order_ask_under_category_deny",
+      "order_deny_then_allow",
+      "order_ask_then_log_all",
+      "matrix_deny_cells",
+      "matrix_all_allow",
+      "matrix_all_ask",
+      "matrix_allow_log_then_allow",
+      "matrix_ask_log_then_allow",
+      "posting_footer",
+      "posting_forbid_words",
+      "posting_forbid_patterns",
+      "posting_max_chars",
+      "posting_scrub_names",
+      "posting_agent_names",
+      "posting_close_and_merge",
+      "posting_forbid_ignore_case",
+      "posting_footer_everywhere",
+      "escalate_off",
+      "escalate_more",
+      "loosest",
+      "tool_rules",
+      "axis_rules",
+      "third_party_allow_gh",
+      "budget_spent",
+      "scope_private_allow_all",
+      "budget_decides",
+      "budget_per_action",
+      "rule_costly_part_deny",
+      "scrub_patterns",
+      "scrub_internal",
+      "scrub_off",
+      "scrub_kinds_off",
+      "rules_flat_named"
+    ],
+    "policy_errors": {
+      "base": {},
+      "head": {}
+    },
+    "gate_files": {
+      "base": "src/exo/gate.py",
+      "head": "src/exo/gate.py"
+    },
+    "counts": {
+      "actions": 152,
+      "pairs_same": 12904,
+      "lowered_pairs": 9,
+      "lowered_actions": 3,
+      "lowered_outcome": 9,
+      "lowered_reserved": 0,
+      "lowered_violations": 0,
+      "violations_reworded": 0,
+      "tightened_pairs": 4,
+      "tightened_actions": 1,
+      "pairs_detail_changed": 307,
+      "classification_only_actions": 0,
+      "base_classify_errors": 0,
+      "base_decide_errors": 0,
+      "head_classify_errors": 0,
+      "head_decide_errors": 0
+    },
+    "tree_secs": {
+      "base": {
+        "secs": 0.7
+      },
+      "head": {
+        "secs": 0.7
+      }
+    },
+    "lowered_by_policy": {
+      "categories_deny": 3,
+      "categories_ask": 3,
+      "categories_log": 3
+    },
+    "lowered_by_transition": {
+      "unknown deny -> read allow": 3,
+      "unknown ask -> read allow": 3,
+      "unknown log -> read allow": 3
+    },
+    "tightened_by_transition": {
+      "unknown allow -> local_write deny": 3,
+      "unknown allow -> local_write ask": 1
+    },
+    "classification_only_examples": [],
+    "lowered_actions": [
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "read"
+          }
+        },
+        "policies": [
+          "categories_deny",
+          "categories_ask",
+          "categories_log"
+        ],
+        "transitions": [
+          "unknown deny -> read allow",
+          "unknown ask -> read allow",
+          "unknown log -> read allow"
+        ],
+        "first": {
+          "action": {
+            "tool": "work_notes",
+            "args": {
+              "action": "read"
+            }
+          },
+          "policy": "categories_deny",
+          "kinds": [
+            "outcome"
+          ],
+          "base": {
+            "category": "unknown",
+            "target": "",
+            "outcome": "deny",
+            "rule": "category",
+            "reason": "category unknown",
+            "reserved": [],
+            "violations": []
+          },
+          "head": {
+            "category": "read",
+            "target": "",
+            "outcome": "allow",
+            "rule": "matrix",
+            "reason": "reversible and private",
+            "reserved": [],
+            "violations": []
+          }
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history"
+          }
+        },
+        "policies": [
+          "categories_deny",
+          "categories_ask",
+          "categories_log"
+        ],
+        "transitions": [
+          "unknown deny -> read allow",
+          "unknown ask -> read allow",
+          "unknown log -> read allow"
+        ],
+        "first": {
+          "action": {
+            "tool": "work_notes",
+            "args": {
+              "action": "history"
+            }
+          },
+          "policy": "categories_deny",
+          "kinds": [
+            "outcome"
+          ],
+          "base": {
+            "category": "unknown",
+            "target": "",
+            "outcome": "deny",
+            "rule": "category",
+            "reason": "category unknown",
+            "reserved": [],
+            "violations": []
+          },
+          "head": {
+            "category": "read",
+            "target": "",
+            "outcome": "allow",
+            "rule": "matrix",
+            "reason": "reversible and private",
+            "reserved": [],
+            "violations": []
+          }
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history",
+            "limit": 10
+          }
+        },
+        "policies": [
+          "categories_deny",
+          "categories_ask",
+          "categories_log"
+        ],
+        "transitions": [
+          "unknown deny -> read allow",
+          "unknown ask -> read allow",
+          "unknown log -> read allow"
+        ],
+        "first": {
+          "action": {
+            "tool": "work_notes",
+            "args": {
+              "action": "history",
+              "limit": 10
+            }
+          },
+          "policy": "categories_deny",
+          "kinds": [
+            "outcome"
+          ],
+          "base": {
+            "category": "unknown",
+            "target": "",
+            "outcome": "deny",
+            "rule": "category",
+            "reason": "category unknown",
+            "reserved": [],
+            "violations": []
+          },
+          "head": {
+            "category": "read",
+            "target": "",
+            "outcome": "allow",
+            "rule": "matrix",
+            "reason": "reversible and private",
+            "reserved": [],
+            "violations": []
+          }
+        }
+      }
+    ],
+    "lowered": [
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "read"
+          }
+        },
+        "policy": "categories_deny",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "deny",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "read"
+          }
+        },
+        "policy": "categories_ask",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "ask",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "read"
+          }
+        },
+        "policy": "categories_log",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "log",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history"
+          }
+        },
+        "policy": "categories_deny",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "deny",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history"
+          }
+        },
+        "policy": "categories_ask",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "ask",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history"
+          }
+        },
+        "policy": "categories_log",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "log",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history",
+            "limit": 10
+          }
+        },
+        "policy": "categories_deny",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "deny",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history",
+            "limit": 10
+          }
+        },
+        "policy": "categories_ask",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "ask",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      },
+      {
+        "action": {
+          "tool": "work_notes",
+          "args": {
+            "action": "history",
+            "limit": 10
+          }
+        },
+        "policy": "categories_log",
+        "kinds": [
+          "outcome"
+        ],
+        "base": {
+          "category": "unknown",
+          "target": "",
+          "outcome": "log",
+          "rule": "category",
+          "reason": "category unknown",
+          "reserved": [],
+          "violations": []
+        },
+        "head": {
+          "category": "read",
+          "target": "",
+          "outcome": "allow",
+          "rule": "matrix",
+          "reason": "reversible and private",
+          "reserved": [],
+          "violations": []
+        }
+      }
+    ],
+    "reworded": [],
+    "lowered_truncated": false,
+    "reworded_truncated": false,
+    "base": "5a9dc394f7406fe58f3c257e8227649ca9a56f72",
+    "head": "042c896e9b2888cb4b8d5fc8b07165b11c986ee5",
+    "corpus_counts": {
+      "files": 152
+    },
+    "wall_secs": 0.9,
+    "unread_tables": {},
+    "incomplete": []
+  },
+  "prior_lowered_action_coverage": {
+    "comparison_head": "cdf54caf",
+    "unique_actions": 35,
+    "all_included_in_this_corpus": true,
+    "corpus_loss": 0
+  },
+  "unsupported_key_coverage": {
+    "generated_argument_shapes": 36,
+    "supported_actions": [
+      "read",
+      "history",
+      "update"
+    ],
+    "actions": 108,
+    "lowered_pairs": 0
+  }
+}

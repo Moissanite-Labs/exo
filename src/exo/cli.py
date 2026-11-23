@@ -21,7 +21,10 @@
                                            (D-028, D-040)
   exo taste [list|export-house|review]     the taste layers with a source on every item; build and
                                            review the house taste pack (D-044)
-  exo findings [add TITLE|fix ID --in SHA|export --md]  the harness's findings about itself
+  exo improve --offline --adapter NAME --fixture FILE [--output RUN]
+                                           public synthetic harness experiment; review-only proposal and evidence
+  exo findings [add TITLE|fix ID --in SHA|export --md|backlog [--limit N]]
+                                           the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
@@ -65,6 +68,8 @@ LAZY = {
     'ingest': ('ingest.cli', 'cmd_ingest', 'import conversations into the ledger'),
     'ask': ('ask', 'cmd_ask', 'question queue and interruption budget'),
     'eval': ('eval', 'cmd_eval', 'n=1 evaluation report'),
+    'improve': ('improvement.offline', 'cmd_improve',
+                'offline Harness² proposals from explicit public fixtures (review only)'),
     'brief': ('brief', 'cmd_brief', 'morning brief (Markdown and HTML)'),
     'consolidate': ('consolidate', 'cmd_consolidate', 'turn new ledger events into belief proposals'),
     'proposals': ('consolidate', 'cmd_proposals', 'review belief proposals'),

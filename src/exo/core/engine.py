@@ -76,7 +76,7 @@ class SqliteLog:
         self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
-        return self.store.events_since(since, session, limit=1 << 30, with_global=True)
+        return self.store.iter_events(since, session, with_global=True)  # page by page (#254)
 
     def last_seq(self) -> int:
         return self.store.last_event_seq()
@@ -107,6 +107,7 @@ class CoreRuntime:
                  context_factory: Callable[[ContextTree], TurnContext] | None = None,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
+                 provider_auth: dict[str, tuple[Callable, ...]] | None = None,
                  attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
@@ -149,6 +150,9 @@ class CoreRuntime:
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
+        from exo.core.seat_binding_conformance import maybe_note_load_core_seat
+
+        maybe_note_load_core_seat(seat.name if seat else None)
         self.env_allow = tuple(seat.env_allow) if seat else ()  # [tools] env_allow, see tool_env
         self.env_deny = tuple(seat.env_deny) if seat else ()  # [tools] env_deny (D-039)
         self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
@@ -170,7 +174,7 @@ class CoreRuntime:
         elif seat and "spend" in seat.models and selection.source is None:
             raise ValueError("model-spend policy belongs to the principal, not a seat")
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env,
-                                         principal=active_principal)
+                                         principal=active_principal, provider_auth=provider_auth)
         self._automatic_main = "main" not in (models.get("roles") or {}) and not (seat and seat.tier)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
@@ -271,7 +275,9 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        if (task := self._started) is not None and task.done() and (task.cancelled() or task.exception() is not None):
+            self._started = None  # it raised (the _main_status provider probe, say) or was cancelled. A running one stays.
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -335,7 +341,7 @@ class CoreRuntime:
         self._writer = None
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp, self.router.aclose):
             try:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
@@ -360,9 +366,8 @@ class CoreRuntime:
                 self.scheduler.close()
 
     async def _close_mcp(self) -> None:
-        if self._started is not None:
-            await self.mcp.close()
-            self._started = None
+        await self.mcp.close()  # always: a start cleared after failing may have left servers running
+        self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
@@ -418,6 +423,8 @@ class CoreRuntime:
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
                 "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
+                "author": ctx.meta.get("author", ""),   # who started the turn (D-040): the gate lowers only for
+                                                        # the principal's turn (#598)
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
                 "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
 
@@ -499,8 +506,9 @@ class CoreRuntime:
         if call.name == "bash" and sid:
             self._guard_cwd(sid, call, info.cwd if info and info.cwd else self.cwd)
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
-                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs, "env_allow": self.env_allow,
-                                "env_deny": self.env_deny})
+                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
+                                           "jobs": self.jobs, "env_allow": self.env_allow,
+                                           "env_deny": self.env_deny})
         return await self.registry.call(call, ctx)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
@@ -549,17 +557,30 @@ class CoreRuntime:
 
     def _info(self, sid: str) -> s.SessionInfo:
         info = self.store.get_session(sid)
-        if info is None:
+        if info is None or (self.seat is not None and info.agent != self.agent):
+            # Ownership comes from the stored agent, never the client-visible seat label.
+            # Use the missing-session response so another profile's existence is not disclosed.
             raise CommandFailed("not_found", f"no session {sid}")
-        st = self.loop._state.get(sid)  # session.get and session.resume show a running turn, as session.list does
-        info.status = "live" if st is not None and st.running else "idle"
+        info.cwd = info.cwd or self.cwd  # report the same fallback used by tools for older sessions
+        info.status = "live" if (st := self.loop._state.get(sid)) is not None and st.running else "idle"
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
+        from exo.core.seat_binding_conformance import maybe_note_refusal, session_create_trace
+
         if b.kind not in ("", "thread", "private"):
             raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
-        info = await self.loop.create_session(title=b.title, seat=b.seat, model=b.model or self._main_ref(),
-                                              cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
+        seat = b.seat  # an unseated core keeps whatever the client asked for (""/None included)
+        if self.seat is not None:
+            seat = b.seat or self.seat.name
+            if seat != self.seat.name:
+                maybe_note_refusal(b.seat or seat)
+                raise CommandFailed(
+                    "bad_request", f"this core runs the {self.seat.name!r} seat; it cannot start a thread for seat {seat!r}"
+                )
+        with session_create_trace():
+            info = await self.loop.create_session(title=b.title, seat=seat, model=b.model or self._main_ref(),
+                                                  cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
         why = self.cwd_note if not b.cwd else ""
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
             self._cwd_seen.setdefault(info.id, set()).add(str(Path(info.cwd or self.cwd).resolve()))
@@ -574,7 +595,7 @@ class CoreRuntime:
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
         rows = []
-        for i in self.store.list_sessions(b.limit, b.seat):
+        for i in self.store.list_sessions(b.limit, b.seat, agent=self.agent if self.seat is not None else None):
             st = self.loop._state.get(i.id)  # do not create state for an idle session
             i.status = "live" if st is not None and st.running else "idle"
             rows.append(to_dict(i))
@@ -706,7 +727,7 @@ class CoreRuntime:
                                    or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
-        return {"tasks": self.agents.list(b.session)}
+        return {"tasks": self.agents.list(b.session, active=b.active)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         self.approvals.respond(b)
@@ -744,6 +765,10 @@ class CoreRuntime:
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "harness findings by state", "args": ""}]
+        if getattr(self, "work_checkpoint", None) is not None:
+            own.append({"name": "checkpoint", "description": "record-derived continuity index", "args": ""})
+        if getattr(self, "work_notebook", None) is not None:
+            own.append({"name": "work", "description": "saved working notes for this conversation", "args": "[show|history]"})
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 
@@ -828,7 +853,7 @@ class CoreRuntime:
         value = cfg.get(b.key, _MISSING)
         if value is _MISSING:
             raise CommandFailed("not_found", f"{b.key} is not set")
-        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+        return {"key": b.key, "value": redact(value, b.key.split("."))}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
         require_principal("change settings")

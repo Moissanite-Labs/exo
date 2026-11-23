@@ -97,9 +97,13 @@ async def bash(eng, sid, command, **extra):
 async def test_start_returns_at_once_and_output_streams_to_the_log(tmp_path):
     eng = engine(tmp_path)
     sid = (await eng.loop.create_session(title="t", agent="tester")).id
-    t0 = time.monotonic()
-    res = await bash(eng, sid, "echo first; sleep 0.4; echo second", background=True)
-    assert time.monotonic() - t0 < 0.3 and not res.is_error
+    # The job holds until the test makes `go`, so the call returns only if it does not wait for the job. A wall-clock
+    # bound here failed on a loaded runner, where the start alone took 0.3 s to nearly 1 s. The call has 8 s and the
+    # job a 30 s limit, so a start that waits fails and does not hang. That limit is a timer in this process, so the
+    # loop also gives up by itself after 1500 polls, in under a minute: a failed run leaves no shell behind.
+    res = await asyncio.wait_for(bash(eng, sid, "echo first; i=0; until [ -e go ] || [ $i -ge 1500 ]; do sleep 0.02; "
+                                      "i=$((i+1)); done; echo second", background=True, timeout=30), 8)
+    assert not res.is_error
     text = res.text()
     jid = text.split()[3]
     assert jid.startswith("j_") and "job notice" in text
@@ -109,12 +113,14 @@ async def test_start_returns_at_once_and_output_streams_to_the_log(tmp_path):
     assert state(eng, jid) == "running"
     listing = (await eng.registry.call(ToolCall(id="c2", name="jobs", arguments={}), None)).text()
     assert jid in listing and "running" in listing
+    (tmp_path / "go").touch()
     await until(lambda: state(eng, jid) == "done")
     out = (await eng.registry.call(ToolCall(id="c3", name="job_output", arguments={"id": jid, "tail": 1}), None)).text()
     body = out.split("\n", 1)[1]
     assert body == "second" and "done, exit 0" in out
     grep = (await eng.registry.call(ToolCall(id="c4", name="job_output", arguments={"id": jid, "grep": "FIR"}), None)).text()
     assert grep.split("\n", 1)[1] == "first"
+    await until(lambda: any(e.state == "done" for e in events(eng)))  # the row says done before the event
     states = [(e.job_id, e.state) for e in events(eng)]
     assert states[0] == (jid, "running") and states[-1] == (jid, "done")
     assert events(eng)[-1].exit_code == 0

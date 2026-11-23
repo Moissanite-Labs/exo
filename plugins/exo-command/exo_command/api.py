@@ -40,9 +40,10 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from exo import complete as cm
+from exo.core.models.keys import redact_secrets
 from exo.protocol import schema as s
 
-from .source import SourceError, core_message
+from .source import TOKEN_REFUSED, SourceError, core_message
 
 MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
@@ -89,6 +90,11 @@ def _choice(body: Dict[str, Any], key: str, allowed: tuple, default: Optional[st
     return v
 
 
+def _safe_message(message: Any) -> str:
+    """A core error text for the page: known key values redacted, at most 500 characters."""
+    return redact_secrets(str(message))[:500]
+
+
 def error_reply(exc: Exception) -> Reply:
     if isinstance(exc, BadRequest):
         return 400, {"error": str(exc)}
@@ -98,7 +104,9 @@ def error_reply(exc: Exception) -> Reply:
         status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
                   else 400 if exc.code in ("bad_model", "bad_request")
                   else 501 if exc.code in ("unsupported", "unknown_command") else 502)
-        return status, {"error": exc.message, "code": exc.code}
+        # #856: a refused bearer token gets the token-file sentence, not the core's raw 401 body
+        text = core_message(exc) if exc.code in TOKEN_REFUSED else _safe_message(exc.message)
+        return status, {"error": text, "code": exc.code}
     return 502, {"error": core_message(exc)}
 
 
@@ -150,6 +158,8 @@ async def _sessions(c, p, q, body):
         limit = min(int(q["limit"][0]), 500) if q.get("limit") else 100
     except ValueError:
         raise BadRequest("limit must be a number")
+    if limit < 1:   # SQLite reads LIMIT -1 as no limit at all (exo-desktop #55)
+        raise BadRequest("limit must be at least 1")
     res = await c.source.call(s.SessionList(limit=limit))
     return {"sessions": res.get("sessions") or []}
 
@@ -254,7 +264,7 @@ async def _permissions_set(c, p, q, body):
         res = await c.source.call(s.CommandRun(name="permissions", args=mode))
     except SourceError as exc:
         if exc.code == "forbidden":
-            raise Forbidden(exc.message) from None
+            raise Forbidden(_safe_message(exc.message)) from None
         raise
     return {"output": res.get("output"), "permissions": await _permissions(c, p, q, {})}
 

@@ -21,7 +21,8 @@ def test_key_field_is_a_password_input_that_is_not_saved():
     assert 'type: "password"' in js
     assert 'autocomplete: "new-password"' in js
     assert 'spellcheck: "false"' in js
-    assert not re.search(r"\bname:\s*\"", js)           # no name attribute for a password manager to key on
+    inputs = re.findall(r'h\("input",\s*\{(.*?)\}', js, re.S)
+    assert inputs and all(not re.search(r'\bname\s*:', attrs) for attrs in inputs if 'type: "password"' in attrs)
 
 
 def test_no_local_storage_anywhere():
@@ -29,6 +30,16 @@ def test_no_local_storage_anywhere():
         body = f.read_text(encoding="utf-8")
         if f.name == "layout.js":  # D-046: the one exception, the layout choice. It never sees keys or text.
             assert "setItem(KEY" in body.replace("(store || localStorage).setItem(KEY", "setItem(KEY") and 'const KEY = "xc-layout"' in body
+            continue
+        if f.name == "appearance.js":  # Only the enum display preference, never arbitrary text.
+            assert 'const KEY = "xc-appearance"' in body
+            assert 'const CHOICES = ["dark", "light", "system"]' in body
+            assert ".setItem(KEY, choice)" in body and "CHOICES.includes(value)" in body
+            continue
+        if f.name == "desktop_prefs.js":  # Native display enums only; the bridge validates every outgoing key.
+            assert "localStorage.setItem(storage, values[key] || fallback)" in body
+            assert "Object.hasOwn(choices, key)" in body and "choices[key].includes(value)" in body
+            assert "if (valid(key, value))" in body
             continue
         assert "localStorage" not in body, f.name
 
@@ -62,7 +73,7 @@ def test_app_strips_the_token_from_the_url():
     assert "history.replaceState" in js
     i = js.index("takeToken();")
     assert i < js.index("show((location.hash")           # before the first view reads the hash
-    assert i < js.index("await bus.start()")
+    assert i < js.index("connecting = bus.start()")
 
 
 def test_token_goes_with_every_request():
@@ -116,9 +127,45 @@ const context = { pill: (text, cls) => [text, cls] };
 vm.createContext(context);
 vm.runInContext(func + "; this.chip = chip;", context);
 const row = { status: "no base_url", needs: "key", key: "found", ready: false, verified: false };
-process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, status: "key found", ready: true })]));
+process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, status: "key found", ready: true }),
+  context.chip({ ...row, status: "configured", needs: "server", ready: true })]));
 '''
     proc = subprocess.run([shutil.which("node"), "-e", script, str(STATIC / "providers.js")],
                           capture_output=True, text=True, timeout=10)
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"]]
+    assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"], ["configured · untested", "known"]]
+
+
+def test_model_list_failure_is_shown_per_class_with_a_retry_only_where_one_helps():
+    """D-091: a refused core is not a broken core. The page shows the sentence the route sent and puts the retry
+    button behind ``retryable``, so a refusal cannot be answered with a button that changes nothing."""
+    js = text("providers.js")
+    assert "modelsError" in js and "error_class" in js and "retryable" in js
+    assert "modelsError.retryable ?" in js                       # the button is conditional on the class
+    assert '"Try again"' in js and "loadModels" in js
+    assert "console." not in js
+    # the old silent swallow is gone: a failure used to become an empty list, which reads as "no models"
+    assert 'catch(() => ({ models: [], available: [] }))' not in js
+
+
+def test_chatgpt_sign_in_disabled_when_os_secret_store_unavailable():
+    js = text("providers.js")
+    assert 'const NEED_SECRET_STORE = "ChatGPT connection needs an available OS secret store."' in js
+    draw = js[js.index("function drawChatGPT"):js.index("async function refreshChatGPT")]
+    assert re.search(r"const storeOk = !\(d && d\.store_available === false\);", draw)
+    assert "storeOk = true" not in draw
+    assert "disabled: authBusy || !storeOk" in draw
+    assert "secret-tool (Linux Secret Service)" in js
+    assert "API-key providers" in js and "ChatGPT tokens are not stored in ~/.config/exo/keys.env" in js
+
+
+def test_chatgpt_store_ok_guard_rejects_a_constant_true_prefix():
+    """A regression that short-circuits storeOk with ``true ||`` would re-enable sign-in while store_available is false."""
+    good = "const storeOk = !(d && d.store_available === false);"
+    bad = "const storeOk = true || !(d && d.store_available === false);"
+
+    def accepted(line):
+        return bool(re.search(r"const storeOk = !\(d && d\.store_available === false\);", line)) and "storeOk = true" not in line
+
+    assert accepted(good)
+    assert not accepted(bad)

@@ -20,6 +20,7 @@ import shutil
 import threading
 import time
 import tomllib
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
@@ -35,6 +36,7 @@ from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
 from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.models.responses import OpenAIResponsesProvider
 from exo.core.models.urls import display_url
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -51,9 +53,9 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
-REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key, the login or the spend: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
-              "decision": DecisionProvider}
+              "decision": DecisionProvider, "responses": OpenAIResponsesProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
@@ -158,7 +160,8 @@ class Router:
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
                  breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None,
-                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None) -> None:
+                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None,
+                 provider_auth: Mapping[str, tuple[Callable, ...]] | None = None) -> None:
         selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
                                          principal=principal)
         if selection.source is not None and spend is not None:
@@ -172,6 +175,7 @@ class Router:
             self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
+        self.provider_auth = dict(provider_auth or {})
         self.instances = dict(instances or {})
         self.env = os.environ if env is None else env
         # Keychain and keys file are read only for the real environment, or when asked.
@@ -185,7 +189,9 @@ class Router:
         self.breaker_failures = max(1, int(b.get("failures") or BREAKER_FAILURES))
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
+        self._auth_context: dict[str, str | None] = {}
         self._creds: dict[str, list[Credential]] = {}
+        self._retired: list[Any] = []  # own clients of transports a reload dropped (maybe mid-call), not their keys
         self._cred_lock = threading.Lock()
         self._cred_versions: dict[str, int] = {}
         self._cred_pending: dict[tuple[str, int], concurrent.futures.Future] = {}
@@ -264,6 +270,9 @@ class Router:
     def credentials(self, provider: str) -> list[Credential]:
         """Synchronous cached lookup. Coordinate workers without holding a lock across secret-store I/O.
         Reload advances a generation so an in-flight lookup cannot restore credentials that were invalidated."""
+        if (self.providers.get(provider) or {}).get("auth") == "chatgpt":
+            self._refresh_auth_context(provider)
+            return self._load_credentials(provider)  # current selected registration; never cache disconnected []
         while True:
             with self._cred_lock:
                 if provider in self._creds:
@@ -289,11 +298,47 @@ class Router:
                 pending.set_result(None)
             # A reload during I/O discards this result and resolves the new generation.
 
+    def _refresh_auth_context(self, provider: str) -> None:
+        try:
+            auth = self.provider_auth.get(provider, ())
+            context = str(auth[2]()) if len(auth) > 2 and self.auth_available(provider) else (
+                '' if self.auth_available(provider) else None)
+        except Exception:
+            context = None
+        with self._cred_lock:
+            changed = provider not in self._auth_context or self._auth_context[provider] != context
+            self._auth_context[provider] = context
+        if changed:
+            self.reload_credentials(provider)  # only this provider: a new grant inherits no old refusal/breaker
+
+    async def _outcome_current(self, route: Route, cred: Credential) -> bool:
+        if (self.providers.get(route.provider) or {}).get("auth") != "chatgpt":
+            return True
+        await asyncio.to_thread(self._refresh_auth_context, route.provider)
+        context = self._auth_context.get(route.provider)
+        expected = route.provider + "#" + hashlib.sha256((context or '').encode()).hexdigest()[:16]
+        return context is not None and cred.id == expected
+
+    def auth_available(self, provider: str) -> bool:
+        try:
+            return provider in self.provider_auth and self.provider_auth[provider][0]() is True
+        except Exception:
+            return False
+
     def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
         spec = self.providers.get(provider)
         timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
-        if provider in self.instances:
+        if spec is not None and spec.get("auth") == "chatgpt":
+            if (spec.get("base_url") == "https://api.openai.com/v1" and self.auth_available(provider)):
+                prov = OpenAIResponsesProvider(spec["base_url"], name=provider, client=self.client,
+                                               header_resolver=self.provider_auth[provider][1], subscription=True,
+                                               continuation_scope=self.provider_auth[provider][2] if len(self.provider_auth[provider]) > 2 else None,
+                                               **timeout)
+                scope = str(self.provider_auth[provider][2]()) if len(self.provider_auth[provider]) > 2 else ""
+                cid = provider + "#" + hashlib.sha256(scope.encode()).hexdigest()[:16]
+                creds = [Credential(cid, None, prov)]
+        elif provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
         elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
             # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
@@ -305,11 +350,16 @@ class Router:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
-            keys = [k for e in envs if (k := self._key(e))] if envs else [None]
+            # One place per key_env name, so a key keeps its id when another comes or goes (exo-desktop #52).
+            keys = [self._key(e) for e in envs] if envs else [None]
             for i, key in enumerate(keys):
+                if envs and not key:  # this name has no key now
+                    continue
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
+                response_opts = ({"prompt_cache_retention": spec.get("prompt_cache_retention")}
+                                 if spec.get("transport") == "responses" else {})
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout, **response_opts)
                 creds.append(Credential(cid, key, prov))
         return creds
 
@@ -321,13 +371,26 @@ class Router:
                                                                    *(n for n, _ in self._cred_pending)]))
             for n in names:
                 self._cred_versions[n] = self._cred_versions.get(n, 0) + 1
-                self._creds.pop(n, None)
+                self._retired += self._own_clients(self._creds.pop(n, []))
         for n in names:
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
             for k in [k for k in self.breakers if k.startswith(n + ":")]:
                 self.breakers.pop(k, None)
         return names
+
+    def _own_clients(self, creds: list[Credential]) -> list[Any]:
+        """The HTTP clients of the transports this router made. An instance it was given is not its own."""
+        made = [c.provider for c in creds if c.provider not in self.instances.values()]
+        return [pool for p in made if (pool := getattr(p, "own_clients", None)) is not None]
+
+    async def aclose(self) -> None:
+        """Close the HTTP clients of every transport this router made, also those a reload dropped (#263)."""
+        with self._cred_lock:
+            pools = [*self._retired, *self._own_clients([c for cs in self._creds.values() for c in cs])]
+            self._retired = []
+        for pool in pools:
+            await pool.aclose()
 
     def _key(self, name: str) -> str | None:
         return lookup_key(name, self.env, sources=self.key_sources)
@@ -353,6 +416,8 @@ class Router:
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
                        sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
+        if status == 501:  # the transport cannot carry this request (muse-cli with tools): the key and model are fine
+            return Cooldown()
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
@@ -423,6 +488,15 @@ class Router:
         failed_credentials: set[str] = set()
         attempted_credentials: set[tuple[str, str]] = set()
         chain = self.chain(role)
+        cut = next((i for i, route in enumerate(chain)
+                    if (self.providers.get(route.provider) or {}).get("auth") == "chatgpt"), None)
+        if cut is not None:
+            # A subscription route is a billing boundary for every role. Routes placed ahead of it stay.
+            # Later API-key routes do not run after a missing, expired, or limited ChatGPT attempt.
+            chain = [*chain[:cut], *[route for route in chain[cut:]
+                     if (self.providers.get(route.provider) or {}).get("auth") == "chatgpt"]]
+        for provider in {r.provider for r in chain if (self.providers.get(r.provider) or {}).get("auth") == "chatgpt"}:
+            await asyncio.to_thread(self._refresh_auth_context, provider)  # invalidate before reading route breakers
         # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
         skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
         pending_routes, i = chain, 0
@@ -455,7 +529,9 @@ class Router:
                             break
                 if candidate is not None:
                     if last is not None:
-                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                        why = (f"is over its provider spend limit ({(last.error or '')[:80]}); this turn's cost is a floor"
+                               if last.status == 402 else f"failed ({(last.error or '')[:80]})")
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} {why}; "
                                                        f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
@@ -505,7 +581,14 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
+                    if last.status == 402:
+                        # The route stopped on the provider's own spend limit. Say it in those words once, and say the
+                        # money figure will read low: the paid route did work nobody will bill this turn for.
+                        yield ProviderEvent(kind="notice", attempts=attempts,
+                                            text=f"{route.ref} is over its provider spend limit; trying {nxt.ref}"
+                                                 " (this turn's cost is a floor)")
+                    else:
+                        yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
@@ -548,7 +631,7 @@ class Router:
                 retry_after = ev.retry_after
                 # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
-                if fallback:
+                if fallback and await self._outcome_current(route, cred):
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole, error=ev.error or "",
                                         model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
                     if ev.status == 429:
@@ -562,7 +645,9 @@ class Router:
                     ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
-                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                    # "spend_limit" keeps the cause after the fallback, so the money figure can say it is a floor.
+                    note("spend_limit" if ev.status == 402 else
+                         "timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
                          else "fallback", ev.error or "")
                     failed.append(ev)
                 return
@@ -574,8 +659,9 @@ class Router:
                 if ev.kind == "done":
                     note("ok")
                     ev.attempts = attempts
-                    self.record_success(cred.id, route.model)
-                    self.route_ok(route.ref)
+                    if await self._outcome_current(route, cred):
+                        self.record_success(cred.id, route.model)
+                        self.route_ok(route.ref)
                     if ev.message is not None:
                         ev.message.meta.setdefault("model", route.ref)
             yield ev
@@ -613,9 +699,9 @@ class Router:
 
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
-        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
-        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
-        not running."""
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 403), or the key is
+        over its spend limit (402) which a new key does not fix; on a later call too, while that credential, or a model
+        of the chain on it, reopens first; or a local server is not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
             cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
@@ -623,6 +709,9 @@ class Router:
         else:
             name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
         spec = self.providers.get(name) or {}
+        if status == 402:  # the provider's own spend limit: a new key fixes nothing, raising the limit does
+            return status, (f"{name} is over its provider spend limit ({err}): raise the limit or top up the account, "
+                            "then test it in /providers")
         if status in REFUSED_STATUS:
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else envs
@@ -657,7 +746,8 @@ class Router:
             out.append({"provider": name, "base_url": display_url(spec.get("base_url", "")),
                         "transport": spec.get("transport", "openai"),
                         "local": bool(spec.get("local")), "key_env": envs,
-                        "key": ("n/a" if not envs else "yes" if found else "no"),
+                        "key": ("yes" if self.auth_available(name) else "no") if spec.get("auth") == "chatgpt" else
+                        ("n/a" if not envs else "yes" if found else "no"),
                         "roles": list(spec.get("roles") or [])})
         return out
 

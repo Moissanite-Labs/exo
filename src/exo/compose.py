@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from exo import peers
-from exo.config import Config
+from exo.config import Config, ConfigError
 from exo.core.engine import SYSTEM_PROMPT
 from exo.application import CoreEngine
 from exo.core.plugins import PluginManager
@@ -42,6 +42,14 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    from exo.work_checkpoint import CheckpointConfig
+    checkpoint_config = CheckpointConfig(cfg.get("work_checkpoint"))
+    notebook_config = None
+    if "work_notes" in cfg.data:
+        from exo.work_notebook import NotebookConfig
+        if not isinstance(cfg.data["work_notes"], dict):
+            raise ConfigError("work_notes must be an object")
+        notebook_config = NotebookConfig(cfg.data["work_notes"])
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):
@@ -58,7 +66,18 @@ def create(seat: str | None = None) -> CoreEngine:
         raise ValueError("model-spend policy principal does not match the configured principal")
     if st and st.principal and not os.environ.get("EXO_PRINCIPAL"):
         os.environ["EXO_PRINCIPAL"] = st.principal
-    pm = PluginManager(config=cfg.data.get("plugin_config") or {},
+    plugin_config = {name: dict(values) for name, values in (cfg.data.get("plugin_config") or {}).items()}
+    if st is not None:
+        memory = plugin_config.setdefault("exo-memory", {})
+        memory.update(exo_home=str(cfg.home), agent_id=st.name)
+        if st.principal:
+            memory["principal"] = st.principal
+        if st.principal_store:
+            root = Path(st.principal_store).expanduser()
+            if not root.is_absolute():
+                raise ValueError("seat principal store must be an absolute path")
+            memory["store_root"] = str(root)
+    pm = PluginManager(config=plugin_config,
                        executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
@@ -100,6 +119,11 @@ def create(seat: str | None = None) -> CoreEngine:
     if eng.peers is not None:
         eng.peers.autostart = True
     eng.peer_cfg_dir = eng.peer_cfg_dir or fitting_peers_dir()
+    if notebook_config is not None and notebook_config.enabled:
+        from exo.work_notebook import attach as attach_work_notebook
+        attach_work_notebook(eng, notebook_config, principal=principal)
+    from exo.work_checkpoint import attach as attach_work_checkpoint
+    attach_work_checkpoint(eng, checkpoint_config, principal=principal or "")
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)

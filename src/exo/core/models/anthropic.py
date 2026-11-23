@@ -222,7 +222,8 @@ def thinking_params(model: str, effort: str | None, max_tokens: int) -> dict[str
     effort = {"minimal": "low", "ultra": "max"}.get(effort, effort)
     effort = effort if effort in _EFFORTS else "medium"
     if is_legacy(model):
-        if "haiku" in model.lower() and "4-5" not in model:
+        # The API wants 1024 <= budget_tokens < max_tokens, so thinking cannot fit in 1024 tokens or fewer.
+        if ("haiku" in model.lower() and "4-5" not in model) or max_tokens <= 1024:
             return {}
         budget = min(_BUDGET[effort], max(1024, max_tokens - 1024))
         return {"thinking": {"type": "enabled", "budget_tokens": budget}}

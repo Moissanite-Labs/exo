@@ -32,7 +32,7 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
 
-from exo.core.models.base import RETRYABLE_STATUS, USER_AGENT, error_event, parse_retry_after
+from exo.core.models.base import RETRYABLE_STATUS, USER_AGENT, LoopClients, error_event, parse_retry_after
 from exo.core.types import Message, ProviderEvent, ToolSpec
 
 DEFAULT_MODEL = "jev-latest"
@@ -149,6 +149,7 @@ class DecisionProvider:
         self.extra_headers = dict(headers or {})
         self._client = client
         self._timeout = timeout
+        self.own_clients = LoopClients(timeout)  # used when no client is given; the router closes them
 
     def headers(self) -> dict[str, str]:
         h = {"content-type": "application/json", "user-agent": USER_AGENT, **self.extra_headers}
@@ -160,14 +161,11 @@ class DecisionProvider:
                      model: str = DEFAULT_MODEL) -> DecisionReply:
         """Ask typed questions about ``state``. Raises DecisionError (see its ``retryable``)."""
         body = {"state": state, "model": model, "questions": {k: dict(v) for k, v in questions.items()}}
-        client = self._client or httpx.AsyncClient(timeout=self._timeout)
+        client = self._client or self.own_clients.get()
         try:
             resp = await client.post(self.base_url + self.path, json=body, headers=self.headers())
         except httpx.HTTPError as e:
             raise DecisionError(f"{type(e).__name__}: {e}", None, True) from None
-        finally:
-            if self._client is None:
-                await client.aclose()
         if resp.status_code >= 400:
             raise DecisionError(f"HTTP {resp.status_code}: {_error_text(resp)}", resp.status_code,
                                 resp.status_code in RETRYABLE_STATUS,
@@ -180,6 +178,10 @@ class DecisionProvider:
         usage = data.get("usage") or {}
         return DecisionReply({k: parse_answer(v) for k, v in raw_answers.items()}, str(data.get("model") or ""),
                              int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0))
+
+    async def aclose(self) -> None:
+        """Close the provider's own clients. A client passed in stays open: its owner closes it."""
+        await self.own_clients.aclose()
 
     async def stream(self, messages: list[Message], tools: list[ToolSpec],
                      **opts: Any) -> AsyncIterator[ProviderEvent]:

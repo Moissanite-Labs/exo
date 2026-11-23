@@ -78,8 +78,27 @@ output, the token is in that log until the next start.
 ### The agent cannot use this
 
 No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
-any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
+any shell or code that names `/api/providers`, `providers_setup` or `chatgpt_auth`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Use a ChatGPT subscription (`chatgpt`)
+
+In Providers, choose **Continue with ChatGPT** and complete the browser sign-in. Select a connected
+account, then one of its available models. **Manage usage** opens your ChatGPT usage settings. The
+connection stores and refreshes its own credentials, without reading a Codex or Hermes login.
+
+ChatGPT plan usage and `openai` API-key billing are separate. A turn selected for subscription access
+does not silently continue through API-key fallback routes. No default model changes during sign-in.
+See [ChatGPT setup and limits](CHATGPT-PROVIDER.md) for account handling and live acceptance checks.
+
+## Use Meta Model API (`meta`)
+
+Add your Meta Model API key in Providers, or run `exo providers add meta` in a terminal. Exo uses
+`META_API_KEY` for this provider and `https://api.meta.ai/v1` as its endpoint. Its Responses transport
+supports streamed text, reasoning and local tool calls. Choose a discovered model explicitly.
+
+The Meta API connection is separate from the `muse-cli` subscription adapter. It does not require Muse
+Code or Hermes. Test lists the provider's models; a completed agent turn is a separate acceptance step.
 
 ## Use your Claude Code login (`claude-cli`)
 
@@ -191,10 +210,13 @@ cannot see the keychain, so the test call is what proves the login works. Error 
 Limits, stated plainly:
 
 - **Text only.** `muse exec` runs its own agent. Exo cannot pass its tools to it or stream tool calls out of it.
-  A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
-  without tools. Its catalog limits it to `aux`; it does not make the main model ready for first run.
+  A turn that carries Exo tools is refused (status 501) and the router falls back to the next route. That refusal
+  cools nothing, so the next call without tools still reaches `muse-cli` (exo-desktop #52). So `muse-cli` suits a
+  role without tools. Its catalog limits it to `aux`. It does not make the main model ready for first run.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
-  is flattened into one prompt, and no token counts come back (usage shows as unknown).
+  is flattened into one prompt, and no token counts come back (usage shows as unknown). Earlier tool rounds stay
+  in that prompt as text: each call as `[tool call <name>] <arguments>` under its assistant turn, and each result
+  as a `[tool result <name>]` block, marked `, error` when it failed. Before exo-desktop #52 they were dropped.
 - **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
   access (`OSStatus -67068`). Exo checks signing with `codesign -dv` only when the configured command is a native
   Mach-O binary. The vendor's `muse` command may be a shell launcher: shell scripts cannot be code-signed, and
@@ -246,11 +268,39 @@ turn those stores off (tests and sandboxes use them).
 | anthropic | ANTHROPIC_API_KEY | https://api.anthropic.com | works |
 | openrouter | OPENROUTER_API_KEY | https://openrouter.ai/api/v1 | works |
 | openai | OPENAI_API_KEY | https://api.openai.com/v1 | works |
+| gemini | GEMINI_API_KEY | https://generativelanguage.googleapis.com/v1beta/openai | Google AI Studio key via OpenAI Chat Completions compatibility; not live-verified here |
 | opencode-go | OPENCODE_GO_API_KEY | https://opencode.ai/zen/go/v1 | chat models only (see below) |
 | nous | NOUS_API_KEY | https://inference-api.nousresearch.com/v1 | off: not verified |
 | jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; works; first decision route by default |
 | laya | none | http://127.0.0.1:8000/v1 | decision role only; local; needs `laya-serve` (see below) |
 | llamacpp, ollama, lmstudio, vllm | none | http://127.0.0.1 (ports 8080, 11434, 1234, 8000) | local |
+
+**Google Gemini:** enter a Google AI Studio Developer API key in the Gemini row or use `exo providers add gemini`.
+Exo uses Google's [OpenAI-compatible endpoint](https://ai.google.dev/gemini-api/docs/openai), not its native Gemini
+API; some native features are not represented by this transport. This is not Vertex AI or Enterprise OAuth. Choose an
+available `gemini:model-id` route. No live Google call was made for this change. Some compatible reasoning endpoints
+require replaying reasoning or provider-specific tool-call metadata that Exo's Chat Completions adapter does not yet
+preserve; see [issue #616](https://github.com/Moissanite-Labs/exo/issues/616).
+
+**Custom providers in the web/desktop Providers page:** choose **Add custom provider**, enter a new name, base URL,
+protocol, authentication and model ID, then optionally enter an API key. Exo supports OpenAI Chat Completions with
+Bearer authentication and Anthropic Messages with `x-api-key`, or no key; an arbitrary API is not necessarily compatible.
+Use **Edit** to change an existing custom provider; adding the same name is refused.
+The core's model-discovery cache is tied to a custom provider's endpoint, protocol and key reference. After a
+configuration change it does not fall back to models cached for the old service, even if the new service is offline;
+the manually entered model remains available. Unchanged configurations retain the normal six-hour cache.
+The OpenAI base includes the API path (often `/v1`); Anthropic uses the service root because Exo adds `/v1/messages`.
+Use HTTPS for remote endpoints: HTTP, including on local networks, sends the key without encryption. URL credentials,
+query strings and fragments are refused. Do not put a key in a URL or model ID.
+
+Settings are saved by the connected core and take effect after it restarts. The key goes to the existing local secret
+store on the web server's machine separately, never into `config.json` or the core protocol. A core on another machine
+needs its own credential in that machine's store; after restarting it, `exo providers add custom-NAME` on that machine
+stores the key there. A failed key save can leave the non-secret settings saved; edit the entry
+to try the key again. Editing the endpoint or protocol creates a different key reference, so the previous key is not
+sent to the new address. Old credentials are not automatically deleted. The entered model is offered after restart;
+select it as the default explicitly. Seat-specific provider settings may override these global settings. The existing core
+and Desktop installation are not restarted or updated by saving.
 
 OpenCode Go: Exo uses its OpenAI-compatible endpoint (`/chat/completions`): GLM, Kimi, DeepSeek,
 MiMo and others. Its other models use `/responses` or `/messages` and are not served yet. Refs look
@@ -313,10 +363,49 @@ one it gets no credential, its routes are skipped and the providers list shows i
 its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
 and the result merges over the catalog (`docs/SEATS.md`).
 
+### Connections
+
+Each HTTP transport (one per key of a provider, the decision transport too) keeps one `httpx.AsyncClient` for
+each event loop that calls it, and every call on that loop reuses it (#263). Before, each call made a client and
+closed it after. So each call loaded the CA bundle again (about 10 ms) and opened a new TCP and TLS connection.
+Now a call reuses an idle connection to the same server. httpx keeps an idle connection for 5 seconds.
+
+A client belongs to the loop that made it. The engine's loop and the `aux_sync` thread's loop each get their own,
+and so does each `asyncio.run` of a command. A client whose loop has ended is dropped. When the engine closes, the
+router closes every client it made (`Router.aclose`), each on its own loop. That includes the clients of
+transports that a key reload replaced. A client passed in (`Router(client=...)`, in tests and plugins) and a
+provider instance passed in are not the router's, so it leaves them open. A script that builds its own router
+calls `await router.aclose()` on the loop that made the calls, before that loop ends. A client whose loop has
+ended can no longer be closed, and its connection stays open until Python collects it. `exo decide` and the
+baseline decision judge run each question in its own `asyncio.run`, so they close the router they built after
+each question.
+
+### Prices
+
+A route without a trace price reads `unknown` in `exo trace`, never `$0` (D-032). Set or override an estimate
+in config.json under `models.models`, keyed by `provider:model`, in USD per million tokens:
+
+    {"models": {"models": {"provider:model": {"input": 0.28, "output": 0.42, "cache_read": 0.028}}}}
+
+The numbers above are an example, not a quote: use the provider's published list price. `cache_read` and
+`cache_write` default to 0.1 and 1.25 times `input`; `context` (the window, in tokens) is optional too. A
+price added later applies to new calls only, so a session recorded before it keeps `unknown`.
+
+These prices are estimates used in model-call usage, session totals and delegated receipts as well as trace
+output. The optional `context` value is used in model listings and context-capacity reports. These values do
+not supply `models.spend.routes` contracts or extend the audited native ceilings. The refusal for a missing
+spend contract points to `docs/MODEL-SPEND.md`, which describes the principal-owned policy and protected-policy
+source. Adding an estimate does not lift a refusal.
+
 ## Roles
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.
 Override any role in `[models.roles]` in your config.
+
+A provider whose `key_env` is a list of names has one credential for each name whose key is found. A key that
+fails cools down on its own while the others serve the route. A key is known by its place in the list
+(`openrouter#0`, `openrouter#2`), so its id stays put when another key is added or removed. A call that runs
+across such a change then skips the key that failed, not the new one (exo-desktop #52).
 
 ### Route circuit breaker
 
@@ -344,13 +433,17 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 
 The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
 
-- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+- The last route tried refused its key (HTTP 401 or 403): `anthropic rejected the key (HTTP 401: invalid
   x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
   asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
   The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
   401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
   sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
   model (D-081), is not named in a main-role error.
+- The last route tried is over its provider spend limit (HTTP 402): `anthropic is over its provider spend limit
+  (HTTP 402: key_spend_limit_reached): raise the limit or top up the account, then test it in /providers`. A new
+  key does not fix this, so the message does not point at the key field. The route stays benched for its cooldown
+  and the router tries the next one; the notice says so and warns that the turn's cost is a floor (D-093).
 - A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
   test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
   never shown, so it stays out of the session store. With no usable host the error says "its configured
@@ -367,7 +460,8 @@ A passing test in `/providers` (`t`) or in the web Providers tab tells the runni
 Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
 saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
 terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
-started, and a CLI must be installed and logged in.
+started, and a CLI must be installed and logged in. Exo checks a local server with one connect to the host and
+port of its base URL. A base URL it cannot read, such as a port that is not a number, counts as not running.
 
 ## See what is set
 

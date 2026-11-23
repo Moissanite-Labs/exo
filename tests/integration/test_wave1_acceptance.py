@@ -22,6 +22,14 @@ from pathlib import Path
 
 import pytest
 
+from exo.budget_scorecard import (
+    CORE,
+    CORE_FLOOR,
+    INWARD_IMPORTS_MAX,
+    PRIVATE_STATE_MAX,
+    core_line_total,
+    scorecard,
+)
 from exo.config import Config
 from exo.protocol import schema as s
 from exo.protocol.client import Client
@@ -183,47 +191,45 @@ commit = "{base}"
     assert "agent/memory_provider.py" in text and "agent/context_engine.py" in text
 
 
-CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.py", "src/exo/upstream.py"]
-
-# The core budget is a ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy").
-CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
-CORE_HEADROOM = 1000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
 
 
-def test_core_line_budget():
-    """Check 6: the core stays under CORE_FLOOR + CORE_HEADROOM counted lines (generated protocol files excluded).
+def test_core_line_budget(repo: Path | None = None):
+    """Check 6: the core's counted lines are reported and the step 4 structure is capped (generated files excluded).
 
-    A ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy"). The principal's ruling of 2026-10-15:
-    "important to be lean and optimized but not at the cost of functionality and robustness and product-market fit".
+    The line ceiling is off (D-083, amending D-077, docs/ENGINE-SPLIT.md "Budget policy"). The principal's ruling of
+    2026-10-27: "we're dropping the ceiling for now as we build out the codebase, it was too restrictive". The 10-15
+    ruling still holds: "important to be lean and optimized but not at the cost of functionality and robustness and
+    product-market fit".
 
-    1. Two recorded numbers, CORE_FLOOR and CORE_HEADROOM. The only assertion is
-       ``total < CORE_FLOOR + CORE_HEADROOM``.
-    2. The floor ratchets down. Every real reduction PR (deletions, simplification, real seams per ENGINE-SPLIT)
-       sets CORE_FLOOR to its post-merge count in the same PR. The floor never goes up.
-    3. Headroom is for shipping. Fixes and features land inside it with no ceremony. The test prints the count,
-       the floor and the headroom left on every run (pytest -s or -rP shows it), and its failure message shows them.
-    4. Security and robustness fixes are never blocked by the budget. If one would cross the ceiling, its PR raises
-       CORE_HEADROOM by the minimum needed with a one-line DECISIONS note, and the lead schedules a reduction within
-       the week. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
-    5. The structural goal carries the real intent: ENGINE-SPLIT step 4's criteria (no private-state reads across
-       module boundaries, no product imports into the engine, one responsibility per module). The count is a
-       signal. The printed report lists the largest counted files and flags any above 1,000 lines. It asserts
-       nothing.
-    6. The CORE list is never edited to dodge the count.
+    1. The test prints the count and its distance from CORE_FLOOR, and asserts nothing about lines. Run it with
+       ``-s`` or ``-rP`` to see the number.
+    2. The floor still ratchets down. Every real reduction PR (deletions, simplification, real seams per
+       ENGINE-SPLIT) sets CORE_FLOOR to its post-merge count in the same PR. The floor never goes up.
+    3. Nothing waits on a line number. A fix or a feature lands on its own merits, with no headroom note.
+    4. The structural goal now carries the budget: ENGINE-SPLIT step 4's criteria (no private-state reads across
+       module boundaries, no product imports into the engine, one responsibility per module). Two of them are
+       counted in ``_scorecard`` and capped by INWARD_IMPORTS_MAX and PRIVATE_STATE_MAX, which ratchet down like the
+       floor. The report also lists the largest counted files and flags any above 1,000 lines; that part is
+       information, not an assertion.
+    5. The CORE list is never edited to dodge the count.
 
     History. Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit security
     wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
-    15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
-    1,000, ceiling 15,813. Issue #46 tracks the rest of the split."""
-    files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
+    15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became a ratchet with headroom (D-077): floor 14,813,
+    headroom 1,000, ceiling 15,813. On 2026-10-26 #598 raised the headroom by 11 to 1,011 for the turn-author
+    plumbing into hooks. On 2026-10-27 main counted 15,828 against a 15,824 ceiling, so the ceiling was failing its
+    own test while the work it blocked was ordinary product work. D-083 drops the ceiling, keeps the floor and the
+    structure caps, and leaves the count as a report. Issue #46 tracks the rest of the split."""
+    repo = repo or REPO
+    files = [p for c in CORE for p in ((repo / c).rglob("*.py") if (repo / c).is_dir() else [repo / c])
              if "generated" not in p.parts]
-    counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}
-    total, ceiling = sum(counts.values()), CORE_FLOOR + CORE_HEADROOM
-    left = ceiling - total
-    status = (f"core budget: {total:,} counted lines, floor {CORE_FLOOR:,}, headroom {CORE_HEADROOM:,}, "
-              f"ceiling {ceiling:,}, headroom left {left:,}")
+    counts = {p.relative_to(repo).as_posix(): len(p.read_text().splitlines()) for p in files}
+    total = core_line_total(repo)
+    assert total == sum(counts.values())
+    status = (f"core budget: {total:,} counted lines, floor {CORE_FLOOR:,}, "
+              f"{total - CORE_FLOOR:+,} against the floor, no ceiling (D-083)")
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     big = sum(n > BIG_FILE for _, n in ranked)
     print(f"\n{status}")
@@ -234,10 +240,96 @@ def test_core_line_budget():
         print(f"  {n:6,}  {name}" + (f"  <- above {BIG_FILE:,} lines" if n > BIG_FILE else ""))
     print(f"{big} counted file{'s' if big > 1 else ''} above {BIG_FILE:,} lines" if big
           else f"no counted file above {BIG_FILE:,} lines")
-    assert total < CORE_FLOOR + CORE_HEADROOM, (
-        f"{status}. A security or robustness fix raises CORE_HEADROOM by the minimum, {1 - left:,}, with a one-line "
-        f"DECISIONS note. A feature waits for a reduction or carries a recorded decision. "
-        f"See docs/ENGINE-SPLIT.md 'Budget policy'.")
+    imports, reads = scorecard(repo / "src/exo/core", repo=repo)
+    item = f"step 4 structure: {imports}, {reads}"
+    print(item)
+    print("  " + ", ".join(f"exo.{k} {n}" for k, n in imports.by_name.most_common(5)))  # the report, not asserted
+    print("  " + ", ".join(f"{k} {n}" for k, n in reads.by_name.most_common(5)))
+    assert imports.total <= INWARD_IMPORTS_MAX and reads.total <= PRIVATE_STATE_MAX, (
+        f"{item}. Both caps only go down: a PR that removes some sets the cap to its own count, "
+        f"and one that adds some has to remove others first. See docs/ENGINE-SPLIT.md 'Budget policy'.")
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("reader.py", "from .. import envscrub"),
+    ("models/reader.py", "from ... import envscrub"),
+    ("reader.py", "from .. import envscrub as scrub"),
+    ("models/reader.py", "from ... import envscrub as scrub"),
+    ("reader.py", "from exo import envscrub"),
+    ("reader.py", "from ..envscrub import scrub_env"),
+    ("models/reader.py", "from ...envscrub import scrub_env"),
+    ("reader.py", "import exo.envscrub as scrub"),
+])
+def test_scorecard_counts_each_absolute_and_relative_module_form(tmp_path, reader, statement):
+    package = tmp_path / "src/exo"
+    package.mkdir(parents=True)
+    (package / "envscrub.py").write_text("def scrub_env(): pass\n")
+    path = package / "core" / reader
+    path.parent.mkdir(parents=True)
+    path.write_text(statement + "\n")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
+    assert imports.hits == [(path.relative_to(tmp_path).as_posix(), "envscrub")]
+    assert reads.total == 0
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("reader.py", "from . import sessions"),
+    ("models/reader.py", "from .. import sessions"),
+])
+def test_scorecard_excludes_normal_core_relative_imports(tmp_path, reader, statement):
+    core = tmp_path / "src/exo/core"
+    core.mkdir(parents=True)
+    (core / "sessions.py").write_text("")
+    path = core / reader
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(statement + "\n")
+    imports, reads = scorecard(core, repo=tmp_path)
+    assert imports.total == reads.total == 0
+
+
+def test_scorecard_deduplicates_forms_and_excludes_core_packages_and_exported_symbols(tmp_path):
+    package = tmp_path / "src/exo"
+    for name in ("core", "protocol", "server", "bus"):
+        directory = package / name
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("")
+    (package / "__init__.py").write_text('__version__ = "fixture"\n')
+    (package / "envscrub.py").write_text("def scrub_env(): pass\n")
+    path = package / "core/reader.py"
+    path.write_text("from .. import envscrub, bus, core, protocol, server, __version__\n")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
+    expected = [("src/exo/core/reader.py", "bus"), ("src/exo/core/reader.py", "envscrub")]
+    assert imports.hits == expected and reads.total == 0
+    path.write_text(path.read_text() + """from exo import envscrub as scrub, bus as bus_alias, core, protocol, server, __version__
+from ..envscrub import scrub_env
+import exo.envscrub
+from ..bus import send
+""")
+    imports, reads = scorecard(package / "core", repo=tmp_path)
+    assert imports.hits == expected
+    assert imports.by_name == {"bus": 1, "envscrub": 1}
+    assert reads.total == 0
+
+
+@pytest.mark.parametrize("reader,statement", [
+    ("extra.py", "from exo import envscrub"),
+    ("extra.py", "from .. import envscrub"),
+    ("models/extra.py", "from ... import envscrub as scrub"),
+])
+def test_scorecard_cap_rejects_extra_dependency_in_absolute_and_relative_forms(tmp_path, reader, statement):
+    package = tmp_path / "src/exo"
+    for name in ("core", "protocol", "server"):
+        (package / name).mkdir(parents=True)
+    for name in ("cli_chat.py", "upstream.py", "envscrub.py"):
+        (package / name).write_text("")
+    for index in range(INWARD_IMPORTS_MAX):
+        (package / f"core/reader{index}.py").write_text("from exo import envscrub\n")
+    test_core_line_budget(repo=tmp_path)  # exactly the existing cap passes
+    path = package / "core" / reader
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(statement + "\n")
+    with pytest.raises(AssertionError, match=f"{INWARD_IMPORTS_MAX + 1} inward product imports"):
+        test_core_line_budget(repo=tmp_path)  # spelling cannot hide the extra dependency from the actual gate
 
 
 def test_dependencies_are_listed():

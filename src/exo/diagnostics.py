@@ -143,8 +143,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
         "path": str(workspace.handoff_path(eng.agent, path_arg)),
         "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
                    "cwd": cwd, "created": info.created,
-                   "user_turns": sum(1 for m in eng.store.messages(info.id) if m.role == "user"
-                                     and not m.meta.get("note"))},
+                   "user_turns": eng.store.user_turns(info.id)},
         # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
         "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
                 if eng.executor_required else workspace.git_facts(cwd)),
@@ -152,7 +151,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
                      for r in eng.findings.list("open")[:10]],
     }
     latest: dict[str, dict[str, Any]] = {}
-    for e in eng.store.events_since(0, info.id, limit=1 << 30):
+    for e in eng.store.iter_events(0, info.id):  # page by page (#254)
         if isinstance(e.body, s.TaskUpdated):
             latest[e.body.task_id] = {"id": e.body.task_id, "title": e.body.title[:100], "status": e.body.status}
     facts["tasks"] = [t for t in latest.values() if t["status"] in ("queued", "running")]
@@ -187,6 +186,12 @@ def memory_status(eng: CoreEngine) -> dict[str, str]:
     return {"state": "on", "provider": mem.name, "text": ""}
 
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
+    if b.name == "checkpoint":
+        from exo.work_checkpoint import command
+        return await command(eng, b)
+    if b.name == "work":
+        from exo.work_notebook import command
+        return await command(eng, b)
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
             raise CommandFailed("bad_request", "usage: /context [json]")
@@ -222,6 +227,29 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         info = eng.store.update_session(b.session, title=title)
         eng.hub.publish(s.SessionUpdated(session=info), b.session)
         return {"session": to_dict(info)}
+    if b.name == "chatgpt":
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "ChatGPT connection changes require principal authority")
+        try:
+            from exo import chatgpt_auth
+            request = json.loads(b.args or '{}')
+            action = request.get("action", "status")
+            auth = chatgpt_auth.service(eng.home, eng.agent)
+            if action == "status":
+                return auth.status()
+            if action == "start":
+                return await asyncio.to_thread(auth.start, request.get("profile"))
+            if action == "cancel":
+                return auth.cancel()
+            if action == "disconnect":
+                return await asyncio.to_thread(auth.disconnect, request.get("profile"))
+            raise ValueError()
+        except chatgpt_auth.AuthError as exc:
+            if str(exc) == chatgpt_auth.NEED_SECRET_STORE:
+                raise CommandFailed("unavailable", str(exc)) from None
+            raise CommandFailed("bad_request", "ChatGPT connection action failed. Check the connection or try again.") from None
+        except Exception:
+            raise CommandFailed("bad_request", "ChatGPT connection action failed. Check the connection or try again.") from None
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":

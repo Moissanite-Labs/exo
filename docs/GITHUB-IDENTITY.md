@@ -132,8 +132,9 @@ register one app for the pilot seat, and run the pilot on a scratch repository i
 
 Each step gives what main does today, what to build and the risk. Steps 1 and 8 change only
 `src/exo/gate.py`, which the core line budget does not count. Steps 2, 3, 4, 5 and 7 touch counted files
-(`src/exo/core`, `src/exo/protocol`), and step 3 also touches the gate. Main stands at 15,076 of 15,813 counted lines
-(D-077), so 737 are left. The size of those changes is not measured.
+(`src/exo/core`, `src/exo/protocol`), and step 3 also touches the gate. The core stands at about 15,828 counted lines, reported
+against a floor of 14,813 with no ceiling (D-077, D-083), so no line number gates this work. The size of those
+changes is not measured.
 
 ### Step 1. Close three gate gaps that exist today
 

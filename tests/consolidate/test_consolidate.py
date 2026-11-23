@@ -1,6 +1,9 @@
 import argparse
+import errno
 import json
 import sqlite3
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -157,6 +160,92 @@ def test_reject_records_reason_and_leaves_nodes(template_store, led, corrections
     assert note["body"]["reason"] == "too narrow"
     assert sorted(p.name for p in template_store.nodes_dir.rglob("*.md")) == nodes_before
     assert pid not in {v.id for v in C.proposals_list(template_store, led)}
+
+
+def test_repeated_signal_after_rejection_creates_a_new_proposal(template_store, led):
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    first = run(template_store, led).proposals[0]
+    C.proposal_reject(template_store, led, first, "Not a standing preference", author="principal")
+    later = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.reinforced == []
+    assert len(result.proposals) == 1 and result.proposals[0] != first
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[first].status == "rejected"
+    assert views[result.proposals[0]].status == "proposed"
+    assert views[result.proposals[0]].evidence == [later["id"]]
+    assert not [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_reinforced"]
+
+
+def _rejected(store, led, text):
+    """A ruling consolidated into a proposal that the principal then rejects."""
+    ev = led.append("ruling", {"text": text}, "principal")
+    (pid,) = run(store, led).proposals
+    C.proposal_reject(store, led, pid, "Not a standing preference", author="principal")
+    return ev, pid
+
+
+def test_rejected_belief_does_not_hide_an_active_conflicting_one(template_store, led):
+    # #861 case 1: the rejected p1 matches the repeat better than the accepted, guarded p2 it contradicts.
+    _, p1 = _rejected(template_store, led, "Use tables with headers, not bullet lists.")
+    led.append("ruling", {"text": "Use bullet lists, not tables, in public GitHub comments."}, "principal")
+    (p2,) = run(template_store, led).proposals
+    C.proposal_accept(template_store, led, p2, author="principal")
+    led.append("ruling", {"text": "Use tables with headers, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.reinforced == [] and len(result.questions) == 1 and len(result.proposals) == 1
+    (p3,) = result.proposals
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p3].status == "held" and views[p3].question == result.questions[0]
+    assert views[p2].status == "accepted" and views[p1].status == "rejected" and len(views[p1].evidence) == 1
+    body = next(e["body"] for e in proposed(led) if e["body"]["proposal_id"] == p3)
+    assert body["supersedes"] == p2
+    q = next(e["body"] for e in led.iter(kind="question") if e["id"] == result.questions[0])
+    assert q["older"] == p2 and q["newer"] == p3 and q["default"] == 1   # guarded: keep the older one
+
+
+def test_rejected_belief_does_not_hide_an_active_agreeing_one(template_store, led):
+    # #861 case 1b: the repeat reinforces the open p2 instead of opening a second, overlapping proposal.
+    _, p1 = _rejected(template_store, led, "Use tables with headers, not bullet lists.")
+    led.append("ruling", {"text": "Use tables, not bullet lists or long prose."}, "principal")
+    (p2,) = run(template_store, led).proposals
+    later = led.append("ruling", {"text": "Use tables with headers, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == [p2]
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert later["id"] in views[p2].evidence and views[p1].status == "rejected" and len(views[p1].evidence) == 1
+
+
+def test_repeated_signal_reinforces_an_accepted_belief(template_store, led):
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    (p1,) = run(template_store, led).proposals
+    C.proposal_accept(template_store, led, p1, author="principal")
+    later = led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == [p1]
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p1].status == "accepted" and later["id"] in views[p1].evidence
+
+
+def test_rule_of_three_still_counts_a_rejected_belief_as_known(template_store, led):
+    # Repeating an instruction in chat does not re-raise a rejected lesson; a new ruling or correction does.
+    _, p1 = _rejected(template_store, led, "Use tables, not bullet lists.")
+    for s in "abc":
+        say(led, "Use tables, not bullet lists.", s)
+
+    result = run(template_store, led)
+
+    assert result.proposals == [] and result.reinforced == []
+    views = {v.id: v for v in C.proposals_list(template_store, led, include_decided=True)}
+    assert views[p1].status == "rejected" and len(views[p1].evidence) == 1
 
 
 def test_rule_of_three_across_runs(template_store, led):
@@ -351,21 +440,24 @@ def test_rule_of_three_cache_rebuild_skips_non_principal(template_store, led):
     assert evidence_ids(led) == [mine]
 
 
-def test_repeat_correction_reinforces_and_raises_weight(template_store, led):
+@pytest.mark.parametrize("anchor", ["2026-10-31T13:52:00.000000Z", "2030-02-01T00:00:00.000000Z"])
+def test_repeat_correction_reinforces_and_raises_weight(template_store, led, monkeypatch, anchor):
+    monkeypatch.setattr(crypto, "now_ts", lambda: anchor)
     out = agent(led, "A long answer")
     led.append("verdict", {"verdict": "edit", "target": out["id"], "text": "Keep replies under five lines."},
                "principal")
-    run(template_store, led)
-    w1 = C.proposals_list(template_store, led)[0].weight
+    run(template_store, led, now=anchor)
+    w1 = C.proposals_list(template_store, led, now=anchor)[0].weight
     out = agent(led, "Another long answer")
-    led.append("verdict", {"verdict": "edit", "target": out["id"], "text": "keep replies under five lines again"},
-               "principal")
-    res = run(template_store, led)
+    correction = led.append("verdict", {"verdict": "edit", "target": out["id"],
+                                        "text": "keep replies under five lines again"}, "principal")
+    res = run(template_store, led, now=anchor)
     assert res.proposals == [] and len(res.reinforced) == 1
-    v = C.proposals_list(template_store, led)[0]
+    v = C.proposals_list(template_store, led, now=anchor)[0]
     assert v.weight > w1 and len(v.evidence) == 2
     # Decay: 120 days later without reinforcement the taste belief is weak.
-    old = C.proposals_list(template_store, led, now="2027-02-15T00:00:00+00:00")[0]
+    last_evidence = C.taste.parse_ts(correction["ts"])
+    old = C.proposals_list(template_store, led, now=(last_evidence + timedelta(days=120)).isoformat())[0]
     assert old.weight < 0.1 and old.confidence == "low"
 
 
@@ -454,7 +546,39 @@ def test_model_reflector_seam_and_fallback(template_store, led, corrections):
     ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
     assert bad.reflect(obs, ctx).reflector == "rules"
     assert C.ModelReflector(lambda p: "not json").reflect(obs, ctx).reflector == "rules"
+    trailing = C.ModelReflector(lambda p: json.dumps({"wants": "unsigned comments", "avoid": None,
+                                                     "because": "agent names leak the team",
+                                                     "implication": "All public text.",
+                                                     "domain": "mind", "type": "preference",
+                                                     "title": "Unsigned"}) + " } trailing brace in prose }")
+    got = trailing.reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
     assert isinstance(C.RuleReflector(), C.Reflector) and res.proposals
+
+
+@pytest.mark.parametrize("wrap", [
+    "Note [draft]: {}",
+    'Options ["a", "b"] then {}',
+    "Scores [1, 2, 3]: {}",
+    "[{}]",
+    "See [1]: {} } and a trailing brace }",
+])
+def test_model_reflector_reads_the_object_past_brackets_in_prose(wrap):
+    # #835 review: a bracket or an array before the object must not hide it, as the greedy match did not.
+    answer = json.dumps({"wants": "unsigned comments", "avoid": None, "because": "names leak",
+                         "implication": "public text", "domain": "mind", "type": "preference",
+                         "title": "Unsigned"})
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    got = C.ModelReflector(lambda p: wrap.replace("{}", answer)).reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
+
+
+def test_model_reflector_without_an_object_falls_back():
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    for raw in ('["unsigned comments"]', "{not json} [1, 2]", "{" * 200):
+        assert C.ModelReflector(lambda p, r=raw: r).reflect(obs, ctx).reflector == "rules"
 
 
 def test_parse_instruction_forms():
@@ -507,3 +631,132 @@ def test_proposal_ids_that_look_like_phone_numbers_do_not_break_lint(template_st
             assert not any(pat.search(text) for pat in LEAKS), text
     assert C.proposal_ref("p-1e0ab9625a43") == "p-1e0ab9625a43"
     assert C.proposal_ref(digits) == "p-3613648960"
+
+
+# --- a failed accept leaves nothing behind (exo-desktop #54) ------------------------------------------
+
+OTHER_NODE = """---
+id: {nid}
+title: Garden watering schedule
+type: fact
+domain: {dom}
+summary: When the garden beds get watered in summer.
+load_when: Planning garden chores.
+confidence: low
+stability: durable
+valid_from: 2026-01-01
+sources:
+  - {{kind: inferred, ref: "template:example"}}
+links:
+  - {{to: person/identity, rel: part-of}}
+---
+
+Water the beds at dawn.
+"""
+
+
+def _write_other_node(store, nid):
+    """Write node `nid` on disk, behind this store object's cache."""
+    path = store.nodes_dir / f"{nid}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = OTHER_NODE.format(nid=nid, dom=nid.split("/")[0])
+    path.write_text(text, encoding="utf-8")
+    return path, text
+
+
+def _fail_once(monkeypatch, obj, name, exc):
+    """Make `obj.name` raise `exc` on its first call only, as a full disk or a lost index would."""
+    real = getattr(obj, name)
+    calls = []
+
+    def once(*a, **kw):
+        if not calls:
+            calls.append(1)
+            raise exc
+        return real(*a, **kw)
+    monkeypatch.setattr(obj, name, once)
+
+
+def _cut_short_once(monkeypatch, path):
+    """The first write to `path` stops halfway on a full disk, and leaves the file cut short as a real one does."""
+    real, calls = Path.write_text, []
+
+    def write_text(self, data, *a, **kw):
+        if self == path and not calls:
+            calls.append(1)
+            real(self, data[: len(data) // 2], *a, **kw)
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, data, *a, **kw)
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def _fail(monkeypatch, where, store, led, path):
+    if where == "index":
+        _fail_once(monkeypatch, store, "index", OSError("no space left on device"))
+    elif where == "ledger":
+        _fail_once(monkeypatch, led, "append", OSError("ledger is read-only"))
+    else:
+        _cut_short_once(monkeypatch, path)
+
+
+@pytest.mark.parametrize("where", ["index", "ledger", "write"])
+def test_a_failed_accept_restores_the_node_and_a_retry_adds_the_lesson_once(template_store, led, monkeypatch, where):
+    path, before = _write_other_node(template_store, "mind/formatting")
+    path.write_text(before.replace("Garden watering schedule", "Formatting of tables and bullet lists")
+                    .replace("When the garden beds get watered in summer.",
+                             "How the principal wants tables and bullet lists used in replies."), encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+    template_store.reload()
+    led.append("ruling", {"text": "Use tables, not bullet lists."}, "principal")
+    run(template_store, led)
+    p = proposed(led)[0]["body"]
+    assert p["action"] == "update" and p["node_id"] == "mind/formatting"
+    _fail(monkeypatch, where, template_store, led, path)
+    with pytest.raises(OSError):
+        C.proposal_accept(template_store, led, p["proposal_id"])
+    assert path.read_text(encoding="utf-8") == before
+    assert not list(led.iter(kind="belief_accepted"))
+    C.proposal_accept(template_store, led, p["proposal_id"])
+    assert path.read_text(encoding="utf-8").count("**Claim.** The principal wants") == 1
+
+
+@pytest.mark.parametrize("where", ["index", "ledger", "write"])
+def test_a_failed_accept_of_a_new_node_leaves_no_file(template_store, led, monkeypatch, where):
+    led.append("ruling", {"text": "Never sign external comments with agent names."}, "principal")
+    res = run(template_store, led)
+    p = C.load_state(led).proposals[res.proposals[0]]
+    path = template_store.nodes_dir / f"{p.node_id}.md"
+    _fail(monkeypatch, where, template_store, led, path)
+    with pytest.raises(OSError):
+        C.proposal_accept(template_store, led, p.id)
+    assert not path.exists() and p.node_id not in template_store.nodes
+    assert p.node_id not in (template_store.root / "INDEX.md").read_text()
+    out = C.proposal_accept(template_store, led, p.id)
+    assert out["action"] == "create" and out["node_id"] == p.node_id
+
+
+# --- a conflict question closes when its proposal is decided (exo-desktop #54) ---------------------------
+
+@pytest.mark.parametrize("decide", ["accept", "reject"])
+def test_deciding_a_held_proposal_closes_its_question(template_store, led, decide):
+    """No client asks a belief_conflict question yet, so a direct accept or reject is how a held proposal ends."""
+    led.append("ruling", {"text": "Never sign external comments with agent names."}, "principal")
+    run(template_store, led)
+    led.append("ruling", {"text": "Always sign external comments with agent names."}, "principal")
+    res = run(template_store, led)
+    (qid,), (pid,) = res.questions, res.proposals
+    assert {v.id: v.status for v in C.proposals_list(template_store, led)}[pid] == "held"
+    if decide == "accept":
+        C.proposal_accept(template_store, led, pid, author="principal")
+        closing = list(led.iter(kind="belief_accepted"))[-1]["body"]
+        assert closing["conflict_resolved_by"] == "direct accept"
+    else:
+        C.proposal_reject(template_store, led, pid, "keep the older one", author="principal")
+        closing = [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_rejected"][-1]["body"]
+    assert closing["question"] == qid
+    assert qid in C.load_state(led).resolved
+    led.append("answer", {"text": "1", "choice": 1}, "principal", refs=[qid])   # a late answer changes nothing
+    later = run(template_store, led)
+    assert later.released == [] and later.rejected == []
+    assert {v.id: v.status for v in C.proposals_list(template_store, led, include_decided=True)}[pid] == \
+        ("accepted" if decide == "accept" else "rejected")

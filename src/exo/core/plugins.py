@@ -181,6 +181,9 @@ def import_folder(m: Manifest) -> Any:
     """Import a plugin folder as a package so its relative imports work."""
     assert m.path is not None
     modname = _module_name(m.name)
+    owner = getattr(sys.modules.get(modname), "__exo_plugin__", m.name)
+    if owner != m.name:  # a-b and a_b share a module name: the second would replace the first's code (exo-desktop #52)
+        raise PluginError(f"plugin {m.name!r} imports as {modname}, which plugin {owner!r} already uses; rename one")
     if "exo_plugins" not in sys.modules:
         pkg = type(sys)("exo_plugins")
         pkg.__path__ = []
@@ -192,6 +195,7 @@ def import_folder(m: Manifest) -> Any:
     for stale in [k for k in sys.modules if k.startswith(modname + ".")]:
         del sys.modules[stale]  # a fresh load never reuses another folder's submodules
     mod = importlib.util.module_from_spec(spec)
+    setattr(mod, "__exo_plugin__", m.name)
     sys.modules[modname] = mod
     try:
         spec.loader.exec_module(mod)

@@ -18,11 +18,12 @@ from collections.abc import Callable
 from typing import Any
 
 from exo import eval as E
-from exo import provenance
-from exo.consolidate import ConsolidateError, Proposal, load_state, proposal_accept, skill_text_after, _status
+from exo import provenance, taste
+from exo.consolidate import (ConsolidateError, Proposal, load_policy, load_state, proposal_accept,
+                             skill_text_after, _status)
 
 from .learner import Learner
-from .promote import accepted_rules, apply_policy, export_taste, revert
+from .promote import accepted_rules, apply_policy, export_taste, revert, _now
 
 SYSTEM_HEAD = "You are an agent working for one principal. Follow what you know about them."
 
@@ -142,9 +143,13 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
     checks in `apply_policy`) and with no critic objection. No candidate scores on its lesson's own evidence: the
     replays and preference pairs built from it count neither for adding the lesson nor for dropping it."""
     rt = lr.runtime
+    if rt is None:
+        return []
     pol = lr.settings["promote"]
     st = load_state(rt.ledger)
+    policy = load_policy(rt.store)
     cfg = current_config(lr)
+    now = _now()
     promoted = {}
     for ev in rt.ledger.iter(kind="note"):
         b = ev["body"] or {}
@@ -154,7 +159,15 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
     for pid, p in st.proposals.items():
         if len(out) >= limit:
             break
-        if _status(st, pid) != "proposed" or p.ptype not in ("taste", "fact") or p.guarded or p.confidence == "low":
+        # "medium weight and up", by the noisy-or `weight` label, not the stale `confidence` field. A lesson that
+        # rule 4 would hold back because its computed weight is low must not slip through as a climb candidate and
+        # auto-promote on eval evidence alone (issue 13). (The session floor belongs to rule 4's auto-promotion; the
+        # climb is the path for medium-weight lessons, so it must still see them.)
+        b = st.beliefs.get(pid)
+        weight = b.weight(now, policy["half_life_days"]) if b is not None else 0.0
+        lab = taste.label(weight)
+        if (_status(st, pid) != "proposed" or p.ptype not in ("taste", "fact") or p.guarded
+                or lab == "low"):
             continue
         if p.critic_note or p.ptype in pol["eval_gate_for"] or p.domain in pol["high_impact_domains"]:
             continue

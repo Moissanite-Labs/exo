@@ -143,7 +143,14 @@ def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
     async def go():
         info = await eng.loop.create_session(title="t")
         await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
-        await asyncio.sleep(0.2)
+        # TurnSend runs the turn in a background task, and the tool.error finding is filed only at its end (the
+        # turn-end rules): wait for that task, not a fixed time, which a loaded machine can outrun
+        turns = set(eng._tasks)
+        assert turns
+        done, pending = await asyncio.wait(turns, timeout=30)
+        assert not pending, "the turn did not end within 30 s"
+        for t in done:
+            t.result()  # asyncio.wait keeps a failed turn's exception; raise it here
         trace.report("direct caller", NotConfigured("off until set up"), info.id)
         return info.id
 
@@ -291,6 +298,20 @@ def sigs(t, **limits):
     return {f.signature for f in trace.detect(t, Thresholds(**limits) if limits else TH)}
 
 
+def test_a_spend_limit_attempt_is_marked_a_floor_and_still_flagged_as_a_fallback():
+    """A route that stopped on its spend limit did work nobody bills this turn. The call's figure is a floor, so it
+    carries the "+" an unpriced call carries, is counted apart (#848, D-093), and keeps the model.fallback signature a
+    finding filed before this outcome existed already uses."""
+    c = Call(route="free:m", tokens_in=100, tokens_out=10, cost_usd=0.0,
+             attempts=[{"route": "paid:m", "outcome": "spend_limit", "error": "HTTP 402: key_spend_limit_reached"},
+                       {"route": "free:m", "outcome": "ok"}], undercounted=True)
+    t = tt(calls=[c])
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["unpriced_calls"] == 0
+    assert t.summary()["cost"] == "$0.0000+"
+    (f,) = [f for f in trace.detect(t, TH) if f.signature == "model.fallback:paid:m"]
+    assert f.title == "paid:m is over its provider spend limit; the call fell back"
+
+
 def test_rule_turn_slow_and_threshold_from_config():
     assert "turn.slow" not in sigs(tt(wall_ms=29_000))
     assert "turn.slow" in sigs(tt(wall_ms=31_000))
@@ -391,6 +412,38 @@ def test_cost_sums_priced_calls_and_never_reports_zero_for_unpriced():
     assert trace.money(1.5) == "$1.50"
 
 
+def test_a_call_that_hit_a_spend_limit_marks_the_figure_as_a_floor():
+    """A paid route that stopped on its own spend limit did work this turn is not billed for. The figure under it is a
+    floor, so it gets the same "+" the unpriced calls get, and the JSON says how many calls were short (D-093)."""
+    short = _usage_call("p:a", 0.02, undercounted=True)
+    t = tt(calls=[short, _usage_call("p:b", 0.01)])
+    assert t.undercounted() == 1
+    s = t.summary()
+    assert s["undercounted_calls"] == 1 and s["unpriced_calls"] == 0 and s["cost"] == "$0.0300+"
+    assert "0.0200+" in trace.table([t])  # the call line says it too, not just the turn total
+    assert "unknown" in trace.table([tt(calls=[_usage_call("p:c", None)])])  # unchanged: no price is still unknown
+    # the count follows the attempt outcome the router writes, not a second field the trace has to guess
+    turn = tt(calls=[])
+    assert turn.undercounted() == 0
+
+
+def test_a_spend_limit_attempt_marks_the_call_short_through_parse():
+    """The flag comes from the event the router writes, not from a guess: a model.call whose attempts include one
+    spend_limit parses into a call marked undercounted, and the JSON carries it on the call (D-093)."""
+    evs = [s.Event.of(s.TurnStarted(turn_id="t1", model="paid:m"), seq=1, session="s"),
+           s.Event.of(s.ModelCall(iteration=1, requested="paid:m", route="free:m", total_ms=10,
+                                  attempts=[{"route": "paid:m", "outcome": "spend_limit",
+                                             "error": "HTTP 402: key_spend_limit_reached"},
+                                            {"route": "free:m", "outcome": "ok"}],
+                                  usage=Usage(input_tokens=10, output_tokens=1, cost_usd=0.0)), seq=2, session="s"),
+           s.Event.of(s.TurnCompleted(turn_id="t1"), seq=3, session="s")]
+    (t,) = trace.parse(evs, "s")
+    assert [c.undercounted for c in t.calls] == [True]
+    assert t.summary()["undercounted_calls"] == 1 and t.summary()["cost"] == "$0.0000+"
+    (c,) = trace.as_dict("s", [t])["turns"][0]["call_list"]
+    assert c["undercounted"] is True and c["cost"] == "$0.0000+"
+
+
 def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     kid = tt(calls=[_usage_call("p:k", 0.5)])
     t = tt(calls=[_usage_call("p:a", 0.25, cache_read=900)], children=[kid], t0=1.0, wall_ms=1000)
@@ -402,6 +455,84 @@ def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
     assert d["cost_usd"] == 0.75 and {c["cost_usd"] for c in d["call_list"]} == {0.25, 0.5}
     u = tt(calls=[_usage_call("p:a", None)], t0=1.0)
     assert "unknown" in trace.table([u]) and trace.as_dict("s", [u])["turns"][0]["cost_usd"] is None
+
+
+def test_table_names_each_unpriced_route_and_where_its_price_goes():
+    t = tt(calls=[_usage_call("provider:model", None), _usage_call("p:a", 0.01)], t0=1.0)
+    out = trace.table([t])
+    assert "$0.0100+" in out  # the priced call, still marked as a mixed turn
+    assert trace.price_hint("provider:model") in out
+    assert 'models.models in config.json' in out and 'docs/PROVIDERS.md "Prices"' in out
+    assert trace.price_hint("p:a") not in out  # a priced route is never named
+    priced = tt(calls=[_usage_call("p:a", 0.01)], t0=1.0)
+    assert "no price for" not in trace.table([priced])
+    many = tt(calls=[_usage_call(f"p:m{i}", None) for i in range(5)], t0=1.0)
+    capped = trace.table([many])
+    assert capped.count('no price for "') == 3  # three named, the rest in one summary line
+    assert 'no price for "p:m0"' in capped and 'no price for "p:m3"' not in capped
+    assert "no price for 2 more routes" in capped
+
+
+def test_table_names_unpriced_descendants_once_across_shown_turns():
+    grandchild = tt(calls=[_usage_call('child:m', None)])
+    child = tt(calls=[_usage_call('child:m', None)], children=[grandchild])
+    parent = tt(calls=[_usage_call('p:a', 0.01)], children=[child], t0=1.0)
+    other = tt(calls=[_usage_call('child:m', None)], t0=2.0)
+    assert parent.cost() == (0.01, 2)
+    out = trace.table([parent, other])
+    assert '$0.0100+' in out and 'unknown' in out
+    assert out.count(trace.price_hint('child:m')) == 1
+    assert trace.price_hint('p:a') not in out
+    # A child-only turn must have the hint even without a parent's own model calls.
+    out = trace.table([tt(children=[child], t0=1.0)])
+    assert 'unknown' in out and out.count(trace.price_hint('child:m')) == 1
+
+
+@pytest.mark.parametrize('count', [0, 1, 3, 4, 5])
+def test_table_caps_unique_unpriced_descendant_hints(count):
+    calls = [_usage_call(f'p:m{i}', None) for i in reversed(range(count))]
+    child = tt(calls=calls + calls)
+    parent = tt(calls=[_usage_call('p:priced', 0.01)], children=[child], t0=1.0)
+    out = trace.table([parent])
+    assert out.count('no price for "') == min(count, 3)
+    for index in range(count):
+        assert (trace.price_hint(f'p:m{index}') in out) == (index < 3)
+    if count > 3:
+        assert f'no price for {count - 3} more routes; each takes its own key under models.models' in out
+    else:
+        assert 'more routes' not in out
+    assert trace.price_hint('p:priced') not in out
+
+
+def test_table_hint_controls_for_requested_unknown_and_unspent_calls():
+    child = tt(calls=[_usage_call('', None, requested='requested:m'),
+                      _usage_call('', None),  # the cost is unknown, but no route identity was recorded
+                      _usage_call('priced:m', 0.01),
+                      _usage_call('unused:m', None, tin=0, tout=0)])
+    out = trace.table([tt(children=[child], t0=1.0)])
+    assert '$0.0100+' in out
+    assert out.count('no price for "') == 1
+    assert trace.price_hint('requested:m') in out
+    assert trace.price_hint('priced:m') not in out and trace.price_hint('unused:m') not in out
+    assert trace.price_hint('') not in out
+
+
+def test_table_names_a_route_present_only_in_an_earlier_displayed_turn():
+    earlier = tt(calls=[_usage_call('early:m', None)], t0=1.0)
+    later = tt(calls=[_usage_call('priced:m', 0.01)], t0=2.0)
+    out = trace.table([earlier, later])
+    assert out.count(trace.price_hint('early:m')) == 1
+    assert trace.price_hint('priced:m') not in out
+
+
+@pytest.mark.parametrize('undercounted', [False, True])
+def test_table_does_not_name_a_priced_zero_cost_call(undercounted):
+    turn = tt(calls=[_usage_call('free:m', 0.0, undercounted=undercounted)], t0=1.0)
+    assert turn.cost() == (0.0, 0)
+    assert turn.summary()['cost'] == '$0.0000' + ('+' if undercounted else '')
+    out = trace.table([turn])
+    assert turn.summary()['cost'] in out
+    assert 'no price for' not in out
 
 
 def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):

@@ -528,10 +528,10 @@ Each stage updates `docs/SCHEDULE.md`, the user guide, the developer guide and t
 
 **Budget.** Stage 0 and the ingress door touch counted core files: `src/exo/core/engine.py`, `context.py`, `sessions.py`,
 `ingress.py`, `findings.py`, `src/exo/protocol/schema.py` and, for 0.4 and 0.5, `src/exo/core/tools/builtin/search.py`
-with a search worker beside it. Sections 0.4 and 0.5 are the largest part, an estimate of 100 to 150 lines. At `6551eed`
-the core counts 15,099 lines against D-077's ceiling of 15,813, so 714 lines are left, and the number moves with every
-merge. The trigger engine, its sources and the connectors live outside the count, in `src/exo/scheduler.py` and siblings
-(D-067). D-077 never lets the count block a security or robustness fix.
+with a search worker beside it. Sections 0.4 and 0.5 are the largest part, an estimate of 100 to 150 lines. The core
+counts about 15,828 lines, reported against a floor of 14,813 and not capped (D-077, D-083). The trigger engine, its sources and the connectors live outside the count, in `src/exo/scheduler.py` and siblings
+(D-067). The budget never blocks a security or robustness fix: since 2026-10-27 it asserts nothing about lines
+(D-083).
 
 **Stage 6, widening.** A trigger that names a write tool, `bash` or a tool that reaches the network needs all of these
 first:

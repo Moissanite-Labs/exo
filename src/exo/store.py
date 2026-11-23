@@ -353,9 +353,12 @@ class PrincipalStore:
         """Pack the best nodes under a token budget (tokens estimated as chars / 4). The header
         line counts against the budget. A node that does not fit is listed by summary."""
         query = words if isinstance(words, str) else ' '.join(words)
+        # This diagnostic is quoted data, not a second copy of the caller's instructions.
+        import html
+        preview = html.escape(json.dumps(" ".join(query.split())[:80], ensure_ascii=True), quote=True)
         limit = budget * 4
         ranked = self.find(query) if ranked is None else ranked
-        header_reserve = len(f'<!-- exo ctx: 9999 nodes, ~{budget} tokens, query={query} -->\n')
+        header_reserve = len(f'<!-- exo ctx: 9999 nodes, ~{budget} tokens, query={preview} -->\n')
         used, picked, ids, full = header_reserve, [], [], []
         for i, _ in ranked:
             body = f"## {i}\n{self.nodes[i]['_body']}\n"
@@ -371,7 +374,7 @@ class PrincipalStore:
             ids.append(i)
             full.append(i)
         content = '\n'.join(picked)
-        header = f'<!-- exo ctx: {len(ids)} nodes, ~{(len(content) + header_reserve) // 4} tokens, query={query} -->'
+        header = f'<!-- exo ctx: {len(ids)} nodes, ~{(len(content) + header_reserve) // 4} tokens, query={preview} -->'
         text = header + '\n' + content if picked else header
         return Context(text=text, ids=ids, full=full, tokens=len(text) // 4)
 

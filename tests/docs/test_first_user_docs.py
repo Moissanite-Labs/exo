@@ -87,13 +87,38 @@ def test_web_links_carry_the_page_token():
         assert bare == [], f"{rel} sends the user to the bare address, which has no page token"
 
 
-def test_quick_start_says_the_repository_is_a_private_preview():
+def test_quick_start_says_the_repository_is_public_and_an_early_preview():
     readme = _section(_read("README.md"), "Quick start")
     m = re.search(r'id="install".*?</section>', _read("site/cli/index.html"), re.S)
     assert m, "site/cli/index.html has no #install section"
     for where, text in (("README.md Quick start", readme), ("site/cli #install", m.group(0))):
-        assert "private preview" in text and "on request" in text, where
-        assert text.index("private preview") < text.index("git clone"), f"{where}: say it before the clone"
+        assert "public" in text and "early preview" in text, where
+        assert "private preview" not in text and "on request" not in text, f"{where}: the repository is public"
+        assert text.index("early preview") < text.index("git clone"), f"{where}: say it before the clone"
+        assert "git clone https://github.com/Moissanite-Labs/exo " in text, f"{where}: clone the moved repository"
+
+
+def test_no_first_user_page_still_calls_the_repository_private():
+    """The repository moved to Moissanite-Labs and is public (#931). The install guide and every site page agree.
+
+    The old URL counts wherever it ends: in an href, in a link's visible text, or before a backtick. A longer name
+    that only starts with it, such as exo-desktop, does not count. The `--exo-source` URL must end at exo too, so
+    exo-cli does not pass. "is private" must start at a word, so "this private key" is not stale.
+    """
+    pages = ["docs/INSTALL.md", *(str(p.relative_to(ROOT)) for p in sorted((ROOT / "site").rglob("index.html")))]
+    for rel in pages:
+        text = _read(rel)
+        for stale in ("private preview", "on request", "limited during the early build", r"\bis private"):
+            said = re.search(stale, text)
+            assert said is None, f"{rel} still says {said.group(0)!r}"
+        old = re.search(r"github\.com/aska-digital/exo(?![\w-])", text)
+        line = old and text.count("\n", 0, old.start()) + 1
+        assert old is None, f"{rel} line {line} still names the old repository"
+    install = _read("docs/INSTALL.md")
+    assert "public" in install and "early preview" in install, "INSTALL.md: say the repository is public"
+    assert "git clone https://github.com/Moissanite-Labs/exo " in install, "INSTALL.md: clone the moved repository"
+    assert re.search(r"--exo-source https://github\.com/Moissanite-Labs/exo(?![\w-])", install), (
+        "INSTALL.md: --exo-source names the moved repository")
 
 
 def test_readme_opens_with_what_exo_is_today():

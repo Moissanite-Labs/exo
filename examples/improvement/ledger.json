@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "classification": "public-synthetic",
+  "namespace": "signed-ledger-v1",
+  "baseline": {"notes": "positive integers"},
+  "development": [
+    {"id": "dev-signed", "domain": "accounting", "input": "100.25,-20.10,5.00"},
+    {"id": "dev-small", "domain": "accounting", "input": "0.10,0.20"}
+  ],
+  "held_out": [
+    {"id": "held-signed", "domain": "accounting", "input": "30.50,-4.25"},
+    {"id": "held-small", "domain": "accounting", "input": "0.05,0.40"}
+  ],
+  "references": {
+    "dev-signed": "Total: 85.15",
+    "dev-small": "Total: 0.30",
+    "held-signed": "Total: 26.25",
+    "held-small": "Total: 0.45"
+  }
+}

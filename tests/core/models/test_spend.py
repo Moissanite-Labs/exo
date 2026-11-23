@@ -76,6 +76,42 @@ def test_reserve_before_send_exact_body_and_immutable_price(tmp_path):
     assert rows(cfg) == [(2_000_000, 200_000)]
 
 
+@pytest.mark.parametrize('trace_price', [False, True])
+def test_unpriced_route_refusal_points_to_contract_docs_before_http(tmp_path, trace_price):
+    cfg = policy(tmp_path); cfg['routes'] = {}  # the journal pins no contract for test:m
+    seen = []
+    r = Router.from_config({
+        'spend': cfg,
+        'models': {'test:m': {'input': 1, 'output': 10}} if trace_price else {},
+        'roles': {'main': ['test:m']},
+        'providers': {'test': {'transport': 'openai', 'base_url': 'https://api.openai.com/v1'}},
+    }, catalog={}, env={}, client=httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda req: seen.append(req) or response())))
+    if trace_price:
+        assert r.models['test:m']['input'] == 1  # following the trace hint does not pin a spend contract
+    event = call(r)[-1]
+    assert event.kind == 'error' and not event.retryable
+    assert 'no pinned model-spend contract for test:m' in event.error
+    assert event.attempts == [{'route': 'test:m', 'outcome': 'spend_refused'}]
+    assert not seen and rows(cfg) == [] and r.spend.prices == {}
+    assert r.spend.status()['stop_reason'] == ''  # no request, reservation, fallback or journal freeze
+    assert 'docs/MODEL-SPEND.md' in event.error and 'models.models' not in event.error
+
+
+def test_estimate_and_contract_do_not_extend_audited_native_ceilings(tmp_path):
+    cfg = policy(tmp_path)
+    cfg['routes']['test:unlisted'] = dict(cfg['routes'].pop('test:m'), model='unlisted')
+    seen = []
+    r = router(cfg, lambda req: seen.append(req) or response())
+    r.roles['main'] = ['test:unlisted']
+    r.models['test:unlisted'] = {'input': 1, 'output': 10}
+    event = call(r)[-1]
+    assert event.kind == 'error' and not event.retryable
+    assert 'lacks an audited native token ceiling' in event.error
+    assert event.attempts == [{'route': 'test:unlisted', 'outcome': 'spend_refused'}]
+    assert not seen and rows(cfg) == [] and r.spend.status()['stop_reason'] == ''
+
+
 @pytest.mark.parametrize('field', ['daily_usd', 'monthly_usd'])
 def test_cap_denial_zero_calls_no_fallback(tmp_path, field):
     cfg = policy(tmp_path); cfg[field] = '.001'

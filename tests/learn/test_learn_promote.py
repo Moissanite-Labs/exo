@@ -1,13 +1,16 @@
 import json
 import re
+from datetime import timedelta
 
 import pytest
 
+from exo import crypto
 from exo import eval as E
-from exo.consolidate import consolidate_run, load_state, proposal_accept, proposals_list
+from exo.consolidate import consolidate_run, load_state, proposal_accept, proposal_reject, proposals_list
 from exo.ingest import ingest
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
+from exo.taste import parse_ts
 
 from helpers import chatgpt_export, correction, propose, ruling, scripted_model, write_qa
 
@@ -163,6 +166,23 @@ def test_rule3_conflict_with_a_guarded_belief_stays_held(learner):
     assert len(q) == 1 and "Default 1" in q[0]["body"]["text"]   # guarded: keep the older one
 
 
+def test_rule3_a_rejected_belief_cannot_route_a_ruling_past_a_guarded_conflict(learner):
+    # #861: the repeated ruling matches the rejected p1 best, but it contradicts the accepted, guarded p2.
+    # It must be held on a question (rule 3), not promoted at once by rule 1 beside the belief it contradicts.
+    rt = learner.runtime
+    ruling(rt, "Use tables with headers, not bullet lists.")
+    (p1,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    proposal_reject(rt.store, rt.ledger, p1, "Not a standing preference", author="principal")
+    ruling(rt, "Use bullet lists, not tables, in public GitHub comments.")
+    (p2,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    proposal_accept(rt.store, rt.ledger, p2, author="principal")
+    ruling(rt, "Use tables with headers, not bullet lists.")
+    (p3,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert d.id == p3 and d.action == "held" and d.rule == 3
+    assert [status(learner, p) for p in (p1, p2, p3)] == ["rejected", "accepted", "held"]
+
+
 def test_rule4_two_sessions_high_weight_auto_promotes(learner):
     rt = learner.runtime
     ev = [correction(rt, "plain status lines please", "s1")["id"], correction(rt, "No emoticons in status", "s2")["id"]]
@@ -282,13 +302,17 @@ def test_rule5_gate_blocks_a_skill_that_does_not_help(learner):
     assert d.action == "gate_failed" and not (rt.root / "skills").exists()
 
 
-def test_rule6_medium_is_a_hint_and_stale_becomes_a_question(learner):
+@pytest.mark.parametrize("anchor", ["2026-10-31T13:52:00.000000Z", "2030-02-01T00:00:00.000000Z"])
+def test_rule6_medium_is_a_hint_and_stale_becomes_a_question(learner, monkeypatch, anchor):
+    # Every time is the anchor or counted from it, so the result does not depend on the day the test runs.
+    monkeypatch.setattr(crypto, "now_ts", lambda: anchor)                 # the ledger stamps its events with this
     rt = learner.runtime
     c = correction(rt, "plain status lines please", "s1")
-    res = propose(rt, evidence=[c["id"]])
-    (d,) = apply_policy(learner)
+    res = propose(rt, evidence=[c["id"]], now=anchor)
+    (d,) = apply_policy(learner, now=anchor)
     assert d.action == "hint" and d.rule == 6
-    (d,) = apply_policy(learner, now="2027-01-01T00:00:00.000000Z")      # months later: stale and low weight
+    later = (parse_ts(anchor) + timedelta(days=64)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    (d,) = apply_policy(learner, now=later)                               # months later: stale and low weight
     assert d.action == "question" and d.rule == 6
     assert status(learner, res["id"]) == "proposed"
 

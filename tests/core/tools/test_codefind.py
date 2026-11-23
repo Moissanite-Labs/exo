@@ -164,6 +164,19 @@ def test_laya_url_only_loopback(monkeypatch):
     assert cf._laya_url() is None
 
 
+@pytest.mark.parametrize("base_url", ["http://127.0.0.1:notaport/v1", "http://127.0.0.1:99999/v1", "http://[::1/v1",
+                                      8080, ["http://127.0.0.1:1/v1"]])
+def test_laya_url_it_cannot_read_is_not_running(monkeypatch, base_url):
+    """These raised ValueError or AttributeError, so code_find failed even with a Jev key."""
+    class C:
+        data = {"models": {"providers": {"laya": {"base_url": base_url}}}}
+        load = classmethod(lambda cls: cls())
+    import exo.config
+    monkeypatch.setattr(exo.config, "Config", C)
+    assert cf._laya_url() is None
+    assert [b.name for b in cf.pick_backends({cf.KEY_ENV: KEY})] == ["jev"]
+
+
 def test_risk_toolset_and_subagent_availability(tmp_path):
     from tests.agents.test_delegate import engine
     spec = next(s for s in default_registry().specs(available_only=False) if s.name == "code_find")

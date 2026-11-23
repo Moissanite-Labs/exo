@@ -1,0 +1,37 @@
+{
+  "issue": 550,
+  "scope": "The body, title and body-file options shared by one gh target-reading set are parsed once, and target membership uses a set without dropping or reordering any target. This reduces repeated classification work only. The quadratic decide path, the quoted option-order corner and alt-target serialization redaction remain open; the existing decide-growth expected failure remains.",
+  "differential_summary": {
+    "actions": 17,
+    "pairs_same": 1496,
+    "lowered_pairs": 0,
+    "lowered_actions": 0,
+    "lowered_outcome": 0,
+    "lowered_reserved": 0,
+    "lowered_violations": 0,
+    "lowered_no_grant": 0,
+    "lowered_body_unseen": 0,
+    "lowered_binds_exact": 0,
+    "lowered_reserved_elsewhere": 0,
+    "violations_reworded": 0,
+    "tightened_pairs": 0,
+    "tightened_actions": 0,
+    "pairs_detail_changed": 0,
+    "classification_only_actions": 0,
+    "base_classify_errors": 0,
+    "base_decide_errors": 0,
+    "head_classify_errors": 0,
+    "head_decide_errors": 0,
+    "base_unknown_outcomes": 0,
+    "head_unknown_outcomes": 0
+  },
+  "intentional_lowering": false,
+  "evidence_note": "The aimed 17-action by 88-policy differential has zero lowered pairs and zero classification/decision errors. A deterministic option-word scan counter fails before and passes after; it is not an end-to-end latency or event-loop bound claim.",
+  "base_commit": "cc3925b3",
+  "no_command_execution": true,
+  "comparator_verified_tree_local_imports": true,
+  "source_sha256": {
+    "base": "c0daaceddffe249bc89fa24c1b30c27c86920bd982dcbf056be13b89cb76fd3d",
+    "head": "194d47b9a13ed4dccaf1d3d0355ad3c5834430327a15f858abe88d86773437a3"
+  }
+}

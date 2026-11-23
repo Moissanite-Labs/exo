@@ -13,7 +13,7 @@ from exo.core.models.fake import FakeProvider, tool_turn
 from exo.core.types import ToolSpec, Usage
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
-from exo.wire import Receipt, decode, verify
+from exo.wire import Brief, Receipt, decode, encode, verify
 
 
 class Keyed:
@@ -290,6 +290,27 @@ def test_nested_delegation_when_depth_allows(tmp_path):
     assert "delegate" not in leaf["tools"]
     mid = next(c for c in fake.calls if "MID" in c["user"])
     assert "delegate" in mid["tools"] and "may use the `delegate` tool" in mid["system"]
+
+
+def test_tasks_list_active_returns_only_queued_and_running_tasks(tmp_path):
+    """#997 review nit: a terminal reads ``tasks.list`` while another session's request is open. ``active`` keeps
+    the reply to the tasks that can still need approval, not every task ever written. It narrows a session filter
+    too, and the field decodes from the wire."""
+    eng, _ = engine(tmp_path, [])
+    for task_id, parent, status in [("k1", "s_a", "queued"), ("k2", "s_a", "running"), ("k3", "s_a", "done"),
+                                    ("k4", "s_a", "failed"), ("k5", "s_a", "cancelled"), ("k6", "s_b", "running")]:
+        brief = encode(Brief(id=task_id, thread=parent, goal=task_id))
+        eng.store._q("INSERT INTO tasks (id, parent, child, depth, title, status, brief, created, updated) VALUES "
+                     "(?,?,?,?,?,?,?,?,?)", (task_id, parent, None, 1, task_id, status, brief, s.now_ts(), s.now_ts()))
+
+    async def listed(body):
+        _, resp = await Dispatcher(eng).dispatch(json.dumps({"id": "1", "type": "tasks.list", "body": body}))
+        assert resp.ok, resp.error
+        return [row["task_id"] for row in resp.result["tasks"]]
+    assert asyncio.run(listed({})) == ["k1", "k2", "k3", "k4", "k5", "k6"]
+    assert asyncio.run(listed({"active": True})) == ["k1", "k2", "k6"]
+    assert asyncio.run(listed({"session": "s_a", "active": True})) == ["k1", "k2"]
+    assert asyncio.run(listed({"session": "s_a"})) == ["k1", "k2", "k3", "k4", "k5"]
 
 
 def test_receipts_are_signed_and_restart_fails_stale_tasks(tmp_path):

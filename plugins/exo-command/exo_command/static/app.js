@@ -1,6 +1,8 @@
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
 // Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
-import { h, api, token, redeem } from "./dom.js";
+import { desktopPreference, saveDesktopPreferences } from "./desktop_prefs.js";
+import { h, token, redeem } from "./dom.js";
+import { getAppearance, applyAppearance, setAppearance } from "./appearance.js";
 import * as bus from "./bus.js";
 import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
@@ -21,7 +23,7 @@ function takeToken() {
   let value;
   try { value = decodeURIComponent(t.slice(6)); } catch (e) { return false; }
   if (value) { sessionStorage.setItem("xc-token", value); launchRefused = ""; }
-  const view = parts.find((x) => !x.startsWith("token=")) || "chat";
+  const view = parts.find((x) => !x.startsWith("token=")) || desktopPreference("view") || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
   return !!value;
 }
@@ -32,7 +34,7 @@ async function takeCode() {
   const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
   const c = parts.find((x) => x.startsWith("code="));
   if (!c) return false;
-  const view = parts.find((x) => !x.startsWith("code=")) || "chat";
+  const view = parts.find((x) => !x.startsWith("code=")) || desktopPreference("view") || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
   let got = {};
   try { got = await redeem(decodeURIComponent(c.slice(5))); } catch (e) { got = {}; }
@@ -48,15 +50,26 @@ async function takeCode() {
 takeToken();
 await takeCode();
 const app = document.getElementById("app");
-const main = h("div", { class: "xc-main" });
-const nav = h("nav", { class: "xc-nav", role: "tablist" });
+const main = h("main", { class: "xc-main", id: "xc-main", tabindex: "-1", "aria-label": "Workspace" });
+const nav = h("nav", { class: "xc-nav", "aria-label": "Primary" });
 const dot = h("span", { class: "xc-dot", id: "xc-live", title: "a turn is running" });
 const where = h("span", { class: "xc-where", id: "xc-where" });
 const led = h("span", { class: "xc-dot" });
 const connText = h("span", null, "");
-const conn = h("span", { class: "xc-conn" }, led, connText);
-let unmount = null, current = null;
-const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const conn = h("span", { class: "xc-conn", role: "status", "aria-live": "polite", "aria-atomic": "true" }, led, connText);
+let unmount = null, current = null, workspaceReady = false, authGeneration = 0;
+let connecting = Promise.resolve();
+const appearance = h("select", { class: "xc-appearance", "aria-label": "Appearance",
+  onchange: () => { appearance.value = setAppearance(appearance.value); saveDesktopPreferences({ appearance: appearance.value }); } },
+  ...[["dark", "Dark"], ["light", "Light"], ["system", "System"]].map(([value, label]) => h("option", { value }, label)));
+appearance.value = applyAppearance(desktopPreference("appearance") || getAppearance());
+const appearanceControl = h("label", { class: "xc-appearance-wrap" }, h("span", null, "Appearance"), appearance);
+const links = VIEWS.map(([id, label]) => h("a", { class: "xc-nav-link", href: "#" + id }, label));
+nav.replaceChildren(h("strong", { class: "xc-brand" },
+  h("img", { class: "xc-brand-mark", src: "/static/brand.svg", alt: "", width: "28", height: "28", "aria-hidden": "true" }), dot, "Exo"),
+  where, ...links, appearanceControl, conn);
+const skip = document.getElementById("xc-skip");
+if (skip && skip.addEventListener) skip.addEventListener("click", (event) => { event.preventDefault(); main.focus(); });
 
 function show(id) {
   if (!token()) {
@@ -67,61 +80,63 @@ function show(id) {
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
+  saveDesktopPreferences({ view: current });
   if (location.hash !== "#" + current) history.replaceState(null, "", "#" + current);
   where.textContent = "";
   dot.classList.remove("on");
-  nav.replaceChildren(h("strong", { class: "xc-brand" }, dot, "E X O"), where,
-    ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", "aria-selected": x[0] === current ? "true" : "false",
-      onclick: () => show(x[0]) }, x[1])), conn);
+  links.forEach((link, index) => {
+    const active = VIEWS[index][0] === current;
+    link.className = "xc-nav-link" + (active ? " on" : "");
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  document.title = v[1] + " | Exo";
   main.replaceChildren();
+  unmount = null;
+  if (!workspaceReady) {
+    main.replaceChildren(h("p", { class: "xc-loading", role: "status" }, "Connecting to the workspace…"));
+    return;
+  }
   unmount = v[2].mount(main) || null;
 }
 
 bus.onState((s) => {
-  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: open the latest complete link printed by exo web" : !token() ? "page token missing" : "reconnecting";
+  connText.textContent = !token() ? "Page token missing" : s.denied
+    ? "Page link expired: open the latest complete link printed by exo web"
+    : s.connected ? "Connected" : "Reconnecting";
   led.className = "xc-dot " + (s.connected ? "ok" : "");
 });
 
-// Boot: draws the brand and runs four honest checks as `·` lines that go green. Under a second, a click or
-// key skips it, and it never runs under reduced motion or twice in one tab. The page loads behind it.
-function boot(checks) {
-  if (reduced() || sessionStorage.getItem("xc-booted") || /[?&]boot=0/.test(location.search)) return null;
-  sessionStorage.setItem("xc-booted", "1");
-  const el = h("div", { class: "xc-boot", role: "status" }, h("div", { class: "xc-bt" }, "E X O"));
-  const lines = checks.map(([label]) => h("div", { class: "xc-bl" }, h("b", null, label), h("i", null, "...")));
-  lines.forEach((l, i) => { l.style.animationDelay = (120 + i * 130) + "ms"; el.appendChild(l); });
-  el.appendChild(h("div", { class: "xc-bh" }, "any key to skip"));
-  app.appendChild(el);
-  let gone = false;
-  const done = () => {
-    if (gone) return; gone = true;
-    el.classList.add("out"); setTimeout(() => el.remove(), 300);
-    window.removeEventListener("keydown", done);
-  };
-  el.addEventListener("click", done); window.addEventListener("keydown", done);
-  const results = checks.map(([, fn], i) => Promise.resolve().then(fn).catch(() => null).then((t) => {
-    const line = lines[i];
-    return new Promise((r) => setTimeout(() => { line.lastChild.textContent = t || "unavailable"; if (t) line.classList.add("ok"); r(); }, 160 + i * 130));
-  }));
-  Promise.all(results).then(() => setTimeout(done, 280));
-  return done;
-}
-
 const permBanner = permissions.banner();   // D-065: on every page while the core's gate is in bypass
 app.replaceChildren(nav, permBanner, main);
-if (token()) boot([
-  ["core", async () => ((await api("GET", "/api/health")).connected ? "connected" : null)],
-  ["agent", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? (s[0].agent || s[0].seat || "exo") + " · " + s.length + " thread" + (s.length > 1 ? "s" : "") : null; }],
-  ["memory", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? s.reduce((n, x) => n + (x.message_count || 0), 0) + " messages on record" : null; }],
-  ["model route", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return (s[0] && s[0].model) || null; }],
-]);
-if (token()) await bus.start();   // loads open panels, then follows the event stream
-if (token()) permissions.start();
-show((location.hash || "").slice(1));
+// Keep real bootstrap progress inline. Navigation is usable while the initial panel snapshot is read.
+show((location.hash || "").slice(1) || desktopPreference("view"));
 window.addEventListener("hashchange", async () => {
   const fresh = takeToken() || await takeCode();
-  if (fresh) await bus.restart();
-  if (fresh) permissions.start();
+  if (fresh) {
+    const generation = ++authGeneration; workspaceReady = false;
+    await connecting;  // a previous bootstrap cannot overwrite the fresh connection's panel snapshot
+    if (generation !== authGeneration) return;
+    connecting = bus.restart();
+    await connecting;
+    if (generation !== authGeneration) return;
+    workspaceReady = true;
+    permissions.start();
+  }
   const id = (location.hash || "").slice(1);
   if (fresh || launchRefused || id !== current) show(id);
 });
+
+// The pet control is supplied by the optional companion module; retain its display choice when present.
+window.addEventListener("change", (event) => { if (event.target?.matches?.(".xc-pet-mode")) saveDesktopPreferences({ petMode: event.target.value }); });
+
+if (token()) {
+  const initialAuth = authGeneration;
+  connecting = bus.start();   // loads open panels before Chat reads them, then follows the event stream
+  await connecting;
+  if (initialAuth === authGeneration) {
+    workspaceReady = true;
+    permissions.start();
+    show((location.hash || "").slice(1));
+  }
+}

@@ -1,12 +1,13 @@
 """A gh download or clone into the Exo store is a store write, not a read (#461).
 
-gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
-or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word. The gate read these commands
-as reads on GitHub, so the store check never looked at the paths, and `gh release download -O
-~/.exo/policies/gates.yaml --clobber` overwrote the gate policy itself, or `-O ~/.exo/update/allowed_signers`
-the signed-update trust pin (#133), where `curl -o` and `git clone` on the same paths ask. Now the store check
-reads their paths as writes, with the principal-only floor. `-O -` prints to stdout and stays a read, and so
-does a path outside the store. Every command string here is data for exo.gate.classify/decide; none is run.
+gh release download writes what it fetches into `-O`/`--output` or `-D`/`--dir`, gh run download into
+`-D`/`--dir`, gh attestation download into the current folder, and gh repo clone and gh gist clone into their
+directory word. The gate read these commands as reads on GitHub, so the store check never looked at the paths,
+and `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy itself, or `-O
+~/.exo/update/allowed_signers` the signed-update trust pin (#133), where `curl -o` and `git clone` on the same
+paths ask. Now the store check reads their paths as writes, with the principal-only floor. `-O -` prints to
+stdout and stays a read, and so does a path outside the store. Every command string here is data for
+exo.gate.classify/decide; none is run.
 """
 import pytest
 
@@ -46,7 +47,8 @@ ROWS = [
     "gh release download v1 -R pub/x -O ~/.exo/update/allowed_signers",
     "gh release download v1 -R pub/x -D ~/.exo/state --clobber",
     "gh run download 1 -R pub/x -D ~/.exo/state",
-    "gh attestation download 1 -R pub/x -D ~/.exo/state",
+    "cd ~/.exo/state && gh attestation download x.tgz -R pub/x",    # it writes into the current folder
+    "cd ~/.exo/state; gh attestation download oci://ghcr.io/pub/x:1 -R pub/x",
     "gh repo clone pub/x ~/.exo/update",
     "gh gist clone abc ~/.exo/update",
     "curl -o ~/.exo/policies/gates.yaml https://x",          # control
@@ -66,7 +68,6 @@ SPELLINGS = [
     "gh release download v1 -R pub/x --output ~/.exo/update/allowed_signers",
     "gh release download v1 -R pub/x --dir=~/.exo/state --clobber",
     "gh run download 1 -R pub/x --dir ~/.exo/state",
-    "gh attestation download 1 -R pub/x --dir=~/.exo/state",
     "gh repo clone pub/x -- ~/.exo/update",
     "gh gist clone abc -- ~/.exo/update",
 ]
@@ -81,7 +82,7 @@ def test_every_spelling_of_the_output_path_asks(line):
 BEFORE = [
     "gh -R pub/x release download v1 -O ~/.exo/policies/gates.yaml --clobber",
     "gh -R pub/x run download 1 -D ~/.exo/state",
-    "gh -R pub/x attestation download 1 -D ~/.exo/state",
+    "cd ~/.exo/state && gh -R pub/x attestation download x.tgz",
     "gh release -R pub/x download v1 -O ~/.exo/policies/gates.yaml --clobber",
     "gh run -R pub/x download 1 -D ~/.exo/state",
 ]
@@ -92,7 +93,22 @@ def test_a_repo_option_before_the_subcommand_asks(line):
     principal_only(*run(line), line)
 
 
-# Wherever the gate reads the store write as a part it is the principal's alone (#447).
+# gh attestation download has no `-D`/`--dir` (it writes into the current folder, above), but a store path among
+# the words of a download line still asks, as for every writer: guards, not spellings gh reads.
+STORE_WORDS = [
+    "gh attestation download 1 -R pub/x -D ~/.exo/state",
+    "gh attestation download 1 -R pub/x --dir=~/.exo/state",
+    "gh -R pub/x attestation download 1 -D ~/.exo/state",
+]
+
+
+@pytest.mark.parametrize("line", STORE_WORDS)
+def test_a_store_path_among_the_words_asks(line):
+    principal_only(*run(line), line)
+
+
+# Wherever the gate reads the store write as a part it is the principal's alone (#447). `bash -c` already asked
+# before #461, as opaque code with a store write; its rows are guards.
 WRAPPERS = [
     "sudo gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml --clobber",
     "sudo gh repo clone pub/x ~/.exo/update",

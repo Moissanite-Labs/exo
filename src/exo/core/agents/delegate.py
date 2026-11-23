@@ -163,8 +163,10 @@ class Delegator:
         rows = self.engine.store._q("SELECT depth FROM tasks WHERE child=?", (session,)) if session else []
         return rows[0]["depth"] if rows else 0
 
-    def list(self, session: str | None = None) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM tasks" + (" WHERE parent=? OR child=?" if session else "") + " ORDER BY created, id"
+    def list(self, session: str | None = None, active: bool = False) -> list[dict[str, Any]]:
+        """``active`` keeps only queued and running tasks, so a reader need not take every task ever written."""
+        where = (["(parent=? OR child=?)"] if session else []) + (["status IN ('queued','running')"] if active else [])
+        sql = "SELECT * FROM tasks" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created, id"
         rows = self.engine.store._q(sql, (session, session) if session else ())
         return [{"task_id": r["id"], "parent": r["parent"],
                  "child_session": None if str(r["child"] or "").startswith("bus:") else r["child"], "depth": r["depth"],

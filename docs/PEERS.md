@@ -8,6 +8,11 @@ the other changes course at its next step. In Exo this works between Exo session
 - `/peers` (TUI) or the `peers` tool lists live sessions on the machine: name, running or idle, folder.
   A seat with one session is just its name (`razi`); with several it is `razi/3fa91c2b`.
   Subagents and scheduled runs are not listed, and a message to a bare seat name never lands in one.
+  A message that names a session lands only in one that exists here, is not a subagent and is not finished
+  (locked). A scheduled run can still be named by its id. Any other name gets a denied receipt that names the
+  session, before the policy runs, so nothing is held for you. The bus channel's session for a chat follows the
+  same rule (exo-desktop #52). When such a message also tries to approve something, the warning you get shows in
+  a live session, not in the one it named.
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
@@ -63,7 +68,9 @@ trusts the key or the principal a presence file names. It checks each message ag
   and receipts, and a send to it: the text leaves only when the peer's presence entry verifies against a key
   pinned for that name — the entry carries the seat key's signature, so a file that copied the pinned key beside
   a socket of its own is refused — and the first answer, signed by the receiving seat like a later receipt, is
-  verified against it before anything is published (#523, the sender's half of this rule). It never signs a ledger
+  verified against it before anything is published (#523, the sender's half of this rule). The first answer is
+  signed as `kind: "reply"` and a later receipt as `kind: "receipt"`, and neither is taken for the other (#603
+  review). It never signs a ledger
   (D-040). A key for a name that is no seat of this home counts as a peer pin too: one pinned with a plain
   `exo keys pin NAME PUB`, or a `.pub` copied into `keys/`.
 - **No key for the name.** The presence file's key shows only that the signature is consistent. The message is held
@@ -121,7 +128,11 @@ or denied where they were delivered before. Each has a fix:
 The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000
 (defaults: 0 and 200). Public `/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1;
 omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
-`to=0` remains valid for an empty log. These bounds match SQLite's integer range and keep read pages bounded.
+`to=0` remains accepted for an empty log, but an empty or inverted range answers ok false with
+checked 0: it verifies nothing, so it must not read as a clean log. The exception is a verify with no
+`to`, and `from` at its default of 1, on an empty log, which answers ok true with an empty marker: the
+whole log was checked and there is nothing in it. `to` is clamped to the current
+head, so the returned range matches what was checked. These bounds match SQLite's integer range and keep read pages bounded.
 
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
@@ -146,8 +157,9 @@ answered"). Any other caller, a tool subprocess on the socket or the principal's
    steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
    typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
 
-A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
-as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
+The channel skips encrypted envelopes sealed to another seat, even when their audience is a shared group.
+It also skips bodies that cannot be opened or verified. These envelopes advance the inbox cursor without
+creating a session, approval or placeholder turn. The bus reader still displays an unreadable-body placeholder.
 
 ## What a peer cannot do
 
@@ -158,7 +170,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
 ## How it works
 
 - Each exod writes a presence file in `$EXO_PEERS_DIR`, else `$XDG_RUNTIME_DIR/exo/peers`, else
-  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). `exo serve` with no running
+  `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). Malformed records,
+  including a non-object JSON body or a pid that is not an integer, are skipped and pruned; one bad
+  record does not hide other live peers. Internal `scan(prune=False)` skips them without deletion. `exo serve` with no running
   daemon in the TUI starts a small socket of its own so the TUI is also reachable. A Unix socket path must stay
   under 104 bytes: when a long `HOME` would push `exo-<pid>.sock` past that, the core uses
   `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default
@@ -220,13 +234,25 @@ names another principal, and a tool call may write a presence file too. None of 
 names its principal.
 
 A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
-forged one under a peer's name no longer receives the messages sent to that name: every daemon signs its presence
-entry with its seat key, and before the text ships `send` re-reads the file and verifies that signature against
-the keys this home pins for the name (the sender's half of the "Peer keys" rule), sending to the socket of the
-entry that verified and nothing when no entry verifies — so the pinned key's public half copied into a file
-beside a socket of its own gets no text either. The first answer to a send is a receipt signed by the receiving
-seat, like a later receipt is; if it does not verify against the keys pinned for that seat here, nothing is
-published and the send fails. Between two current daemons this is invisible; a daemon whose presence file or
-first receipt is unsigned, as an older `exo`'s are, cannot be sent to while its seat's key is pinned here—and a
-name no key is pinned for still follows the receive side's trust ladder, message and reply alike, on an unsigned
-file like any other (D-026 amendments: #132, then #523).
+forged file under a peer's name no longer receives the messages sent to that name: every daemon signs its presence
+entry with its seat key, and before the text ships `send` re-reads the file and verifies that signature (over the
+entry as written) against the keys this home pins for the name (the sender's half of the "Peer keys" rule),
+sending to the socket of the entry that verified and nothing when no entry verifies — so the pinned key's public
+half copied into a file beside a socket of its own gets no text either. The first answer to a send is signed by
+the receiving seat, like a later receipt is; if it does not verify against the keys pinned for that seat here,
+nothing is published and the send fails, though the text has already reached that socket. Between two current daemons
+this is invisible; a daemon whose presence file or first answer is unsigned, as an older `exo`'s are, or signed by a key
+made again that this home has not re-pinned (`exo keys pin --replace`), cannot be sent to while its seat's key is pinned
+here—and a name no key is pinned for still follows the receive side's trust ladder, message and reply alike, on an
+unsigned file like any other (D-026 amendments: #132, then #523).
+
+The first answer is signed for any envelope, one that does not verify too, so that an honest sender still learns
+why its message was refused. It is signed as `kind: "reply"` and a later receipt as `kind: "receipt"`: a first
+reply offered to `receipt` is refused, so a socket client that names a held message's id in a junk envelope gets a
+signed `denied` that a sender on this build or later refuses (the check is the sender's: an older sender still takes
+it), and a receipt offered as a first reply is refused too. An older `exo`'s receipt names no kind and is still taken. A
+first reply from a #523 build of `exo` names no kind either, and both sides tell it apart by the `mode` and `session`
+fields under its signature, which no receipt has: `receipt` refuses it, and the send path takes it as a reply, so a send
+to a #523 build still completes. That matters because the first reply is checked after the text has gone: when a send
+fails on its reply, the peer may already have the message, and only the outcome is refused (D-026 amendment, #603
+review).

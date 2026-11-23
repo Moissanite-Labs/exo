@@ -48,7 +48,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.core.private import atomic_write
-from exo.principal import current_caller, require_principal
+from exo.principal import current_caller, is_principal, require_principal
 from exo.store import principal_root
 
 from . import permissions as perm
@@ -65,8 +65,6 @@ DEFAULTS: Dict[str, Any] = {
     "decision_model": True,     # ask the decision role to tighten (never loosen) rule outcomes
 }
 _MAX_BODY_FILE = 256 * 1024
-# Tools that cannot change anything; on an internal error these still run.
-_SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
@@ -81,6 +79,24 @@ def _every_part(c: gate.Classification) -> list:
             out.append(p)
             todo += p.parts
     return out
+
+
+def _floor(c: gate.Classification, main: bool = False) -> str:
+    """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any.
+    A line with a quoted prefix assignment (#471) was read by main as its reading as before (``before``), so with
+    ``main`` that reading's is taken, and without it that reading and its split readings count too. Where a ${..}
+    word or a $(( is also read as before #143 (``flat``, #158), main read the line that way, so with ``main`` that
+    reading's category is taken: a secret or store write only bash's reading of a word finds asks at the floor after
+    the hold, as one in any other reading does (``gate.no_grant``)."""
+    if main:
+        m = c.before if c.before is not None else c
+        r = (m.split_readings[:1] or [m])[0]
+        rs = [r.flat if r.flat is not None else r]
+    else:
+        rs = [c, *c.split_readings] + ([c.before, *c.before.split_readings] if c.before is not None else [])
+    return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
 def _body_path(f: str) -> Optional[Path]:
@@ -372,14 +388,20 @@ class Gate:
             snap["mode"] = perm.ASK
         return snap
 
-    def _bypass(self, c: gate.Classification, d: gate.Decision) -> Optional[str]:
-        """What bypass does with an ask: ``allow``, ``hold`` (a post that breaks the posting rules goes back to
-        the agent with the fixes) or ``floor`` (store writes and secrets still ask). None when bypass is off."""
-        if d.outcome != "ask" or not self.bypass_on:
+    def _bypass(self, c: gate.Classification, d: gate.Decision, author: str = "") -> Optional[str]:
+        """What bypass does with an ask in a turn the principal started: ``allow``, ``hold`` (a post that breaks
+        the posting rules goes back to the agent with the fixes) or ``floor`` (store writes and secrets still ask).
+        None when bypass is off, or the turn was started by anyone else (#598): a peer, bus wake, job notice or
+        local caller keeps its card, as when bypass was off. The floor counts each reading and part (``gate.no_grant``):
+        a camelCase tool leads with its hump word, and its store write or secret is in its ``floor`` reading (#602);
+        a post that breaks the posting rules with such a reading only is held, as before."""
+        if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if c.category in perm.FLOOR:
+        if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
-        return "hold" if d.violations else "allow"
+        if d.violations:
+            return "hold"
+        return "floor" if _floor(c) or gate.no_grant(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -477,8 +499,8 @@ class Gate:
         read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
         tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
         The copies of the post on its other targets get the text too (`gate.fill_body`), and each other reading of the
-        line (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read
-        it before.
+        line (`gate.readings`: as read before #399, #311 or #471) has its own body file read the same way, as the hook
+        read it before.
 
         Another part in any reading (a command, a redirection to a file, an assignment that changes what runs, a
         wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
@@ -558,10 +580,11 @@ class Gate:
             d.outcome = out
 
     async def apre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
-                             tool_call_id: str = "", turn_id: str = "", risk: Any = None, cwd: str = "",
-                             **_: Any) -> Optional[dict]:
+                             tool_call_id: str = "", turn_id: str = "", author: str = "", risk: Any = None,
+                             cwd: str = "", **_: Any) -> Optional[dict]:
         """The registered hook: the rules, plus the decision model when ``decision_model`` is on. ``cwd`` is the
-        session's working folder, from which the tool reads relative paths (#209)."""
+        session's working folder, from which the tool reads relative paths (#209). ``author`` is who started the
+        turn (D-040); bypass lowers only in the principal's (#598)."""
         args = args if isinstance(args, dict) else {}
         verdict = None
         risk_s = self._risk(tool_name, risk)
@@ -578,15 +601,15 @@ class Gate:
                 if self.executor_required:
                     return {"action": "block", "message": "Required gate checks failed"}
         return self.pre_tool_call(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk,
-                                  _verdict=verdict, cwd=cwd)
+                                  _verdict=verdict, cwd=cwd, author=author)
 
     def pre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
                       tool_call_id: str = "", turn_id: str = "", risk: Any = None, _verdict: Any = None,
-                      cwd: str = "", **_: Any) -> Optional[dict]:
+                      cwd: str = "", author: str = "", **_: Any) -> Optional[dict]:
         args = args if isinstance(args, dict) else {}
         try:
             return self._pre_tool_call(tool_name, args, session_id, tool_call_id, self._risk(tool_name, risk),
-                                       _verdict, cwd)
+                                       _verdict, cwd, author)
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
             if self.executor_required:
@@ -599,24 +622,27 @@ class Gate:
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
                 c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-                store = gate.no_grant(c)    # a part and each reading count too (#311, #399)
+                store = gate.no_grant(c)    # a part and each reading count too (#311, #399, #471)
             except Exception:
                 pass
-            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
-                return None
+            if self.settings.mode == "observe" and not (secret or store):
+                return None     # observe mode only watches: the action goes ahead, and the error is logged above
+            # Any other call asks, reads included, and the card is once-only so no answer becomes a grant (D-084).
             card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
-                    "rule_key": f"exo-gate:error:{tool_name}"}
-            if store:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
-                card.update(approvers=["principal"], once=True)
+                    "rule_key": f"exo-gate:error:{tool_name}", "once": True}
+            if store or secret:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
+                card.update(approvers=["principal"])
             return card
 
     def _rules(self, tool: str, args: dict, risk: str, cwd: str = "", c: Optional[gate.Classification] = None,
-               floors: bool = True) -> tuple[gate.Classification, gate.Decision]:
+               floors: bool = True, only: Optional[bool] = None) -> tuple[gate.Classification, gate.Decision]:
         """Classification and the rule outcome (policies, then the registry risk floor). With ``floors`` off, the
-        outcome as before #557: the defaults alone in place of a policy with a malformed escalate. A given ``c`` is a
-        line already read here: its body files are not read again, and none counts as held (#343), since a held file
-        leaves its post unseen and such a line never gets that far (``_pre_tool_call``)."""
+        outcome as before #557: the defaults alone in place of a policy with a malformed escalate. With ``only``, one
+        policy alone decides, the pinned one (False) or the changed one (True), so the #586 grant check can ask each
+        side's own decision. A given ``c`` is a line already read here: its body files are not read again, and none
+        counts as held (#343), since a held file leaves its post unseen and such a line never gets that far
+        (``_pre_tool_call``)."""
         held: list[str] = []
         if c is None:
             action = {"tool": tool, "args": args}
@@ -626,6 +652,9 @@ class Gate:
         ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
         pol, changed = self.policies(), self.changed_policies()
         floor, changed_floor = self._floor, self._changed_floor
+        if only is not None:
+            pol, floor = (changed, self._changed_floor) if only else (pol, floor)
+            changed, changed_floor = None, None
         if not floors:
             pol, floor = pol if floor is None else floor, None
             changed, changed_floor = changed if changed_floor is None else changed_floor, None
@@ -635,19 +664,25 @@ class Gate:
         elif self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
         if changed is not None:
-            # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept.
+            # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept. Old and new merge
+            # as one stricter reading (#586), as they do beside a policy error (#557). The #557 grant check keeps the
+            # decision as before #557: the higher outcome of the two sides, so its grant applies where that asks too.
             d2 = _decide(c, changed, changed_floor, ctx)
-            if floor is not None or changed_floor is not None:
-                d = _merge(d, d2)   # #557: either may already be a merge; the other's violations stand at a tie
-            elif _RANK[d2.outcome] > _RANK[d.outcome]:
-                d = d2
-            # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo write
-            # line whose displaced part asks under either (#454).
-            d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
-            d.displaced_asks = d.displaced_asks or d2.displaced_asks
+            if floors:
+                d = _merge(d, d2)   # either may already be a merge; the other's violations stand at a tie
+            else:
+                if _RANK[d2.outcome] > _RANK[d.outcome]:
+                    d = d2
+                # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo
+                # write line whose displaced part asks under either (#454).
+                d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
+                d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
-        if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
-            d.reason += f" (registry risk is high and {tool} is not a known tool)"
+        # Any reading counts: a camelCase MCP tool leads with its hump word and is `unknown` in its floor (#602).
+        unknown = any(r.category == "unknown" for r in gate.readings(c))
+        if risk == "high" and unknown and _RANK[d.outcome] < _RANK["ask"]:
+            known = "is not a known tool" if c.category == "unknown" else "is known only by its hump words"
+            d.reason += f" (registry risk is high and {tool} {known})"
             d.outcome = "ask"
         # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
         if self.executor_required and d.outcome != "deny" and any(
@@ -661,7 +696,7 @@ class Gate:
         return c, d
 
     def _pre_tool_call(self, tool: str, args: dict, session_id: str, tool_call_id: str,
-                       risk: str = "", verdict: Any = None, cwd: str = "") -> Optional[dict]:
+                       risk: str = "", verdict: Any = None, cwd: str = "", author: str = "") -> Optional[dict]:
         verdict, via = verdict if isinstance(verdict, tuple) else (verdict, None)
         c, d = self._rules(tool, args, risk, cwd)
         pol = self.policies()
@@ -672,7 +707,7 @@ class Gate:
         binding = gate.approval_binding(c, args) if outward else ""
         # No standing allow for credentials and store writes (a part of the line counts, #311), nor for a post whose
         # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
-        # Each reading counts (gate.readings: as read before #311 or #399).
+        # Each reading counts (gate.readings: as read before #311, #399 or #471).
         once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant and (self._floor is not None or self._changed_floor is not None):
@@ -687,10 +722,25 @@ class Gate:
                        if m.outcome == "ask" else None)
             if m_grant is None:
                 grant = None
+        elif grant and self._changed is not None and not self._policy_error and not self._changed_error:
+            # #586: with two valid files, a grant applies only where each side's own decision (the model's verdict
+            # in) asks and finds one too, so the merged reading never runs a call one side logs (an unbound grant on
+            # the changed file's reserved hit) or a side asks for without that binding (a bound grant on the line
+            # only the changed file binds).
+            for alone in (False, True):
+                s = self._rules(tool, args, risk, cwd, c=c, only=alone)[1]
+                if s.outcome != "deny":
+                    self._tighten(s, verdict)
+                s_out = gate.binds_exact(c, s)
+                s_grant = (self._grant_for(c, s, gate.approval_binding(c, args) if s_out else "", s_out)
+                           if s.outcome == "ask" else None)
+                if s_grant is None:
+                    grant = None
+                    break
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
-        bypass = self._bypass(c, d)
+        bypass = self._bypass(c, d, author)
         if bypass == "allow":
             asked = {"would": "ask", "rule": d.rule, "reason": d.reason}
             d.outcome, d.rule = "allow", "bypass"
@@ -713,10 +763,12 @@ class Gate:
         if bypass in ("allow", "hold"):  # D-065: the exact call, so the audit can be read without the session
             body["decided_by"] = "bypass"
             body["call"] = perm.recorded_call(tool, args)
+            body["turn_author"] = author  # the turn the bypass served (#598)
             if bypass == "allow":
                 body["bypass"] = asked
-        elif bypass == "floor":
-            body["bypass"] = {"floor": c.category}
+        elif bypass == "floor":   # main's reading's floor, a split reading's, or the first a part has (#591, #602)
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c) or next(
+                (x.category for x in _every_part(c) if x.category in perm.FLOOR), c.category)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
@@ -820,13 +872,25 @@ class Gate:
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
         # #454: a sudo write line is also the act of the part its write displaced, which led it before, so a hit on
         # the write keeps the ask too, as it did then (`sudo echo hi > /tmp/f` under `reserved: [local_write]`).
-        if any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved):
+        # #471: the line read as before keeps this check as main made it, on that reading's own decision and act.
+        # There an unknown program led `X='a b' sudo git commit -m x; sudo git commit -m x`, so a hit on the commit
+        # under `reserved: [local_write]` keeps the ask, although the commit leads the line now.
+        if c.before is not None and _off_act(c.before, self._reserved_hits(c.before)):
+            return None
+        if _off_act(c, d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)
         except Exception:
             logger.warning("exo-gate: grant lookup failed; asking instead", exc_info=True)
             return None
+
+    def _reserved_hits(self, c: gate.Classification) -> list:
+        """The reserved parts one reading of the call meets, under the policies `_rules` decides with: the pinned one
+        and a changed one (D-038). It spends nothing, and `_rules` already logged a changed policy."""
+        ctx = {"spent_today": self._spent.get(_dt.date.today().isoformat(), 0.0)}
+        pols = [p for p in (self.policies(), self.changed_policies()) if p is not None]
+        return [hit for pol in pols for hit in gate.decide(c, pol, ctx).reserved]
 
     def _grant_days(self, outward: bool) -> float:
         """How long an "always" lasts: the pinned approvals.yaml, or the shorter of pinned and changed while a
@@ -947,6 +1011,12 @@ def permissions_command(g: "Gate", args: str = "") -> Any:
     elif words and words[0] != "status":
         return "usage: permissions [status] | bypass | ask"
     return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
+
+
+def _off_act(c: gate.Classification, hits: list) -> bool:
+    """D-075: a reserved hit that differs from the act of the line, or from that of the part its sudo write displaced
+    (#454)."""
+    return any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in hits)
 
 
 def _iso(ts: float) -> str:

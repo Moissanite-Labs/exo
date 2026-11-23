@@ -8,6 +8,7 @@ stores and a mock context; nothing is executed.
 import asyncio
 import json
 import os
+import time
 
 import pytest
 
@@ -73,11 +74,16 @@ def answer(ctx, verdict, choice, by="principal:tui"):
        decided_by=by, session_id="s1")
 
 
+_rewrite_tick = 0
+
+
 def rewrite(root, text):
+    global _rewrite_tick
     p = root / "policies" / "approvals.yaml"
     p.write_text(text)
-    st = p.stat()
-    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+    _rewrite_tick += 1
+    ts = time.time_ns() + _rewrite_tick
+    os.utime(p, ns=(ts, ts))
 
 
 def grant_days(root):

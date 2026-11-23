@@ -35,6 +35,10 @@ export function attachApprovals({ root, composer, answer }) {
     state.actions.querySelector(state.mode === "confirm" ? "button" : "input").focus();
   }
   function drawChoices(state) {
+    state.instructions.replaceChildren(h("span", null, state.mode === "confirm" ? "Enter confirms always; Esc cancels." :
+      state.mode === "note" ? "Enter sends denial; Esc cancels." :
+      "Then " + CHOICES.filter(([o]) => state.req.options.includes(o)).map(([o, k, label]) =>
+        (o === "allow" ? k : k + ", Enter") + " " + label).join("; ") + ". Esc returns to your message."));
     const button = (label, action, key) => h("button", { type: "button", class: "xc-key", disabled: state.busy,
       "aria-keyshortcuts": key, onclick: action }, label);
     if (state.mode === "confirm") {
@@ -53,13 +57,13 @@ export function attachApprovals({ root, composer, answer }) {
         button("Cancel", () => cancel(state), "Escape"));
     } else {
       state.actions.replaceChildren(...CHOICES.filter(([o]) => state.req.options.includes(o)).map(([o, k, label]) =>
-        button(h("span", null, h("b", null, k), " " + label), () => choose(state, o), k)),
-        h("span", { class: "xc-pm" }, "Tab, click or Ctrl+F to answer."));
+        button(h("span", null, h("b", null, k), " " + label), () => choose(state, o), k)));
     }
   }
   function card(req) {
     const actions = h("div", { class: "xc-keys" });
-    const state = { req, actions, mode: "", busy: false };
+    const instructions = h("span");
+    const state = { req, actions, instructions, mode: "", busy: false };
     state.el = h("article", { class: "xc-pn xc-gate xc-in xc-risk-" + req.risk, tabindex: "0", role: "group",
       "aria-label": "Approval: " + req.summary, "data-approval": req.request_id,
       onclick: (e) => { if (!e.target.closest("button,input")) state.el.focus(); },
@@ -90,6 +94,10 @@ export function attachApprovals({ root, composer, answer }) {
       h("div", { class: "xc-ph" }, "Approval \u00B7 " + (req.risk || "medium") + " risk"),
       h("div", { class: "xc-pb" }, req.summary),
       req.call ? h("div", { class: "xc-pm" }, req.call.name + " " + short(JSON.stringify(req.call.arguments || {}), 200)) : null,
+      h("div", { class: "xc-approval-help" },
+        h("span", { class: "xc-approval-unfocused" }, h("b", null, "Ctrl+F"), " to focus the first approval. "),
+        h("span", { class: "xc-approval-focused" }, "Approval focused. "),
+        instructions),
       actions);
     drawChoices(state);
     return state;

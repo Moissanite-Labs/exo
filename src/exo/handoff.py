@@ -39,9 +39,7 @@ FORMAT_VERSION = 1
 PIN_OPEN, PIN_CLOSE = provenance.PIN_OPEN, provenance.PIN_CLOSE
 ATTR_RE = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 DECISIONS = "Decisions made (principal's words, verbatim)"
-DECISIONS_RE = re.compile(r'^## ' + re.escape(DECISIONS) + r'\s*$', re.M)
-STATE_RE = re.compile(r'^## State\s*$', re.M)
-SECTION_RE = re.compile(r'^## ', re.M)
+TITLE_RE = re.compile(r'^# (?:Handoff:\s*)?(.+)$', re.M)
 # Text that marks a host-written compaction summary; its body is not the principal speaking.
 SUMMARY_MARKERS = ('END OF CONTEXT SUMMARY', '[CONTEXT COMPACTION', '[CONTEXT SUMMARY]')
 MAX_VERBATIM = 600          # a user message up to this length is kept whole
@@ -575,8 +573,10 @@ def launch_line(topic: str, path: str | os.PathLike) -> str:
 
 def _attr(v: Any) -> str:
     """One header attribute value: quotes and backslashes escaped, and line breaks folded to
-    spaces, so a value can never add a line of its own to the file (#395)."""
-    return ' '.join(str(v).replace('\\', '\\\\').replace('"', '\\"').splitlines())
+    spaces, so a value can never add a line of its own to the file (#395). A `-->` in the value is
+    written `--\\>`, so a markdown viewer's comment ends only at the writer's own closer (#540)."""
+    return ' '.join(str(v).replace('\\', '\\\\').replace('"', '\\"')
+                    .replace('-->', '--\\>').splitlines())
 
 
 def _quoted_items(signals: list[Signal]) -> str:
@@ -669,12 +669,17 @@ def write_handoff(topic: str, messages: list[dict], store: PrincipalStore | None
     return path
 
 
-def _sections(text: str) -> dict[str, str]:
+def _sections(text: str, start: int, read: set[int]) -> dict[str, str]:
+    """Body of each `## ` heading the reader reads, from `start`, bounded at the next `## ` line of
+    any kind. First of a name wins: a later duplicate (an old file's unquoted summary, a hand edit)
+    never replaces the real section, which the writer puts first (#315). A heading the reader does
+    not read opens no section; its lines stay in the section it sits under."""
     out: dict[str, str] = {}
-    for m in re.finditer(r'^## (.+?)\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
-        # First of a name wins: a later duplicate (an old file's unquoted summary, a hand edit)
-        # never replaces the real section, which the writer puts first (#315).
-        out.setdefault(m.group(1).strip(), m.group(2).strip('\n'))
+    ms = [m for m in re.finditer(r'^## (.+?)\s*$', text, re.M) if m.start() >= start]
+    for i, m in enumerate(ms):
+        if m.start() in read:
+            nxt = ms[i + 1].start() if i + 1 < len(ms) else len(text)
+            out.setdefault(m.group(1).strip(), text[m.end():nxt].strip('\n'))
     return out
 
 
@@ -708,20 +713,72 @@ def _header(text: str) -> tuple[str, int]:
     return '', 0
 
 
-def _decided(body: str) -> str:
-    """The Decisions section of `body` (the file after its header), or '' when the file cannot say which
-    copy the writer put there (#395). In an older file, a field that spanned lines can put a copy before the
-    real heading (a path or title line) or after it (a summary from before #349, under State). So the
-    section counts when its exact heading is the only one, or the only one before ## State in a file with a
-    single State. Otherwise the file reads as undecided rather than forged."""
-    heads = [m.end() for m in DECISIONS_RE.finditer(body)]
-    states = [m.start() for m in STATE_RE.finditer(body)]
-    if len(heads) > 1 and len(states) == 1:
-        heads = [h for h in heads if h < states[0]]
-    if len(heads) != 1:
-        return ''
-    nxt = SECTION_RE.search(body, heads[0])
-    return body[heads[0]:nxt.start() if nxt else len(body)].strip('\n')
+def _recovered(attrs: str) -> dict[str, str]:
+    """Header attribute values with the writer's escapes undone: `-->` first, then quotes, then
+    backslashes, the reverse of how `_attr` wrote them (#540). An older writer escaped only quotes
+    and backslashes, and an older file holds `-->` raw, which this reads as itself."""
+    return {k: v.replace('--\\>', '-->').replace('\\"', '"').replace('\\\\', '\\')
+            for k, v in ATTR_RE.findall(attrs)}
+
+
+def _title_span(text: str, end: int, topic: str) -> tuple[int, int] | None:
+    """(start, past-end) of the title span, or None. The writer writes the title from the topic, so
+    the `# ` line must say what the header's recovered topic says (#395); a title that spans lines
+    instead is an older writer's raw topic, and its lines are data that opens no section (#540).
+    The span counts as the writer's only when it is the topic value's footprint, line for line;
+    otherwise the title region is unknown and nothing is read out of it."""
+    lines = topic.splitlines()
+    m = TITLE_RE.search(text, end) if lines else None
+    if not m or m.group(1).strip() == _one_line(topic).strip():
+        return None
+    at = m.start()
+    for _ in lines:
+        nl = text.find('\n', at)
+        if nl < 0:
+            return None
+        at = nl + 1
+    # The join adds the newline after the topic's last line, so a trailing one may ride along.
+    want = f'# Handoff: {topic}'
+    return (m.start(), at) if text[m.start():at].rstrip('\n') == want.rstrip('\n') else None
+
+
+def _decided_at(heads: list[tuple[int, str]]) -> int:
+    """Start offset of the one Decisions heading the file reads as the section, or -1 when the file
+    cannot say which copy the writer put there (#395). In an older file, a field that spanned lines
+    can put a copy before the real heading (a path or title line) or after it (a summary from before
+    #349, under State). So the section counts when its exact heading is the only one, or the only
+    one before ## State in a file with a single State. Otherwise the file reads as undecided rather
+    than forged."""
+    names = [s for s, name in heads if name == DECISIONS]
+    states = [s for s, name in heads if name == 'State']
+    if len(names) > 1 and len(states) == 1:
+        names = [h for h in names if h < states[0]]
+    return names[0] if len(names) == 1 else -1
+
+
+def _read_heads(text: str) -> set[int]:
+    """Start offsets of the `## ` heading lines the reader reads as the file's sections, and so the
+    ones `resume_text` leaves standing. Sections count from the end of the header (#395); of a name
+    the reader keeps the first heading, Next steps its last (#353), and Decisions the one exact
+    heading `_decided_at` takes. A heading before the header, or inside a title that does not say
+    what the recovered topic says, is data an older writer left, not a section (#540)."""
+    attrs, end = _header(text)
+    span = _title_span(text, end, _recovered(attrs).get('topic', ''))
+    heads = [(m.start(), m.group(1)) for m in re.finditer(r'^## (.+?)\s*$', text, re.M)
+             if m.start() >= end and not (span and span[0] <= m.start() < span[1])]
+    by_name: dict[str, list[int]] = {}
+    for s, name in heads:
+        by_name.setdefault(name.strip(), []).append(s)
+    read = {ps[0] for name, ps in by_name.items() if name != 'Next steps'}
+    nexts = [s for s, name in heads if name == 'Next steps']
+    if nexts:
+        read.add(nexts[-1])
+    # Decisions is read from its one exact heading: no other heading of the name, one with an extra
+    # space after the ## included, stands in for it or takes its body (#395).
+    read -= {s for s, name in heads if name.strip() == DECISIONS}
+    if (at := _decided_at(heads)) >= 0:
+        read.add(at)
+    return read
 
 
 def load_handoff(path: str | os.PathLike) -> Handoff:
@@ -730,22 +787,18 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
     attrs, end = _header(text)
     # Each value is folded to one line as the writer folds it, so an older file's topic that spans
     # lines stays on one line where `resume_text` and the /exo resume reply repeat it (#395).
-    meta = {k: _one_line(v.replace('\\"', '"').replace('\\\\', '\\')) for k, v in ATTR_RE.findall(attrs)}
+    meta = {k: _one_line(v) for k, v in _recovered(attrs).items()}
     topic = meta.get('topic')
     if not topic:
-        tm = re.search(r'^# (?:Handoff:\s*)?(.+)$', text, re.M)
+        tm = TITLE_RE.search(text, end)
         topic = tm.group(1).strip() if tm else p.stem
     # Sections count from the end of the header: a header value an older writer let span lines is
-    # data, and opens no section (#395).
-    body = text[end:]
-    secs = _sections(body)
-    # Next steps is the one section the writer puts after every untrusted one, so its genuine copy
-    # is the last in the file; a forged earlier copy (an old file's unquoted summary) loses (#353).
-    for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', body, re.S | re.M):
-        secs['Next steps'] = m.group(1).strip('\n')
+    # data, and opens no section (#395). So do the lines of a title that does not say what the
+    # recovered topic says (#540): an older writer's raw topic carried its forged headings there.
+    secs = _sections(text, end, _read_heads(text))
     # Decisions is read from its own heading, never by name: _sections files a heading with an
     # extra space or tab after the ## under the same name, and keeps the first copy (#395).
-    decided = secs[DECISIONS] = _decided(body)
+    decided = secs[DECISIONS] = secs.get(DECISIONS, '')
     open_body = secs.get('Open decisions', '')
     return Handoff(
         path=p, topic=topic, created=meta.get('created', ''), meta=meta, text=text, sections=secs,
@@ -756,14 +809,36 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
     )
 
 
+def _standing(text: str, end: int) -> str:
+    """The file from the header end with every `## ` heading line the reader does not read as the
+    section demoted to a `### ` line (#540): an older writer's path, launch, title, list or summary
+    line could carry a forged section into the system message next to the principal's real one. The
+    copies the reader reads stand. The match takes the spellings a markdown reader takes as the
+    heading (#540): up to three leading spaces, and after the `##` a space, a tab or the line's end.
+    A fourth leading space is an indented code block, not a heading, and the line stands as
+    written. Fenced code blocks are not skipped, as before."""
+    read = _read_heads(text)
+    out, pos = [], end
+    for m in re.finditer(r'^ {0,3}##(?:[ \t][^\n]*)?$', text, re.M):
+        if m.start() < end:
+            continue
+        out.append(text[pos:m.start()])
+        out.append(m.group(0) if m.start() in read else m.group(0).replace('##', '###', 1))
+        pos = m.end()
+    out.append(text[pos:])
+    return ''.join(out)
+
+
 def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: int = 1500) -> str:
     """Working context for a fresh session: the handoff plus a retrieval pass over the store. It goes into the
     system message, so every pinned-block tag in it is escaped (#279): the file quotes the agent's report and a
     summary, and records the principal's words as quoted items under their own headings, never as a pinned block."""
     # The header goes in on one line: a value an older writer let span lines must not stand as a
-    # section next to the principal's words (#395).
+    # section next to the principal's words (#395). Nor does any other line's: every `## ` heading
+    # the reader did not read as the section is demoted, so an older file's raw path, launch, title,
+    # list and summary lines reach the model as data, not as sections (#540).
     end = _header(handoff.text)[1]
-    text = _one_line(handoff.text[:end]) + handoff.text[end:]
+    text = _one_line(handoff.text[:end]) + _standing(handoff.text, end)
     parts = [f'Resuming "{handoff.topic}" from the handoff at {handoff.path}. The quoted rulings and '
              'corrections are the principal\'s own words; follow them.', '', text.strip()]
     if store is not None and store.exists():

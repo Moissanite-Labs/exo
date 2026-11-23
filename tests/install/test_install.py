@@ -161,6 +161,84 @@ def test_selected_plugins_install_to_standalone_and_explicit_hermes_home(box, mo
     assert {p.name for p in (target / "plugins").iterdir()} == {"exo-command", "exo-gate"}
 
 
+DEFAULT_SIX = frozenset(
+    {"exo-bus", "exo-command", "exo-context", "exo-gate", "exo-memory", "exo-orchestra"}
+)
+
+
+def test_dev_plugin_dir_does_not_discover_habitat_by_default(monkeypatch):
+    monkeypatch.setenv("EXO_PLUGIN_DIRS", str(REPO / "plugins"))
+    assert {m.name for m in discover([REPO / "plugins"])} == DEFAULT_SIX
+
+
+def test_dev_plugin_dir_loads_habitat_when_opt_in_dir_is_named(monkeypatch):
+    monkeypatch.setenv(
+        "EXO_PLUGIN_DIRS",
+        os.pathsep.join([str(REPO / "plugins-opt-in"), str(REPO / "plugins")]),
+    )
+    names = {m.name for m in discover(default_dirs())}
+    assert "exo-habitat" in names
+    pm = PluginManager()
+    records = {r.manifest.name: r for r in pm.load_all(entry_points=False)}
+    assert records["exo-habitat"].ok
+    assert DEFAULT_SIX <= set(records)
+
+
+def test_default_install_excludes_habitat_and_no_sqlite(box, monkeypatch):
+    result = run(box, "--no-pip", "--no-interview", "--yes")
+    assert result.returncode == 0, result.stderr + result.stdout
+    exo = box / "exo"
+    assert (exo / "plugins" / "exo-memory" / ".exo-managed").is_file()
+    assert not (exo / "plugins" / "exo-habitat").exists()
+    assert not (exo / "habitat.sqlite").exists()
+    monkeypatch.setenv("EXO_HOME", str(exo))
+    monkeypatch.delenv("EXO_PLUGIN_DIRS", raising=False)
+    assert {m.name for m in discover(default_dirs())} == DEFAULT_SIX
+
+
+def test_install_plugins_exo_habitat_copies_and_loads(box, monkeypatch):
+    result = run(
+        box,
+        "--no-pip",
+        "--no-interview",
+        "--yes",
+        "--plugins",
+        "exo-bus,exo-command,exo-context,exo-gate,exo-memory,exo-orchestra,exo-habitat",
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    exo = box / "exo"
+    assert (exo / "plugins" / "exo-habitat" / ".exo-managed").is_file()
+    monkeypatch.setenv("EXO_HOME", str(exo))
+    monkeypatch.delenv("EXO_PLUGIN_DIRS", raising=False)
+    names = DEFAULT_SIX | {"exo-habitat"}
+    assert {m.name for m in discover(default_dirs())} == names
+    pm = PluginManager()
+    records = {r.manifest.name: r for r in pm.load_all(entry_points=False)}
+    assert records["exo-habitat"].ok
+    assert set(records) == names
+
+
+def test_seat_plugins_enabled_loads_habitat_when_installed(box, monkeypatch):
+    result = run(
+        box,
+        "--no-pip",
+        "--no-interview",
+        "--yes",
+        "--plugins",
+        "exo-gate,exo-habitat",
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    exo = box / "exo"
+    monkeypatch.setenv("EXO_HOME", str(exo))
+    monkeypatch.delenv("EXO_PLUGIN_DIRS", raising=False)
+    pm = PluginManager()
+    records = {
+        r.manifest.name: r
+        for r in pm.load_all(enabled=["exo-gate", "exo-habitat"], entry_points=False)
+    }
+    assert records["exo-habitat"].ok and records["exo-gate"].ok
+
+
 # --- the skill pack ------------------------------------------------------------------
 
 def test_skill_pack_is_installed_where_the_core_and_orchestra_find_it(box, monkeypatch, caplog):

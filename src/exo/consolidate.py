@@ -19,11 +19,17 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
   both count. Summaries (`secondary`) are not anyone's own words and do not. Nor is superseded text: the older
   versions of an edited ChatGPT prompt (`branch: alt`) and Hermes rows marked `inactive`. An imported row
   counts as said at its source time (`source_ts`), not when it was imported (`said_at`).
-- **Taste:** a new event that agrees with a known belief reinforces it (a `note` of type
-  `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`).
-- **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
+  A rejected belief that agrees still counts as encoding the instruction.
+- **Taste:** a new correction or ruling that agrees with an active belief (proposed, held, accepted) reinforces
+  it (a `note` of type `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`). Only
+  active beliefs are matched, so a rejected one is never reinforced and never hides an active one. One that
+  agrees only with a rejected belief is a new proposal. A reviewer taste or fact lesson (`propose_typed`) whose
+  evidence the rejected beliefs it agrees with already hold in full, together, is skipped: no proposal, question
+  or reinforcement (#861). A skill lesson is not checked and is proposed as before.
+- **Conflict:** an event that opposes an active belief goes through the store's conflict rule.
   The default is newer wins unless the older belief guards something irreversible or public; then
   a numbered `question` event is raised and the new proposal is held until an `answer` arrives.
+  No client asks that question yet: a direct accept or reject decides the held proposal and closes it.
   Nothing is overwritten silently: "newer wins" still lands as a reviewed supersede proposal.
 
 Outputs: `belief_proposed` events, and draft files in `<store>/proposals/`: `<pid>.md` (the node
@@ -59,10 +65,12 @@ CLI hook: `exo.cli` lists both commands in its `LAZY` table. It imports this mod
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import json
 import re
+import secrets
 import shutil
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -523,6 +531,33 @@ Reply with one JSON object and nothing else:
  "domain": "one of the allowed domains", "type": "preference or rule", "title": "short title"}}"""
 
 
+_JSON_STARTS = 64   # brace positions tried before the reply counts as having no object
+
+
+def _decode_model_json(raw: str) -> Any:
+    """Decode the first JSON object in model output, skipping the prose around it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the object dropped valid output. Decoding is tried
+    from each `{` in turn, so a bracketed note, an array or an object wrapped
+    in an array before or around the answer does not hide it either. The first
+    start that decodes to an object wins.
+    """
+    decoder, start = json.JSONDecoder(), raw.find("{")
+    for _ in range(_JSON_STARTS):
+        if start < 0:
+            break
+        try:
+            value = decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                return value
+        start = raw.find("{", start + 1)
+    raise ValueError("no JSON object in the model output")
+
+
 class ModelReflector:
     """Adapter seam for a model call. `complete(prompt) -> str` is any function the host supplies
     (Hermes auxiliary model, a local model, a test double). Bad output falls back to the rules."""
@@ -537,8 +572,7 @@ class ModelReflector:
         try:
             raw = self.complete(MODEL_PROMPT.format(text=obs.text, rejected=obs.rejected or "",
                                                     reason=obs.reason or "", domains=", ".join(ctx.domains)))
-            m = re.search(r"\{.*\}", raw, re.S)
-            data = json.loads(m.group(0) if m else raw)
+            data = _decode_model_json(raw)
             wants = _tidy(str(data["wants"]))
             if not wants or re.match(r"^(not|no|don'?t|never)\b", wants, re.I):
                 raise ValueError("wants must be positive")
@@ -774,6 +808,8 @@ def load_state(ledger: Ledger) -> State:
             st.seen_evidence.update(e["id"] for e in p.evidence)
         elif k == "belief_accepted" and b.get("proposal_id") in st.beliefs:
             pid = b["proposal_id"]
+            if b.get("question"):
+                st.resolved.add(b["question"])
             st.beliefs[pid].status = "accepted"
             st.beliefs[pid].node_id = b.get("node_id")
             st.decided[pid] = {"status": "accepted", "event": ev["id"], "node_id": b.get("node_id")}
@@ -965,11 +1001,26 @@ class _Run:
         if obs.event_id in self.state.seen_evidence and not self.meta:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
-        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
+        # A lesson the principal rejected teaches nothing again from the same evidence: it is not proposed, does
+        # not reinforce another belief and raises no conflict question (#861). The evidence may be split across
+        # several rejected beliefs that agree with it (since #770 each agreeing ruling after a rejection is its own
+        # proposal), so it is checked against their union. Only the typed taste and fact path gets here with such
+        # evidence: any other signal already returned above, as its event is in seen_evidence. A skill lesson goes
+        # to _propose_skill and is not checked.
+        ids = set(obs.evidence)
+        ruled: set[str] = set()
+        for x in self.beliefs():
+            got = {e.id for e in x.evidence}
+            if x.status == "rejected" and ids & got and taste.relation(obs.sig, x.sig, self.thr) == "agree":
+                ruled |= got
+        if ids and ids <= ruled:
+            return
+        # Only active beliefs are matched: a rejected belief that scores higher must not hide an active one (#861).
+        b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr)
         if b is not None and rel == "agree":
             self.reinforce(b, obs)
             return
-        if b is not None and rel == "conflict" and b.active:
+        if b is not None and rel == "conflict":
             self.conflict(b, obs, kind)
             return
         self.propose(obs, kind)
@@ -1214,10 +1265,18 @@ def _archive(pdir: Path, pid: str, dry: bool = False) -> None:
             shutil.move(str(f), arch / f.name)
 
 
+def _question_of(p: Proposal) -> dict:
+    """{"question": id} for a proposal held by a conflict question, so deciding it closes the question too.
+    No client asks a belief_conflict question yet: a direct accept or reject is how a held proposal ends."""
+    q = (p.conflict or {}).get("question")
+    return {"question": q} if q else {}
+
+
 def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: str | None = None,
                     now: str | None = None) -> dict:
     """Write the proposal into its node (create or append), lint it, then log `belief_accepted`.
-    The node file is restored if the edit would add lint errors."""
+    The node file is restored if the edit would add lint errors, or if indexing or the ledger write fails. It stays
+    when the ledger holds the accept despite the error, or may hold it (`_accept_may_stand`)."""
     st = load_state(ledger)
     p = _find(st, pid)
     status = _status(st, p.id)
@@ -1234,27 +1293,37 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text, encoding="utf-8")
-    store.reload()
-    after = store.lint()
-    added = [e for e in after.errors if e not in before.errors]
-    if added or p.node_id not in store.nodes:
-        if old_text is None:
-            path.unlink()
-        else:
-            path.write_text(old_text, encoding="utf-8")
+    indexed, sent, operation_id = False, False, secrets.token_hex(16)
+    try:
+        path.write_text(new_text, encoding="utf-8")   # inside the guard: a write cut short (a full disk) goes back too
         store.reload()
-        raise ConsolidateError(f"accepting {p.id} would break lint: {'; '.join(added) or 'node did not parse'}")
-    store.index()
-    body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old_text is not None else "create",
-            "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence}
-    if p.supersedes:
-        body["supersedes"] = p.supersedes
-    if status == "held":
-        body["conflict_resolved_by"] = "direct accept"
-    refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
-                       refs=refs)
+        after = store.lint()
+        added = [e for e in after.errors if e not in before.errors]
+        if added or p.node_id not in store.nodes:
+            raise ConsolidateError(f"accepting {p.id} would break lint: {'; '.join(added) or 'node did not parse'}")
+        indexed = True
+        store.index()
+        body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old_text is not None else "create",
+                "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence}
+        if p.supersedes:
+            body["supersedes"] = p.supersedes
+        if status == "held":
+            body["conflict_resolved_by"] = "direct accept"
+        body.update(_question_of(p))
+        refs = [r for r in (st.beliefs[p.id].event_id,) if r]
+        sent = True   # from here an authority may commit the accept, even if the call is cut short
+        ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
+                           refs=refs, operation_id=operation_id)
+    except BaseException as exc:
+        if sent and _accept_may_stand(ledger, p.id, operation_id, exc):
+            raise   # the ledger holds the accept, or may: the node stays with it
+        # Nothing is accepted until the ledger says so: put the node back, so a retry does not add the lesson twice.
+        _put_back(path, old_text)
+        store.reload()
+        if indexed:
+            with contextlib.suppress(Exception):
+                store.index()
+        raise
     pairs = store.root / PAIRS_FILE
     pairs.parent.mkdir(parents=True, exist_ok=True)
     with pairs.open("a", encoding="utf-8") as fh:
@@ -1275,8 +1344,8 @@ def proposal_reject(store: PrincipalStore, ledger: Ledger, pid: str, reason: str
     if status not in ("proposed", "held"):
         raise ConsolidateError(f"proposal {p.id} is already {status}")
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip()},
-                       author or ledger.author or "principal", refs=refs)
+    ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip(),
+                                **_question_of(p)}, author or ledger.author or "principal", refs=refs)
     _archive(store.root / "proposals", p.id)
     return {"proposal_id": p.id, "event": ev["id"]}
 
@@ -1462,20 +1531,78 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     path = store.root / "skills" / str(p.target) / "SKILL.md"
     old = path.read_text(encoding="utf-8") if path.is_file() else None
     new = skill_text_after(old or "", str(p.target), p.patch, (p.created or "")[:10], p.id, p.claim)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new, encoding="utf-8")
     body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old is not None else "create",
             "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence, "ptype": "skill"}
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
+    body.update(_question_of(p))
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or ledger.author
-                       or "principal", refs=refs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sent, operation_id = False, secrets.token_hex(16)
+    try:
+        path.write_text(new, encoding="utf-8")
+        sent = True
+        ev = ledger.append("belief_accepted", body, author or ledger.author
+                           or "principal", refs=refs, operation_id=operation_id)
+    except BaseException as exc:
+        if not (sent and _accept_may_stand(ledger, p.id, operation_id, exc)):
+            _put_back(path, old)  # not accepted: a retry must not append the lesson a second time
+        raise
     _archive(store.root / "proposals", p.id)
     _save_undo(store.root, p.id, path, old, new)
     commit = _git_commit(store.root, path, f"skill {p.target}: lesson {p.id}")
     return {"proposal_id": p.id, "node_id": p.node_id, "event": ev["id"], "action": body["action"],
             "commit": commit}
+
+
+def _accept_may_stand(ledger: Ledger, pid: str, operation_id: str, exc: BaseException) -> bool:
+    """True when the `belief_accepted` append for `pid` raised `exc` but the event stands or may stand, so the accept
+    keeps its file. Any other failure puts the file back.
+
+    Only a ledger authority raises these (docs/LEDGER-AUTHORITY.md). ProjectionPending: the authority committed the
+    event. AppendOutcomeUnknown: look the operation up and copy what it committed, or else sync and read the ledger.
+    An interrupt (Ctrl-C) during the authority call leaves the outcome unknown too, so it is looked up the same way.
+    If neither answers, the outcome stays unknown and the file stays: a lesson twice can be fixed, a lost one cannot.
+
+    A plain ledger commits the event, then moves its head anchors. An interrupt in either step is checked against
+    the local ledger. If the ledger cannot be read, the outcome stays unknown and the file stays, as above."""
+    from .ledger_authority import AppendOutcomeUnknown, ProjectionPending
+    if isinstance(exc, ProjectionPending):
+        return True
+    interrupted = not isinstance(exc, Exception)
+    if interrupted and ledger.authority is None:
+        try:
+            return _accepted(ledger, pid)
+        except Exception:
+            return True
+    if not (interrupted or isinstance(exc, AppendOutcomeUnknown)):
+        return False
+    try:
+        record = ledger.authority.lookup(operation_id)
+    except Exception:   # the lookup cannot answer: sync, then read the ledger
+        try:
+            ledger.sync_authority()
+        except Exception:
+            return True
+        return _accepted(ledger, pid)
+    if record is not None:
+        with contextlib.suppress(Exception):
+            ledger.sync_authority()   # repair the local copy, so a retry sees the accept
+    return record is not None
+
+
+def _accepted(ledger: Ledger, pid: str) -> bool:
+    """True when the local ledger holds a `belief_accepted` for proposal `pid`. An accept starts only while the
+    proposal is undecided, so any such event is this accept's own, or one that won a race with it."""
+    return any(e["body"].get("proposal_id") == pid for e in ledger.iter(kind="belief_accepted"))
+
+
+def _put_back(path: Path, before: str | None) -> None:
+    """Return a file an accept wrote to what it was: `before`, or no file."""
+    if before is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(before, encoding="utf-8")
 
 
 def _save_undo(root: Path, pid: str, path: Path, before: str | None, after: str) -> None:

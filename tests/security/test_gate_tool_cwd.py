@@ -517,15 +517,71 @@ def test_a_rule_on_the_bare_name_reaches_only_the_cd_form(cmd, tool, key):
 
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
 @pytest.mark.parametrize("folder", ["~/.ssh", "~/.exo/keys"])
-def test_a_rule_that_names_a_line_of_one_command_lifts_its_parts_deny(folder, tool, key, _home):
-    """A limit in GATE.md: the call's text has no `cd`, so an allow rule keyed on `command` that names a line of one
-    command lifts the matrix deny on its parts, as on any such line (#394). The call still asks. Its cd form is
-    denied, since the rule does not name the `cd`. On a line of two commands the deny stands."""
+def test_a_rule_on_the_line_does_not_lift_the_folders_part_deny(folder, tool, key, _home):
+    """#516: the part the folder read adds keeps no own text, as a `cd` form's parts have, and carries the
+    `cd <folder>` stand-in among its setters, so the line is not one text for _one_text. A rule keyed on `command`
+    that names only the line is passed over, and its matrix deny stands, as on the cd form, whose parts the `cd`'s
+    own text makes two texts of. The cd form, the two-command line, a `cd` that goes elsewhere and a policy with no
+    rule deny as before; with no matrix deny the call still asks the principal."""
     _held(_home)
     c = _bash_in(FORCE, folder, tool=tool, key=key)
-    assert _store_parts(c) and gate.decide(c, _pol(LIFT)).outcome == "ask"
+    assert [p.setters for p in _store_parts(c)] == [[f"cd {folder}"], []]   # the stand-in, and the weight (#468)
+    assert gate._one_text(c) is False
+    assert gate.decide(c, _pol(LIFT)).outcome == "deny"
     assert gate.decide(_bash(f"cd {folder} && {FORCE}"), _pol(LIFT)).outcome == "deny"
     assert gate.decide(_bash_in(f"cat *; {FORCE}", folder, tool=tool, key=key), _pol(LIFT)).outcome == "deny"
+    assert gate.decide(_bash_in(f"cd /tmp && {FORCE}", folder, tool=tool, key=key), _pol(LIFT)).outcome == "deny"
+    assert gate.decide(c, _pol({"gates": {"matrix": {"irreversible": {"private": "deny"}}}})).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
+
+
+NAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                   "rules": [{"match": {"command": "cat config|cd ~/.kube"}, "decision": "allow"}]}}
+UNNAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                     "rules": [{"match": {"command": "cat config"}, "decision": "allow"}]}}
+EVERYTHING = {"gates": {"categories": {"credentials": "deny"},
+                        "rules": [{"match": {"command": ".*"}, "decision": "allow"}]}}
+
+
+def test_a_rule_that_names_the_folder_decides_as_the_cd_form_does():
+    """A rule keyed on `command` that names the `cd <folder>` the part stands for lowers the line no further than
+    the cd form's, whose credentials line has no own text: the part's matrix deny stands either way (#516). So does
+    one that names only the line's command, and one that names everything lifts nothing, as before."""
+    c = _bash_in("cat config", "~/.kube")
+    cd = _bash("cd ~/.kube && cat config")
+    assert gate.decide(c, _pol(NAMED)).outcome == gate.decide(cd, _pol(NAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(UNNAMED)).outcome == gate.decide(cd, _pol(UNNAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(EVERYTHING)).outcome == "deny"
+    assert gate.decide(c).outcome == gate.decide(cd).outcome == "ask"
+
+
+REL_NAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                       "rules": [{"match": {"command": r"cat \.ssh/config|cd ~"}, "decision": "allow"}]}}
+REL_DOUBLED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                         "rules": [{"match": {"command": r"cd cd ~|cat \.ssh/config"}, "decision": "allow"}]}}
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
+def test_the_relative_reads_stand_in_names_the_cd_once(tool, key):
+    """#516, review: the part the relative read adds (#209) carried the stand-in with the `cd` said twice —
+    `cd cd ~` for a folder the call spells `~` — so a rule naming the folder as it names the `cd` could not match
+    on this branch. _tool_folder_read returns the `cd` spelling itself and _shell_call adds no second one: the
+    stand-in is `cd <folder>`, said once, so a rule on the doubled spelling matches nothing where `cd <folder>`
+    does. Either way the part's matrix deny stands, as the cd form's does, and with no matrix deny the call asks."""
+    c = _bash_in("cat .ssh/config", "~", tool=tool, key=key)
+    assert [p.setters for p in _store_parts(c)] == [["cd ~"]]
+    assert gate._one_text(c) is False
+    cd = _bash("cd ~ && cat .ssh/config")
+    assert gate.decide(c, _pol(REL_NAMED)).outcome == gate.decide(cd, _pol(REL_NAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(REL_DOUBLED)).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
+
+
+def test_two_folders_stand_in_names_each_cd_once():
+    """#516, review: with two folders the relative read's stand-in read `cd cd ~ or cd ~/x`; each folder's `cd` is
+    said once now."""
+    c = gate.classify({"tool": "bash", "args": {"command": "cat .ssh/config", "cwd": "~", "workdir": "~/x"}})
+    assert [p.setters for p in _store_parts(c)] == [["cd ~ or cd ~/x"]]
 
 
 EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]

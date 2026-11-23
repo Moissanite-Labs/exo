@@ -450,18 +450,21 @@ def test_the_launch_route_checks_its_own_peer_and_host(monkeypatch):
 def test_the_page_strips_the_code_before_it_sends_it(tmp_path):
     static = server.STATIC
     (tmp_path / "app.mjs").write_text((static / "app.js").read_text().replace('.js"', '.mjs"'))
+    (tmp_path / "desktop_prefs.mjs").write_text((static / "desktop_prefs.js").read_text())
+    (tmp_path / "appearance.mjs").write_text((static / "appearance.js").read_text())
     (tmp_path / "dom.mjs").write_text('''
 export const token=()=>sessionStorage.getItem("xc-token") || "";
 export const api=async()=>({});
 export const redeem=async(code)=>{globalThis.sent.push([code, location.hash]);return code==="good" ? {token:"the-token"}
   : code==="host" ? {error:"bad Host header: open the page at the address `exo web` printed"}
   : {error:"launch code already used: the page token was replaced"};};
-export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){},add(){}},replaceChildren(...c){this.children=c;}});
+export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){},add(){}},setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},replaceChildren(...c){this.children=c;}});
 ''')
     (tmp_path / "bus.mjs").write_text('export const onState=f=>f({connected:false});export const start=async()=>{};'
                                       'export const restart=async()=>{globalThis.restarted++;};')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
+    (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{};')
     (tmp_path / "test.mjs").write_text(r'''
 import assert from "node:assert/strict";
 let stored={};globalThis.sessionStorage={getItem:k=>stored[k],setItem:(k,v)=>stored[k]=v};
@@ -475,7 +478,7 @@ assert.deepEqual(sent,[["good","#tasks"]]);              // out of the address b
 assert.equal(stored["xc-token"],"the-token");assert.equal(location.hash,"#tasks");assert.equal(mounted,1);
 stored={};location.hash="#code=used&chat";await handlers.hashchange();
 assert.deepEqual(sent.at(-1),["used","#chat"]);assert.equal(stored["xc-token"],undefined);assert.equal(restarted,0);
-const main=app.children[1];assert.match(main.children[0].children.join(""),/already used or has expired\. Paste the link/);
+const main=app.children.at(-1);assert.match(main.children[0].children.join(""),/already used or has expired\. Paste the link/);
 location.hash="#code=host&chat";await handlers.hashchange();   // a refusal that is not about the code names its reason
 assert.match(main.children[0].children.join(""),/refused \(bad Host header/);assert.equal(stored["xc-token"],undefined);
 location.hash="#token=fresh&chat";await handlers.hashchange();
@@ -493,7 +496,7 @@ console.log("ok");
 # ---------------------------------------------------------------- the real page in headless Chrome
 needs_chrome = pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec("websockets"),
                                   reason="headless Chrome or the websockets package is missing")
-READY = "document.querySelectorAll('.xc-nav button').length > 0"
+READY = "!!document.querySelector('.xc-nav [aria-current=page]') && !document.querySelector('.xc-main > .xc-loading')"
 
 
 @needs_chrome
@@ -514,7 +517,7 @@ def test_the_page_trades_a_launch_code_and_survives_a_reload():
             # a code that gives nothing: the tab says why instead of showing a view
             b.eval("sessionStorage.clear()")
             b.goto("http://127.0.0.1:{}/?boot=0#code={}".format(srv.port, "z" * 43))
-            msg = b.wait("(document.querySelector('.xc-main [role=status]') || {}).textContent")
+            msg = b.wait("(()=>{const text=(document.querySelector('.xc-main [role=status]') || {}).textContent || '';return text.includes('already used or has expired') && text;})()")
             assert "already used or has expired" in msg and "Paste the link exo web printed" in msg
             assert "into this tab" in msg and "Open the link" not in msg   # a click hands it to a launcher (#166)
             assert "code" not in b.eval("location.href") and not b.eval("sessionStorage.getItem('xc-token')")

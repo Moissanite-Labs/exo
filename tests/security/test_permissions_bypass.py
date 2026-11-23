@@ -17,6 +17,10 @@ from exo.server.engine import CommandFailed
 
 REPO = Path(__file__).resolve().parents[2]
 MODELS = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}, "fake": {"reply": "ok"}}
+# The review rig on #366: a rule fake that answers PROBE with a call the gate asks about, then a plain reply.
+PROBE_MODELS = {"fake": {"rules": [{"match": "PROBE", "steps": [
+    {"tool": "bash", "args": {"command": "rm -rf build"}}, "done"]}]},
+    "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 ON = s.CommandRun(name="permissions", args="bypass")
 
 
@@ -40,8 +44,9 @@ def mode(eng):
     return eng.plugins.commands["permissions"].handler("json")["mode"]
 
 
-def risky(eng):
-    return asyncio.run(eng.plugins.hooks.afire("pre_tool_call", tool_name="bash", args={"command": "rm -rf build"}))
+def risky(eng, author="principal:tui"):
+    return asyncio.run(eng.plugins.hooks.afire("pre_tool_call", tool_name="bash", args={"command": "rm -rf build"},
+                                               author=author))  # the core sends who started the turn (#598)
 
 
 @pytest.mark.parametrize("caller", ["local", "unknown", "seat:helper", "peer:other", "bus:scout"])
@@ -174,3 +179,53 @@ def test_bypass_does_not_survive_a_core_restart(tmp_path, template_store):
         assert mode(eng2) == "ask" and risky(eng2)[0]["action"] == "approve"
     finally:
         asyncio.run(eng2.close())
+
+
+def probe_engine(tmp_path, store):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    pm = PluginManager(config={"exo-gate": {"principal_store": str(store.root), "key_path": str(tmp_path / "gate.key"),
+                                            "decision_model": False}})
+    assert pm.load_folder(REPO / "plugins" / "exo-gate").ok, pm.errors()
+    return CoreEngine(home, PROBE_MODELS, plugins=pm, cwd=str(tmp_path), env={})
+
+
+def cards(eng, since):
+    return [e.body for e in eng.hub.since(since) if isinstance(e.body, s.ApprovalRequested)]
+
+
+async def probe_turn(eng, author):
+    """A PROBE turn ``author`` starts; cards it opens are denied by the principal, so the turn ends. Returns
+    (cards opened, calls the bypass auto-approved) (#598)."""
+    sid = (await eng.loop.create_session(title="t")).id
+    mark = eng.hub.since(0)[-1].seq if eng.hub.since(0) else 0
+    eng.start_turn(sid, "PROBE", {"author": author})
+    async with asyncio.timeout(30):
+        while eng._tasks:  # the turn ends when its card is answered; without bypass there is none
+            for p in list(eng.approvals.open.values()):
+                tok = pr.CALLER.set(pr.Caller("principal:tui"))
+                try:
+                    eng.approvals.respond(s.ApprovalRespond(request_id=p.request.request_id, decision="deny"))
+                except CommandFailed:
+                    pass
+                finally:
+                    pr.CALLER.reset(tok)
+            await asyncio.sleep(0.01)
+    auto = eng.plugins.commands["permissions"].handler("json")["auto_approved"]
+    return cards(eng, mark), auto
+
+
+@pytest.mark.parametrize("author", ["principal:tui", "local", "peer:mallory", "bus:scout", "job"])
+def test_bypass_lowers_only_turns_the_principal_started(tmp_path, template_store, author):
+    """#598: bypass consents to skip asking in the principal's turns. A turn a local caller, a peer, a bus wake
+    or a job notice started in the same core asks as if bypass were off."""
+    eng = probe_engine(tmp_path, template_store)
+    try:
+        assert asyncio.run(Dispatcher(eng, caller="principal:tui").run(s.Command.of(ON))).ok
+        opened, auto = asyncio.run(probe_turn(eng, author))
+        if pr.is_principal(author):
+            assert not opened and auto == 1
+        else:
+            assert len(opened) == 1 and auto == 0
+    finally:
+        asyncio.run(eng.close())

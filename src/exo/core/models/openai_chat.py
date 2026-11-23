@@ -14,7 +14,7 @@ from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 _FINISH_MAP = {"stop": "end", "tool_calls": "tool_use", "function_call": "tool_use", "length": "max_tokens",
                "content_filter": "end", "eos": "end"}
-_WIRE_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "none")
+_WIRE_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "none")  # OpenAI's and OpenRouter's scale
 
 
 def _content(m: Message) -> str | list[dict[str, Any]]:
@@ -113,7 +113,7 @@ class OpenAIChatProvider(HttpTransport):
             body["stop"] = list(opts["stop"])
         effort = opts.get("reasoning")
         if effort:
-            effort = {"ultra": "max"}.get(effort, effort)
+            effort = {"max": "xhigh", "ultra": "xhigh"}.get(effort, effort)  # "max" is a 400 on both wires
             if effort in _WIRE_EFFORTS:
                 if "openrouter.ai" in self.base_url:
                     body["reasoning"] = {"effort": effort} if effort != "none" else {"enabled": False}

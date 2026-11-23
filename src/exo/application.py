@@ -6,6 +6,7 @@ here. The core engine keeps turn orchestration and its public lifecycle.
 from __future__ import annotations
 
 from functools import update_wrapper
+import inspect
 from typing import Any
 
 from exo.core.engine import CoreRuntime
@@ -24,6 +25,16 @@ class CoreEngine(CoreRuntime):
         plugins = kwargs["plugins"] = kwargs.get("plugins") or PluginManager()
         if kwargs.get("context_factory") is None:
             kwargs["context_factory"] = lambda tree: ContextAdapter(tree, plugins.slots.context, plugins.slots.memory)
+        if kwargs.get("provider_auth") is None:
+            from exo import chatgpt_auth
+            bound = inspect.signature(CoreRuntime.__init__).bind_partial(None, *args, **kwargs).arguments
+            home = bound["home"]
+            seat = bound.get("seat")
+            name = seat.name if seat else "default"
+            kwargs["provider_auth"] = {"chatgpt": (
+                lambda: chatgpt_auth.status(home, name)["available"],
+                lambda: chatgpt_auth.request_headers(home, name),
+                lambda: chatgpt_auth.continuation_scope(home, name))}
         super().__init__(*args, **kwargs)
 
 

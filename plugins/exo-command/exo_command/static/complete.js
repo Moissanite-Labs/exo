@@ -113,6 +113,31 @@ export function ghost(text, sug, history) {
   return { text: "", ok: false };
 }
 
+// #756: what a recorded model error is evidence of. "auth" only when the text reads as an authentication or
+// permission failure, "transport" for a network, stream or timeout failure, "" when the text says nothing we can
+// read. The guide never sends someone to their keys on a connection error. #855: the router words its own refusals
+// ("rejected the key", "refused the login", "no credentials for role"), a status counts only as `HTTP 401` or `HTTP 403`
+// (so `HTTP 404: model gpt-403` and a proxy's 407 are not the keys), and httpx names its timeouts `ReadTimeout`.
+const AUTH_ERROR = /\bHTTP\s+40[13]\b|\berror code:?\s*40[13]\b|authentication[ _]?(?:error|failed|failure)|permission[_ ]?denied|unauthori[sz]ed|invalid[_ -]?api[_ -]?key|incorrect api key|invalid x-api-key|api key (?:is )?(?:invalid|missing|required|not set)|rejected the key|refused the login|no credentials for role/i;
+const TRANSPORT_ERROR = /\b(?:read|connect|write|pool|remoteprotocol)error\b|\b(?:read|connect|write|pool)?timeout\b|\btimed? ?out\b|stream ended without a response|\beconnreset\b|\beconnrefused\b|\beconnaborted\b|\beai_again\b|network|unreachable|connection (?:refused|reset|closed|aborted)|peer closed|closed the connection|no route to host/i;
+
+export function providerErrorKind(error) {
+  const text = typeof error === "string" ? error : "";
+  if (!text) return "";
+  if (AUTH_ERROR.test(text)) return "auth";
+  if (TRANSPORT_ERROR.test(text)) return "transport";
+  return "other";
+}
+
+// #855: the text to classify for one model.call body. A failure before any output is retried, and while the route
+// cools down the router answers "all routes for 'main' failed or are cooling down", so the cause (a ReadError, a 401)
+// is only in the attempts. "" when the call did not fail.
+export function providerErrorText(call) {
+  if (!call || !call.error) return "";
+  const tries = Array.isArray(call.attempts) ? call.attempts.map((a) => (a && typeof a.error === "string" ? a.error : "")) : [];
+  return [String(call.error), ...tries].filter(Boolean).join("\n");
+}
+
 // One dim line, local rules only. At most one new tip per `gap` ms, each rule twice a session, nothing while busy.
 export class Guide {
   constructor(opts = {}) {
@@ -124,7 +149,12 @@ export class Guide {
   }
   rules(st) {
     const out = [];
-    if (st.providerError) out.push({ key: "providers", text: "that model call failed: check your keys on the Providers page", fill: "" });
+    // The suggestion follows the error itself: a refusal can be the key, a transport failure cannot (chat.js passes the text).
+    const bad = st.providerError ? providerErrorKind(providerErrorText({ error: st.providerError, attempts: st.providerAttempts })) || "other" : "";
+    // Each kind keeps its own twice-a-session count (`rule`), so two transport failures do not use up a refusal's line.
+    if (bad === "auth") out.push({ key: "providers:auth", rule: "providers:auth", text: "that model call was refused: check your keys on the Providers page", fill: "" });
+    if (bad === "transport") out.push({ key: "providers:transport", rule: "providers:transport", text: "the model could not be reached: send it again, or /trace", fill: "/trace" });
+    if (bad === "other") out.push({ key: "providers:error", rule: "providers:error", text: "that model call failed: /trace shows the error", fill: "/trace" });
     if (st.jobDone) out.push({ key: "job:" + st.jobDone, text: "job " + st.jobDone + " finished: ask for its job_output", fill: "show me the job_output for " + st.jobDone });
     if (st.findings) out.push({ key: "findings", text: st.findings + " open finding(s): /findings", fill: "/findings" });
     if (st.longTurn) out.push({ key: "trace", text: "that turn was slow: /trace shows where the time went", fill: "/trace" });
@@ -137,7 +167,7 @@ export class Guide {
     const now = this.clock();
     if (this.lastAt !== null && now - this.lastAt < this.gap) return null;
     for (const tip of this.rules(st)) {
-      const rule = tip.key.split(":")[0];
+      const rule = tip.rule || tip.key.split(":")[0];
       if (this.retired.has(tip.key) || tip.key === this.lastKey || (this.shown[rule] || 0) >= 2) continue;
       this.shown[rule] = (this.shown[rule] || 0) + 1;
       this.lastAt = now; this.lastKey = tip.key;
